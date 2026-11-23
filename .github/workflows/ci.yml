@@ -40,7 +40,7 @@ jobs:
         run: vp run --filter @t3tools/desktop ensure:electron
 
       - name: Typecheck
-        run: vp run -r --concurrency-limit 2 --filter '!@t3tools/scripts' --filter '!@t3tools/monorepo' typecheck
+        run: vp run --concurrency-limit 2 --filter '!@t3tools/scripts' --filter '!@t3tools/monorepo' typecheck
 
   # Everything except apps/server and the web app, which have their own jobs.
   test:
@@ -103,7 +103,8 @@ jobs:
   # over runners by recorded duration (apps/server/src/testUtils/weightedShardSequencer.ts).
   test_server:
     name: Test Server ${{ matrix.shard }}
-    runs-on: ubuntu-latest
+    # Playwright's headless shell has no Ubuntu 26.04 build yet.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false

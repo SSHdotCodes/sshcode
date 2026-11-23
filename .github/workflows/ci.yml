@@ -130,6 +130,9 @@ jobs:
         run: node apps/server/node_modules/playwright-core/cli.js install --only-shell chromium
 
       - name: Test
+        # macOS's default temp folder is a symlink (/var -> /private/var); path checks need the real one.
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: vp run --filter ./apps/server test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
 
   # The phone app's Expo config must resolve with no private identity configured.

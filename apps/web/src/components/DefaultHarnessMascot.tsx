@@ -3,6 +3,7 @@ import { usePrimaryEnvironmentId } from "../state/environments";
 import { useServerConfigs } from "../state/entities";
 import { HarnessMascot } from "./HarnessMascot";
 import {
+  BUILD_DEFAULT_MASCOT_DRIVER,
   defaultHarnessMascotProvider,
   harnessMascotAgentId,
   type HarnessMascotState,
@@ -23,11 +24,18 @@ export function DefaultHarnessMascot({
   const config = target ? configs.get(target) : undefined;
   const selection = config?.settings.defaultModelSelection;
   const provider = defaultHarnessMascotProvider(config?.providers ?? [], selection?.instanceId);
-  const agentId = harnessMascotAgentId(
-    provider?.driver,
-    provider ? config?.settings.providerInstances[provider.instanceId]?.config : null,
-  );
+  const agentId = BUILD_DEFAULT_MASCOT_DRIVER
+    ? null
+    : harnessMascotAgentId(
+        provider?.driver,
+        provider ? config?.settings.providerInstances[provider.instanceId]?.config : null,
+      );
   return (
-    <HarnessMascot driver={provider?.driver ?? null} agentId={agentId} state={state} size={size} />
+    <HarnessMascot
+      driver={BUILD_DEFAULT_MASCOT_DRIVER ?? provider?.driver ?? null}
+      agentId={agentId}
+      state={state}
+      size={size}
+    />
   );
 }

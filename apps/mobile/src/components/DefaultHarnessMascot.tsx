@@ -1,5 +1,6 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import {
+  BUILD_DEFAULT_MASCOT_DRIVER,
   defaultHarnessMascotProvider,
   harnessMascotAgentId,
   type HarnessMascotState,
@@ -46,13 +47,15 @@ export function DefaultHarnessMascot({
   const provider =
     providers.find((candidate) => candidate.instanceId === selection?.instanceId) ??
     defaultHarnessMascotProvider(providers, null);
-  const agentId = harnessMascotAgentId(
-    provider?.driver,
-    provider ? config?.settings.providerInstances[provider.instanceId]?.config : null,
-  );
+  const agentId = BUILD_DEFAULT_MASCOT_DRIVER
+    ? null
+    : harnessMascotAgentId(
+        provider?.driver,
+        provider ? config?.settings.providerInstances[provider.instanceId]?.config : null,
+      );
   return (
     <HarnessMascot
-      driver={provider?.driver ?? null}
+      driver={BUILD_DEFAULT_MASCOT_DRIVER ?? provider?.driver ?? null}
       agentId={agentId}
       state={state}
       size={size}

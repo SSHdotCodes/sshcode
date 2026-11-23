@@ -370,6 +370,13 @@ export function harnessMascotTurnState(
   return waiting ? "waiting" : working ? "working" : (outcome ?? "idle");
 }
 
+/**
+ * The pet a build shows on its empty screens, ahead of the harness a new chat opens with: Codex's
+ * here. Null makes the pet follow the default harness. Chats keep their own harness's pet
+ * either way.
+ */
+export const BUILD_DEFAULT_MASCOT_DRIVER: string | null = "codex";
+
 /** Empty states follow the configured default, then the catalog's implicit default. */
 export function defaultHarnessMascotProvider<
   T extends {

@@ -7,9 +7,11 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  RunId,
   ThreadId,
   TurnItemId,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadStreamItem,
   OrchestrationV2TurnItem,
@@ -36,6 +38,7 @@ import {
   projectTurnItemForWire,
   projectTurnItemForDetail,
   projectDomainEventForWire,
+  projectThreadProjectionForWire,
 } from "./WireProjection.ts";
 import { threadShellFromProjection } from "./ProjectionStore.ts";
 import { MAX_TOOL_OUTPUT_IMAGES, toolOutputImages } from "@t3tools/shared/toolOutput";
@@ -284,6 +287,73 @@ describe("orchestration V2 wire projection", () => {
       "a".repeat(32_767) + "\n… output truncated for transport",
     );
     expect(item.progress).toBe(progress);
+  });
+
+  it("does not attach a finished task's commits to the result of a later child turn", () => {
+    const followupStarted = DateTime.toEpochMillis(base.completedAt) + 1_000;
+    const task = {
+      id: NodeId.make("subagent"),
+      threadId: base.threadId,
+      runId: null,
+      parentNodeId: NodeId.make("parent"),
+      origin: "app_owned",
+      createdBy: "agent",
+      driver: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      providerThreadId: null,
+      childThreadId: ThreadId.make("child"),
+      nativeTaskRef: null,
+      prompt: "Initial task",
+      title: "Worker",
+      model: "gpt-5.4",
+      status: "completed",
+      result: "Initial result",
+      seen: { commits: ["123abcd"], files: 3 },
+      startedAt: base.startedAt,
+      completedAt: base.completedAt,
+      updatedAt: base.updatedAt,
+    } satisfies OrchestrationV2Subagent;
+    const resumed = {
+      ...task,
+      childActivity: {
+        runId: RunId.make("run:follow-up"),
+        status: "failed" as const,
+        result: "Follow-up failed",
+        startedAt: followupStarted,
+        completedAt: followupStarted + 1_000,
+      },
+    };
+    const event = {
+      id: EventId.make("subagent-followup"),
+      type: "subagent.updated" as const,
+      threadId: task.threadId,
+      occurredAt: task.updatedAt,
+      payload: resumed,
+    };
+    const display = { status: "failed", result: "Follow-up failed", seen: undefined };
+    expect(projectDomainEventForWire(event).payload).toMatchObject(display);
+    expect(
+      projectThreadProjectionForWire({
+        subagents: [resumed],
+        contextHandoffs: [],
+        turnItems: [],
+        visibleTurnItems: [],
+      } as unknown as OrchestrationV2ThreadProjection).subagents[0],
+    ).toMatchObject(display);
+    expect(projectDomainEventForWire({ ...event, payload: task }).payload).toEqual(task);
+    expect(
+      projectDomainEventForWire({
+        ...event,
+        payload: {
+          ...resumed,
+          childActivity: {
+            ...resumed.childActivity,
+            startedAt: DateTime.toEpochMillis(base.startedAt),
+          },
+        },
+      }).payload,
+    ).toMatchObject({ seen: task.seen });
+    expect(resumed.seen).toBe(task.seen);
   });
 
   it.each(["", "small output", "x".repeat(1_048_576)])(

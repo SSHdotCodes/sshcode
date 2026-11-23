@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import type { ClaudeRcEvent } from "@t3tools/contracts";
 import { ClaudeRcClient, claudeRcInputPlatform } from "./ClaudeRcService.ts";
 
 const live = {
@@ -52,6 +53,32 @@ it("marks keyboard input as human using the native CLI input contract", async ()
       { payload: { type: "user", origin: { kind: "human" }, message: { content: "hello" } } },
     ],
   });
+});
+
+it("keeps an already-running CLI session working when Terminal attaches", async () => {
+  const abort = new AbortController();
+  const statuses: ClaudeRcEvent[] = [];
+  const client = new ClaudeRcClient(async (url) =>
+    String(url).endsWith("/events/stream")
+      ? new Response(
+          'event: delivery_update\ndata: {"status":"DELIVERY_STATUS_PENDING"}\n\n' +
+            'event: delivery_update\ndata: {"status":"DELIVERY_STATUS_PROCESSED"}\n\n',
+          { headers: { "Content-Type": "text/event-stream" } },
+        )
+      : Response.json({ data: [{ ...live, worker_status: "running" }] }),
+  );
+
+  await client.watch("native-login", "cse_test", abort.signal, (event) => {
+    if (event.type !== "status" || event.phase !== "connected") return;
+    statuses.push(event);
+    if (statuses.length === 3) abort.abort();
+  });
+
+  expect(statuses).toEqual([
+    { type: "status", phase: "connected", working: true },
+    { type: "status", phase: "connected", working: true },
+    { type: "status", phase: "connected", working: false },
+  ]);
 });
 
 it("attaches as an RC client and approves only the original worker request", async () => {

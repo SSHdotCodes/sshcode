@@ -1,12 +1,50 @@
-import type { NotificationResponse } from "expo-notifications";
+import type { NotificationBehavior, NotificationResponse } from "expo-notifications";
+import { AsyncResult } from "effect/reactivity";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { useAgentNotificationNavigation } from "./notificationNavigation";
 import { consumeLastAgentNotificationResponse } from "./notificationResponseConsumer";
 
 import {
   extractAgentNotificationDeepLink,
   routeAgentNotificationResponseOnce,
 } from "./notificationPayload";
+
+const foreground = vi.hoisted(() => ({
+  connection: "connected",
+  feed: "live",
+  setHandler: vi.fn(),
+  presentationAtom: Symbol("presentation"),
+  threadAtom: Symbol("thread"),
+  navigate: vi.fn(),
+}));
+
+vi.mock("react", () => ({
+  useEffect: (effect: () => void) => effect(),
+  useLayoutEffect: (effect: () => void) => effect(),
+  useRef: <A>(current: A) => ({ current }),
+}));
+vi.mock("@react-navigation/native", () => ({ useLinkTo: () => foreground.navigate }));
+vi.mock("expo-notifications", () => ({
+  setNotificationHandler: foreground.setHandler,
+  addNotificationResponseReceivedListener: () => ({ remove: vi.fn() }),
+  getLastNotificationResponseAsync: async () => null,
+}));
+vi.mock("./androidNotifications", () => ({ setAndroidThreadOnScreen: vi.fn() }));
+vi.mock("../../state/presentation", () => ({
+  environmentPresentations: { presentationAtom: () => foreground.presentationAtom },
+}));
+vi.mock("../../state/threads", () => ({
+  environmentThreads: { stateAtom: () => foreground.threadAtom },
+}));
+vi.mock("../../state/atom-registry", () => ({
+  appAtomRegistry: {
+    get: (atom: symbol) =>
+      atom === foreground.presentationAtom
+        ? { connection: { phase: foreground.connection } }
+        : AsyncResult.success({ status: foreground.feed }),
+  },
+}));
 
 function responseWithData(data: Record<string, unknown>, identifier = "notification-1") {
   return {
@@ -23,6 +61,25 @@ function responseWithData(data: Record<string, unknown>, identifier = "notificat
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+it("presents an alert on a cached thread until its live feed has caught up", async () => {
+  useAgentNotificationNavigation("/threads/env/thread");
+  const handler: {
+    handleNotification: (notification: unknown) => Promise<NotificationBehavior>;
+  } = foreground.setHandler.mock.lastCall?.[0];
+  const { notification } = responseWithData({ deepLink: "/threads/env/thread" });
+
+  foreground.connection = "reconnecting";
+  foreground.feed = "cached";
+  expect((await handler.handleNotification(notification)).shouldShowBanner).toBe(true);
+
+  foreground.connection = "connected";
+  foreground.feed = "synchronizing";
+  expect((await handler.handleNotification(notification)).shouldShowBanner).toBe(true);
+
+  foreground.feed = "live";
+  expect((await handler.handleNotification(notification)).shouldShowBanner).toBe(false);
 });
 
 describe("consumeLastAgentNotificationResponse", () => {

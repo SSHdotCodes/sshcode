@@ -45,6 +45,21 @@ function projectSubagentActivity<
   };
 }
 
+function projectSubagentForWire(subagent: OrchestrationV2Subagent): OrchestrationV2Subagent {
+  const projected = projectSubagentActivity(subagent);
+  const { childActivity, completedAt, seen } = subagent;
+  // The original task's check, files and commits describe work up to its completion.
+  if (
+    seen !== undefined &&
+    childActivity !== undefined &&
+    completedAt !== null &&
+    childActivity.startedAt > DateTime.toEpochMillis(completedAt)
+  ) {
+    return { ...projected, seen: undefined };
+  }
+  return projected;
+}
+
 const MAX_DETAIL_STRING_BYTES = 32_768;
 export const COMMAND_OUTPUT_FAILURE_SCAN_CHARS = MAX_DETAIL_STRING_BYTES;
 const MAX_DYNAMIC_VALUE_BYTES = 16_384;
@@ -459,7 +474,7 @@ export function projectThreadProjectionForWire(
   };
   return {
     ...projection,
-    subagents: projection.subagents.map(projectSubagentActivity),
+    subagents: projection.subagents.map(projectSubagentForWire),
     contextHandoffs: projection.contextHandoffs.map(projectContextHandoffForWire),
     turnItems: projection.turnItems.map(project),
     visibleTurnItems: projection.visibleTurnItems.map((row) => ({
@@ -473,7 +488,7 @@ export function projectDomainEventForWire(
   event: OrchestrationV2DomainEvent,
 ): OrchestrationV2DomainEvent {
   if (event.type === "subagent.updated")
-    return { ...event, payload: projectSubagentActivity(event.payload) };
+    return { ...event, payload: projectSubagentForWire(event.payload) };
   return event.type === "turn-item.updated"
     ? { ...event, payload: projectTurnItemForWire(event.payload) }
     : event.type === "context-handoff.updated"

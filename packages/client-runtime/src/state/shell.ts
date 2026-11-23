@@ -1,5 +1,6 @@
 import {
   ORCHESTRATION_V2_WS_METHODS,
+  SHELL_RESUME_MONITOR_THREAD_LIMIT,
   type EnvironmentId,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ShellStreamItem,
@@ -481,9 +482,22 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           }
         }
 
-        // If the authoritative refresh failed, omit the cached cursor so the
-        // socket fallback sends a complete snapshot for this new session.
-        if (!canResume || Option.isNone(current.snapshot)) {
+        // A finished app monitor may leave no event to replay. Ask the server
+        // to refresh any row that still shows a monitor in our saved shell.
+        const snapshot = Option.getOrNull(current.snapshot);
+        const refreshMonitorThreadIds =
+          canResume && snapshot !== null
+            ? snapshot.threads.flatMap((thread) =>
+                (thread.longRunningWork?.monitorCount ?? 0) > 0 ? [thread.id] : [],
+              )
+            : [];
+        // Fall back to a complete snapshot when the cache cannot resume or the
+        // monitor refresh would exceed the bounded patch request.
+        if (
+          !canResume ||
+          snapshot === null ||
+          refreshMonitorThreadIds.length > SHELL_RESUME_MONITOR_THREAD_LIMIT
+        ) {
           return {
             ...omission,
             ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
@@ -499,7 +513,8 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           }));
         }
         return {
-          afterSequence: current.snapshot.value.snapshotSequence,
+          afterSequence: snapshot.snapshotSequence,
+          ...(refreshMonitorThreadIds.length > 0 ? { refreshMonitorThreadIds } : {}),
           ...omission,
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
         };

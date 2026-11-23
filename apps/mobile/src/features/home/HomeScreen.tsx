@@ -301,7 +301,7 @@ function HomeScreenContent(allProps: HomeScreenProps) {
       ),
     [props.environments],
   );
-  const chatTabs = useHomeChatTabs(props.threads, connectionPhases);
+  const chatTabs = useHomeChatTabs(props.threads, connectionPhases, selectedMachine);
   const [collapsedCategories, setCollapsedCategories] = useState<ReadonlySet<string>>(
     () => new Set(["Snoozed", "Settled"]),
   );

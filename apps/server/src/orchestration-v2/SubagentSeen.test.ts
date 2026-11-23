@@ -81,6 +81,18 @@ describe("subagentSeen", () => {
     );
   });
 
+  it.each([
+    "env -u ELECTRON_RUN_AS_NODE TMPDIR=/private/tmp PATH=/repo/node_modules/.bin:$PATH vp test run a.test.ts",
+    "../../node_modules/.bin/tsc --noEmit -p .",
+  ])("uses the latest successful check when launched with %s", (input) => {
+    const seen = subagentSeen({
+      turnItems: [command("tsc --noEmit -p .", { exitCode: 2 }), command(input, { exitCode: 0 })],
+      commits: [],
+      seconds: 0,
+    });
+    expect(seen?.check).toEqual({ command: shortCommand(input), passed: true });
+  });
+
   it("ignores check names in search terms, shell arguments and similarly named scripts", () => {
     for (const input of [
       "rg 'npm test' README.md",
@@ -136,7 +148,7 @@ describe("subagentSeen", () => {
 });
 
 describe("seenLineForLead", () => {
-  it("is one short line of what the app recorded", () => {
+  it("does not call ordinary probe results failures in the lead's wake", () => {
     expect(
       seenLineForLead({
         commands: 12,
@@ -148,7 +160,7 @@ describe("seenLineForLead", () => {
         seconds: 372,
       }),
     ).toBe(
-      "App saw: check passed: pnpm exec vp test run src/a.test.ts; 12 commands, 1 failed; 3 files; commits 1a2b3c4 5d6e7f8; 6m",
+      "App saw: check passed: pnpm exec vp test run src/a.test.ts; 12 commands; 3 files; commits 1a2b3c4 5d6e7f8; 6m",
     );
     expect(seenLineForLead({ check: { command: "tsc | tail" }, seconds: 40 })).toBe(
       "App saw: check ran, result unseen: tsc | tail; 40s",

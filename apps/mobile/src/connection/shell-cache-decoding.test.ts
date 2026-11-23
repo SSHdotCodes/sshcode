@@ -78,6 +78,18 @@ describe("first screen shell cache", () => {
     expect(titleReads).toBe(0);
   });
 
+  it("counts an actionable plan in the machine chip before and after hydration", () => {
+    const environmentId = EnvironmentId.make("plans");
+    const planChat = { ...v2ThreadShell, hasActionableProposedPlan: true };
+    const preview = firstScreenShellSnapshot(
+      { ...v2ShellSnapshot, threads: [planChat] },
+      environmentId,
+    );
+    expect(preview.previewCounts?.needsYou).toBe(1);
+    const live = homeMachineSummaries([presentThreadShell(environmentId, planChat)]);
+    expect(live.get(environmentId)?.needsYou).toBe(1);
+  });
+
   it.effect("stores full counts including unread and active chats outside the first 64 rows", () =>
     Effect.gen(function* () {
       const id = EnvironmentId.make("counts");

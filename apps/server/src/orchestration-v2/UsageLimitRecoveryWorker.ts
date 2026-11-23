@@ -33,9 +33,7 @@ export function limitRecoveryCommand(
     return null;
   // The blanket setting never arms a child: its lead decides. A resume the owner asked for
   // on the child's own banner still runs. Snoozing their cards remains independent.
-  const child =
-    thread.lineage.relationshipToParent === "subagent" && thread.creationSource !== "provider";
-  const mayResume = autoResume && !child;
+  const mayResume = autoResume && !ProjectionStore.isLeadManagedTask(thread);
   const identity = `${thread.id}:${thread.latestRunId}:${resetMs}`;
   const recovery = thread.limitRecovery;
   if (recovery?.runId !== thread.latestRunId || recovery.resetAt !== thread.usageLimitResetAt) {

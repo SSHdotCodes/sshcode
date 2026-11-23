@@ -10093,6 +10093,20 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       expectedClass: "validation_error",
     },
     {
+      name: "policy-terminal",
+      code: "cyberPolicy",
+      notification: false,
+      message: "The task is incomplete. Please retry.",
+      expectedClass: "validation_error",
+    },
+    {
+      name: "policy-notification",
+      code: "cyberPolicy",
+      notification: true,
+      message: "The task is incomplete. Please retry.",
+      expectedClass: "validation_error",
+    },
+    {
       name: "notification",
       code: "usageLimitExceeded",
       notification: true,
@@ -10304,6 +10318,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         if (terminal?.status !== "failed") return;
         assert.equal(terminal.failure.class, scenario.expectedClass);
         assert.equal(terminal.threadDisposition, "reusable");
+        if (scenario.code === "cyberPolicy") {
+          assert.equal(terminal.failure.code, "cyberPolicy");
+          assert.equal(terminal.failure.retryable, false);
+          assert.equal(
+            terminal.failure.message,
+            "Codex stopped this request under its safety policy.",
+          );
+        }
         if (scenario.name === "known-reset" || scenario.name === "deferred-reset")
           assert.equal(terminal.failure.resetAt, resetAt);
         if (scenario.name === "matching-details")

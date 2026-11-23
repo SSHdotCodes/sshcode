@@ -32,8 +32,10 @@ export function shortCommand(input: string): string {
 function invokesCheck(command: string): boolean {
   const invocation = command
     .trimStart()
-    .replace(/^(?:env\s+)?(?:[A-Za-z_]\w*=[\w./:@+-]*\s+)+/u, "")
-    .replace(/^(?:(?:pnpm|npm|yarn|bun)\s+exec\s+|npx\s+)/u, "");
+    .replace(/^env\s+(?:(?:-u|--unset)\s+[A-Za-z_]\w*\s+)*/u, "")
+    .replace(/^(?:[A-Za-z_]\w*=[\w./:@+${}-]*\s+)+/u, "")
+    .replace(/^(?:(?:pnpm|npm|yarn|bun)\s+exec\s+|npx\s+)/u, "")
+    .replace(/^(?:[\w./@+-]*\/)?node_modules\/\.bin\//u, "");
   return CHECK_COMMAND.test(invocation);
 }
 
@@ -141,9 +143,8 @@ export function seenLineForLead(seen: OrchestrationV2SubagentSeen): string {
     check === undefined
       ? null
       : `${check.passed === undefined ? "check ran, result unseen" : check.passed ? "check passed" : "check FAILED"}: ${check.command}`,
-    seen.commands === undefined
-      ? null
-      : `${count(seen.commands, "command")}${seen.failed ? `, ${seen.failed} failed` : ""}`,
+    // A nonzero exit can mean a normal probe found nothing. Report the check's outcome above.
+    seen.commands === undefined ? null : count(seen.commands, "command"),
     seen.files === undefined ? null : count(seen.files, "file"),
     seen.commits === undefined
       ? null

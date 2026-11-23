@@ -22,6 +22,7 @@ const state = vi.hoisted(() => ({
   threadPresent: true,
   connected: true,
   modelUnavailable: false,
+  unavailableModel: null as string | null,
   alert: vi.fn(),
   draftText: "Keep this draft separate",
   cleanups: [] as Array<() => void>,
@@ -98,7 +99,8 @@ vi.mock("./threads", async () => {
 vi.mock("./use-atom-command", () => ({ useAtomCommand: <A>(command: A) => command }));
 vi.mock("./git", () => ({ gitEnvironment: { preparePullRequestThread: state.checkout } }));
 vi.mock("../lib/modelOptions", () => ({
-  isModelSelectionUnavailable: () => state.modelUnavailable,
+  isModelSelectionUnavailable: (_config: unknown, selection: { model: string }) =>
+    state.modelUnavailable || selection.model === state.unavailableModel,
   describeUnavailableModelSelection: () => ({ title: "Disabled", detail: "Project override" }),
 }));
 vi.mock("../lib/uuid", () => ({ uuidv4: () => "uuid", randomHex: () => "abcd" }));
@@ -203,6 +205,7 @@ beforeEach(() => {
   state.threadPresent = true;
   state.connected = true;
   state.modelUnavailable = false;
+  state.unavailableModel = null;
   state.config.attachmentReceiptReplay = undefined;
   state.alert.mockReset();
   appAtomRegistry.set(writableShells, [state.thread] as never);
@@ -408,6 +411,55 @@ describe("queued task operation access", () => {
     expect(state.start.mock.calls[0]?.[0].input).not.toHaveProperty("modelSelection");
     expect(remaining()).toEqual([]);
   });
+
+  it.each(["waiting for the outbox write", "uploading attachments"])(
+    "sends with the current chat model when the previous one is disabled while %s",
+    async (stage) => {
+      state.grantedEnvironments.add("secondary");
+      const switchModel = () => {
+        state.unavailableModel = state.thread.modelSelection.model;
+        appAtomRegistry.set(writableShells, [
+          {
+            ...state.thread,
+            modelSelection: { ...state.thread.modelSelection, model: "enabled-model" },
+          },
+        ] as never);
+      };
+      const queued = message();
+      if (stage === "waiting for the outbox write") {
+        const writing = Promise.withResolvers<void>();
+        const write = Promise.withResolvers<void>();
+        state.write.mockImplementationOnce(() => {
+          writing.resolve();
+          return write.promise;
+        });
+        const enqueued = state.manager.enqueue(queued);
+        await writing.promise;
+        const drained = runDrain();
+        switchModel();
+        write.resolve();
+        await enqueued;
+        await drained;
+      } else {
+        await state.manager.enqueue(queued);
+        state.prepare.mockImplementationOnce(async ({ attachments }) => {
+          switchModel();
+          return {
+            status: "ready",
+            attachments: [],
+            draftAttachments: attachments,
+            pendingAttachmentIds: [],
+          };
+        });
+        await runDrain();
+      }
+
+      expect(state.start).toHaveBeenCalledOnce();
+      expect(state.start.mock.calls[0]?.[0].input).not.toHaveProperty("modelSelection");
+      expect(state.draftText).toBe("Keep this draft separate");
+      expect(remaining()).toEqual([]);
+    },
+  );
 
   it.each([
     { isCreation: false, accepted: false },

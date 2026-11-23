@@ -128,8 +128,13 @@ it("uses cached complete workspace counts without double counting preview rows, 
   const fullRow = makeThreadShellFixture({ environmentId: other, hasPendingUserInput: true });
   expect(workspaceThreadCounts([previewRow, fullRow], new Map([[id, counts]]))).toEqual({
     working: 20,
-    needsYou: 131,
+    needsYou: 141,
   });
   expect(workspaceThreadCounts([previewRow, fullRow], new Map([[id, null]]))).toBeNull();
   expect(workspaceThreadCounts([fullRow], new Map())).toEqual({ working: 0, needsYou: 1 });
+});
+
+it("counts a child's question once on the visible parent chat", () => {
+  const parent = makeThreadShellFixture({ pendingSubagentRequest: "user_input" });
+  expect(workspaceThreadCounts([parent], new Map())).toEqual({ working: 0, needsYou: 1 });
 });

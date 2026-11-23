@@ -1,11 +1,31 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import * as Notifications from "expo-notifications";
 import { useLinkTo } from "@react-navigation/native";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import * as Option from "effect/Option";
+import { AsyncResult } from "effect/reactivity";
 
+import { appAtomRegistry } from "../../state/atom-registry";
+import { environmentPresentations } from "../../state/presentation";
+import { environmentThreads } from "../../state/threads";
 import { setAndroidThreadOnScreen } from "./androidNotifications";
 import { foregroundNotificationBehavior } from "./foregroundNotificationBehavior";
 import { routeAgentNotificationResponseOnce, threadDeepLinkOnScreen } from "./notificationPayload";
 import { consumeLastAgentNotificationResponse } from "./notificationResponseConsumer";
+
+function threadHasLiveFeed(deepLink: string): boolean {
+  const [, , environment, thread] = deepLink.split("/");
+  if (!environment || !thread) return false;
+  const environmentId = EnvironmentId.make(decodeURIComponent(environment));
+  const presentation = appAtomRegistry.get(
+    environmentPresentations.presentationAtom(environmentId),
+  );
+  if (presentation?.connection.phase !== "connected") return false;
+  const result = appAtomRegistry.get(
+    environmentThreads.stateAtom(environmentId, ThreadId.make(decodeURIComponent(thread))),
+  );
+  return Option.exists(AsyncResult.value(result), ({ status }) => status === "live");
+}
 
 export function useAgentNotificationNavigation(pathname: string): void {
   const linkTo = useLinkTo();
@@ -24,7 +44,9 @@ export function useAgentNotificationNavigation(pathname: string): void {
   useEffect(() => {
     Notifications.setNotificationHandler({
       handleNotification: (notification) =>
-        Promise.resolve(foregroundNotificationBehavior(notification, deepLinkOnScreen.current)),
+        Promise.resolve(
+          foregroundNotificationBehavior(notification, deepLinkOnScreen.current, threadHasLiveFeed),
+        ),
     });
     return () => {
       Notifications.setNotificationHandler(null);

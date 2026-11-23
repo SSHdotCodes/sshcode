@@ -26,13 +26,14 @@ export function threadHasUnseenCompletion(
   return completedAtMs > lastVisitedAtMs;
 }
 
-/** Requests always; a failure only until the chat has been opened. */
+/** Requests and plans always; a failure only until the chat has been opened. */
 export function threadNeedsYou(thread: EnvironmentThreadShell, now = Date.now()): boolean {
   return (
     thread.hasPendingApprovals ||
     thread.hasPendingUserInput ||
     thread.pendingSubagentRequest === "approval" ||
     thread.pendingSubagentRequest === "user_input" ||
+    thread.hasActionableProposedPlan ||
     failureNeedsYou(thread, now)
   );
 }

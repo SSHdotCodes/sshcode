@@ -135,10 +135,8 @@ function sameIds(a: readonly string[] | undefined, b: readonly string[] | undefi
 }
 
 /**
- * Choose what to publish after a status probe finishes. A probe that failed
- * this time must not wipe bars a previous probe or a turn already
- * established, so the last good snapshot stays; `unsupported` is
- * authoritative and replaces them.
+ * Choose what to publish after a status probe finishes. The registry can show
+ * an older reading with its original time when the probe reports a failure.
  *
  * A newer runtime update keeps its windows while the probe contributes its
  * other metadata.
@@ -148,16 +146,14 @@ export function resolveUsageLimitsAfterProbe(input: {
   readonly probed: ServerProviderUsageLimits | undefined;
 }): ServerProviderUsageLimits | undefined {
   const { published, probed } = input;
-  if (probed?.unavailable?.reason === "probeFailed" && published && !published.unavailable) {
-    return published;
-  }
   if (
     published &&
     probed &&
     !published.unavailable &&
-    !probed.unavailable &&
+    probed.unavailable?.reason !== "unsupported" &&
     Date.parse(published.checkedAt) > Date.parse(probed.checkedAt)
   ) {
+    if (probed.unavailable) return published;
     // A sparse runtime reading owns utilization; a full probe can fill its missing metadata.
     const windows = published.windows.map((window) => {
       const metadata = probed.windows.find((candidate) => candidate.id === window.id);

@@ -258,6 +258,29 @@ describe("forecast", () => {
     expect(poolForecast(windows, friday)).toBeNull();
   });
 
+  it("does not forecast the whole pool from one reading when another is older or untimed", () => {
+    const live = claude([weekly(100, at(21, 8))], "a");
+    const room = weekly(20, at(21, 8));
+    const { resetsAt: _reset, ...untimed } = room;
+    for (const account of [
+      { ...claude([room], "b"), asOf: at(16, 19) },
+      claude([untimed], "b"),
+      claude([weekly(20, at(16, 22))], "b"),
+    ]) {
+      expect(poolForecast(pool([live, account]).windows, friday)).toBeNull();
+    }
+    const spending = claude([weekly(90, at(21, 8))], "a");
+    expect(poolForecast(pool([spending, claude([untimed], "b")]).windows, friday)).toBeNull();
+  });
+
+  it("does not project more spending on an account that is already at its limit", () => {
+    const { windows } = pool([
+      claude([weekly(100, at(21, 8))], "a"),
+      claude([weekly(25, at(21, 8))], "b"),
+    ]);
+    expect(poolForecast(windows, friday)).toMatchObject({ kind: "lasts", resetsAt: at(21, 8) });
+  });
+
   it("leads with a reached window before an almost empty one", () => {
     const { windows } = pool([
       claude([

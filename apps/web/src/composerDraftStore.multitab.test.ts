@@ -131,3 +131,29 @@ it("marks attachments as unavailable when the saved draft cannot be read", async
   expect(restored?.persistedAttachments).toEqual([]);
   expect(restored?.nonPersistedImageIds).toEqual([attachment.id]);
 });
+
+it("keeps newly saved images when two draft attachment saves overlap", async () => {
+  const tab = await openTab();
+  const images = ["first", "second"].map((id) => {
+    const file = new File([id], `${id}.png`, { type: "image/png" });
+    return { id, name: file.name, mimeType: file.type, sizeBytes: file.size, file };
+  });
+  const persistedImages = images.map(({ file: _file, ...image }) => ({
+    ...image,
+    dataUrl: "data:image/png;base64,AA==",
+  }));
+  const draft = tab.getState();
+  draft.addImage(first, { ...images[0]!, type: "image", previewUrl: "blob:first" });
+  const firstSave = draft.syncPersistedAttachments(first, persistedImages.slice(0, 1));
+  draft.addImage(first, { ...images[1]!, type: "image", previewUrl: "blob:second" });
+  await Promise.all([firstSave, draft.syncPersistedAttachments(first, persistedImages)]);
+  await save();
+
+  const reopened = await openTab();
+  expect(
+    reopened
+      .getState()
+      .getComposerDraft(first)
+      ?.images.map((image) => image.id),
+  ).toEqual(["first", "second"]);
+});

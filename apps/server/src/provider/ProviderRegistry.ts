@@ -492,6 +492,13 @@ const haveProvidersChanged = (
   nextProviders: ReadonlyArray<ServerProvider>,
 ): boolean => !Equal.equals(previousProviders, nextProviders);
 
+const matchesUsageReadingAccount = (
+  reading: ServerProvider["auth"],
+  current: ServerProvider["auth"],
+): boolean =>
+  (reading.email === undefined || current.email === undefined || reading.email === current.email) &&
+  (current.workspaceId === undefined || reading.workspaceId === current.workspaceId);
+
 const correlateSnapshotWithSource = (
   source: ProviderSnapshotSource,
   snapshot: ServerProvider,
@@ -575,7 +582,7 @@ export const layer = Layer.effect(
     // so nothing old looks live at boot; a probe that then fails shows them as an older reading.
     const savedUsageLimits = new Map<
       ProviderInstanceId,
-      { readonly limits: ServerProviderUsageLimits; readonly email: string | undefined }
+      { readonly limits: ServerProviderUsageLimits; readonly auth: ServerProvider["auth"] }
     >();
     const cachedProviders = yield* Effect.forEach(
       bootSources,
@@ -617,7 +624,7 @@ export const layer = Layer.effect(
               if (cachedProvider.usageLimits?.windows.length) {
                 savedUsageLimits.set(source.instanceId, {
                   limits: cachedProvider.usageLimits,
-                  email: cachedProvider.auth.email,
+                  auth: cachedProvider.auth,
                 });
               }
               return Effect.succeed(hydrateCachedProvider(correlation));
@@ -728,13 +735,16 @@ export const layer = Layer.effect(
         } = provider;
         // Snapshots published before the first probe carry no limits; keep the saved ones on
         // disk until a probe replaces them, so a second restart can still fall back to them.
-        const saved =
-          provider.usageLimits === undefined ? savedUsageLimits.get(key)?.limits : undefined;
+        const saved = savedUsageLimits.get(key);
         yield* writeProviderStatusCache({
           filePath,
           provider: {
             ...machineProvider,
-            ...(saved ? { usageLimits: saved } : {}),
+            ...(provider.usageLimits === undefined &&
+            saved &&
+            matchesUsageReadingAccount(saved.auth, provider.auth)
+              ? { usageLimits: saved.limits }
+              : {}),
             ...(rememberedAccountFailure(provider)
               ? { recentFailure: provider.recentFailure }
               : {}),
@@ -831,12 +841,12 @@ export const layer = Layer.effect(
     /**
      * The limits to publish: the probe's own, or, when it read nothing, the last reading this
      * instance published (in this process, else before the restart) as an older reading. A
-     * reading taken under another signed-in email is never carried over.
+     * reading taken under another signed-in email or workspace is never carried over.
      */
     const lastUsageReadingFor = (
       key: ProviderInstanceId,
       limits: ServerProviderUsageLimits,
-      email: string | undefined,
+      auth: ServerProvider["auth"],
       previous: ServerProvider | undefined,
       now: number,
     ): ServerProviderUsageLimits => {
@@ -844,13 +854,13 @@ export const layer = Layer.effect(
       if (limits.unavailable?.reason !== "probeFailed" || limits.windows.length > 0) return limits;
       const saved = savedUsageLimits.get(key);
       const last = [
-        previous?.usageLimits && { limits: previous.usageLimits, email: previous.auth.email },
+        previous?.usageLimits && { limits: previous.usageLimits, auth: previous.auth },
         saved,
       ].find(
         (candidate) =>
           candidate !== undefined &&
           candidate.limits.windows.length > 0 &&
-          (candidate.email === undefined || email === undefined || candidate.email === email),
+          matchesUsageReadingAccount(candidate.auth, auth),
       );
       return withLastUsageReading(limits, last?.limits, now);
     };
@@ -888,13 +898,7 @@ export const layer = Layer.effect(
                   ...provider,
                   usageLimits: usageLimitHistory.record(
                     key,
-                    lastUsageReadingFor(
-                      key,
-                      provider.usageLimits,
-                      provider.auth.email,
-                      previous,
-                      now,
-                    ),
+                    lastUsageReadingFor(key, provider.usageLimits, provider.auth, previous, now),
                     previous?.usageLimits,
                   ),
                 }

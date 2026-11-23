@@ -99,15 +99,18 @@ describe("monitors across a server restart", () => {
           Effect.gen(function* () {
             // Until recovery runs, a waiting delegated task still counts it as open.
             expect(service.hasOpenWork(threadId)).toBe(true);
+            expect(yield* service.list(threadId)).toMatchObject([
+              { monitorId: first.monitorId, state: "recovering", restartable: true },
+            ]);
             yield* service.recover(() => Effect.succeed("ok"));
             const [event] = yield* service.events.pipe(Stream.take(1), Stream.runCollect);
             expect(event?.monitorId).toBe(first.monitorId);
             expect(event?.notification.detail).toBe("after-restart");
             // New ids, so delivery never mistakes it for an event already handled.
             expect(event!.sequence).toBeGreaterThan(first.sequence);
-            expect((yield* service.list(threadId)).map((info) => info.monitorId)).toEqual([
-              first.monitorId,
-            ]);
+            const [monitor] = yield* service.list(threadId);
+            expect(monitor?.monitorId).toBe(first.monitorId);
+            expect(monitor?.state).toBeUndefined();
             expect(yield* service.stop(threadId, first.monitorId)).toBe(true);
           }),
         );
@@ -185,6 +188,26 @@ describe("monitors across a server restart", () => {
         }),
       );
       expect(yield* readJournal(baseDir)).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.live("removes a recovering restartable monitor when the thread no longer allows it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "monitor-restart-denied-" });
+      const { monitorId } = yield* serverRun(baseDir)((service) =>
+        start(service, { command: "sleep 600", restartable: true }),
+      );
+      yield* serverRun(baseDir)((service) =>
+        Effect.gen(function* () {
+          expect(yield* service.list(threadId)).toMatchObject([{ monitorId, state: "recovering" }]);
+          yield* service.recover(() => Effect.succeed("denied"));
+          const [event] = yield* service.events.pipe(Stream.take(1), Stream.runCollect);
+          expect(event?.monitorId).toBe(monitorId);
+          expect(event?.notification.outcome).toBe("failed");
+          expect(yield* service.list(threadId)).toEqual([]);
+        }),
+      );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

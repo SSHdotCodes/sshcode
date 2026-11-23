@@ -2681,7 +2681,6 @@ function readPersistedAttachmentIdsFromStorage(threadKey: string): string[] {
 
 function verifyPersistedAttachments(
   threadKey: string,
-  attachments: PersistedComposerImageAttachment[],
   set: (
     partial:
       | ComposerDraftStoreState
@@ -2705,7 +2704,8 @@ function verifyPersistedAttachments(
       return state;
     }
     const imageIdSet = new Set(current.images.map((image) => image.id));
-    const persistedAttachments = attachments.filter(
+    // The flush writes the latest draft, which may include another save's images.
+    const persistedAttachments = current.persistedAttachments.filter(
       (attachment) => imageIdSet.has(attachment.id) && persistedIdSet.has(attachment.id),
     );
     const nonPersistedImageIds: string[] = [];
@@ -4522,7 +4522,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
           await Promise.resolve();
-          verifyPersistedAttachments(threadKey, attachments, set);
+          verifyPersistedAttachments(threadKey, set);
         },
         clearComposerContent: (threadRef) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";

@@ -9,6 +9,7 @@ import { Atom } from "effect/reactivity";
 import type { Persistence } from "@t3tools/client-runtime/platform";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { isThreadWorking } from "@t3tools/client-runtime/state/thread-inbox";
+import { threadNeedsYou } from "../lib/thread-summaries";
 
 export type PreviewCounts = ReadonlyMap<string, Persistence.ShellPreviewCounts | null>;
 
@@ -18,13 +19,11 @@ export function workspaceThreadCounts(
 ) {
   const complete = threads.filter((thread) => !previews.has(thread.environmentId));
   let working = complete.filter(isThreadWorking).length;
-  let needsYou = complete.filter(
-    (thread) => thread.hasPendingApprovals || thread.hasPendingUserInput,
-  ).length;
+  let needsYou = complete.filter((thread) => threadNeedsYou(thread)).length;
   for (const counts of previews.values()) {
     if (counts === null) return null;
     working += counts.working;
-    needsYou += counts.pendingInput;
+    needsYou += counts.needsYou;
   }
   return { working, needsYou };
 }

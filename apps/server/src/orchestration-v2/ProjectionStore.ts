@@ -261,6 +261,13 @@ export interface ProjectionSignedOutStop {
   readonly completedAt: DateTime.Utc;
 }
 
+/** The lead decides whether to retry a delegated task. */
+export function isLeadManagedTask(
+  thread: Pick<OrchestrationV2ThreadShell, "id" | "lineage" | "creationSource">,
+): boolean {
+  return thread.lineage.relationshipToParent === "subagent" && thread.creationSource !== "provider";
+}
+
 /** Revalidate after provider I/O, which may outlive the failure or the user's selection. */
 export function isCurrentRecoveryStop(
   stop: ProjectionSignedOutStop,
@@ -269,6 +276,7 @@ export function isCurrentRecoveryStop(
 ): boolean {
   return (
     thread !== null &&
+    !isLeadManagedTask(thread) &&
     thread.status === "failed" &&
     thread.latestRunId === stop.runId &&
     thread.providerInstanceId === stop.providerInstanceId &&

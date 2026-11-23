@@ -99,20 +99,19 @@ export const makeSweep = Effect.gen(function* () {
   /** When each instance last switched to its token or back to its login. */
   const switchedAt = new Map<ProviderInstanceId, number>();
 
+  const stillStopped = Effect.fnUntraced(function* (stop: ProjectionStore.ProjectionSignedOutStop) {
+    return ProjectionStore.isCurrentRecoveryStop(
+      stop,
+      yield* projections.getThreadShell(stop.threadId),
+      yield* DateTime.now,
+    );
+  });
+
   const resume = Effect.fn("SignInRecoveryWorker.resume")(function* (
     stops: ReadonlyArray<ProjectionStore.ProjectionSignedOutStop>,
     nowMs: number,
     restartSession = false,
   ) {
-    const stillStopped = Effect.fnUntraced(function* (
-      stop: ProjectionStore.ProjectionSignedOutStop,
-    ) {
-      return ProjectionStore.isCurrentRecoveryStop(
-        stop,
-        yield* projections.getThreadShell(stop.threadId),
-        yield* DateTime.now,
-      );
-    });
     for (const stop of stops) {
       if (!(yield* stillStopped(stop))) continue;
       const times = resumes.get(stop.threadId) ?? [];
@@ -245,6 +244,10 @@ export const makeSweep = Effect.gen(function* () {
       if (!autoResume) continue;
       const previous = checks.get(instanceId);
       if (nowMs < nextCheckDueMs(newestStopMs, previous)) continue;
+      // A failed child can switch the account to its fallback above. Only probe the
+      // login when a chat we can actually continue is waiting for it.
+      const waiting = yield* Effect.filter(instanceStops, stillStopped);
+      if (waiting.length === 0) continue;
       if (!(yield* signedIn(instanceId))) {
         checks.set(instanceId, {
           failed:
@@ -256,7 +259,7 @@ export const makeSweep = Effect.gen(function* () {
         continue;
       }
       checks.delete(instanceId);
-      yield* resume(instanceStops, nowMs);
+      yield* resume(waiting, nowMs);
     }
   });
 });

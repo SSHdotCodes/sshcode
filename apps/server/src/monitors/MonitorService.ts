@@ -365,28 +365,27 @@ const make = Effect.gen(function* () {
     Effect.forever,
     Effect.forkIn(serviceScope),
   );
-  const durableInfo = (
-    saved: MonitorJournalEntry & { readonly job: DurableJobProcess.DurableJob },
-  ): MonitorInfo => ({
+  const savedMonitorInfo = (saved: MonitorJournalEntry): MonitorInfo => ({
     monitorId: saved.monitorId,
     threadId: saved.threadId,
     description: saved.description,
     startedAt: saved.startedAt,
     timeoutMs: saved.timeoutMs,
     persistent: saved.persistent,
-    durable: true,
-    logPath: saved.job.logPath,
+    ...(saved.job === undefined
+      ? { restartable: saved.restartable, silenceMs: saved.silenceMs }
+      : { durable: true, logPath: saved.job.logPath }),
   });
   const publishRoster = () =>
     Effect.suspend(() => {
       const entries: ReadonlyArray<MonitorInfo> = [
         ...[...running.values()].map((entry) => entry.info),
         ...[...recoverable.values()].flatMap((saved) =>
-          saved.job === undefined || saved.completion !== undefined
+          (saved.job === undefined && !saved.restartable) || saved.completion !== undefined
             ? []
             : [
                 {
-                  ...durableInfo({ ...saved, job: saved.job }),
+                  ...savedMonitorInfo(saved),
                   state:
                     saved.stopRequested === true ? ("stopping" as const) : ("recovering" as const),
                 },
@@ -403,7 +402,7 @@ const make = Effect.gen(function* () {
     saved: MonitorJournalEntry & { readonly job: DurableJobProcess.DurableJob },
   ) =>
     Effect.gen(function* () {
-      const info = durableInfo(saved);
+      const info = savedMonitorInfo(saved);
       const stop = yield* Deferred.make<EndReason>();
       const done = yield* Deferred.make<void, MonitorError>();
       const shutdown = yield* Effect.cached(jobs.stop(saved.job));
@@ -918,8 +917,8 @@ const make = Effect.gen(function* () {
             // Bound restart-local receipts without retaining commands forever.
             if (requests.size > 4096) requests.delete(requests.keys().next().value!);
           }
-          yield* publishRoster();
           recoverable.delete(monitorId);
+          yield* publishRoster();
           yield* journalPut(
             journalEntry(input.resume?.sequence ?? 0, input.resume?.delivered ?? []),
           );
@@ -1460,6 +1459,7 @@ const make = Effect.gen(function* () {
           }
           if (allowed === "gone") {
             recoverable.delete(saved.monitorId);
+            yield* publishRoster();
             yield* journalRemove(saved.monitorId);
             yield* notifySettled(saved.threadId);
             return;
@@ -1490,6 +1490,7 @@ const make = Effect.gen(function* () {
             if (relaunched) return;
           }
           recoverable.delete(saved.monitorId);
+          yield* publishRoster();
           yield* journalRemove(saved.monitorId);
           yield* reportLost(
             saved,

@@ -27,10 +27,13 @@ describe("threadDeepLinkOnScreen", () => {
 });
 
 describe("foregroundNotificationBehavior", () => {
+  const isLive = () => true;
+
   it("suppresses a notification for the thread already on screen", () => {
     const behavior = foregroundNotificationBehavior(
       notificationWithData({ environmentId: "env-1", threadId: "thread-1" }),
       "/threads/env-1/thread-1",
+      isLive,
     );
     expect(behavior.shouldShowBanner).toBe(false);
     expect(behavior.shouldShowList).toBe(false);
@@ -41,6 +44,7 @@ describe("foregroundNotificationBehavior", () => {
     const behavior = foregroundNotificationBehavior(
       notificationWithData({ deepLink: "/threads/env-1/thread-2" }),
       "/threads/env-1/thread-1",
+      isLive,
     );
     expect(behavior.shouldShowBanner).toBe(true);
     expect(behavior.shouldShowList).toBe(true);
@@ -51,10 +55,11 @@ describe("foregroundNotificationBehavior", () => {
       foregroundNotificationBehavior(
         notificationWithData({ environmentId: "env-1", threadId: "thread-1" }),
         null,
+        isLive,
       ).shouldShowBanner,
     ).toBe(true);
     expect(
-      foregroundNotificationBehavior(notificationWithData({}), "/threads/env-1/thread-1")
+      foregroundNotificationBehavior(notificationWithData({}), "/threads/env-1/thread-1", isLive)
         .shouldShowBanner,
     ).toBe(true);
   });

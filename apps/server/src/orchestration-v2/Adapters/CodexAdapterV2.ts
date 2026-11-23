@@ -6666,19 +6666,26 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       ? baseFailure.class
                       : undefined));
               const failure =
-                permanentClass !== undefined
-                  ? { ...baseFailure, class: permanentClass, retryable: false }
-                  : isCodexCapacityFailure(
-                        baseFailure.code,
-                        input.failureMessage ?? baseFailure.message,
-                      )
-                    ? makeProviderFailure({
-                        class: baseFailure.class,
-                        code: baseFailure.code,
-                        retryable: true,
-                        message: `The task is incomplete; retry it or choose another current model. ${baseFailure.message}`,
-                      })
-                    : baseFailure;
+                baseFailure.code === "cyberPolicy"
+                  ? makeProviderFailure({
+                      class: "validation_error",
+                      code: baseFailure.code,
+                      message: "Codex stopped this request under its safety policy.",
+                      retryable: false,
+                    })
+                  : permanentClass !== undefined
+                    ? { ...baseFailure, class: permanentClass, retryable: false }
+                    : isCodexCapacityFailure(
+                          baseFailure.code,
+                          input.failureMessage ?? baseFailure.message,
+                        )
+                      ? makeProviderFailure({
+                          class: baseFailure.class,
+                          code: baseFailure.code,
+                          retryable: true,
+                          message: `The task is incomplete; retry it or choose another current model. ${baseFailure.message}`,
+                        })
+                      : baseFailure;
               return {
                 type: "turn.terminal",
                 driver: CODEX_PROVIDER,

@@ -17,6 +17,7 @@ import { deriveThreadFeedPresentation } from "../lib/threadActivity";
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import type { Atom } from "effect/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import type { QueuedRunEdit } from "./queued-run-edit";
 
 const state = vi.hoisted(() => ({
   projection: null as OrchestrationV2ThreadProjection | null,
@@ -36,6 +37,12 @@ const state = vi.hoisted(() => ({
   enqueue: vi.fn(async () => undefined),
   clearDraft: vi.fn(),
   feedback: vi.fn(),
+  alert: vi.fn(),
+  prepareAttachments: vi.fn(),
+  edit: null as QueuedRunEdit | null,
+  editQueuedRun: vi.fn(),
+  releaseEditSave: vi.fn(),
+  endEdit: vi.fn(),
   updateSettings: vi.fn(),
   pickModel: vi.fn(),
   rememberModel: vi.fn(),
@@ -66,19 +73,21 @@ vi.mock("react", () => ({
   ],
 }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => "uuid" }));
-vi.mock("../lib/attachmentUpload", () => ({ prepareTurnAttachments: vi.fn() }));
+vi.mock("../lib/attachmentUpload", () => ({ prepareTurnAttachments: state.prepareAttachments }));
 vi.mock("../lib/uuid", () => ({ uuidv4: () => "uuid" }));
-vi.mock("./queued-run-edit", () => ({
-  claimQueuedRunEditSave: () => () => {},
-  useQueuedRunEdit: () => null,
+vi.mock("./queued-run-edit", async () => ({
+  ...(await import("./queued-edit-draft-key")),
+  claimQueuedRunEditSave: () => state.releaseEditSave,
+  endQueuedRunEdit: state.endEdit,
+  useQueuedRunEdit: () => state.edit,
   useQueuedRunEditSaving: () => false,
-  getQueuedRunEdit: () => null,
+  getQueuedRunEdit: () => state.edit,
 }));
 vi.mock("./preferences", async () => {
   const { Atom, AsyncResult } = await import("effect/reactivity");
   return { mobilePreferencesAtom: Atom.make(AsyncResult.success({})) };
 });
-vi.mock("react-native", () => ({ Alert: { alert: vi.fn() } }));
+vi.mock("react-native", () => ({ Alert: { alert: state.alert } }));
 vi.mock("@effect/atom-react", async () => {
   const { appAtomRegistry } = await import("./atom-registry");
   return { useAtomValue: <A>(atom: Atom.Atom<A>) => appAtomRegistry.get(atom) };
@@ -151,6 +160,7 @@ vi.mock("./threads", async () => {
   return {
     environmentThreadDetails: { queueWorkflowAtom: () => Atom.make(null) },
     threadEnvironment: {
+      editQueuedRun: state.editQueuedRun,
       uploadFeedback: state.feedback,
       updateMetadata: state.pickModel,
       setRuntimeMode: state.pickRuntime,
@@ -291,6 +301,13 @@ beforeEach(() => {
   state.projection = null;
   state.visibleItems = null;
   state.thread.runtime = null;
+  state.draft.attachments = [];
+  state.edit = null;
+  state.alert.mockClear();
+  state.editQueuedRun.mockClear();
+  state.prepareAttachments.mockReset();
+  state.releaseEditSave.mockClear();
+  state.endEdit.mockClear();
   state.draft.modelSelection = undefined;
   state.draft.runtimeMode = undefined;
   state.draft.interactionMode = undefined;
@@ -301,6 +318,39 @@ beforeEach(() => {
   state.connectionState = "connected";
   state.grantedEnvironments.clear();
   appAtomRegistry.set(acknowledgedThreadMessagesAtom, []);
+});
+
+it("shows an upload failure and keeps the queued message edit available to retry", async () => {
+  state.grantedEnvironments.add("secondary");
+  state.edit = {
+    runId,
+    messageId: MessageId.make("queued-message"),
+    originalText: "Original message",
+    existingAttachments: [],
+  };
+  state.draft.text = "Edited message with photo";
+  state.draft.attachments = [
+    {
+      id: "photo",
+      type: "image",
+      name: "photo.jpg",
+      mimeType: "image/jpeg",
+      sizeBytes: 123,
+      fileUri: "file:///photo.jpg",
+      previewUri: "file:///photo.jpg",
+    },
+  ];
+  state.prepareAttachments.mockRejectedValueOnce(new Error("Connection lost during upload."));
+
+  await useThreadComposerState().onSendMessage();
+
+  expect(state.alert).toHaveBeenCalledWith(
+    "Could not upload queued message attachments",
+    "Connection lost during upload.",
+  );
+  expect(state.editQueuedRun).not.toHaveBeenCalled();
+  expect(state.endEdit).not.toHaveBeenCalled();
+  expect(state.releaseEditSave).toHaveBeenCalledOnce();
 });
 
 describe("mobile send model options", () => {

@@ -69,8 +69,8 @@ describe("pace", () => {
     ["2026-09-03T12:01:00.000Z", "resets in 1m"],
     ["2026-09-03T12:00:59.999Z", "Resets momentarily"],
     ["2026-09-03T12:00:00.001Z", "Resets momentarily"],
-    ["2026-09-03T12:00:00.000Z", "resets now"],
-    ["2026-09-03T11:59:59.999Z", "resets now"],
+    ["2026-09-03T12:00:00.000Z", "reset time passed"],
+    ["2026-09-03T11:59:59.999Z", "reset time passed"],
   ])("formats the reset boundary at %s", (resetsAt, label) => {
     expect(formatResetsIn({ ...window, resetsAt }, now)).toBe(label);
   });
@@ -98,7 +98,7 @@ describe("pace", () => {
       "resets in 3d 3h",
     );
     expect(formatResetsIn({ ...window, resetsAt: "2026-09-03T11:00:00.000Z" }, now)).toBe(
-      "resets now",
+      "reset time passed",
     );
   });
 });

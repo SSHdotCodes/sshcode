@@ -4159,7 +4159,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
   );
 
   it.effect(
-    "admits restart continuations once and rejects a stale continuation behind newer work",
+    "admits restart continuations once and rejects stale delivery after putting a chat away",
     () =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -4229,6 +4229,46 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           dispatchMode: { type: "start_immediately" as const },
           restartContinuationOfRunId: original.id,
         };
+        // Snooze commits after the recovery worker selected the source run.
+        yield* orchestrator.dispatch({
+          type: "thread.snooze",
+          commandId: CommandId.make("restart-snooze"),
+          threadId,
+          snoozedUntil: DateTime.formatIso(DateTime.add(now, { minutes: 10 })),
+        });
+        yield* orchestrator.dispatch({
+          ...command,
+          commandId: CommandId.make("restart-snoozed-delivery"),
+          messageId: MessageId.make("restart-snoozed-delivery"),
+        });
+        const snoozed = yield* orchestrator.getThreadProjection(threadId);
+        assert.lengthOf(snoozed.runs, 1);
+        assert.isNotNull(snoozed.thread.snoozedUntil);
+        yield* orchestrator.dispatch({
+          type: "thread.unsnooze",
+          commandId: CommandId.make("restart-unsnooze"),
+          reason: "user",
+          threadId,
+        });
+        yield* orchestrator.dispatch({
+          type: "thread.settle",
+          commandId: CommandId.make("restart-settle"),
+          threadId,
+        });
+        yield* orchestrator.dispatch({
+          ...command,
+          commandId: CommandId.make("restart-settled-delivery"),
+          messageId: MessageId.make("restart-settled-delivery"),
+        });
+        const settled = yield* orchestrator.getThreadProjection(threadId);
+        assert.lengthOf(settled.runs, 1);
+        assert.equal(settled.thread.settledOverride, "settled");
+        yield* orchestrator.dispatch({
+          type: "thread.unsettle",
+          commandId: CommandId.make("restart-unsettle"),
+          reason: "user",
+          threadId,
+        });
         yield* orchestrator.dispatch(command);
         yield* orchestrator.dispatch(command);
         const admitted = yield* orchestrator.getThreadProjection(threadId);

@@ -3518,7 +3518,7 @@ it.layer(layerTest)("what a finished task did", (it) => {
       assert.equal(
         delegatedCompletionWakeDetail([child.taskId], [{ ...task!, result: "Report." }]),
         `Subagent ${taskReference(child.taskId)}: completed (${task!.providerInstanceId}/${task!.model ?? "default"})\n` +
-          "App saw: check passed: pnpm exec tsc-rs --noEmit; 2 commands, 1 failed; 1 file\nReport.",
+          "App saw: check passed: pnpm exec tsc-rs --noEmit; 2 commands; 1 file\nReport.",
       );
 
       // A stop on the original assignment must not cancel the next one either.

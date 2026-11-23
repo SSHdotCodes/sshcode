@@ -72,6 +72,15 @@ function windowLengthMs(window: ServerProviderUsageWindow, resetsAt: number): nu
  */
 const MIN_FORECAST_ELAPSED_SHARE = 0.1;
 
+interface TimedMember {
+  readonly used: number;
+  readonly limited: boolean;
+  /** Percent per millisecond; null when neither pace is known yet. */
+  readonly rate: number | null;
+  readonly usesRecent: boolean;
+  readonly resetsAt: number;
+}
+
 /**
  * Projects a pool at each account's faster pace, refilling at its soonest reset.
  * Recent measurements have their own sampling guard and can speak before the
@@ -83,7 +92,7 @@ export function limitForecast(
   },
   now: number,
 ): LimitForecast | null {
-  const timed = window.members.flatMap(({ window: member }) => {
+  const timed = window.members.flatMap(({ window: member }): ReadonlyArray<TimedMember> => {
     const resetsAt = resetMillis(member);
     if (resetsAt === null || resetsAt <= now) return [];
     const length = windowLengthMs(member, resetsAt);
@@ -94,20 +103,19 @@ export function limitForecast(
       length !== null && elapsed !== null && elapsed >= length * MIN_FORECAST_ELAPSED_SHARE
         ? used / elapsed
         : null;
+    // An account at its limit cannot contribute more spending before the first reset.
+    if (limited) return [{ used, limited, rate: 0, usesRecent: false, resetsAt }];
     const recent = validRecentPace(member);
-    if (length === null && recent === null) return [];
     const usesRecent = recent !== null && (average === null || recent / HOUR > average);
     const rate = usesRecent ? recent / HOUR : average;
     return [{ used, limited, rate, usesRecent, resetsAt }];
   });
-  if (timed.length === 0) return null;
+  // A pool forecast describes the whole bar, including each member's next refill.
+  if (timed.length === 0 || timed.length !== window.members.length) return null;
   const resetsAt = Math.min(...timed.map((member) => member.resetsAt));
   const base = { windowId: window.id, label: window.label, resetsAt };
-  if (window.members.every((member) => isUsageWindowLimited(member.window)))
-    return { kind: "out", ...base };
+  if (timed.every((member) => member.limited)) return { kind: "out", ...base };
   if (isUsageWindowAlmostOut(window)) return { kind: "almostOut", ...base };
-  // Untimed members may still have quota, even when every timed member is spent.
-  if (timed.every((member) => member.limited)) return null;
   const left = timed.reduce((sum, member) => sum + (100 - member.used), 0) / timed.length;
   if (timed.some((member) => member.rate === null)) return null;
   const rate = timed.reduce((sum, member) => sum + member.rate!, 0) / timed.length;
@@ -192,9 +200,10 @@ export function poolForecast(
   now: number,
 ): LimitForecast | null {
   const forecasts = windows.flatMap((window) => {
-    // An older reading stopped counting when it was read; projecting it forward would guess.
-    const members = window.members.filter((member) => member.account.asOf === undefined);
-    const forecast = members.length === 0 ? null : limitForecast({ ...window, members }, now);
+    // An older reading stopped counting when it was read; projecting part of the pool
+    // would describe a different allowance than the bar.
+    if (window.members.some((member) => member.account.asOf !== undefined)) return [];
+    const forecast = limitForecast(window, now);
     return forecast === null ? [] : [forecast];
   });
   const emptyAt = (forecast: LimitForecast) =>

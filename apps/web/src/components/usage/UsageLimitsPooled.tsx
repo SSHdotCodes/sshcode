@@ -150,7 +150,7 @@ function ResetsIn({ label }: { readonly label: string | null | undefined }) {
   return (
     <span className="inline-flex items-center gap-1">
       <TimerResetIcon aria-hidden className="size-3 shrink-0" />
-      <span className="sr-only">resets in </span>
+      {label.startsWith("resets in ") ? <span className="sr-only">resets in </span> : null}
       {label.replace("resets in ", "")}
     </span>
   );
@@ -233,7 +233,7 @@ function SegmentPopover({
             {resetsIn ? ` · ${resetsIn.replace("resets in ", "in ")}` : ""}
           </Row>
         ) : null}
-        {reset && reset.restoresPercent > 0 ? (
+        {reset && reset.at > now && reset.restoresPercent > 0 ? (
           <Row label="Restores">+{reset.restoresPercent}% of pool</Row>
         ) : null}
       </div>
@@ -567,7 +567,7 @@ function PoolWindowCard({
   readonly note?: string | undefined;
 }) {
   // The soonest reset that hands anything back; an untouched account resets to no effect.
-  const nextRefill = pool.resets.find((reset) => reset.restoresPercent > 0);
+  const nextRefill = pool.resets.find((reset) => reset.at > now && reset.restoresPercent > 0);
   return (
     <div className="grid items-center gap-x-6 gap-y-3 rounded-lg border border-border/60 p-4 md:grid-cols-[11rem_minmax(0,1fr)]">
       <div className="flex flex-col gap-1">

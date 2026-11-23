@@ -99,6 +99,9 @@ describe("AgentActivity widget layout", () => {
     expect(banner).toContain("Out of date");
     expect(banner).not.toContain("#7dd3fc"); // sky-300: running
     expect(banner).toContain("Done");
+    const expandedLeading = JSON.stringify(layout.expandedLeading);
+    expect(expandedLeading).toContain('"children":"Out of date"');
+    expect(expandedLeading).not.toContain('"children":"2"');
     expect(JSON.stringify(layout.minimal)).not.toContain("2");
   });
 

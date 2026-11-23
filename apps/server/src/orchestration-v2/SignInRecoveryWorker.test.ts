@@ -90,12 +90,15 @@ describe("sign-in recovery with a saved token", () => {
         modelSelection: { instanceId, model: "claude-sonnet-4-6" },
         completedAt: DateTime.makeUnsafe(now),
       };
+      const childId = ThreadId.make("signed-out-child");
       const sweep = yield* makeSweep.pipe(
         Effect.provideService(ProjectionStore.ProjectionStoreV2, {
-          getSignedOutStops: () => Effect.succeed([stop]),
-          getThreadShell: () =>
+          getSignedOutStops: () => Effect.succeed([stop, { ...stop, threadId: childId }]),
+          getThreadShell: (id: ThreadId) =>
             Effect.succeed({
-              id: threadId,
+              id,
+              lineage: { relationshipToParent: id === childId ? "subagent" : null },
+              creationSource: id === childId ? "mcp" : "web",
               latestRunId: stop.runId,
               providerInstanceId: instanceId,
               modelSelection: stop.modelSelection,
@@ -230,6 +233,7 @@ describe("splitClaudeToken", () => {
 describe("sign-in recovery revalidation", () => {
   it.effect.each([
     "unchanged",
+    "delegated task",
     "expired snooze",
     "new run",
     "provider",
@@ -254,8 +258,11 @@ describe("sign-in recovery revalidation", () => {
       };
       const entered = yield* Deferred.make<void>();
       const checked = yield* Deferred.make<void>();
+      let deleted = false;
       const thread = {
         id: threadId,
+        lineage: { relationshipToParent: change === "delegated task" ? "subagent" : null },
+        creationSource: change === "delegated task" ? "mcp" : "web",
         providerInstanceId: instanceId,
         modelSelection: stop.modelSelection,
         latestRunId: stop.runId,
@@ -270,7 +277,7 @@ describe("sign-in recovery revalidation", () => {
       const sweep = yield* makeSweep.pipe(
         Effect.provideService(ProjectionStore.ProjectionStoreV2, {
           getSignedOutStops: () => Effect.succeed([stop]),
-          getThreadShell: () => Effect.sync(() => (change === "deleted" ? null : thread)),
+          getThreadShell: () => Effect.sync(() => (deleted ? null : thread)),
         } as never),
         Effect.provideService(ThreadManagement.ThreadManagementService, {
           dispatch: (command: unknown) => Effect.sync(() => void dispatched.push(command)),
@@ -302,9 +309,20 @@ describe("sign-in recovery revalidation", () => {
           ),
         ),
       );
+      if (change === "delegated task") {
+        // Its lead can already have removed the checkout after seeing the failure.
+        yield* Deferred.succeed(checked, undefined);
+        yield* sweep();
+        expect(yield* Deferred.isDone(entered)).toBe(false);
+        expect(dispatched).toHaveLength(0);
+        return;
+      }
       const fiber = yield* sweep().pipe(Effect.forkScoped);
       yield* Deferred.await(entered);
       switch (change) {
+        case "deleted":
+          deleted = true;
+          break;
         case "expired snooze":
           thread.snoozedUntil = DateTime.subtract(now, { hours: 1 });
           break;

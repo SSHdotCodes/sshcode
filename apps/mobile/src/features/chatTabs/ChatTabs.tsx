@@ -1,15 +1,8 @@
 import { usePrivacyLabel } from "../../state/use-privacy-mode";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import {
-  ALL_CHATS_TAB,
-  buildChatTabs,
-  type ChatTabView,
-} from "@t3tools/client-runtime/state/chat-tabs";
-import {
-  connectionWorkStatus,
-  type EnvironmentConnectionPhase,
-} from "@t3tools/client-runtime/connection";
+import { ALL_CHATS_TAB, type ChatTabView } from "@t3tools/client-runtime/state/chat-tabs";
+import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
   CLAUDE_RC_TAB,
@@ -31,6 +24,7 @@ import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/
 import { environmentServerConfigsAtom, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { resolveHomeChatTab } from "../terminalSessions/terminalSessions.logic";
+import { buildHomeChatTabs } from "./ChatTabs.logic";
 
 /**
  * Chat tabs on the phone: a row of chips above Home's list, All first, the same tabs the
@@ -40,44 +34,27 @@ import { resolveHomeChatTab } from "../terminalSessions/terminalSessions.logic";
 /** The tabs Home shows, for row menus to offer. */
 const chatTabViewsAtom = Atom.make<ReadonlyArray<ChatTabView>>([]).pipe(Atom.keepAlive);
 
-function chatTabStatus(thread: EnvironmentThreadShell) {
-  if (thread.hasPendingApprovals || thread.hasPendingUserInput || thread.pendingSubagentRequest)
-    return "attention" as const;
-  const status = thread.runtime?.status;
-  return status === "preparing" ||
-    status === "queued" ||
-    status === "starting" ||
-    status === "running" ||
-    status === "waiting"
-    ? ("working" as const)
-    : null;
-}
-
 /** Home's tabs and the open one, from the chats Home lists. */
 export function useHomeChatTabs(
   threads: ReadonlyArray<EnvironmentThreadShell>,
   connectionPhases: ReadonlyMap<EnvironmentId, EnvironmentConnectionPhase>,
+  selectedMachine: string | null,
 ) {
   const preferences = useAtomValue(mobilePreferencesAtom);
   const save = useAtomSet(updateMobilePreferencesAtom);
+  const configs = useAtomValue(environmentServerConfigsAtom);
   const tabs = useMemo(
     () =>
-      buildChatTabs(
-        threads.filter(
-          (thread) => thread.archivedAt === null && thread.lineage.parentThreadId === null,
+      buildHomeChatTabs(
+        threads,
+        connectionPhases,
+        [...configs].flatMap(([environmentId, config]) =>
+          selectedMachine === null || selectedMachine === environmentId
+            ? (config.chatTabs ?? []).map((tab) => ({ environmentId, tab }))
+            : [],
         ),
-        {
-          threadKey: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-          status: (thread) => {
-            const status = chatTabStatus(thread);
-            return status === "working" &&
-              connectionWorkStatus(connectionPhases.get(thread.environmentId)) !== null
-              ? null
-              : status;
-          },
-        },
       ),
-    [threads, connectionPhases],
+    [threads, connectionPhases, configs, selectedMachine],
   );
   // Row menus only need which chats each tab holds, so statuses changing does not
   // re-render every row.

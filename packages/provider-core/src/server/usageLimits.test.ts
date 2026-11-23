@@ -220,11 +220,17 @@ describe("resolveUsageLimitsAfterProbe", () => {
     const sameTime = { ...probed, checkedAt: live.checkedAt };
     expect(resolveUsageLimitsAfterProbe({ published: live, probed: sameTime })).toBe(sameTime);
   });
-  it("keeps the last good windows through a failed probe but not an unsupported one", () => {
+  it("publishes the failed read so older usage is never presented as live", () => {
     const failed = { checkedAt, windows: [], unavailable: { reason: "probeFailed" as const } };
     const unsupported = { checkedAt, windows: [], unavailable: { reason: "unsupported" as const } };
-    expect(resolveUsageLimitsAfterProbe({ published, probed: failed })).toBe(published);
+    expect(resolveUsageLimitsAfterProbe({ published, probed: failed })).toBe(failed);
     expect(resolveUsageLimitsAfterProbe({ published, probed: unsupported })).toBe(unsupported);
     expect(resolveUsageLimitsAfterProbe({ published: undefined, probed: failed })).toBe(failed);
+  });
+
+  it("keeps a live update that arrived after a failing probe began", () => {
+    const live = { ...published, checkedAt: "2026-09-03T12:00:05.000Z" };
+    const failed = { checkedAt, windows: [], unavailable: { reason: "probeFailed" as const } };
+    expect(resolveUsageLimitsAfterProbe({ published: live, probed: failed })).toBe(live);
   });
 });

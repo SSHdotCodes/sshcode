@@ -388,8 +388,12 @@ describe("environment shell synchronization", () => {
         );
 
       const first = yield* Queue.take(subscriptions);
+      const monitored = {
+        ...v2ThreadShell,
+        longRunningWork: { monitorCount: 1, backgroundTaskCount: 0, runningSubagentCount: 0 },
+      };
       yield* Queue.offerAll(first.events, [
-        { kind: "snapshot", snapshot: LIVE_SHELL_SNAPSHOT },
+        { kind: "snapshot", snapshot: { ...LIVE_SHELL_SNAPSHOT, threads: [monitored] } },
         { kind: "synchronized" },
       ] as const);
       yield* liveAt(1);
@@ -408,12 +412,21 @@ describe("environment shell synchronization", () => {
       // Without a reconnect or wakeup, the stream resubscribes once the backoff passes.
       yield* TestClock.adjust("250 millis");
       const retried = yield* Queue.take(subscriptions);
-      expect(retried.input).toMatchObject({ afterSequence: 1 });
+      expect(retried.input).toMatchObject({
+        afterSequence: 1,
+        refreshMonitorThreadIds: [monitored.id],
+      });
       yield* Queue.offerAll(retried.events, [
-        { kind: "snapshot", snapshot: { ...LIVE_SHELL_SNAPSHOT, snapshotSequence: 2 } },
+        {
+          kind: "snapshot",
+          snapshot: { ...LIVE_SHELL_SNAPSHOT, projects: [], threads: [v2ThreadShell] },
+          resolvedRepositoryIdentityRoots: [],
+        },
         { kind: "synchronized" },
       ] as const);
-      expect((yield* liveAt(2)).error).toEqual(Option.none());
+      const resumed = yield* liveAt(1);
+      expect(resumed.error).toEqual(Option.none());
+      expect(Option.getOrThrow(resumed.snapshot).threads[0]?.longRunningWork).toBeUndefined();
     }),
   );
 

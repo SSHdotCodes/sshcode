@@ -1230,12 +1230,15 @@ type SidebarSessionOrderInput = SidebarThreadStatusInput &
   > & {
     readonly lastVisitedAt?: string | null | undefined;
     readonly latestUserAuthoredMessageAt?: string | null | undefined;
+    readonly unsettledAt?: string | null | undefined;
   };
 
-/** A turn in flight, including one blocked on an approval or an answer. */
+/** A turn in flight, work that will wake it, or a request for the user. */
 export function isSidebarSessionBusy(thread: SidebarThreadStatusInput): boolean {
   const status = resolveSidebarThreadStatus(thread);
-  return status === "working" || status === "approval" || status === "input";
+  return (
+    status === "working" || status === "waiting" || status === "approval" || status === "input"
+  );
 }
 
 /**
@@ -1259,12 +1262,13 @@ export function belongsInSidebarSettledShelf(
 export function sidebarSessionActivityAt(
   thread: Pick<
     SidebarSessionOrderInput,
-    "createdAt" | "updatedAt" | "latestUserMessageAt" | "latestRun"
+    "createdAt" | "updatedAt" | "latestUserMessageAt" | "latestRun" | "unsettledAt"
   >,
 ): string | null {
   let latest: string | null = null;
   let latestMs = Number.NEGATIVE_INFINITY;
   for (const candidate of [
+    thread.unsettledAt,
     thread.latestUserMessageAt,
     thread.latestRun?.requestedAt,
     thread.latestRun?.startedAt,
@@ -1345,9 +1349,7 @@ export function sortSidebarSessions<T extends SidebarSessionOrderInput>(
   const tier = (thread: T) =>
     sidebarSessionNeedsYou(thread, options?.nowMs) || options?.holdsNeedsYou?.(thread) === true
       ? 0
-      : isSidebarSessionBusy(thread) ||
-          resolveSidebarThreadStatus(thread) === "waiting" ||
-          finishedWithin(thread, options?.nowMs)
+      : isSidebarSessionBusy(thread) || finishedWithin(thread, options?.nowMs)
         ? 1
         : 2;
   return threads

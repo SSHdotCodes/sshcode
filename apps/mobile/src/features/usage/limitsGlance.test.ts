@@ -261,10 +261,19 @@ describe("limit presentation", () => {
 
   it("says when the window resets", () => {
     expect(resetsInLabel(window("5h", 10, 134), NOW)).toBe("Resets in 2h 14m");
-    expect(resetsInLabel(window("5h", 10, -1), NOW)).toBe("Resets now");
+    expect(resetsInLabel(window("5h", 10, -1), NOW)).toBe("Reset time passed");
+    expect(resetsInShort(window("5h", 10, -1), NOW)).toBeNull();
     expect(resetsInLabel(window("5h", 10, 0.5), NOW)).toBe("Resets in <1m");
     expect(resetsInShort(window("5h", 10, 0.5), NOW)).toBe("<1m");
     expect(resetsInLabel(window("5h", 10, null), NOW)).toBeNull();
+  });
+
+  it("counts down to the next future reset in a pooled window", () => {
+    const expired = window("weekly", 90, -60);
+    const upcoming = window("weekly", 40, 120);
+    const pooled = { ...expired, resets: [...expired.resets, ...upcoming.resets] };
+    expect(resetsInLabel(pooled, NOW)).toBe("Resets in 2h 0m");
+    expect(resetsInShort(pooled, NOW)).toBe("2h 0m");
   });
 });
 

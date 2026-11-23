@@ -203,8 +203,8 @@ export function newChatUsageWindows(
   driver: string | null,
   /**
    * The account the selected model runs on. A provider with several accounts (a second
-   * subscription) shows only that account's limits; without one, or when the account has no
-   * entry of its own, every account of the provider shows.
+   * subscription) shows only that account's limits. Without a selection, every account of
+   * the provider shows.
    */
   instanceId?: string | null,
 ) {
@@ -213,21 +213,24 @@ export function newChatUsageWindows(
       [environmentId, { entry: { target: { label: "This machine" } }, serverConfig: config }],
     ]),
   );
-  const selected = instanceId
-    ? accounts.filter((account) => account.key === `${environmentId}:${instanceId}`)
-    : [];
+  const sourceKey = instanceId ? `${environmentId}:${instanceId}` : null;
+  const selectedName = config?.providers
+    .find((provider) => provider.instanceId === instanceId)
+    ?.displayName?.trim();
   return (
-    (
-      selected.length > 0
-        ? selected
-        : accounts.filter((account) => driver === null || account.driver === driver)
-    )
+    accounts
+      .filter((account) =>
+        sourceKey === null
+          ? driver === null || account.driver === driver
+          : account.sourceKeys.includes(sourceKey),
+      )
       .flatMap((account) =>
         account.limits.windows.map((window) => ({
           ...window,
           key: `${account.key}:${window.id}`,
           accountLabel:
-            account.displayName ?? (account.driver === "claudeAgent" ? "Claude" : account.driver),
+            selectedName ||
+            (account.displayName ?? (account.driver === "claudeAgent" ? "Claude" : account.driver)),
           checkedAt: account.limits.checkedAt,
         })),
       )

@@ -152,6 +152,7 @@ effectIt.effect(
 
 effectIt.effect.each([
   "unchanged",
+  "delegated task",
   "expired snooze",
   "new run",
   "provider",
@@ -177,6 +178,8 @@ effectIt.effect.each([
     const ready = yield* Deferred.make<void>();
     const thread = {
       id: threadId,
+      lineage: { relationshipToParent: change === "delegated task" ? "subagent" : null },
+      creationSource: change === "delegated task" ? "mcp" : "web",
       providerInstanceId: instanceId,
       modelSelection: stop.modelSelection,
       latestRunId: stop.runId,

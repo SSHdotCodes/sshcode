@@ -551,6 +551,7 @@ it.effect("cancels a stale waiting run when no checkpoint capture can finish it"
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getRecoveryThreadIds: () => Effect.succeed([threadId]),
           getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+          getNextTurnItemOrdinal: () => Effect.succeed(42),
         }),
         Layer.mock(EventSink.EventSinkV2)({
           commitCommand: (input) => {
@@ -616,6 +617,7 @@ it.effect("keeps a pending secret request answerable when its run is recovered",
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getRecoveryThreadIds: () => Effect.succeed([threadId]),
           getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+          getNextTurnItemOrdinal: () => Effect.succeed(42),
         }),
         Layer.mock(EventSink.EventSinkV2)({
           commitCommand: (input) => {
@@ -637,9 +639,10 @@ it.effect("keeps a pending secret request answerable when its run is recovered",
 
   return Effect.gen(function* () {
     yield* (yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService).reconcile("startup");
-    const itemEvent = committedInput?.events.find((event) => event.type === "turn-item.updated");
-    const card = itemEvent?.type === "turn-item.updated" ? itemEvent.payload : null;
-    assert.isNull(card, "the pending secret card remains answerable after process loss");
+    const card = committedInput?.events.find(
+      (event) => event.type === "turn-item.updated" && event.payload.type === "secret_request",
+    );
+    assert.isUndefined(card, "the pending secret card remains answerable after process loss");
   }).pipe(Effect.provide(layer));
 });
 
@@ -699,6 +702,7 @@ it.effect.each(["queued", "preparing"] as const)("recovers $0 work after restart
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getRecoveryThreadIds: () => Effect.succeed([threadId]),
           getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+          getNextTurnItemOrdinal: () => Effect.succeed(42),
           getThreadRecords: () => Effect.succeed(projection),
         }),
         Layer.mock(EventSink.EventSinkV2)({
@@ -844,7 +848,7 @@ it.effect(
 );
 
 it.effect(
-  "cancels the complete in-flight subtree and stops its persisted session without reopening it",
+  "records a restart notice when recovery cancels an in-flight turn and its subtree",
   () => {
     const threadId = ThreadId.make("thread_recovery_cancel");
     const runId = RunId.make("run_recovery_cancel");
@@ -917,6 +921,7 @@ it.effect(
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
             getRecoveryThreadIds: () => Effect.succeed([threadId]),
             getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+            getNextTurnItemOrdinal: () => Effect.succeed(42),
           }),
           Layer.mock(EventSink.EventSinkV2)({
             commitCommand: (input) => {
@@ -960,12 +965,21 @@ it.effect(
           ["provider-turn.updated", "cancelled"],
           ["message.updated", null],
           ["turn-item.updated", "cancelled"],
+          ["turn-item.updated", "completed"],
           ["provider-thread.updated", "idle"],
           ["provider-session.updated", "stopped"],
         ],
       );
       const messageEvent = events.find((event) => event.type === "message.updated");
       assert.isFalse(messageEvent?.type === "message.updated" && messageEvent.payload.streaming);
+      const notice = events.find(
+        (event) => event.type === "turn-item.updated" && event.payload.type === "system_notice",
+      );
+      assert.deepInclude(notice?.payload, {
+        runId,
+        message: "The server restarted before this turn finished.",
+        ordinal: 42,
+      });
     }).pipe(Effect.provide(layer));
   },
 );
@@ -1192,6 +1206,7 @@ it.effect(
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
             getRecoveryThreadIds: () => Effect.succeed([threadId]),
             getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+            getNextTurnItemOrdinal: () => Effect.succeed(42),
           }),
           Layer.mock(EventSink.EventSinkV2)({
             commitCommand: (input) => {
@@ -1649,6 +1664,7 @@ it.effect("leaves delegated tasks to their own child threads after process loss"
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getRecoveryThreadIds: () => Effect.succeed([threadId]),
           getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+          getNextTurnItemOrdinal: () => Effect.succeed(42),
         }),
         Layer.mock(EventSink.EventSinkV2)({
           commitCommand: (input) => {

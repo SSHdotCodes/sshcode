@@ -538,8 +538,14 @@ export function useThreadComposerState() {
         environmentId: thread.environmentId,
         attachments: draft.attachments,
         supportsImageUploads: capabilities?.attachmentUploads === true,
+      }).catch((error: unknown) => {
+        Alert.alert(
+          "Could not upload queued message attachments",
+          error instanceof Error ? error.message : "Your edit is still in the composer. Try again.",
+        );
+        return null;
       });
-      if (prepared.status !== "ready") return;
+      if (prepared?.status !== "ready") return;
       const payload = resolveQueuedEditPayload({
         edit,
         draftContext: draft.context,

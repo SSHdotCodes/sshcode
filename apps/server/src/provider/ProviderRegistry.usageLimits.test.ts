@@ -223,6 +223,35 @@ it.effect("starts at most one probe a minute for a reading that stays stale", ()
   }),
 );
 
+it.effect("does not show the old workspace's quota after switching workspaces", () =>
+  Effect.gen(function* () {
+    const original = provider("codex");
+    const auth = { ...original.auth, email: "account@example.test", workspaceId: "personal" };
+    const live = { ...original, auth };
+    const failedAt = {
+      ...original,
+      usageLimits: makeUnavailableUsageLimits({
+        checkedAt: "1970-01-01T00:01:00.000Z",
+        reason: "probeFailed",
+      }),
+    };
+    const current = yield* Ref.make(live);
+    yield* withRegistry(
+      [{ provider: live, refresh: Ref.get(current) }],
+      Effect.gen(function* () {
+        const registry = yield* ProviderRegistry.ProviderRegistry;
+        yield* TestClock.setTime(60_000);
+        yield* Ref.set(current, { ...failedAt, auth });
+        const sameWorkspace = yield* registry.refreshInstance(live.instanceId);
+        expect(sameWorkspace[0]?.usageLimits?.windows).toHaveLength(1);
+        yield* Ref.set(current, { ...failedAt, auth: { ...auth, workspaceId: "work" } });
+        const newWorkspace = yield* registry.refreshInstance(live.instanceId);
+        expect(newWorkspace[0]?.usageLimits).toEqual(failedAt.usageLimits);
+      }),
+    );
+  }),
+);
+
 it.effect(
   "serves the reading saved before a restart while probes read nothing, until a live one",
   () =>

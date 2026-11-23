@@ -2733,6 +2733,12 @@ describe("sortSidebarSessions", () => {
     });
     expect(belongsInSidebarSettledShelf(shelfInput(), true)).toBe(true);
     expect(belongsInSidebarSettledShelf(shelfInput({ runtime: running }), true)).toBe(false);
+    expect(
+      belongsInSidebarSettledShelf(
+        shelfInput({ runtime: { ...running, status: "idle", activeRunId: null } }),
+        true,
+      ),
+    ).toBe(false);
     expect(belongsInSidebarSettledShelf(shelfInput({ hasPendingApprovals: true }), true)).toBe(
       false,
     );
@@ -2765,6 +2771,21 @@ describe("sortSidebarSessions", () => {
     expect(
       sidebarSessionActivityAt(session("broken", { updatedAt: "nope", createdAt: "nope" })),
     ).toBeNull();
+  });
+
+  it("brings a reopened chat to the top and dates its row from the reopening", () => {
+    const reopenedAt = "2026-03-09T13:00:00.000Z";
+    const reopened = session("reopened", {
+      latestUserMessageAt: "2026-03-09T10:00:00.000Z",
+      unsettledAt: reopenedAt,
+    });
+    const recent = session("recent", { latestUserMessageAt: "2026-03-09T12:00:00.000Z" });
+
+    expect(sortSidebarSessions([recent, reopened]).map((thread) => thread.id)).toEqual([
+      "reopened",
+      "recent",
+    ]);
+    expect(sidebarSessionActivityAt(reopened)).toBe(reopenedAt);
   });
 
   it("sorts a held chat with working chats and leaves a dev server ready", () => {

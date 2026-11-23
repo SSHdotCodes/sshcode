@@ -18,17 +18,16 @@ const SUPPRESS: NotificationBehavior = {
 
 /**
  * Decides how a notification that arrives while the app is open is presented.
- * A notification for the thread already on screen is redundant with the live
- * feed, so it stays silent; everything else banners like it would in the
- * background. `deepLinkOnScreen` is the normalized `/threads/:env/:thread`
- * path of the current route, or null when no thread is open.
+ * A notification for the thread on screen stays silent once its feed is live.
+ * A cached or synchronizing thread may still be missing the event in the alert.
  */
 export function foregroundNotificationBehavior(
   notification: Notification,
   deepLinkOnScreen: string | null,
+  hasLiveFeed: (deepLink: string) => boolean,
 ): NotificationBehavior {
   const target = extractAgentNotificationDeepLink({ notification });
-  if (target !== null && target === deepLinkOnScreen) {
+  if (target !== null && target === deepLinkOnScreen && hasLiveFeed(target)) {
     return SUPPRESS;
   }
   return SHOW;

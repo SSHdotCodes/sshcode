@@ -238,8 +238,9 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         keybindingsConfigPath,
         JSON.stringify([
           { key: "mod+j", command: "terminal.toggle" },
+          { key: "mod+9", command: "openChats.jump.9" },
           { key: "mod+shift+d+o", command: "terminal.new" },
-          { key: "mod+x", command: "invalid.command" },
+          { key: "mod+x", command: "openChats.jump.10" },
         ]),
       );
 
@@ -250,20 +251,42 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
 
       assert.isTrue(configState.keybindings.some((entry) => entry.command === "terminal.toggle"));
       assert.isFalse(
-        configState.keybindings.some((entry) => String(entry.command) === "invalid.command"),
+        configState.keybindings.some((entry) => String(entry.command) === "openChats.jump.10"),
       );
       assert.deepEqual(configState.issues, [
         {
           kind: "keybindings.invalid-entry",
-          index: 1,
+          index: 2,
           message: configState.issues[0]?.message ?? "",
         },
         {
           kind: "keybindings.invalid-entry",
-          index: 2,
+          index: 3,
           message: configState.issues[1]?.message ?? "",
         },
       ]);
+    }).pipe(Effect.provide(layerKeybindings())),
+  );
+
+  it.effect("backfills defaults in configs that still contain the removed chat-tab shortcuts", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const keybindings = yield* Keybindings.Keybindings;
+      const custom = { key: "mod+shift+y", command: "terminal.toggle" };
+      const retired = [
+        { key: "mod+1", command: "openChats.jump.1" },
+        { key: "ctrl+meta+w", command: "openChats.close" },
+      ];
+      yield* fs.writeFileString(keybindingsConfigPath, JSON.stringify([...retired, custom]));
+      assert.deepEqual((yield* keybindings.loadConfigState).issues, []);
+      yield* keybindings.syncDefaultKeybindingsOnStartup;
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.deepEqual(
+        persisted.find((rule) => rule.command === "terminal.toggle"),
+        custom,
+      );
+      assert.isTrue(persisted.some((rule) => rule.command === "sidebar.toggle"));
     }).pipe(Effect.provide(layerKeybindings())),
   );
 

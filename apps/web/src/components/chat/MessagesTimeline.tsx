@@ -223,7 +223,8 @@ import { useFileContextMenuHandler } from "../../fileContextMenu";
 import { useProject, useThreadShell } from "../../state/entities";
 import {
   CHAT_TIMELINE_ANCHOR_OFFSET,
-  readTimelinePosition,
+  readTimelineViewState,
+  rememberTimelineDisclosures,
   rememberTimelinePosition,
   timelineContentOverflowsViewport,
 } from "./timelineScrollAnchoring";
@@ -792,18 +793,17 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const casualVoice = casualVoiceActive(casualVoiceEnabled);
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
   const presentationNow = useMemo(() => new Date(), [listIdentityKey]);
-  const rememberedPosition = useMemo(
-    () => readTimelinePosition(listIdentityKey),
-    [listIdentityKey],
-  );
+  const rememberedView = useMemo(() => readTimelineViewState(listIdentityKey), [listIdentityKey]);
+  const rememberedPosition = rememberedView?.position;
+  const rememberedDisclosures = rememberedView?.disclosures;
   const [expandedRunIds, setExpandedRunIds] = useState<ReadonlySet<RunId>>(
-    () => rememberedPosition?.disclosures?.runs ?? new Set(),
+    () => rememberedDisclosures?.runs ?? new Set(),
   );
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(
-    () => rememberedPosition?.disclosures?.workGroups ?? new Set(),
+    () => rememberedDisclosures?.workGroups ?? new Set(),
   );
   const [expandedAttemptIds, setExpandedAttemptIds] = useState<ReadonlySet<RunAttemptId>>(
-    () => rememberedPosition?.disclosures?.attempts ?? new Set(),
+    () => rememberedDisclosures?.attempts ?? new Set(),
   );
   const [positionedThreadKey, setPositionedThreadKey] = useState<string | null>(() =>
     rememberedPosition?.atEnd === false ? null : listIdentityKey,
@@ -822,9 +822,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     setPreviousListIdentity(listIdentityKey);
     setPositionedThreadKey(null);
     setSettlingListIdentity(listIdentityKey);
-    paintedExpandedRunIds = rememberedPosition?.disclosures?.runs ?? new Set();
-    paintedExpandedWorkGroupIds = rememberedPosition?.disclosures?.workGroups ?? new Set();
-    paintedExpandedAttemptIds = rememberedPosition?.disclosures?.attempts ?? new Set();
+    paintedExpandedRunIds = rememberedDisclosures?.runs ?? new Set();
+    paintedExpandedWorkGroupIds = rememberedDisclosures?.workGroups ?? new Set();
+    paintedExpandedAttemptIds = rememberedDisclosures?.attempts ?? new Set();
     setExpandedRunIds(paintedExpandedRunIds);
     setExpandedWorkGroupIds(paintedExpandedWorkGroupIds);
     setExpandedAttemptIds(paintedExpandedAttemptIds);
@@ -837,12 +837,28 @@ const ConversationTimeline = memo(function ConversationTimeline({
   // Nested tool state shares the bounded thread-position cache.
   const workGroupViewState = useMemo<WorkGroupViewState>(
     () =>
-      rememberedPosition?.disclosures?.workGroupState ?? {
+      rememberedDisclosures?.workGroupState ?? {
         scrollPositions: new Map(),
         expandedEntries: new Set(),
       },
-    [listIdentityKey, rememberedPosition],
+    [listIdentityKey, rememberedDisclosures],
   );
+  useLayoutEffect(() => {
+    if (paintOnly) return;
+    rememberTimelineDisclosures(listIdentityKey, {
+      runs: paintedExpandedRunIds,
+      workGroups: paintedExpandedWorkGroupIds,
+      attempts: paintedExpandedAttemptIds,
+      workGroupState: workGroupViewState,
+    });
+  }, [
+    listIdentityKey,
+    paintOnly,
+    paintedExpandedRunIds,
+    paintedExpandedWorkGroupIds,
+    paintedExpandedAttemptIds,
+    workGroupViewState,
+  ]);
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
   const disclosureAnchorKeyRef = useRef<string | null>(null);
   const disclosureSettleFrameRef = useRef<number | null>(null);
@@ -1549,12 +1565,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
             offsetWithinRow: element.getBoundingClientRect().top - row.getBoundingClientRect().top,
             scrollOffset: element.scrollTop,
             atEnd: isAtEnd,
-            disclosures: {
-              runs: paintedExpandedRunIds,
-              workGroups: paintedExpandedWorkGroupIds,
-              attempts: paintedExpandedAttemptIds,
-              workGroupState: workGroupViewState,
-            },
           },
           liveFollowEnabled && !anchoredEndSpace,
         );
@@ -1586,10 +1596,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
     );
   }, [
     citationPositioning,
-    paintedExpandedRunIds,
-    paintedExpandedWorkGroupIds,
-    paintedExpandedAttemptIds,
-    workGroupViewState,
     rows,
     listIdentityKey,
     liveFollowEnabled,

@@ -26,6 +26,7 @@ import {
 import { renderToStaticMarkup } from "react-dom/server";
 import { createRoot } from "react-dom/client";
 import { setUiModePreference } from "../../hooks/useTheme";
+import type { TimelineEntry } from "../../session-logic";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { shouldUseRestingComposerLayout } from "../composerFooterLayout";
 import { useComposerFocusState } from "./useComposerFocusState";
@@ -504,29 +505,64 @@ function buildSnapShotTimelineEntry(previewUrl?: string) {
 }
 
 describe("MessagesTimeline", () => {
+  it("keeps a work group expanded after switching chats without scrolling", async () => {
+    vi.unstubAllGlobals();
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    const props = buildProps();
+    const work: TimelineEntry[] = [1, 2].map((index) => ({
+      kind: "work",
+      id: `disclosure-entry-${index}`,
+      createdAt: MESSAGE_CREATED_AT,
+      entry: {
+        id: `disclosure-${index}`,
+        createdAt: MESSAGE_CREATED_AT,
+        label: "Ran command",
+        command: `echo disclosure-${index}`,
+        tone: "tool",
+        itemType: "command_execution",
+        toolLifecycleStatus: "completed",
+      },
+    }));
+    const render = (original: boolean) =>
+      root.render(
+        <MessagesTimeline
+          {...props}
+          routeThreadKey={original ? "environment-local:expanded" : "environment-local:other"}
+          timelineEntries={original ? work : [buildUserTimelineEntry("Other chat")]}
+        />,
+      );
+    try {
+      await act(() => render(true));
+      const toggle = host.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
+      await act(() => toggle.click());
+      expect(host.textContent).toContain("echo disclosure-1");
+      await act(() => render(false));
+      expect(host.textContent).toContain("Other chat");
+      await act(() => render(true));
+      expect(host.textContent).toContain("echo disclosure-1");
+    } finally {
+      await act(() => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("restores a thread's disclosures after an interrupted switch to it", async () => {
     vi.unstubAllGlobals();
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.stubGlobal("requestAnimationFrame", () => 0);
     vi.stubGlobal("cancelAnimationFrame", () => {});
-    const { rememberTimelinePosition } = await import("./timelineScrollAnchoring");
+    const { rememberTimelineDisclosures } = await import("./timelineScrollAnchoring");
     const target = "environment-local:interrupted-switch";
-    rememberTimelinePosition(
-      target,
-      {
-        rowId: "work-group:entry-1",
-        offsetWithinRow: 0,
-        scrollOffset: 0,
-        atEnd: true,
-        disclosures: {
-          runs: new Set(),
-          workGroups: new Set(["work-group:entry-1"]),
-          attempts: new Set(),
-          workGroupState: { scrollPositions: new Map(), expandedEntries: new Set() },
-        },
-      },
-      true,
-    );
+    rememberTimelineDisclosures(target, {
+      runs: new Set(),
+      workGroups: new Set(["work-group:entry-1"]),
+      attempts: new Set(),
+      workGroupState: { scrollPositions: new Map(), expandedEntries: new Set() },
+    });
     const host = document.createElement("div");
     const root = createRoot(host);
     const props = buildProps();

@@ -100,11 +100,13 @@ export class ClaudeRcClient {
       "Claude returned too many session pages. Close old CLI sessions and refresh Terminal.",
     );
   }
-  private async assertLive(token: string, sessionId: string, signal?: AbortSignal) {
-    if (!(await this.sessions(token, signal)).some((session) => session.id === sessionId))
+  private async liveSession(token: string, sessionId: string, signal?: AbortSignal) {
+    const session = (await this.sessions(token, signal)).find((entry) => entry.id === sessionId);
+    if (session === undefined)
       throw failure(
         "This is not an open Claude Code CLI session with Remote Control enabled. Refresh Terminal.",
       );
+    return session;
   }
   private async post(
     token: string,
@@ -134,7 +136,7 @@ export class ClaudeRcClient {
     signal?: AbortSignal,
   ) {
     if (!platform) throw failure("Control CLI sessions from the SSHCode Mac or mobile app.");
-    await this.assertLive(token, input.sessionId, signal);
+    await this.liveSession(token, input.sessionId, signal);
     if (input.action === "send") {
       if (!input.text.trim()) throw failure("Enter a message for the CLI.");
       await this.post(
@@ -200,14 +202,14 @@ export class ClaudeRcClient {
     emit: (event: ClaudeRcEvent) => void,
   ) {
     emit({ type: "status", phase: "connecting", working: false });
-    await this.assertLive(token, sessionId, signal);
+    const session = await this.liveSession(token, sessionId, signal);
     const response = await this.request(`${BASE}/${sessionId}/events/stream`, {
       headers: { ...this.headers(token), Accept: "text/event-stream" },
       signal,
     });
     await this.check(response);
     if (!response.body) throw failure("Claude Remote Control did not open an event stream.");
-    const decoder = new RcEventDecoder();
+    const decoder = new RcEventDecoder(session.working);
     const active = this.decoders.get(sessionId) ?? new Set<RcEventDecoder>();
     active.add(decoder);
     this.decoders.set(sessionId, active);
@@ -218,7 +220,7 @@ export class ClaudeRcClient {
     const reader = response.body.getReader(),
       utf8 = new TextDecoder(),
       parser = new RcSseParser();
-    emit({ type: "status", phase: "connected", working: false });
+    emit({ type: "status", phase: "connected", working: session.working });
     try {
       // Watching is read-only. Do not initialize the CLI or negotiate its dialog/settings policy.
       while (!signal.aborted) {

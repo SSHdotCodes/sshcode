@@ -81,6 +81,7 @@ import {
   OrchestrationV2ThreadLaunchError,
   type OrchestrationProjectShell,
   type OrchestrationV2ShellSnapshot,
+  type OrchestrationV2SubscribeShellInput,
   type OrchestrationV2ThreadStreamItem,
   type ProjectEntriesFailure,
   type ProjectFileFailure,
@@ -1119,12 +1120,7 @@ const readSharedThreadShell = Effect.fn("ws.orchestrationV2.readSharedThreadShel
 });
 
 export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subscribeShell")(
-  function* (input: {
-    readonly afterSequence?: number;
-    readonly requestCompletionMarker?: boolean;
-    readonly omitIdleSubagents?: boolean;
-    readonly omitIdleAppOwnedSubagents?: boolean;
-  }) {
+  function* (input: OrchestrationV2SubscribeShellInput) {
     const omitIdleSubagents: IdleSubagentOmission | undefined =
       input.omitIdleAppOwnedSubagents === true
         ? "all"
@@ -1393,10 +1389,6 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       }
 
       const loaded = yield* loadProjectMetadataSnapshot(highWater);
-      // Monitors the app runs start and end outside the event log, so the rows a
-      // resuming client saved can miss them. Their chats' rows go out as a patch.
-      const monitored = appMonitorThreadIds();
-      const monitoredPatch = monitored.length === 0 ? [] : [yield* threadPatchFrame(monitored)];
       // Bounded by SHELL_RESUME_MAX_GAP, so it is read whole and joins the prefix.
       const replay = yield* toShellStream(
         applicationEvents.readApplicationEvents({
@@ -1408,14 +1400,18 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
           skipUnknownEventTypes: true,
         }),
       ).pipe(Stream.runCollect);
+      // App monitors start and end outside the event log. Refresh both currently
+      // monitored chats and chats the client may still show as waiting.
+      const monitored = [...appMonitorThreadIds(), ...(input.refreshMonitorThreadIds ?? [])];
+      const monitoredPatch = monitored.length === 0 ? [] : [yield* threadPatchFrame(monitored)];
       return composeShellStreamWithEnrichment({
         initial: rpcInitialItems([
           ...shellStreamItemsFromResumeSnapshot({
             snapshot: loaded.snapshot,
             resolvedRepositoryIdentityRoots: loaded.resolvedRepositoryIdentityRoots,
           }),
-          ...monitoredPatch,
           ...replay,
+          ...monitoredPatch,
           ...completionItems,
         ]),
         tail: liveFrom(highWater),

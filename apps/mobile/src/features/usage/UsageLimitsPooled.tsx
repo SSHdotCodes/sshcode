@@ -495,7 +495,7 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
                   })}
                 </Text>
               ) : null}
-              {reset && reset.restoresPercent > 0 ? (
+              {reset && reset.at > now && reset.restoresPercent > 0 ? (
                 <Text className="text-sm text-foreground-muted">
                   Restores {reset.restoresPercent}% of the pool
                 </Text>

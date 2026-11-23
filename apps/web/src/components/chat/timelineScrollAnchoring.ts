@@ -147,22 +147,46 @@ export interface RememberedTimelinePosition {
   readonly offsetWithinRow: number;
   readonly scrollOffset: number;
   readonly atEnd: boolean;
-  readonly disclosures?: {
-    readonly runs: ReadonlySet<RunId>;
-    readonly workGroups: ReadonlySet<string>;
-    readonly attempts: ReadonlySet<RunAttemptId>;
-    readonly workGroupState: {
-      scrollPositions: Map<string, { readonly entryId: string; readonly offset: number }>;
-      expandedEntries: Set<string>;
-    };
+}
+
+interface TimelineDisclosures {
+  readonly runs: ReadonlySet<RunId>;
+  readonly workGroups: ReadonlySet<string>;
+  readonly attempts: ReadonlySet<RunAttemptId>;
+  readonly workGroupState: {
+    scrollPositions: Map<string, { readonly entryId: string; readonly offset: number }>;
+    expandedEntries: Set<string>;
   };
 }
 
+interface TimelineViewState {
+  readonly position?: RememberedTimelinePosition;
+  readonly disclosures?: TimelineDisclosures;
+}
+
 // Scoped thread keys keep separate environments independent. Bound the session cache.
-const rememberedTimelinePositions = new Map<string, RememberedTimelinePosition>();
+const timelineViewStates = new Map<string, TimelineViewState>();
+
+export function readTimelineViewState(threadKey: string) {
+  return timelineViewStates.get(threadKey);
+}
 
 export function readTimelinePosition(threadKey: string) {
-  return rememberedTimelinePositions.get(threadKey);
+  return readTimelineViewState(threadKey)?.position;
+}
+
+function rememberTimelineViewState(threadKey: string, update: TimelineViewState) {
+  const previous = timelineViewStates.get(threadKey);
+  timelineViewStates.delete(threadKey);
+  timelineViewStates.set(threadKey, { ...previous, ...update });
+  if (timelineViewStates.size > 100) {
+    const oldest = timelineViewStates.keys().next().value;
+    if (oldest !== undefined) timelineViewStates.delete(oldest);
+  }
+}
+
+export function rememberTimelineDisclosures(threadKey: string, disclosures: TimelineDisclosures) {
+  rememberTimelineViewState(threadKey, { disclosures });
 }
 
 export function rememberTimelinePosition(
@@ -170,13 +194,7 @@ export function rememberTimelinePosition(
   position: RememberedTimelinePosition,
   liveFollowEnabled: boolean,
 ) {
-  rememberedTimelinePositions.delete(threadKey);
-  rememberedTimelinePositions.set(threadKey, {
-    ...position,
-    atEnd: liveFollowEnabled || position.atEnd,
+  rememberTimelineViewState(threadKey, {
+    position: { ...position, atEnd: liveFollowEnabled || position.atEnd },
   });
-  if (rememberedTimelinePositions.size > 100) {
-    const oldest = rememberedTimelinePositions.keys().next().value;
-    if (oldest !== undefined) rememberedTimelinePositions.delete(oldest);
-  }
 }

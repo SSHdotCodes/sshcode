@@ -3903,6 +3903,8 @@ export const OrchestrationV2GetThreadProjectionInput = Schema.Struct({
 export type OrchestrationV2GetThreadProjectionInput =
   typeof OrchestrationV2GetThreadProjectionInput.Type;
 
+export const SHELL_RESUME_MONITOR_THREAD_LIMIT = 256;
+
 export const OrchestrationV2SubscribeShellInput = Schema.Struct({
   /**
    * When provided, the server skips the initial full shell snapshot and instead
@@ -3913,6 +3915,10 @@ export const OrchestrationV2SubscribeShellInput = Schema.Struct({
    * client).
    */
   afterSequence: Schema.optionalKey(NonNegativeInt),
+  /** Chats the client last saw with monitors, including monitors that may have ended off-stream. */
+  refreshMonitorThreadIds: Schema.optionalKey(
+    Schema.Array(ThreadId).check(Schema.isMaxLength(SHELL_RESUME_MONITOR_THREAD_LIMIT)),
+  ),
   /** Requests a marker between initial catch-up and live delivery. */
   requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /**

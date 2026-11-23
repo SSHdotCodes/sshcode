@@ -147,6 +147,7 @@ it("recovers a running run and lost command even when its Claude session already
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getRecoveryThreadIds: () => Effect.succeed([threadId]),
           getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+          getNextTurnItemOrdinal: () => Effect.succeed(42),
           getThreadRecords: () =>
             Effect.succeed({
               messages: [

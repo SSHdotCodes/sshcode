@@ -114,9 +114,13 @@ export interface RcPendingPermission {
 export class RcEventDecoder {
   readonly permissions = new Map<string, RcPendingPermission>();
   private streamingId = "";
-  private working = false;
+  private working: boolean;
   /** Results arrive in a later user frame; pairing them keeps one row per call. */
   private readonly toolCalls = new Map<string, ClaudeRcItem>();
+
+  constructor(working = false) {
+    this.working = working;
+  }
 
   private rememberToolCall(item: ClaudeRcItem) {
     this.toolCalls.delete(item.id);

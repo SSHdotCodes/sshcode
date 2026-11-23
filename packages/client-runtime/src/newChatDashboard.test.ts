@@ -372,9 +372,29 @@ describe("new chat activity", () => {
 
     expect(shown("claudeAgent_work")).toEqual(["Max-2 4"]);
     expect(shown("claudeAgent")).toEqual(["Claude 93"]);
-    // No account chosen, or one with no limits of its own: the provider's accounts, tightest first.
+    // Without a selection, show the provider's accounts, tightest first.
     expect(shown(null)).toEqual(["Claude 93", "Max-2 4"]);
-    expect(shown("claudeAgent_other")).toEqual(["Claude 93", "Max-2 4"]);
+    expect(shown("claudeAgent_other")).toEqual([]);
+
+    const alias = account("claudeAgent_alias", "Work profile", "second@example.com", 4);
+    expect(
+      newChatUsageWindows(
+        { providers: [...config.providers, alias] },
+        environmentId,
+        "claudeAgent",
+        alias.instanceId,
+      ).map((entry) => `${entry.accountLabel} ${entry.usedPercent}`),
+    ).toEqual(["Work profile 4"]);
+
+    const { usageLimits: _unread, ...unread } = alias;
+    expect(
+      newChatUsageWindows(
+        { providers: [config.providers[0]!, unread] },
+        environmentId,
+        "claudeAgent",
+        unread.instanceId,
+      ),
+    ).toEqual([]);
   });
 });
 

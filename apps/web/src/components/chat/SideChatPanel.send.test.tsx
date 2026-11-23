@@ -175,6 +175,31 @@ it("ignores a cached snapshot belonging to the previous side chat", () => {
   expect(input().disabled).toBe(false);
 });
 
+it("lets the user start another question after the side answer fails", () => {
+  const start = vi.fn();
+  act(() =>
+    root.render(
+      <RegistryContext.Provider value={registry}>
+        <Popover open>
+          <SideChatPanel session={session} kind="btw" cwd="/repo" onStart={start} />
+        </Popover>
+      </RegistryContext.Provider>,
+    ),
+  );
+  act(() =>
+    registry.set(
+      stateAtom,
+      AsyncResult.success({ ...complete, status: "failed", error: "The side answer timed out." }),
+    ),
+  );
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("The side answer timed out.");
+  expect(input().disabled).toBe(false);
+  draft("try again");
+  act(enter);
+  expect(start).toHaveBeenCalledWith("try again");
+  expect(harness.calls).toHaveLength(0);
+});
+
 it("sends a question about selected text with its quote, then drops the quote", async () => {
   const clearQuote = vi.fn();
   await act(async () =>

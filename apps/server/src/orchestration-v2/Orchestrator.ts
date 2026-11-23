@@ -5362,6 +5362,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ).pipe(mapDispatchError(command));
       if (command.restartContinuationOfRunId !== undefined) {
         const source = projection.runs.find((run) => run.id === command.restartContinuationOfRunId);
+        const now = yield* DateTime.now;
         if (
           !source ||
           (accountMove === undefined
@@ -5370,7 +5371,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           projection.thread.archivedAt !== null ||
           projection.thread.deletedAt !== null ||
           (accountMove === undefined &&
-            projection.thread.providerInstanceId !== source.providerInstanceId) ||
+            (projection.thread.providerInstanceId !== source.providerInstanceId ||
+              projection.thread.settledOverride === "settled" ||
+              (projection.thread.snoozedUntil != null &&
+                DateTime.isGreaterThan(projection.thread.snoozedUntil, now)))) ||
           // Held queued runs never started; they wait behind the continuation.
           projection.runs.some(
             (run) => run.id !== source.id && run.status !== "queued" && runRanAfter(run, source),
@@ -5385,7 +5389,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           )({
             type: "thread.metadata-updated",
             threadId: command.threadId,
-            occurredAt: yield* DateTime.now,
+            occurredAt: now,
             payload: projection.thread,
           });
           return;

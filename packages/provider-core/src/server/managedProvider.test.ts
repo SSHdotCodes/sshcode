@@ -850,88 +850,90 @@ describe("makeManagedServerProvider", () => {
       }).pipe(Effect.scoped, Effect.provide(layerAlwaysRunTest)),
   );
 
-  it.effect("keeps live usage windows across a failed probe and a stale enrichment", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const releaseEnrichment = yield* Deferred.make<void>();
-        const refreshCount = yield* Ref.make(0);
-        const probedLimits = {
-          checkedAt: "2026-04-10T00:00:01.000Z",
-          windows: [{ id: "primary", kind: "session", label: "Session", usedPercent: 10 }],
-        } as const;
-        const provider = yield* makeManagedServerProvider<TestSettings>({
-          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
-          getSettings: Effect.succeed({ enabled: true }),
-          streamSettings: Stream.empty,
-          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
-          initialSnapshot: () => Effect.succeed(initialSnapshot),
-          checkProvider: Ref.updateAndGet(refreshCount, (count) => count + 1).pipe(
-            Effect.map((count) =>
-              count === 1
-                ? {
-                    ...refreshedSnapshot,
-                    auth: { ...refreshedSnapshot.auth, workspaceId: "ws-a" },
-                    usageLimits: probedLimits,
-                  }
-                : {
-                    ...refreshedSnapshotSecond,
-                    ...(count === 3
-                      ? { auth: { ...refreshedSnapshotSecond.auth, workspaceId: "ws-b" } }
-                      : {}),
-                    usageLimits: {
-                      checkedAt: "2026-04-10T00:00:03.000Z",
-                      windows: [],
-                      unavailable: { reason: "probeFailed" },
+  it.effect(
+    "keeps live usage through stale enrichment and publishes subsequent probe failures",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const releaseEnrichment = yield* Deferred.make<void>();
+          const refreshCount = yield* Ref.make(0);
+          const probedLimits = {
+            checkedAt: "2026-04-10T00:00:01.000Z",
+            windows: [{ id: "primary", kind: "session", label: "Session", usedPercent: 10 }],
+          } as const;
+          const provider = yield* makeManagedServerProvider<TestSettings>({
+            resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+            getSettings: Effect.succeed({ enabled: true }),
+            streamSettings: Stream.empty,
+            haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+            initialSnapshot: () => Effect.succeed(initialSnapshot),
+            checkProvider: Ref.updateAndGet(refreshCount, (count) => count + 1).pipe(
+              Effect.map((count) =>
+                count === 1
+                  ? {
+                      ...refreshedSnapshot,
+                      auth: { ...refreshedSnapshot.auth, workspaceId: "ws-a" },
+                      usageLimits: probedLimits,
+                    }
+                  : {
+                      ...refreshedSnapshotSecond,
+                      ...(count === 3
+                        ? { auth: { ...refreshedSnapshotSecond.auth, workspaceId: "ws-b" } }
+                        : {}),
+                      usageLimits: {
+                        checkedAt: "2026-04-10T00:00:03.000Z",
+                        windows: [],
+                        unavailable: { reason: "probeFailed" },
+                      },
                     },
-                  },
-            ),
-          ),
-          enrichSnapshot: ({ snapshot, publishSnapshot }) =>
-            Deferred.await(releaseEnrichment).pipe(
-              Effect.flatMap(() =>
-                publishSnapshot({
-                  ...enrichedSnapshot,
-                  ...snapshot,
-                  models: enrichedSnapshot.models,
-                }),
               ),
             ),
-          refreshInterval: "1 hour",
-        });
-        yield* Stream.take(provider.streamChanges, 1).pipe(Stream.runDrain);
+            enrichSnapshot: ({ snapshot, publishSnapshot }) =>
+              Deferred.await(releaseEnrichment).pipe(
+                Effect.flatMap(() =>
+                  publishSnapshot({
+                    ...enrichedSnapshot,
+                    ...snapshot,
+                    models: enrichedSnapshot.models,
+                  }),
+                ),
+              ),
+            refreshInterval: "1 hour",
+          });
+          yield* Stream.take(provider.streamChanges, 1).pipe(Stream.runDrain);
 
-        const liveWindow = {
-          id: "primary",
-          kind: "session",
-          label: "Session",
-          usedPercent: 60,
-        } as const;
-        yield* provider.applyUsageLimits({
-          checkedAt: "2026-04-10T00:00:02.000Z",
-          windows: [liveWindow],
-        });
+          const liveWindow = {
+            id: "primary",
+            kind: "session",
+            label: "Session",
+            usedPercent: 60,
+          } as const;
+          yield* provider.applyUsageLimits({
+            checkedAt: "2026-04-10T00:00:02.000Z",
+            windows: [liveWindow],
+          });
 
-        // Enrichment computed from the pre-update snapshot lands afterwards.
-        yield* Deferred.succeed(releaseEnrichment, undefined);
-        const enriched = yield* Stream.take(provider.streamChanges, 1).pipe(
-          Stream.runCollect,
-          Effect.map((chunk) => Array.from(chunk)[0]!),
-        );
-        assert.deepStrictEqual(enriched.models, enrichedSnapshot.models);
-        assert.deepStrictEqual(enriched.usageLimits?.windows, [liveWindow]);
+          // Enrichment computed from the pre-update snapshot lands afterwards.
+          yield* Deferred.succeed(releaseEnrichment, undefined);
+          const enriched = yield* Stream.take(provider.streamChanges, 1).pipe(
+            Stream.runCollect,
+            Effect.map((chunk) => Array.from(chunk)[0]!),
+          );
+          assert.deepStrictEqual(enriched.models, enrichedSnapshot.models);
+          assert.deepStrictEqual(enriched.usageLimits?.windows, [liveWindow]);
 
-        // A probe that could not read usage keeps the last good windows.
-        const refreshed = yield* provider.refresh;
-        assert.strictEqual(refreshed.message, refreshedSnapshotSecond.message);
-        assert.deepStrictEqual(refreshed.usageLimits?.windows, [liveWindow]);
-        // ...and the workspace they were read for.
-        assert.strictEqual(refreshed.auth.workspaceId, "ws-a");
+          // The registry can mark the last good reading as older only when it sees the failure.
+          const refreshed = yield* provider.refresh;
+          assert.strictEqual(refreshed.message, refreshedSnapshotSecond.message);
+          assert.strictEqual(refreshed.usageLimits?.unavailable?.reason, "probeFailed");
+          assert.deepStrictEqual(refreshed.usageLimits?.windows, []);
+          assert.strictEqual(refreshed.auth.workspaceId, "ws-a");
 
-        // A failed read for another workspace does not inherit those windows.
-        const switched = yield* provider.refresh;
-        assert.strictEqual(switched.auth.workspaceId, "ws-b");
-        assert.strictEqual(switched.usageLimits?.unavailable?.reason, "probeFailed");
-      }),
-    ).pipe(Effect.provide(layerAlwaysRunTest)),
+          // A failed read for another workspace does not inherit those windows.
+          const switched = yield* provider.refresh;
+          assert.strictEqual(switched.auth.workspaceId, "ws-b");
+          assert.strictEqual(switched.usageLimits?.unavailable?.reason, "probeFailed");
+        }),
+      ).pipe(Effect.provide(layerAlwaysRunTest)),
   );
 });

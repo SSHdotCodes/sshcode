@@ -301,8 +301,8 @@ export function SideChatPanel(props: {
   const messages = session === null ? [] : sideChatVisibleMessages(state, session.question);
   const busy = session !== null && session.error === null && sideChatIsBusy(state);
   const closed = state?.status === "closed";
-  // With no side chat, a closed one, or one that never opened, the input starts a new one.
-  const starts = session === null || closed || session.error !== null;
+  const ended = closed || state?.status === "failed";
+  const starts = session === null || ended || session.error !== null;
   const error =
     session?.error ??
     sendError ??
@@ -494,7 +494,7 @@ export function SideChatPanel(props: {
               ? "Waiting for the answer…"
               : quote !== null
                 ? "Ask about the selection"
-                : closed
+                : ended
                   ? "Ask again to start a new one"
                   : props.kind === "btw"
                     ? session === null

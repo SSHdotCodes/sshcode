@@ -337,6 +337,7 @@ it.effect.each([
             Layer.mock(ProjectionStore.ProjectionStoreV2)({
               getRecoveryThreadIds: () => Effect.succeed([threadId]),
               getRuntimeRecoveryProjection: () => Effect.succeed(makeProjection()),
+              getNextTurnItemOrdinal: () => Effect.succeed(42),
             }),
             Layer.mock(EventSink.EventSinkV2)({
               commitCommand: (input) => {
@@ -401,6 +402,7 @@ it.effect("lets a cut blocking delegate_task wake its parent like an async task"
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
             getRecoveryThreadIds: () => Effect.succeed([threadId]),
             getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+            getNextTurnItemOrdinal: () => Effect.succeed(42),
           }),
           Layer.mock(EventSink.EventSinkV2)({
             commitCommand: (input) => {
@@ -668,6 +670,7 @@ it.effect.each([
               Layer.mock(ProjectionStore.ProjectionStoreV2)({
                 getRecoveryThreadIds: () => Effect.succeed([threadId]),
                 getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+                getNextTurnItemOrdinal: () => Effect.succeed(42),
               }),
               Layer.mock(EventSink.EventSinkV2)({
                 writeWithEffects: (input) =>

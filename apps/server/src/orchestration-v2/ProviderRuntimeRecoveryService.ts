@@ -502,6 +502,47 @@ export const make = Effect.gen(function* () {
           });
         }
       }
+      const cutRuns = runs.filter((run) => run.status !== "queued");
+      if (cutRuns.length > 0) {
+        const firstOrdinal = yield* projections.getNextTurnItemOrdinal(projection.thread.id).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderRuntimeRecoveryError({
+                operation: "read-projections",
+                threadId: projection.thread.id,
+                cause,
+              }),
+          ),
+        );
+        for (const [index, run] of cutRuns.entries()) {
+          events.push({
+            id: yield* allocateEventId(),
+            type: "turn-item.updated",
+            threadId: projection.thread.id,
+            runId: run.id,
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: {
+              id: ids.derive.runSignalTurnItem({ runId: run.id, signal: "server-restart" }),
+              threadId: projection.thread.id,
+              runId: run.id,
+              nodeId: null,
+              providerThreadId: run.providerThreadId,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: firstOrdinal + index,
+              status: "completed",
+              title: trigger === "startup" ? "Server restart" : "Server shutdown",
+              type: "system_notice",
+              message: `The server ${trigger === "startup" ? "restarted" : "shut down"} before this turn finished.`,
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+            },
+          });
+        }
+      }
       // A blocking delegate_task wait dies with the turn that made it, and its
       // continuation never got the tool result. Let the child's result wake
       // the parent like an async task, so it reaches the continued turn.

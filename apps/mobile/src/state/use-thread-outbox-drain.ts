@@ -974,20 +974,30 @@ export function useThreadOutboxDrain(): void {
       const currentConfig = appAtomRegistry.get(
         serverEnvironment.configValueAtom(queuedMessage.environmentId),
       );
-      if (!currentConfig) return false;
-      if (isModelSelectionUnavailable(currentConfig, settings.modelSelection, thread.projectId)) {
+      const currentThread = findThread(
+        appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
+        persistedMessage,
+      );
+      if (!currentConfig || !currentThread) return false;
+      const sendSettings = resolveQueuedThreadSettings(
+        persistedMessage,
+        currentThread,
+        currentConfig.providers,
+      );
+      if (
+        isModelSelectionUnavailable(
+          currentConfig,
+          sendSettings.modelSelection,
+          currentThread.projectId,
+        )
+      ) {
         const { title, detail } = describeUnavailableModelSelection(
           currentConfig,
-          settings.modelSelection,
-          thread.projectId,
+          sendSettings.modelSelection,
+          currentThread.projectId,
         );
         return restoreQueuedMessage(persistedMessage, `${title}. ${detail}`);
       }
-      const sendSettings = resolveQueuedThreadSettings(
-        queuedMessage,
-        settings,
-        currentConfig.providers,
-      );
       if (!hasAccess()) return true;
       return dispatchQueuedTurn(persistedMessage, deliveryRevision, {
         commandId: queuedMessage.commandId,
@@ -1518,6 +1528,9 @@ export function useThreadOutboxDrain(): void {
           if (liveDeliveryAction !== "send") {
             return true;
           }
+          if (creation === undefined && liveThread !== undefined) {
+            return sendQueuedMessage(nextQueuedMessage, liveThread);
+          }
         }
         return deliveryAction === "remove"
           ? creation !== undefined
@@ -1535,9 +1548,7 @@ export function useThreadOutboxDrain(): void {
                   nextQueuedMessage,
                   "The project for this queued chat no longer exists.",
                 )
-            : thread !== undefined
-              ? sendQueuedMessage(nextQueuedMessage, thread)
-              : Promise.resolve(false);
+            : Promise.resolve(false);
       });
       void delivery
         .catch((error) => {

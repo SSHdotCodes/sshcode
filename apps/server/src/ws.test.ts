@@ -1,5 +1,8 @@
 import * as AcpRegistrySessions from "./provider/AcpRegistrySessions.ts";
-import { v2Projection } from "../../../packages/client-runtime/src/state/orchestrationV2TestFixtures.ts";
+import {
+  v2Projection,
+  v2ThreadShell,
+} from "../../../packages/client-runtime/src/state/orchestrationV2TestFixtures.ts";
 import {
   THREAD_RESUME_MAX_RAW_PAYLOAD_BYTES,
   THREAD_RESUME_MAX_SOURCE_EVENTS,
@@ -515,6 +518,43 @@ it.live.each(["thread", "shell"] as const)(
       // The replay stats would count only what is left; the floor tells.
       assert.equal(yield* firstItem(old!.sequence - 1), "snapshot");
     }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
+);
+
+it.live("refreshes a chat whose only monitor ended while the shell was disconnected", () =>
+  Effect.gen(function* () {
+    const updates = yield* PubSub.unbounded();
+    const input = {
+      afterSequence: 0,
+      requestCompletionMarker: true,
+      refreshMonitorThreadIds: [v2ThreadShell.id],
+    };
+    const stream = yield* subscribeOrchestrationV2Shell(input).pipe(
+      Effect.provideService(ThreadManagement.ThreadManagementService, {
+        getThreadShell: (threadId: ThreadId) =>
+          Effect.succeed(threadId === v2ThreadShell.id ? v2ThreadShell : null),
+      } as unknown as ThreadManagement.ThreadManagementService["Service"]),
+      Effect.provideService(ProjectStore.ProjectStoreV2, {
+        listShells: () => Effect.succeed([]),
+      } as unknown as ProjectStore.ProjectStoreV2["Service"]),
+      Effect.provideService(
+        ProjectService.ProjectService,
+        {} as ProjectService.ProjectService["Service"],
+      ),
+      Effect.provideService(ProjectEnrichment.ProjectEnrichmentService, {
+        subscribeChanges: PubSub.subscribe(updates),
+      } as ProjectEnrichment.ProjectEnrichmentService["Service"]),
+    );
+    const items = yield* stream.pipe(
+      Stream.takeUntil((item) => item.kind === "synchronized"),
+      Stream.runCollect,
+    );
+    const refreshed = items.flatMap((item) =>
+      item.kind === "snapshot" && item.resolvedRepositoryIdentityRoots !== undefined
+        ? item.snapshot.threads
+        : [],
+    );
+    assert.deepEqual(refreshed, [v2ThreadShell]);
+  }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
 );
 
 // Pulls until `done` matches, then returns everything pulled. A stream failure fails the test.

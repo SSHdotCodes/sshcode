@@ -206,8 +206,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
           input.enrichSnapshot || input.checkUsageLimits
             ? state.enrichmentGeneration + 1
             : state.enrichmentGeneration;
-        // A failed read keeps the last good limits only for the same account,
-        // and they keep the workspace they were read for.
+        // Only merge usage readings for the same account.
         const previous = state.snapshot.auth;
         const differs = (a: string | undefined, b: string | undefined) =>
           a !== undefined && b !== undefined && a !== b;
@@ -225,8 +224,14 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
                   ? state.snapshot.usageLimits
                   : probedSnapshot.usageLimits,
             });
+        // A failed limits read can omit the workspace id. Keep it so the registry
+        // can attribute its older reading to the workspace it was read for.
         const workspaceId =
-          usageLimits === probedSnapshot.usageLimits ? undefined : state.snapshot.auth.workspaceId;
+          !switchedAccount &&
+          (usageLimits !== probedSnapshot.usageLimits ||
+            probedSnapshot.usageLimits?.unavailable?.reason === "probeFailed")
+            ? previous.workspaceId
+            : undefined;
         const snapshot = withUsageLimits(
           workspaceId && !probedSnapshot.auth.workspaceId
             ? { ...probedSnapshot, auth: { ...probedSnapshot.auth, workspaceId } }

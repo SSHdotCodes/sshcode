@@ -832,43 +832,42 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
     ),
   );
 
-  it.effect(
-    "publishes limits, retains a successful read on failure, and clears them on sign-out",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const limits: ServerProviderUsageLimits = {
-            checkedAt: "2026-10-09T12:00:00.000Z",
-            windows: [
-              {
-                id: "3p-weekly",
-                kind: "weekly",
-                label: "Claude & GPT (shared) · Weekly",
-                usedPercent: 75,
-              },
-            ],
-          };
-          const usage = yield* Ref.make(limits);
-          const harness = yield* makeHarness({ probeUsage: Ref.get(usage) });
-          yield* harness.initialize;
-          expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toEqual(limits);
-          yield* Ref.set(harness.probe, Effect.succeed(initializeResult));
-          yield* Ref.set(usage, {
-            checkedAt: "2026-10-09T12:01:00.000Z",
-            windows: [],
-            unavailable: { reason: "probeFailed" },
-          });
-          expect((yield* harness.provider.snapshot.refresh).usageLimits).toEqual(limits);
-          yield* harness.provider.onSignedOut;
-          expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toBeUndefined();
-          yield* Ref.set(usage, {
-            checkedAt: "2026-10-09T12:02:00.000Z",
-            windows: [],
-            unavailable: { reason: "unsupported" },
-          });
-          expect((yield* harness.provider.snapshot.refresh).usageLimits?.windows).toEqual([]);
-        }),
-      ),
+  it.effect("publishes fresh limits and probe failures, and clears limits on sign-out", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const limits: ServerProviderUsageLimits = {
+          checkedAt: "2026-10-09T12:00:00.000Z",
+          windows: [
+            {
+              id: "3p-weekly",
+              kind: "weekly",
+              label: "Claude & GPT (shared) · Weekly",
+              usedPercent: 75,
+            },
+          ],
+        };
+        const usage = yield* Ref.make(limits);
+        const harness = yield* makeHarness({ probeUsage: Ref.get(usage) });
+        yield* harness.initialize;
+        expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toEqual(limits);
+        yield* Ref.set(harness.probe, Effect.succeed(initializeResult));
+        const failed = {
+          checkedAt: "2026-10-09T12:01:00.000Z",
+          windows: [],
+          unavailable: { reason: "probeFailed" as const },
+        };
+        yield* Ref.set(usage, failed);
+        expect((yield* harness.provider.snapshot.refresh).usageLimits).toEqual(failed);
+        yield* harness.provider.onSignedOut;
+        expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toBeUndefined();
+        yield* Ref.set(usage, {
+          checkedAt: "2026-10-09T12:02:00.000Z",
+          windows: [],
+          unavailable: { reason: "unsupported" },
+        });
+        expect((yield* harness.provider.snapshot.refresh).usageLimits?.windows).toEqual([]);
+      }),
+    ),
   );
 
   it.effect("a quota read finishing after sign-out cannot restore account limits", () =>

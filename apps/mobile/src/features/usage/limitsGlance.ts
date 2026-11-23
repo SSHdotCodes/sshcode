@@ -35,19 +35,18 @@ export function nextResetAt(window: LimitPoolWindow): number | null {
 
 const MINUTE = 60_000;
 
-/** `Resets in 2h 14m`, `Resets in <1m`, `Resets now`, or null when no account reports a reset. */
+/** The next future reset, or a status when every reported reset time has passed. */
 export function resetsInLabel(window: LimitPoolWindow, now: number): string | null {
   const short = resetsInShort(window, now);
-  if (short === null) return null;
-  return short === "now" ? "Resets now" : `Resets in ${short}`;
+  if (short !== null) return `Resets in ${short}`;
+  return window.resets.length > 0 ? "Reset time passed" : null;
 }
 
 /** Just the countdown, for places too small for a sentence: `2h 14m`. The
     last minute reads `<1m`, not `0m`, as thread times do. */
 export function resetsInShort(window: LimitPoolWindow, now: number): string | null {
-  const at = nextResetAt(window);
-  if (at === null) return null;
-  if (at <= now) return "now";
+  const at = window.resets.find((reset) => reset.at > now)?.at;
+  if (at === undefined) return null;
   return at - now < MINUTE ? "<1m" : formatDuration(at - now);
 }
 
@@ -128,7 +127,7 @@ function combineProviderLimits(plans: readonly ProviderLimits[]): ProviderLimits
       (sum, plan) => sum + (plan.tightest.limited === true ? 100 : plan.tightest.usedPercent),
       0,
     ) / plans.length;
-  const resets = plans.flatMap((plan) => plan.tightest.resets.slice(0, 1));
+  const resets = plans.flatMap((plan) => plan.tightest.resets);
   resets.sort((left, right) => left.at - right.at);
   const window: LimitPoolWindow = {
     id: "plans",

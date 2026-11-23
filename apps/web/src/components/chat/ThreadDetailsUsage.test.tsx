@@ -65,6 +65,28 @@ it("shows the shared recent forecast in the limit row details", async () => {
     expect(trigger).not.toBeNull();
     await act(async () => trigger!.focus());
     expect(document.body.textContent).toContain("At the last hour's pace you'll run out");
+
+    for (const usedPercent of [99.6, 100]) {
+      await act(async () =>
+        root.render(
+          <ThreadDetailsUsage
+            environmentId={EnvironmentId.make("qa")}
+            providerInstanceId={provider.instanceId}
+            providers={[
+              {
+                ...provider,
+                usageLimits: {
+                  ...provider.usageLimits!,
+                  windows: [{ ...provider.usageLimits!.windows[0]!, usedPercent, limited: false }],
+                },
+              },
+            ]}
+            sources={[]}
+          />,
+        ),
+      );
+      expect(container.textContent).toContain("<1% left");
+    }
   } finally {
     act(() => root.unmount());
     container.remove();

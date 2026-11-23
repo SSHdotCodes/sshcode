@@ -14,6 +14,7 @@ import {
   limitsNotice,
   paceOf,
   remainingPercent,
+  remainingPercentLabel,
 } from "@t3tools/shared/usageLimits";
 import {
   describeLimitForecast,
@@ -201,6 +202,7 @@ function LimitRow({
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const left = remainingPercent(window);
+  const room = `${remainingPercentLabel(window)} left`;
   const pace = paceOf(window, now);
   const projection = usageWindowForecast(window, now);
   const runsOut =
@@ -218,12 +220,12 @@ function LimitRow({
         fill={left}
         tone={left <= 10 ? "error" : left <= 20 ? "warning" : null}
         // "left" is spelled out: toasts and the Usage page count the same window as used.
-        value={`${left}% left`}
-        ariaValue={`${left}% left`}
+        value={room}
+        ariaValue={room}
         tooltip={
           <>
             <span className="text-foreground">
-              {window.label}: {left}% left
+              {window.label}: {room}
             </span>
             {window.resetsAt && resetsAt > now ? (
               <span className="text-muted-foreground">

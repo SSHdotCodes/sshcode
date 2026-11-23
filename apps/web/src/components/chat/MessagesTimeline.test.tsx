@@ -2872,7 +2872,7 @@ describe("MessagesTimeline", () => {
     );
 
     // The T3 wordmark replaces the generic tool icon for T3 MCP calls.
-    expect(markup).toContain('viewBox="22.75 26.75 80.5 74.5"');
+    expect(markup).toContain('viewBox="40.55 24.9 46.9 80.2"');
     expect(markup).toContain("Read a chat");
     expect(markup).not.toContain("mcp__t3-code__t3_thread_read");
   });

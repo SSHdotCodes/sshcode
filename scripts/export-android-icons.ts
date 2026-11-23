@@ -29,14 +29,14 @@ const ADAPTIVE_CANVAS = 432;
 // 288dp at xxxhdpi: the full Android 12+ splash canvas, so the icon needs no upscaling.
 const SPLASH_CANVAS = 1152;
 // Icon Composer's layer sources use a 128pt viewBox; the wordmark path spans this box.
-const TEXT = { x: 22.75, y: 26.75, width: 80.5, height: 74.5 };
+const TEXT = { x: 40.55, y: 24.92, width: 46.89, height: 80.16 };
 // Mark width as a fraction of the 108dp canvas. The visible area is 72dp, 66dp of it
-// guaranteed; at 0.44 the cursor's far corner stays inside that guaranteed circle, so
-// round masks never clip it.
-const WORDMARK_FRACTION = 0.44;
+// guaranteed; at 0.29 the line's far corners stay inside that guaranteed circle, so
+// round masks never clip them.
+const WORDMARK_FRACTION = 0.29;
 // Notification icons are 24dp with 2dp padding; the mark fills most of what remains.
 const NOTIFICATION_CANVAS = 96;
-const NOTIFICATION_FRACTION = 0.62;
+const NOTIFICATION_FRACTION = 0.45;
 const SVG_DENSITY = 300;
 const OUTPUT_DIRECTORY = "apps/mobile/assets";
 // Production has no background artwork, so its splash composes onto the adaptive color.

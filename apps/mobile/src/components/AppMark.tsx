@@ -14,29 +14,26 @@ export function AppMark(props: {
   readonly color?: ColorValue;
   readonly colorClassName?: string;
 }) {
-  const aspectRatio = 80.5 / 74.5;
+  const aspectRatio = 46.9 / 80.2;
   return (
     <Svg
       accessibilityLabel="SSHCode"
       height={props.height}
       width={props.height * aspectRatio}
-      viewBox="22.75 26.75 80.5 74.5"
+      viewBox="40.55 24.9 46.9 80.2"
     >
       <ThemedPath
-        d="M62.34 41.05A17.5 15 0 1 0 47.50 64.00A17.5 15 0 1 1 32.66 86.95"
+        d={S_PATH}
         color={props.color}
         colorClassName={props.colorClassName}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={14.5}
-        strokeLinecap="round"
+        fill="currentColor"
       />
       <ThemedRect
-        x={79.25}
-        y={91.75}
-        width={24}
-        height={9.5}
-        rx={2.5}
+        x={40.55}
+        y={96.58}
+        width={46.89}
+        height={8.5}
+        rx={1.5}
         color={props.color}
         colorClassName={props.colorClassName}
         fill="currentColor"
@@ -44,3 +41,7 @@ export function AppMark(props: {
     </Svg>
   );
 }
+
+// DM Sans Black "S", the same outline as assets/prod/app-icon.icon/Assets/text.svg.
+const S_PATH =
+  "M64.77 90.08Q58.02 90.08 52.57 87.78Q47.12 85.49 43.97 80.99Q40.82 76.49 40.55 69.92H54.95Q55.05 72.53 56.3 74.51Q57.56 76.49 59.72 77.61Q61.88 78.74 64.77 78.74Q67.19 78.74 69.04 77.97Q70.88 77.21 71.96 75.72Q73.04 74.24 73.04 71.99Q73.04 69.65 71.78 67.98Q70.53 66.32 68.37 65.1Q66.2 63.89 63.37 62.86Q60.53 61.82 57.3 60.83Q49.82 58.4 45.82 54.26Q41.81 50.12 41.81 43.19Q41.81 37.43 44.65 33.34Q47.48 29.24 52.44 27.08Q57.38 24.92 63.69 24.92Q70.16 24.92 75.11 27.13Q80.06 29.33 82.94 33.52Q85.82 37.7 86 43.46H71.52Q71.42 41.48 70.39 39.86Q69.35 38.24 67.6 37.25Q65.84 36.26 63.5 36.26Q61.44 36.17 59.73 36.84Q58.02 37.52 57.02 38.92Q56.03 40.31 56.03 42.38Q56.03 44.36 57.07 45.84Q58.1 47.33 59.95 48.36Q61.8 49.4 64.27 50.3Q66.75 51.2 69.72 52.1Q74.48 53.72 78.49 55.92Q82.5 58.13 84.97 61.69Q87.44 65.24 87.44 71.09Q87.44 76.22 84.79 80.54Q82.13 84.86 77.14 87.47Q72.14 90.08 64.77 90.08Z";

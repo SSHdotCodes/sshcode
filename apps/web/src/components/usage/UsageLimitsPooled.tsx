@@ -21,7 +21,12 @@ import {
 } from "@t3tools/shared/usageLimits";
 import { newSessionAccountKeys } from "@t3tools/shared/accountBalance";
 import { collectStorage, describeStorage } from "@t3tools/shared/storageUsage";
-import { describeLimitForecast, poolForecast } from "@t3tools/shared/usageLimitForecast";
+import {
+  borrowedPoolForecast,
+  describeLimitForecast,
+  headlineWindows,
+  poolForecast,
+} from "@t3tools/shared/usageLimitForecast";
 import type { StorageUsageSnapshot } from "@t3tools/contracts";
 import {
   AlertTriangleIcon,
@@ -551,12 +556,15 @@ function PoolWindowCard({
   now,
   label,
   description,
+  note,
 }: {
   readonly pool: LimitPoolWindow;
   readonly color: string;
   readonly now: number;
   readonly label?: string | undefined;
   readonly description?: string | undefined;
+  /** A warning only this limit has, such as a shared pool running dry. */
+  readonly note?: string | undefined;
 }) {
   // The soonest reset that hands anything back; an untouched account resets to no effect.
   const nextRefill = pool.resets.find((reset) => reset.restoresPercent > 0);
@@ -584,22 +592,27 @@ function PoolWindowCard({
       {description ? (
         <p className="text-xs text-muted-foreground md:col-span-2">{description}</p>
       ) : null}
+      {note ? <p className="text-xs text-warning-foreground md:col-span-2">{note}</p> : null}
     </div>
   );
 }
 
 /**
  * Where the provider is heading at its faster recent or average pace: when the tightest window
- * runs dry before its reset, or that the longest one makes it.
+ * runs dry before its reset, or that the longest one makes it. A Google plan's headline follows
+ * Gemini's limits, not the pool it shares out to Claude and GPT.
  */
 function PoolForecast({
-  windows,
+  driver,
+  windows: allWindows,
   now,
 }: {
+  readonly driver: string;
   readonly windows: readonly LimitPoolWindow[];
   readonly now: number;
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
+  const windows = headlineWindows(driver, allWindows);
   const forecast = poolForecast(windows, now);
   if (!forecast) return null;
   const { text, warn } = describeLimitForecast(forecast, now, (ms) =>
@@ -663,9 +676,10 @@ function PoolSection({
       {older.length > 0 ? (
         <p className="text-xs text-muted-foreground tabular-nums">{older.join(" · ")}</p>
       ) : null}
-      <PoolForecast windows={windows} now={now} />
+      <PoolForecast driver={pool.driver} windows={windows} now={now} />
       {windows.map((window) => {
         const details = pool.driver === "cursor" ? cursorUsageWindowDetails(window.id) : undefined;
+        const shared = borrowedPoolForecast(pool.driver, window, now);
         return (
           <PoolWindowCard
             key={`${window.kind}:${window.id}`}
@@ -674,6 +688,7 @@ function PoolSection({
             now={now}
             label={details?.label}
             description={details?.description}
+            note={shared ? describeLimitForecast(shared, now, clock).text : undefined}
           />
         );
       })}

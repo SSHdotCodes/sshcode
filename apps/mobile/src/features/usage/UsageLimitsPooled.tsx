@@ -20,7 +20,12 @@ import {
 } from "@t3tools/shared/usageLimits";
 import { newSessionAccountKeys } from "@t3tools/shared/accountBalance";
 import { collectStorage, describeStorage } from "@t3tools/shared/storageUsage";
-import { describeLimitForecast, poolForecast } from "@t3tools/shared/usageLimitForecast";
+import {
+  borrowedPoolForecast,
+  describeLimitForecast,
+  headlineWindows,
+  poolForecast,
+} from "@t3tools/shared/usageLimitForecast";
 import { Fragment, type ReactNode, useState } from "react";
 import { Linking, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -81,8 +86,10 @@ function ProviderLimitsCard({
     account.environments
       .map((environment) => environmentLabels.get(environment.environmentId) ?? environment.label)
       .join(", ") || account.sourceLabel;
-  // Use the same recent-or-average forecast as the web and thread details.
-  const forecast = poolForecast(windows, now);
+  // Use the same recent-or-average forecast as the web and thread details. A Google plan's
+  // headline follows Gemini's limits, not the pool it shares out to Claude and GPT.
+  const forecastWindows = headlineWindows(pool.driver, windows);
+  const forecast = poolForecast(forecastWindows, now);
   const forecastText = forecast ? describeLimitForecast(forecast, now) : null;
   const openAccount = (window: LimitPoolWindow, member: LimitPoolMember) => {
     navigation.navigate("SettingsSheet", {
@@ -124,7 +131,7 @@ function ProviderLimitsCard({
             {forecast.kind === "runsOut" ? "Heads up. " : ""}
             {forecastText.text}
           </Text>
-          {windows.length > 1 ? (
+          {forecastWindows.length > 1 ? (
             <Text className="text-xs text-foreground-muted">
               Based on the {forecast.label} limit
             </Text>
@@ -136,6 +143,7 @@ function ProviderLimitsCard({
         const label = details?.label ?? window.label;
         const color = LIMIT_TONE_COLOR[limitTone(window.usedPercent)];
         const resetsIn = resetsInLabel(window, now);
+        const shared = borrowedPoolForecast(pool.driver, window, now);
         return (
           <View key={`${window.kind}:${window.id}`} className="gap-1.5">
             <View className="flex-row items-baseline justify-between gap-3">
@@ -159,6 +167,11 @@ function ProviderLimitsCard({
             {resetsIn || details?.description ? (
               <Text className="text-xs tabular-nums text-foreground-muted" numberOfLines={2}>
                 {[resetsIn, details?.description].filter(Boolean).join(" · ")}
+              </Text>
+            ) : null}
+            {shared ? (
+              <Text className="text-xs" style={{ color: LIMIT_TONE_COLOR.warn }}>
+                {describeLimitForecast(shared, now).text}
               </Text>
             ) : null}
             {window.members.map((member) => (

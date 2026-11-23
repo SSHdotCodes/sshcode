@@ -3,7 +3,9 @@ import { ProviderDriverKind } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  borrowedPoolForecast,
   describeLimitForecast,
+  headlineWindows,
   limitForecast,
   poolForecast,
   limitPaceWarning,
@@ -86,6 +88,31 @@ describe("forecast", () => {
     expect(describeLimitForecast(poolForecast(spent.windows, friday)!, friday, clock).text).toBe(
       "Limit reached until the 23:30 reset.",
     );
+  });
+
+  it("leads a Google plan with Gemini and warns about the shared Claude & GPT pool apart", () => {
+    const google: LimitAccount = {
+      ...claude([
+        { ...weekly(26, at(21, 8), 10080), id: "gemini-weekly", label: "Gemini · Weekly" },
+        {
+          ...weekly(50, at(21, 8), 10080),
+          id: "3p-weekly",
+          label: "Claude & GPT (shared) · Weekly",
+        },
+      ]),
+      driver: ProviderDriverKind.make("antigravity"),
+    };
+    const { windows } = pool([google]);
+    // Across both pools the shared one runs dry first; the headline speaks for Gemini.
+    expect(poolForecast(windows, friday)).toMatchObject({ windowId: "3p-weekly" });
+    const own = headlineWindows("antigravity", windows);
+    expect(own.map((window) => window.id)).toEqual(["gemini-weekly"]);
+    expect(poolForecast(own, friday)).toMatchObject({ kind: "lasts", windowId: "gemini-weekly" });
+    const shared = windows.find((window) => window.id === "3p-weekly")!;
+    expect(borrowedPoolForecast("antigravity", shared, friday)).toMatchObject({ kind: "runsOut" });
+    // Gemini's own limit and other providers' limits never get the shared-pool line.
+    expect(borrowedPoolForecast("antigravity", own[0]!, friday)).toBeNull();
+    expect(headlineWindows("claudeAgent", windows)).toHaveLength(2);
   });
 
   it("waits for a tenth of the window before projecting", () => {

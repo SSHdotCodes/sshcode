@@ -215,6 +215,35 @@ export function poolForecast(
   return [...forecasts].sort((left, right) => right.resetsAt - left.resetsAt)[0] ?? null;
 }
 
+/**
+ * A Google plan also serves Claude and GPT from one shared allowance (`3p-*`; `claude-*`/`gpt-*`
+ * quotas on older accounts), but it is bought for Gemini: its headline follows Gemini's limits
+ * and the shared pool speaks for itself under its own bar.
+ */
+export function isBorrowedModelsWindow(driver: string, window: { readonly id: string }): boolean {
+  return driver === "antigravity" && /^(3p-|claude-|gpt-)/.test(window.id);
+}
+
+/** The windows a provider's headline forecast speaks for: its own models' limits when it has any. */
+export function headlineWindows<T extends { readonly id: string }>(
+  driver: string,
+  windows: readonly T[],
+): readonly T[] {
+  const own = windows.filter((window) => !isBorrowedModelsWindow(driver, window));
+  return own.length > 0 ? own : windows;
+}
+
+/** A shared pool's own warning, shown under its bar: only when it runs dry before its reset. */
+export function borrowedPoolForecast(
+  driver: string,
+  window: LimitPoolWindow,
+  now: number,
+): LimitForecast | null {
+  if (!isBorrowedModelsWindow(driver, window)) return null;
+  const forecast = poolForecast([window], now);
+  return forecast && forecast.kind !== "lasts" ? forecast : null;
+}
+
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 function startOfDay(ms: number): number {

@@ -3908,7 +3908,7 @@ describe("OrchestratorMcpService provider resolution", () => {
         const result = yield* service.usageLimits(scope, {});
         assert.isTrue(result.providers[0]?.stale);
         assert.equal(result.providers[0]?.windows[0]?.usedPercent, 35);
-        assert.equal(result.providers[0]?.windows[0]?.resetsIn, "resets now");
+        assert.equal(result.providers[0]?.windows[0]?.resetsIn, "reset time passed");
         assert.isTrue(result.providers[1]?.stale);
       }).pipe(
         Effect.provide(

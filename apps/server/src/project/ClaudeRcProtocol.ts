@@ -1,4 +1,5 @@
-import type { ClaudeRcEvent, ClaudeRcSession } from "@t3tools/contracts";
+import type { ClaudeRcEvent, ClaudeRcItem, ClaudeRcSession } from "@t3tools/contracts";
+import { mcpToolPresentation } from "@t3tools/provider-core/server/mcpToolPresentation";
 
 export const record = (value: unknown): Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -21,6 +22,27 @@ const text = (value: unknown): string => {
     .join("\n")
     .slice(0, 64_000);
 };
+
+const TOOL_INPUT_STRING_LIMIT = 4_000;
+const TOOL_INPUT_JSON_LIMIT = 16_000;
+const TOOL_OUTPUT_LIMIT = 32_000;
+const REMEMBERED_TOOL_CALLS = 500;
+
+/** Labels need paths, commands and queries, never a whole written file. */
+function boundedToolInput(value: unknown): unknown {
+  const input = record(value);
+  const bounded: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(input))
+    bounded[key] =
+      typeof field === "string" && field.length > TOOL_INPUT_STRING_LIMIT
+        ? `${field.slice(0, TOOL_INPUT_STRING_LIMIT)}…`
+        : field;
+  return JSON.stringify(bounded).length <= TOOL_INPUT_JSON_LIMIT
+    ? bounded
+    : Object.fromEntries(
+        Object.entries(bounded).filter(([, field]) => typeof field !== "object" || field === null),
+      );
+}
 
 /** Archived husks, cloud runs and SDK workers are deliberately not Terminal sessions. */
 export function liveClaudeRcSession(value: unknown): ClaudeRcSession | null {
@@ -93,6 +115,42 @@ export class RcEventDecoder {
   readonly permissions = new Map<string, RcPendingPermission>();
   private streamingId = "";
   private working = false;
+  /** Results arrive in a later user frame; pairing them keeps one row per call. */
+  private readonly toolCalls = new Map<string, ClaudeRcItem>();
+
+  private rememberToolCall(item: ClaudeRcItem) {
+    this.toolCalls.delete(item.id);
+    this.toolCalls.set(item.id, item);
+    if (this.toolCalls.size > REMEMBERED_TOOL_CALLS)
+      this.toolCalls.delete(this.toolCalls.keys().next().value!);
+  }
+
+  private toolResults(content: ReadonlyArray<unknown>, id: string): ClaudeRcEvent[] {
+    const events: ClaudeRcEvent[] = [];
+    content.forEach((block, index) => {
+      const result = record(block);
+      if (result.type !== "tool_result") return;
+      const output = text(result.content).slice(0, TOOL_OUTPUT_LIMIT);
+      const failed = result.is_error === true;
+      const toolUseId = string(result.tool_use_id);
+      const call = toolUseId ? this.toolCalls.get(toolUseId) : undefined;
+      const item: ClaudeRcItem = call?.tool
+        ? {
+            ...call,
+            text: output ? `${call.text}\n\n${output}` : call.text,
+            tool: { ...call.tool, output, failed, done: true },
+          }
+        : {
+            id: toolUseId || `${id}:result:${index}`,
+            role: "tool",
+            text: output,
+            tool: { name: "", output, failed, done: true },
+          };
+      if (call) this.rememberToolCall(item);
+      events.push({ type: "item", item });
+    });
+    return events;
+  }
 
   decode(frame: RcFrame): ClaudeRcEvent[] {
     if (frame.event === "catch_up_truncated") {
@@ -150,10 +208,10 @@ export class RcEventDecoder {
         (!Array.isArray(content) || content.some((block) => record(block).type !== "text"))
       )
         return [];
+      if (Array.isArray(content) && content.some((block) => record(block).type === "tool_result"))
+        return this.toolResults(content, id);
       const body = text(content);
-      const tool =
-        Array.isArray(content) && content.some((block) => record(block).type === "tool_result");
-      return body ? [{ type: "item", item: { id, role: tool ? "tool" : "user", text: body } }] : [];
+      return body ? [{ type: "item", item: { id, role: "user", text: body } }] : [];
     }
     if (!worker) return [];
     // We never send initialize, so no control response is an authoritative approval snapshot.
@@ -165,18 +223,38 @@ export class RcEventDecoder {
       const body = text(message.content);
       if (body)
         items.push({ type: "item", item: { id: messageId, role: "assistant", text: body } });
+      const meta = new Map<string, Record<string, unknown>>();
+      if (Array.isArray(payload.tool_use_meta))
+        for (const entry of payload.tool_use_meta) {
+          const fields = record(entry);
+          if (typeof fields.id === "string") meta.set(fields.id, fields);
+        }
       if (Array.isArray(message.content))
         for (const block of message.content) {
           const tool = record(block);
-          if (tool.type === "tool_use")
-            items.push({
-              type: "item",
-              item: {
-                id: string(tool.id) || `${id}:tool`,
-                role: "tool",
-                text: `${string(tool.name)}\n${JSON.stringify(tool.input ?? {}).slice(0, 16_000)}`,
-              },
+          if (tool.type === "tool_use") {
+            const toolId = string(tool.id);
+            const fields = meta.get(toolId);
+            const presentation = mcpToolPresentation({
+              toolName: string(tool.name).replace(/^mcp__claude_ai_/u, "mcp__"),
+              title: fields?.display_name,
+              serverDisplayName: fields?.server_display_name,
+              iconUrl: fields?.icon_url,
             });
+            const item: ClaudeRcItem = {
+              id: toolId || `${id}:tool`,
+              role: "tool",
+              text: `${string(tool.name)}\n${JSON.stringify(tool.input ?? {}).slice(0, 16_000)}`,
+              tool: {
+                name: string(tool.name),
+                input: boundedToolInput(tool.input),
+                ...(presentation.title ? { title: presentation.title } : {}),
+                ...(presentation.toolSource ? { source: presentation.toolSource } : {}),
+              },
+            };
+            this.rememberToolCall(item);
+            items.push({ type: "item", item });
+          }
         }
       return items;
     }

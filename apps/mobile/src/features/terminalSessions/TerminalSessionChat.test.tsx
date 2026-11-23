@@ -80,6 +80,7 @@ vi.mock("../../state/use-atom-command", () => ({
 }));
 vi.mock("react-native", () => ({
   Linking: { openURL: vi.fn() },
+  useWindowDimensions: () => ({ width: 400, height: 800, fontScale: 1 }),
   View: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   ScrollView: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   Pressable: ({
@@ -154,6 +155,38 @@ vi.mock("../files/FileMarkdownPreview", () => ({
   useMarkdownPreviewStyles: () => ({ nativeTextStyle: {} }),
 }));
 
+vi.mock("../../lib/useUniwindTheme", () => ({
+  useUniwindTheme: () => ({ "--color-icon-subtle": "#888" }),
+}));
+vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
+  useAppearancePreferences: () => ({ appearance: { baseFontSize: 14 }, themeAppearance: "dark" }),
+}));
+vi.mock("../threads/thread-work-log", () => ({
+  ThreadDisclosureChevron: () => null,
+  WorkLogIcon: () => null,
+  workRowSymbolName: (icon: string) => icon,
+  ThreadWorkGroupToggle: (props: { summary: string; expanded: boolean; onToggle: () => void }) => (
+    <button aria-expanded={props.expanded} onClick={props.onToggle}>
+      {props.summary}
+    </button>
+  ),
+}));
+vi.mock("../threads/work-log-layout", () => ({
+  WorkLogBlock: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  WorkLogRows: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  WorkLogIconSlot: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+  WorkLogLabel: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+  WorkLogPressable: (props: {
+    children: ReactNode;
+    onPress: () => void;
+    accessibilityState?: { expanded?: boolean };
+  }) => (
+    <button aria-expanded={props.accessibilityState?.expanded} onClick={props.onPress}>
+      {props.children}
+    </button>
+  ),
+}));
+
 import { TerminalSessionRouteScreen } from "./TerminalSessionRouteScreen";
 
 let host: HTMLDivElement;
@@ -166,7 +199,18 @@ beforeEach(() => {
     working: true,
     items: [
       { id: "u", role: "user", text: "Check the login" },
-      { id: "t", role: "tool", text: "Read file\nprivate details" },
+      {
+        id: "t1",
+        role: "tool",
+        text: "",
+        tool: { name: "Bash", input: { command: "ls" }, output: "private details", done: true },
+      },
+      {
+        id: "t2",
+        role: "tool",
+        text: "",
+        tool: { name: "Read", input: { file_path: "/Users/me/a.ts" }, output: "x", done: true },
+      },
       { id: "a", role: "assistant", text: "History from the CLI" },
     ],
     permissions: [{ requestId: "req_1", toolName: "Bash", description: "Run tests" }],
@@ -213,12 +257,17 @@ it("opens as a native screen with a thread-style header, history, live text and 
   });
   expect(host.textContent).toContain("History from the CLI");
   expect(host.textContent).not.toContain("private details");
-  await act(async () => button("▸ Read file").click());
+  const summary = "Ran 1 command and read 1 file";
+  expect(host.textContent).not.toContain("Read ~/a.ts");
+  await act(async () => button(summary).click());
+  await act(async () => button("ls").click());
   expect(host.textContent).toContain("private details");
   await event({ type: "textDelta", id: "a", text: " live" });
   expect(host.textContent).toContain("History from the CLI live");
   expect([...host.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
-    "▾ Read file",
+    summary,
+    "ls",
+    "Read ~/a.ts",
     "Allow",
     "Deny",
     "Stop",

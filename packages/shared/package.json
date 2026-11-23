@@ -163,6 +163,10 @@
       "types": "./src/toolActivity.ts",
       "import": "./src/toolActivity.ts"
     },
+    "./claudeNativeTools": {
+      "types": "./src/claudeNativeTools.ts",
+      "import": "./src/claudeNativeTools.ts"
+    },
     "./terminalOutput": {
       "types": "./src/terminalOutput.ts",
       "import": "./src/terminalOutput.ts"

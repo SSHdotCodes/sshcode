@@ -108,6 +108,80 @@ describe("Claude CLI Remote Control boundary", () => {
     ).toEqual({ type: "item", item: { id: "msg_1", role: "assistant", text: "hello world" } });
   });
 
+  it("joins each tool result to its call, keeping labels small", () => {
+    const decoder = new RcEventDecoder();
+    const [call] = decoder.decode(
+      frame({
+        type: "assistant",
+        message: {
+          id: "msg_2",
+          content: [
+            { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } },
+            {
+              type: "tool_use",
+              id: "toolu_2",
+              name: "Write",
+              input: { file_path: "/a.ts", content: "x".repeat(10_000) },
+            },
+          ],
+        },
+      }),
+    );
+    expect(call).toMatchObject({
+      type: "item",
+      item: { id: "toolu_1", role: "tool", tool: { name: "Bash", input: { command: "ls" } } },
+    });
+    const results = decoder.decode(
+      frame({
+        type: "user",
+        uuid: "result-frame",
+        message: {
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_1", content: "a.ts" },
+            { type: "tool_result", tool_use_id: "toolu_2", content: "denied", is_error: true },
+            { type: "tool_result", tool_use_id: "toolu_lost", content: "late" },
+          ],
+        },
+      }),
+    );
+    expect(results.map((event) => event.type === "item" && event.item)).toMatchObject([
+      {
+        id: "toolu_1",
+        role: "tool",
+        tool: { name: "Bash", input: { command: "ls" }, output: "a.ts", failed: false, done: true },
+      },
+      { id: "toolu_2", tool: { name: "Write", output: "denied", failed: true, done: true } },
+      { id: "toolu_lost", tool: { name: "", output: "late", done: true } },
+    ]);
+    const written = results[1]?.type === "item" ? results[1].item.tool?.input : undefined;
+    expect(JSON.stringify(written).length).toBeLessThan(4_200);
+  });
+
+  it("names MCP tools the way Claude Code reports them", () => {
+    const [event] = new RcEventDecoder().decode(
+      frame({
+        type: "assistant",
+        tool_use_meta: [
+          { id: "toolu_mcp", display_name: "Run SQL", server_display_name: "Supabase" },
+        ],
+        message: {
+          id: "msg_3",
+          content: [
+            { type: "tool_use", id: "toolu_mcp", name: "mcp__supabase__execute_sql", input: {} },
+          ],
+        },
+      }),
+    );
+    expect(event).toMatchObject({
+      item: {
+        tool: {
+          title: "Run SQL",
+          source: { key: "mcp:supabase", name: "Supabase", kind: "integration" },
+        },
+      },
+    });
+  });
+
   it("tracks live approvals without trusting unrelated initialize snapshots", () => {
     const decoder = new RcEventDecoder();
     const request = {

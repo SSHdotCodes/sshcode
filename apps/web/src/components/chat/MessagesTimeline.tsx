@@ -5002,7 +5002,7 @@ function ActivityShimmerOverlay({ children }: { children: ReactNode }) {
   );
 }
 
-const failedToolIconClassName = "text-tool-error-icon/40";
+export const failedToolIconClassName = "text-tool-error-icon/40";
 
 /** Image icons cannot take a currentColor tint, so failed rows get a trailing x. */
 function toolIconAcceptsTint(toolIcon: ToolActivityIcon | undefined): boolean {
@@ -5439,7 +5439,7 @@ function LiveWorkEntryTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "
   );
 }
 
-function toolGroupSummaryIconName(
+export function toolGroupSummaryIconName(
   kind: Extract<TimelineRow, { kind: "work-toggle" }>["summaryKind"],
 ): WorkEntryIconName {
   switch (kind) {
@@ -6459,7 +6459,7 @@ function useStableRows(rows: MessagesTimelineRow[], identity: string): MessagesT
 // Pure helpers
 // ---------------------------------------------------------------------------
 
-type WorkEntryIconName =
+export type WorkEntryIconName =
   | "bot"
   | "brain"
   | "browser"
@@ -6664,7 +6664,7 @@ function ToolActivityImageIcon(props: {
   );
 }
 
-function WorkEntryIcon({ name, className }: { name: WorkEntryIconName; className: string }) {
+export function WorkEntryIcon({ name, className }: { name: WorkEntryIconName; className: string }) {
   switch (name) {
     case "pull-request":
       return <PullRequestGlyph.pullRequest className={className} aria-hidden />;
@@ -6804,10 +6804,10 @@ function buildToolCallExpandedBody(
   return blocks.length > 0 ? blocks.join("\n\n") : null;
 }
 
-const toolCallExpandedBodyClassName =
+export const toolCallExpandedBodyClassName =
   "max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-secondary-label text-(length:--font-size-code,var(--text-2xs)) leading-relaxed select-text";
 
-function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
+export function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
   if (workEntry.structuredPayload?.type === "notification") {
     if (workEntry.structuredPayload.outcome === "failed") return "circle-alert";
     const source = workEntry.structuredPayload.source;

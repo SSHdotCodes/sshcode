@@ -134,7 +134,7 @@ type WorkContentIcon =
   | "pull-request"
   | "x-logo";
 
-function WorkLogIcon(props: {
+export function WorkLogIcon(props: {
   readonly icon: WorkContentIcon;
   readonly color: ColorValue;
   readonly colorClassName?: string;
@@ -411,7 +411,7 @@ export function ShimmeringWorkContent(props: {
   );
 }
 
-function workRowSymbolName(icon: ThreadFeedActivity["icon"]): WorkContentIcon {
+export function workRowSymbolName(icon: ThreadFeedActivity["icon"]): WorkContentIcon {
   switch (icon) {
     case "agent":
       return { ios: "sparkles", android: "auto_awesome" };
@@ -1689,7 +1689,7 @@ function ToolActivityImage(props: {
   );
 }
 
-function toolGroupSummarySymbolName(kind: ToolGroupSummaryKind): AppSymbolName | "x-logo" {
+export function toolGroupSummarySymbolName(kind: ToolGroupSummaryKind): AppSymbolName | "x-logo" {
   switch (kind) {
     case "pull-request":
     case "link-pr":

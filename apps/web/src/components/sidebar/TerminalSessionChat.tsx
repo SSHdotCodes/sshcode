@@ -4,13 +4,34 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { ClaudeRcItem, ClaudeRcSession, EnvironmentId } from "@t3tools/contracts";
-import { useEffect, useRef, useState } from "react";
+import {
+  summarizeToolGroup,
+  toolGroupSummaryKind,
+  workEntryDisplayIndicatesToolFailure,
+} from "@t3tools/client-runtime/work-log/presentation";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
-import { ArrowUpIcon, ChevronDownIcon, SquareIcon, TerminalIcon } from "lucide-react";
+import { ArrowUpIcon, ChevronRightIcon, SquareIcon, TerminalIcon } from "lucide-react";
 import { ComposerSurface } from "../chat/ComposerSurface";
-import { WorkLogBlock, WorkLogButton, WorkLogDetails } from "../chat/WorkLog";
+import {
+  WorkLogBlock,
+  WorkLogButton,
+  WorkLogDetails,
+  WorkLogList,
+  WorkLogRow,
+} from "../chat/WorkLog";
+import {
+  WorkEntryIcon,
+  failedToolIconClassName,
+  toolCallExpandedBodyClassName,
+  toolGroupSummaryIconName,
+  workEntryIconName,
+} from "../chat/MessagesTimeline";
+import { singleToolCallLabel } from "../chat/MessagesTimeline.logic";
+import { ToolOutputText } from "../chat/ToolOutputText";
+import { cn } from "../../lib/utils";
 import { UserMessageBubble } from "../chat/UserMessageBubble";
 import { TimelineSystemDivider } from "../chat/TimelineSystemDivider";
 import { SidebarTrigger } from "../ui/sidebar";
@@ -24,6 +45,9 @@ import {
   TERMINAL_SESSION_LABEL,
   composerTextAfterSend,
   terminalCommandFailure,
+  terminalSessionRows,
+  terminalToolDetails,
+  terminalToolEntry,
 } from "@t3tools/client-runtime/terminal-sessions";
 
 export function TerminalSessionChat(props: {
@@ -51,7 +75,7 @@ export function TerminalSessionChat(props: {
   const [uiMode] = useUiMode();
   const discord = uiMode === "discord";
   const state = watch.data;
-  const items = state?.items ?? [];
+  const rows = useMemo(() => terminalSessionRows(state?.items ?? []), [state?.items]);
   useEffect(() => {
     if (!state) return;
     const scroller = scrollRef.current;
@@ -150,16 +174,21 @@ export function TerminalSessionChat(props: {
               : "chat-content-lane mx-auto flex w-full max-w-(--chat-content-max-width) flex-col gap-4 px-4 py-6"
           }
         >
-          {items.map((item, index) => (
-            <TerminalSessionMessage
-              key={item.id}
-              item={item}
-              discord={discord}
-              streaming={
-                state?.working === true && index === items.length - 1 && item.role === "assistant"
-              }
-            />
-          ))}
+          {rows.map((row, index) => {
+            const last = index === rows.length - 1;
+            return row.kind === "tools" ? (
+              <div key={row.id} data-dc-timeline-row={discord || undefined}>
+                <TerminalToolGroup items={row.items} live={state?.working === true && last} />
+              </div>
+            ) : (
+              <TerminalSessionMessage
+                key={row.item.id}
+                item={row.item}
+                discord={discord}
+                streaming={state?.working === true && last && row.item.role === "assistant"}
+              />
+            );
+          })}
           {(state?.permissions ?? []).map((permission) => (
             <div key={permission.requestId} data-dc-timeline-row={discord || undefined}>
               <div className="rounded-xl border border-border bg-card px-4 py-3">
@@ -279,30 +308,11 @@ function TerminalSessionMessage(props: {
   readonly streaming: boolean;
   readonly discord: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const { item } = props;
   if (item.role === "notice")
     return (
       <div data-dc-timeline-row={props.discord || undefined}>
         <TimelineSystemDivider label={item.text} />
-      </div>
-    );
-  if (item.role === "tool")
-    return (
-      <div data-dc-timeline-row={props.discord || undefined}>
-        <WorkLogBlock>
-          <WorkLogButton
-            aria-expanded={expanded}
-            onClick={() => setExpanded(!expanded)}
-            icon={<ChevronDownIcon className="size-3" />}
-            label={item.text.split("\n")[0]}
-          />
-          {expanded ? (
-            <WorkLogDetails>
-              <pre className="font-mono text-xs whitespace-pre-wrap">{item.text}</pre>
-            </WorkLogDetails>
-          ) : null}
-        </WorkLogBlock>
       </div>
     );
   const body = (
@@ -337,5 +347,147 @@ function TerminalSessionMessage(props: {
         body
       )}
     </article>
+  );
+}
+
+/** A chat's lone edit reads "Changed 1 file" next to its diff; here the path is all there is. */
+function terminalToolLabel(entry: ReturnType<typeof terminalToolEntry>): string {
+  return entry.itemType === "file_change" ? entry.label : singleToolCallLabel(entry);
+}
+
+/** Tool calls drawn like a chat's work log: one row for a lone call, a summary for a run of them. */
+function TerminalToolGroup(props: {
+  readonly items: readonly ClaudeRcItem[];
+  readonly live: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const entries = useMemo(
+    () => props.items.map((item) => terminalToolEntry(item, props.live)),
+    [props.items, props.live],
+  );
+  const single = entries.length === 1 ? entries[0] : undefined;
+  if (single)
+    return (
+      <WorkLogBlock>
+        <TerminalToolRow item={props.items[0]!} entry={single} label={terminalToolLabel(single)} />
+      </WorkLogBlock>
+    );
+  const latest = entries[entries.length - 1];
+  const failed = latest !== undefined && workEntryDisplayIndicatesToolFailure(latest);
+  const active = entries.some((entry) => entry.toolLifecycleStatus === "inProgress");
+  const summary = summarizeToolGroup(entries).summary;
+  return (
+    <>
+      <WorkLogBlock layout={expanded ? "group-header" : "standalone"}>
+        <WorkLogButton
+          aria-label={failed ? `${summary}, tool call failed` : summary}
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+          icon={
+            <WorkEntryIcon
+              name={toolGroupSummaryIconName(toolGroupSummaryKind(entries))}
+              className="size-4 shrink-0 stroke-2 text-icon-muted opacity-70 light:brightness-60"
+            />
+          }
+          label={
+            <span className={cn("block truncate", active && !failed && "live-tool-shine")}>
+              {summary}
+            </span>
+          }
+        />
+      </WorkLogBlock>
+      {expanded ? (
+        <WorkLogBlock layout="group-content">
+          <WorkLogList>
+            {props.items.map((item, index) => (
+              <TerminalToolRow
+                key={item.id}
+                item={item}
+                entry={entries[index]!}
+                label={terminalToolLabel(entries[index]!)}
+              />
+            ))}
+          </WorkLogList>
+        </WorkLogBlock>
+      ) : null}
+    </>
+  );
+}
+
+function TerminalToolRow(props: {
+  readonly item: ClaudeRcItem;
+  readonly entry: ReturnType<typeof terminalToolEntry>;
+  readonly label: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const details = terminalToolDetails(props.item, props.label);
+  const failed = workEntryDisplayIndicatesToolFailure(props.entry);
+  const toggle = () => setExpanded(!expanded);
+  const toggleProps =
+    details === null
+      ? {}
+      : {
+          role: "button" as const,
+          tabIndex: 0 as const,
+          "aria-label": failed ? `${props.label}, tool call failed` : props.label,
+          "aria-expanded": expanded,
+          onClick: toggle,
+          onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
+            if (event.target !== event.currentTarget) return;
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              toggle();
+            }
+          },
+        };
+  return (
+    <WorkLogRow
+      {...toggleProps}
+      icon={
+        <span
+          className={cn(
+            "flex size-4 items-center justify-center",
+            failed ? failedToolIconClassName : "text-icon-muted",
+          )}
+        >
+          <WorkEntryIcon
+            name={workEntryIconName(props.entry)}
+            className="block size-4 shrink-0 stroke-2 opacity-70 light:brightness-60"
+          />
+        </span>
+      }
+      label={
+        <span
+          className={cn(
+            "block truncate text-sm text-secondary-label",
+            props.entry.toolLifecycleStatus === "inProgress" && "live-tool-shine",
+          )}
+        >
+          {props.label}
+        </span>
+      }
+      trailing={
+        <span
+          className={cn(
+            "flex size-4 shrink-0 items-center justify-center",
+            details === null && "invisible",
+          )}
+          aria-hidden
+        >
+          <ChevronRightIcon
+            className={cn(
+              "size-3 shrink-0 text-icon-muted opacity-70 transition-transform duration-200",
+              expanded && "rotate-90",
+            )}
+          />
+        </span>
+      }
+    >
+      {expanded && details !== null ? (
+        <WorkLogDetails>
+          <ToolOutputText text={details} className={toolCallExpandedBodyClassName} />
+        </WorkLogDetails>
+      ) : null}
+    </WorkLogRow>
   );
 }

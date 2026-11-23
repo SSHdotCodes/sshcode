@@ -177,7 +177,7 @@ function mergedMonitorUpdateEntry(updates: ReadonlyArray<WorkLogEntry>): WorkLog
   return entry;
 }
 
-function singleToolCallLabel(entry: WorkLogEntry): string {
+export function singleToolCallLabel(entry: WorkLogEntry): string {
   if (entry.itemType === "reasoning") return entry.detail?.trim().replace(/\s+/g, " ") || "Thought";
   const toolPresentation = resolveWorkEntryToolPresentation(entry, "completed");
   if (toolPresentation) return toolPresentation.displayName;

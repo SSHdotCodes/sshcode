@@ -1,6 +1,7 @@
 import * as DateTime from "effect/DateTime";
-import { type ClaudeRcSession, EnvironmentId } from "@t3tools/contracts";
+import { type ClaudeRcItem, type ClaudeRcSession, EnvironmentId } from "@t3tools/contracts";
 import { expect, it } from "vite-plus/test";
+import { summarizeToolGroup } from "./work-log/presentation.ts";
 import {
   TERMINAL_HOST_UPDATE_MESSAGE,
   composerTextAfterSend,
@@ -9,6 +10,9 @@ import {
   terminalListEnvironmentId,
   terminalSessionRelativeTime,
   terminalCommandFailure,
+  terminalSessionRows,
+  terminalToolDetails,
+  terminalToolEntry,
 } from "./terminalSessions.ts";
 
 const primary = EnvironmentId.make("primary");
@@ -174,4 +178,89 @@ it("dedupes before filtering and sorts equal timestamps by id without changing t
   expect(filterTerminalSessions(input, "copy")).toEqual([]);
   expect(filterTerminalSessions(input, " DEPLOY ")).toEqual([second, first]);
   expect(input).toEqual([first, second, duplicate]);
+});
+
+const call = (id: string, name: string, input: unknown, output?: string): ClaudeRcItem => ({
+  id,
+  role: "tool",
+  text: "",
+  tool: { name, input, ...(output === undefined ? {} : { output, done: true }) },
+});
+
+it("groups back-to-back tool calls and keeps messages apart", () => {
+  const rows = terminalSessionRows([
+    { id: "u", role: "user", text: "check it" },
+    call("t1", "Bash", { command: "ls" }, "a"),
+    call("t2", "Read", { file_path: "/Users/me/a.ts" }, "x"),
+    { id: "a", role: "assistant", text: "done" },
+    call("t3", "Bash", { command: "pwd" }),
+  ]);
+  expect(
+    rows.map((row) => (row.kind === "tools" ? row.items.map((item) => item.id) : row.kind)),
+  ).toEqual(["item", ["t1", "t2"], "item", ["t3"]]);
+});
+
+it("labels tool calls the way a chat's work log does", () => {
+  const bash = terminalToolEntry(call("t1", "Bash", { command: "ls -la" }, "a"), false);
+  expect(bash).toMatchObject({
+    itemType: "command_execution",
+    command: "ls -la",
+    toolLifecycleStatus: "completed",
+  });
+  expect(summarizeToolGroup([bash, bash, bash]).summary).toBe("Ran 3 commands");
+  expect(
+    terminalToolEntry(call("t2", "Read", { file_path: "/Users/me/p/a.ts" }), true),
+  ).toMatchObject({
+    label: "Read ~/p/a.ts",
+    toolLifecycleStatus: "inProgress",
+  });
+  expect(
+    terminalToolEntry(call("t3", "Write", { file_path: "/home/me/b.ts", content: "x" }), false),
+  ).toMatchObject({
+    label: "Wrote ~/b.ts",
+    changedFiles: ["~/b.ts"],
+  });
+  expect(
+    terminalToolEntry(call("t4", "WebFetch", { url: "https://www.example.com/x" }), false).label,
+  ).toBe("Fetched example.com");
+  const failed: ClaudeRcItem = {
+    ...call("t5", "Bash", { command: "false" }),
+    tool: { name: "Bash", input: { command: "false" }, output: "exit 1", failed: true, done: true },
+  };
+  expect(terminalToolEntry(failed, false).toolLifecycleStatus).toBe("failed");
+  const mcp: ClaudeRcItem = {
+    id: "t6",
+    role: "tool",
+    text: "",
+    tool: {
+      name: "mcp__supabase__execute_sql",
+      title: "execute sql",
+      source: { key: "mcp:supabase", name: "Supabase", kind: "integration" },
+      input: { query: "select 1" },
+    },
+  };
+  expect(summarizeToolGroup([terminalToolEntry(mcp, false)]).summary).toBe(
+    "Used Supabase integration",
+  );
+});
+
+it("shows output, and the command when the label does not", () => {
+  const item = call("t1", "Bash", { command: "curl -s https://x.test" }, "200");
+  expect(terminalToolDetails(item, "curl -s https://x.test")).toBe("200");
+  expect(terminalToolDetails(item, "Ran command")).toBe("curl -s https://x.test\n\n200");
+  expect(terminalToolDetails(call("t2", "Read", { file_path: "/a" }, "body"), "Read /a")).toBe(
+    "body",
+  );
+});
+
+it("reads items from servers that sent calls and results separately", () => {
+  expect(
+    terminalToolEntry({ id: "old", role: "tool", text: 'Bash\n{"command":"ls"}' }, false),
+  ).toMatchObject({ itemType: "command_execution", command: "ls" });
+  expect(
+    terminalToolEntry({ id: "out", role: "tool", text: "table before: 200" }, false),
+  ).toMatchObject({
+    toolTitle: "Tool output",
+    toolData: { output: "table before: 200" },
+  });
 });

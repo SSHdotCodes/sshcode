@@ -85,6 +85,14 @@ vi.mock("../../state/use-atom-command", () => ({
     return queried.commandResult;
   },
 }));
+// The chat timeline's icon helpers; the real module pulls in the whole thread view.
+vi.mock("../chat/MessagesTimeline", () => ({
+  WorkEntryIcon: () => null,
+  failedToolIconClassName: "",
+  toolCallExpandedBodyClassName: "",
+  toolGroupSummaryIconName: () => "terminal",
+  workEntryIconName: () => "terminal",
+}));
 vi.mock("../ChatMarkdown", () => ({
   default: ({ text }: { text: string }) => <p>{text}</p>,
 }));
@@ -105,7 +113,18 @@ const transcript = {
   message: null,
   items: [
     { id: "user", role: "user" as const, text: "Check the login" },
-    { id: "tool", role: "tool" as const, text: "read file" },
+    {
+      id: "tool1",
+      role: "tool" as const,
+      text: "",
+      tool: { name: "Bash", input: { command: "ls" }, output: "read file", done: true },
+    },
+    {
+      id: "tool2",
+      role: "tool" as const,
+      text: "",
+      tool: { name: "Read", input: { file_path: "/Users/me/a.ts" }, output: "x", done: true },
+    },
     { id: "assistant", role: "assistant" as const, text: "Hello from the CLI" },
   ],
   permissions: [{ requestId: "req_1", toolName: "Bash", description: "Run the tests" }],
@@ -243,9 +262,14 @@ it("navigates to a full chat, renders history and streamed text, and controls th
   expect(container!.querySelector('[aria-current="page"]')).not.toBeNull();
   expect(container!.querySelector('[role="dialog"]')).toBeNull();
   expect(container!.querySelector("main")?.textContent).toContain("Hello from the CLI");
-  expect(container!.querySelector("pre")).toBeNull();
-  await act(async () => button("read file").click());
-  expect(container!.querySelector("pre")?.textContent).toBe("read file");
+  const main = container!.querySelector("main")!;
+  expect(main.textContent).not.toContain("read file");
+  await act(async () => button("Ran 1 command and read 1 file").click());
+  expect(main.textContent).toContain("Read ~/a.ts");
+  await act(async () =>
+    main.querySelector<HTMLElement>('[role="button"][aria-label="ls"]')!.click(),
+  );
+  expect(main.textContent).toContain("read file");
   await stream({ type: "textDelta", id: "assistant", text: " live" });
   expect(container!.textContent).toContain("Hello from the CLI live");
   expect(queried.watch).toBeGreaterThan(0);
@@ -324,6 +348,6 @@ it("keeps terminal-only controls in both layouts", async () => {
   expect(main.querySelector('[data-slot="composer-shell"]')).not.toBeNull();
   expect(
     [...main.querySelectorAll("button")].map((b) => b.getAttribute("aria-label") ?? b.textContent),
-  ).toEqual(["Toggle sidebar", "read file", "Allow", "Deny", "Send"]);
+  ).toEqual(["Toggle sidebar", "Ran 1 command and read 1 file", "Allow", "Deny", "Send"]);
   expect(main.querySelector('input[type="file"], select, [role="combobox"]')).toBeNull();
 });

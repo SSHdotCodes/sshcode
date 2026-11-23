@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { ToolActivitySource } from "./providerRuntime.ts";
 
 const SessionId = Schema.String.check(Schema.isPattern(/^cse_[A-Za-z0-9]+$/));
 export const CLAUDE_RC_TAB = "builtin:terminal-sessions:sidebar-tab";
@@ -13,10 +14,24 @@ export const ClaudeRcSession = Schema.Struct({
 export type ClaudeRcSession = typeof ClaudeRcSession.Type;
 export const ClaudeRcSelection = Schema.Struct({ sessionId: SessionId });
 export const ClaudeRcSessions = Schema.Array(ClaudeRcSession);
+/** A tool call joined with its result, so clients can label it like a chat's work log. */
+export const ClaudeRcTool = Schema.Struct({
+  name: Schema.String,
+  /** An MCP tool's display name and server, as Claude Code reports them. */
+  title: Schema.optionalKey(Schema.String),
+  source: Schema.optionalKey(ToolActivitySource),
+  input: Schema.optionalKey(Schema.Unknown),
+  output: Schema.optionalKey(Schema.String),
+  failed: Schema.optionalKey(Schema.Boolean),
+  done: Schema.optionalKey(Schema.Boolean),
+});
+export type ClaudeRcTool = typeof ClaudeRcTool.Type;
 export const ClaudeRcItem = Schema.Struct({
   id: Schema.String,
   role: Schema.Literals(["user", "assistant", "tool", "notice"]),
+  /** Plain text for every role; tool items keep it for clients without `tool`. */
   text: Schema.String,
+  tool: Schema.optionalKey(ClaudeRcTool),
 });
 export type ClaudeRcItem = typeof ClaudeRcItem.Type;
 export const ClaudeRcPermission = Schema.Struct({

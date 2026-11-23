@@ -1,0 +1,114 @@
+import type { ProviderDriverKind } from "@t3tools/contracts";
+import type * as AcpSchema from "effect-acp/compat";
+import type { AcpToolCallState } from "@t3tools/provider-acp/server/runtimeModel";
+import type {
+  AcpAdapterV2Flavor,
+  AcpAdapterV2SubagentUpdate,
+} from "@t3tools/provider-acp/server/adapter";
+import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
+
+// How long a steer watches for the turn ending under it before calling it delivered.
+const STEER_SETTLE = "1500 millis";
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** Devin's typed extension metadata, captured from its native ACP stream. */
+export function normalizeDevinSessionUpdate(
+  notification: AcpSchema.SessionNotification,
+): AcpSchema.SessionNotification {
+  const update = notification.update;
+  const meta = record("_meta" in update ? update._meta : undefined);
+  const parentAgentId = record(meta?.["cognition.ai/subagent_context"])?.parentAgentId;
+  const routed =
+    typeof parentAgentId === "string" && parentAgentId !== "root"
+      ? { ...notification, sessionId: parentAgentId }
+      : notification;
+  const messageId = meta?.["cognition.ai/streamingMessageId"];
+  if (
+    (update.sessionUpdate === "agent_message_chunk" ||
+      update.sessionUpdate === "agent_thought_chunk") &&
+    typeof messageId === "string"
+  ) {
+    return { ...routed, update: { ...update, messageId } };
+  }
+  return routed;
+}
+
+export function normalizeDevinToolCall(tool: AcpToolCallState): AcpToolCallState {
+  const name = record(tool.data.meta)?.["cognition.ai/inferenceToolName"];
+  return typeof name === "string" && (!tool.title || tool.title === "Tool")
+    ? { ...tool, title: name }
+    : tool;
+}
+
+export function extractDevinSubagentUpdate(
+  tool: AcpToolCallState,
+): AcpAdapterV2SubagentUpdate | undefined {
+  const meta = record(tool.data.meta);
+  const completed = record(meta?.["cognition.ai/subagent_completed"]);
+  const started = record(meta?.["cognition.ai/subagent_started"]);
+  const data = completed ?? started;
+  if (typeof data?.agentId !== "string") return undefined;
+  return {
+    nativeTaskId: data.agentId,
+    childSessionId: data.agentId,
+    prompt: typeof started?.task === "string" ? started.task : "",
+    title: typeof started?.title === "string" ? started.title : null,
+    model: typeof started?.model === "string" ? started.model : null,
+    status: completed ? (completed.success === false ? "failed" : "completed") : "running",
+    result: typeof completed?.summary === "string" ? completed.summary : null,
+  };
+}
+
+type DevinSteerInput = Parameters<NonNullable<AcpAdapterV2Flavor["steer"]>>[0] & {
+  readonly driver: ProviderDriverKind;
+};
+
+/**
+ * Devin folds a `session/prompt` sent during a turn into that turn
+ * (`cognition.ai/midTurnPrompts`): it reads the new message at its next step and carries on,
+ * and both calls return together when the turn ends. When the turn ends just before Devin
+ * reads it, Devin starts a turn of its own that no SSHCode turn would show: that one is
+ * cancelled and the message goes back to the host to send next, like any other agent's.
+ */
+export const steerDevinTurn = Effect.fn("steerDevinTurn")(function* (input: DevinSteerInput) {
+  const unsupported = new ProviderAdapter.ProviderAdapterSteerRunUnsupportedError({
+    driver: input.driver,
+    providerThreadId: input.providerThreadId,
+  });
+  if (yield* input.turnOver.isDone) return yield* unsupported;
+  const answered = yield* Deferred.make<boolean>();
+  yield* input.runtime
+    .request("session/prompt", {
+      sessionId: input.sessionId,
+      prompt: [{ type: "text", text: input.text }],
+    })
+    .pipe(
+      Effect.exit,
+      Effect.flatMap((exit) => Deferred.succeed(answered, Exit.isSuccess(exit))),
+      Effect.forkDetach,
+    );
+  const first = yield* Effect.raceFirst(
+    Deferred.await(answered).pipe(Effect.map((ok) => (ok ? "answered" : "refused"))),
+    input.turnOver.await.pipe(Effect.as("ended" as const)),
+  ).pipe(Effect.timeoutOption(STEER_SETTLE));
+  // Still running: Devin has it.
+  if (Option.isNone(first) || first.value === "answered") return;
+  if (first.value === "refused") return yield* unsupported;
+  // The turn ended: a prompt Devin folded in returns with it; one it did not is a new turn.
+  const late = yield* Deferred.await(answered).pipe(Effect.timeoutOption(STEER_SETTLE));
+  if (Option.isSome(late)) {
+    if (late.value) return;
+    return yield* unsupported;
+  }
+  yield* input.runtime.cancel.pipe(Effect.ignore);
+  return yield* unsupported;
+});

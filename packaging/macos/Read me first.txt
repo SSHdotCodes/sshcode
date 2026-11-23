@@ -1,0 +1,86 @@
+SSHCode — read me first
+=======================
+
+SSHCode is a desktop app for coding agents. It runs the agent command-line
+tools you already use (Claude Code, Codex, and others) with your own
+subscriptions.
+
+
+1. Install
+----------
+Drag SSHCode onto the Applications folder in this window.
+
+
+2. Open it the first time
+-------------------------
+This copy is not notarized by Apple, so macOS blocks the first launch.
+
+  a. Open SSHCode from Applications. macOS says it can't verify it.
+     Click Done (not Move to Trash).
+  b. Open System Settings > Privacy & Security, scroll to Security, and
+     click "Open Anyway" next to the message about SSHCode.
+  c. Confirm with your password or Touch ID, then click Open.
+
+Or do it in one step in Terminal:
+
+  xattr -dr com.apple.quarantine /Applications/SSHCode.app
+
+You only need to do this once per new version.
+
+
+3. Set up at least one agent
+----------------------------
+Install one or more of these and sign in. Paste the install line into
+Terminal, then run the sign-in command. The "Set up an agent" card on the
+new chat screen shows which ones SSHCode sees; click Refresh after
+installing. Settings > Providers has the same setup for each agent.
+
+  Claude Code (Claude Pro or Max)
+    curl -fsSL https://claude.ai/install.sh | bash
+    then: claude auth login
+    https://code.claude.com/docs/en/setup
+
+  Codex (ChatGPT plan)
+    curl -fsSL https://chatgpt.com/codex/install.sh | sh
+    then: codex login
+    https://developers.openai.com/codex/cli
+
+  Antigravity CLI (Google Gemini)
+    SSHCode can install it for you: Settings > Providers > Antigravity.
+    Or: curl -fsSL https://antigravity.google/cli/install.sh | bash
+    then sign in with Google from Settings > Providers.
+    https://antigravity.google/docs/cli/install
+
+  Grok Build (SuperGrok or X Premium+)
+    curl -fsSL https://x.ai/cli/install.sh | bash
+    then: grok login
+    https://docs.x.ai/build/overview
+
+  Cursor CLI
+    curl https://cursor.com/install -fsS | bash
+    then: agent login
+    https://cursor.com/cli
+
+  OpenCode
+    curl -fsSL https://opencode.ai/install | bash
+    then: opencode auth login
+    https://opencode.ai/docs
+
+  Pi (needs Node.js 22.19 or newer)
+    npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+    then run pi and type /login
+    https://pi.dev
+
+
+Updating
+--------
+Each update comes as a new disk image. Drag the new SSHCode onto
+Applications and choose Replace. Your chats and settings are kept.
+
+
+Where SSHCode keeps things
+--------------------------
+Chats and settings: ~/.sshcode
+App data:           ~/Library/Application Support/sshcode-shared
+
+To remove SSHCode, quit it and delete the app and both folders.

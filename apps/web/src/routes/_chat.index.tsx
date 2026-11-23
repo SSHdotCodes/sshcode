@@ -1,0 +1,239 @@
+import { RefreshIcon } from "~/components/ui/refresh-icon";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { LinkIcon, PlusIcon } from "lucide-react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+
+import { questPanelRole } from "../questBridge";
+import { isLocalEnvironmentDisabled } from "../localEnvironment";
+import { isElectron } from "../env";
+import { NoProjectsHero } from "../components/NoProjectsHero";
+import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
+import { Button } from "../components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
+import { SidebarInset } from "../components/ui/sidebar";
+import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
+import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+import {
+  readProject,
+  useAllEnvironmentShellsBootstrapped,
+  useEnvironmentShellLoaded,
+  useProjects,
+  useThreadShells,
+} from "../state/entities";
+import {
+  useEnvironments,
+  usePrimaryEnvironmentId,
+  usePrimaryEnvironmentPending,
+} from "../state/environments";
+import { landingReady, useScratchProject } from "../hooks/useScratchProject";
+import { APP_DISPLAY_NAME } from "~/branding";
+import { hasCloudPublicConfig } from "~/cloud/publicConfig";
+
+function ChatIndexRouteView() {
+  const { authGateState } = Route.useRouteContext();
+  const { environments, isReady } = useEnvironments();
+
+  if (authGateState.status === "hosted-static") {
+    if (!isReady) return null;
+    if (environments.length === 0) return <HostedStaticOnboardingState />;
+  }
+
+  return <IndexDraftLanding />;
+}
+
+/**
+ * Landing on the index route drops straight into a new chat without a
+ * project, like Claude Code and Codex, so the first screen is a prompt. On an
+ * environment without a scratch folder it opens a draft in the most recently
+ * active project instead, and falls back to an add-project hero when there is
+ * no project either.
+ */
+export function IndexDraftLanding() {
+  const projects = useProjects();
+  const threads = useThreadShells();
+  const allShellsLoaded = useAllEnvironmentShellsBootstrapped();
+  const handleNewThread = useNewThreadHandler();
+  const { environments } = useEnvironments();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const primaryPending = usePrimaryEnvironmentPending();
+  const { scratchEnvironmentId, openScratchProject } = useScratchProject();
+  const router = useRouter();
+  // Read at effect time: this page stays mounted while a navigation away from
+  // "/" is still loading, but the router already points at the new location.
+  const isStillOnIndex = useEffectEvent(
+    () =>
+      router.state.location.pathname === "/" ||
+      (router.state.location.pathname === "/new" && questPanelRole() === "new"),
+  );
+  const startingRef = useRef(false);
+  const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
+
+  const scratchTargetEnvironmentId = scratchEnvironmentId(primaryEnvironmentId);
+  const bootstrapped = landingReady({
+    scratchEnvironmentId: scratchTargetEnvironmentId,
+    scratchShellLoaded: useEnvironmentShellLoaded(scratchTargetEnvironmentId),
+    allShellsLoaded,
+  });
+  // Only a loaded config can say the environment has no scratch folder, and
+  // only once this client's own machine has registered: before that another
+  // saved machine's projects would be the only ones to start in.
+  const scratchKnown =
+    !primaryPending &&
+    (scratchTargetEnvironmentId !== null ||
+      primaryEnvironmentId === null ||
+      environments.some(
+        (environment) =>
+          environment.environmentId === primaryEnvironmentId && environment.serverConfig != null,
+      ));
+  const mostRecentProject = useMemo(
+    () =>
+      bootstrapped && scratchKnown && scratchTargetEnvironmentId === null
+        ? (sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null)
+        : null,
+    [bootstrapped, projects, scratchKnown, scratchTargetEnvironmentId, threads],
+  );
+
+  useEffect(() => {
+    // Starting a draft after the user has left would replace the page they picked.
+    if (!bootstrapped || startingRef.current || !isStillOnIndex()) {
+      return;
+    }
+    const markFailed = () => {
+      startingRef.current = false;
+      setStartState((state) => ({ ...state, failed: true }));
+    };
+    if (scratchTargetEnvironmentId !== null) {
+      startingRef.current = true;
+      void openScratchProject(scratchTargetEnvironmentId)
+        .then((project) =>
+          project === null
+            ? null
+            : handleNewThread(scopeProjectRef(project.environmentId, project.id), {
+                replace: true,
+                fresh: questPanelRole() === "new",
+              }),
+        )
+        .then((opened) => {
+          if (opened === null) markFailed();
+        })
+        .catch(markFailed);
+      return;
+    }
+    if (mostRecentProject === null) {
+      return;
+    }
+    const projectRef = scopeProjectRef(mostRecentProject.environmentId, mostRecentProject.id);
+    // A project removed since this render is gone from the store; the next
+    // render picks another one.
+    if (readProject(projectRef) === null) {
+      return;
+    }
+    startingRef.current = true;
+    void handleNewThread(projectRef, { replace: true, fresh: questPanelRole() === "new" })
+      .then((opened) => {
+        // The project was removed while its draft started; land on the next one.
+        if (opened === null) {
+          startingRef.current = false;
+          setStartState((state) => ({ ...state, retryRequest: state.retryRequest + 1 }));
+        }
+      })
+      .catch(markFailed);
+  }, [
+    bootstrapped,
+    handleNewThread,
+    mostRecentProject,
+    openScratchProject,
+    scratchTargetEnvironmentId,
+    startState.retryRequest,
+  ]);
+
+  if (!bootstrapped || !scratchKnown) {
+    return null;
+  }
+  if (scratchTargetEnvironmentId !== null || mostRecentProject !== null) {
+    return startState.failed ? (
+      <DraftStartError
+        onRetry={() => {
+          setStartState((state) => ({
+            failed: false,
+            retryRequest: state.retryRequest + 1,
+          }));
+        }}
+      />
+    ) : null;
+  }
+  // First-run routing to the welcome wizard happens in FirstRunGate at the
+  // root, before this route ever renders.
+  return <NoProjectsHero />;
+}
+
+function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
+  return (
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
+      {isElectron ? <WorkspacePageHeader electron /> : null}
+      <Empty className="flex-1">
+        <EmptyHeader className="max-w-md">
+          <EmptyTitle>Couldn’t start a new chat</EmptyTitle>
+          <EmptyDescription>Try opening it again.</EmptyDescription>
+          <div className="mt-5 flex justify-center">
+            <Button size="sm" onClick={onRetry}>
+              <RefreshIcon size="md" />
+              Try again
+            </Button>
+          </div>
+        </EmptyHeader>
+      </Empty>
+    </SidebarInset>
+  );
+}
+
+export const Route = createFileRoute("/_chat/")({
+  component: ChatIndexRouteView,
+});
+
+function HostedStaticOnboardingState() {
+  const cloudEnabled = hasCloudPublicConfig();
+  const localEnvironmentOff = isLocalEnvironmentDisabled();
+  const description = localEnvironmentOff
+    ? "The local environment is turned off. Connect a remote environment, or turn the local environment back on in Connections."
+    : cloudEnabled
+      ? "Enable T3 Connect on that machine, then open Connections here to sign in with the same account. You can also add the machine using a pairing link."
+      : "Open Connections and add that machine using its pairing link. This app must be able to reach it.";
+
+  return (
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
+        <WorkspacePageHeader electron={isElectron} className="border-b border-border">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-foreground md:text-muted-foreground/60">
+              {APP_DISPLAY_NAME}
+            </span>
+          </div>
+        </WorkspacePageHeader>
+
+        <Empty className="flex-1">
+          <div className="w-full max-w-xl rounded-3xl border border-border/55 bg-card/20 px-8 py-12 shadow-sm/5">
+            <EmptyHeader className="max-w-none">
+              <div className="mx-auto mb-5 flex size-11 items-center justify-center rounded-xl border border-border/70 bg-background/70 text-muted-foreground">
+                <LinkIcon className="size-5" />
+              </div>
+              <EmptyTitle>Connect to a computer running SSHCode</EmptyTitle>
+              <EmptyDescription>
+                This app connects to SSHCode running on your computer or a server. Start the SSHCode
+                desktop app or command-line server on that machine and keep it running.
+              </EmptyDescription>
+              <EmptyDescription>{description}</EmptyDescription>
+              <div className="mt-6 flex justify-center">
+                <Button render={<Link to="/settings/connections" />} size="sm">
+                  <PlusIcon className="size-4" />
+                  Open Connections
+                </Button>
+              </div>
+            </EmptyHeader>
+          </div>
+        </Empty>
+      </div>
+    </SidebarInset>
+  );
+}

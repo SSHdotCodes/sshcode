@@ -1,0 +1,146 @@
+{
+  "code": 200,
+  "tweet": {
+    "id": "1950583566947213444",
+    "text": "Launch success! NISAR is in orbit and communicating with @NASA and @ISRO teams after launching from India this morning 🚀\n\nThe mission will study Earth’s land and ice surfaces, providing critical insight into how our planet changes over time. http://go.nasa.gov/3U5mf9i",
+    "raw_text": {
+      "text": "Launch success! NISAR is in orbit and communicating with @NASA and @ISRO teams after launching from India this morning 🚀\n\nThe mission will study Earth’s land and ice surfaces, providing critical insight into how our planet changes over time. https://t.co/m1uEXR5QqR https://t.co/L0EEo3Lx19",
+      "display_text_range": [0, 265],
+      "facets": [
+        {
+          "type": "mention",
+          "indices": [57, 62],
+          "original": "NASA",
+          "id": "11348282"
+        },
+        {
+          "type": "mention",
+          "indices": [67, 72],
+          "original": "isro",
+          "id": "2253142422"
+        },
+        {
+          "type": "url",
+          "indices": [242, 265],
+          "original": "https://t.co/m1uEXR5QqR",
+          "replacement": "http://go.nasa.gov/3U5mf9i",
+          "display": "go.nasa.gov/3U5mf9i"
+        },
+        {
+          "type": "media",
+          "indices": [266, 289],
+          "id": "1950583114239279104",
+          "display": "pic.x.com/L0EEo3Lx19",
+          "original": "https://t.co/L0EEo3Lx19",
+          "replacement": "https://x.com/NASAJPL/status/1950583566947213444/video/1"
+        },
+        {
+          "type": "media",
+          "indices": [266, 289],
+          "id": "1950582192369004544",
+          "display": "pic.x.com/L0EEo3Lx19",
+          "original": "https://t.co/L0EEo3Lx19",
+          "replacement": "https://x.com/NASAJPL/status/1950583566947213444/video/1"
+        },
+        {
+          "type": "media",
+          "indices": [266, 289],
+          "id": "1950583539881455616",
+          "display": "pic.x.com/L0EEo3Lx19",
+          "original": "https://t.co/L0EEo3Lx19",
+          "replacement": "https://x.com/NASAJPL/status/1950583566947213444/video/1"
+        }
+      ]
+    },
+    "author": {
+      "screen_name": "NASAJPL",
+      "name": "NASA JPL"
+    },
+    "replies": 41,
+    "retweets": 110,
+    "likes": 567,
+    "created_at": "Wed Jul 30 15:45:37 +0000 2025",
+    "created_timestamp": 1753890337,
+    "views": 164392,
+    "is_note_tweet": false,
+    "community_note": null,
+    "replying_to_status": null,
+    "media": {
+      "all": [
+        {
+          "type": "photo",
+          "id": "1950583114239279104",
+          "url": "https://pbs.twimg.com/media/GxHdAf0bgAAPO76.jpg?name=orig",
+          "width": 4096,
+          "height": 2731,
+          "altText": "A blue-hued room filled with NISAR team members is shown during launch. In the background is the JPL Caltech, NASA, and NISAR logos alongside an American flag. Toward the left side of the room is a screen displaying a NISAR illustration. Each person is wearing a headset and a tan-colored NISAR team polo."
+        },
+        {
+          "id": "1950582192369004544",
+          "url": "https://video.twimg.com/amplify_video/1950582192369004544/vid/avc1/1280x720/pvtMy1nrV3rQNc_u.mp4?tag=21",
+          "thumbnail_url": "https://pbs.twimg.com/amplify_video_thumb/1950582192369004544/img/t8Ln3nL6kcIRjFWp.jpg",
+          "duration": 66.594,
+          "width": 1280,
+          "height": 720,
+          "format": "video/mp4",
+          "type": "video",
+          "formats": [
+            {
+              "url": "https://video.twimg.com/amplify_video/1950582192369004544/pl/dNvw6-Jdx8W7NVjo.m3u8?tag=21",
+              "container": "m3u8"
+            },
+            {
+              "url": "https://video.twimg.com/amplify_video/1950582192369004544/vid/avc1/480x270/tFAqbAX-SUg8X6Iy.mp4?tag=21",
+              "bitrate": 256000,
+              "container": "mp4",
+              "codec": "h264"
+            },
+            {
+              "url": "https://video.twimg.com/amplify_video/1950582192369004544/vid/avc1/640x360/m6CFUmX4pP8BzkNk.mp4?tag=21",
+              "bitrate": 832000,
+              "container": "mp4",
+              "codec": "h264"
+            },
+            {
+              "url": "https://video.twimg.com/amplify_video/1950582192369004544/vid/avc1/1280x720/pvtMy1nrV3rQNc_u.mp4?tag=21",
+              "bitrate": 2176000,
+              "container": "mp4",
+              "codec": "h264"
+            }
+          ],
+          "publisher": null,
+          "variants": [
+            {
+              "url": "https://video.twimg.com/amplify_video/1950582192369004544/pl/dNvw6-Jdx8W7NVjo.m3u8?tag=21",
+              "bitrate": 0,
+              "content_type": "application/x-mpegURL"
+            },
+            {
+              "url": "https://video.twimg.com/amplify_video/1950582192369004544/vid/avc1/480x270/tFAqbAX-SUg8X6Iy.mp4?tag=21",
+              "bitrate": 256000,
+              "content_type": "video/mp4"
+            },
+            {
+              "url": "https://video.twimg.com/amplify_video/1950582192369004544/vid/avc1/640x360/m6CFUmX4pP8BzkNk.mp4?tag=21",
+              "bitrate": 832000,
+              "content_type": "video/mp4"
+            },
+            {
+              "url": "https://video.twimg.com/amplify_video/1950582192369004544/vid/avc1/1280x720/pvtMy1nrV3rQNc_u.mp4?tag=21",
+              "bitrate": 2176000,
+              "content_type": "video/mp4"
+            }
+          ]
+        },
+        {
+          "type": "photo",
+          "id": "1950583539881455616",
+          "url": "https://pbs.twimg.com/media/GxHdZRdbsAAqxXa.jpg?name=orig",
+          "width": 4096,
+          "height": 2730,
+          "altText": "A close-up shot shows a container of lucky peanuts with a NISAR sticker on it. NISAR team members in tan-colored polos are sitting at stations with headsets on. In the background are the JPL Caltech, NASA, and NISAR logos alongside the American flag. The room is a blue hue."
+        }
+      ]
+    }
+  }
+}

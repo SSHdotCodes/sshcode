@@ -1,0 +1,39 @@
+{
+  "code": 200,
+  "tweet": {
+    "id": "2036334114169823731",
+    "text": "",
+    "raw_text": {
+      "text": "https://t.co/ztDxNpxucl",
+      "display_text_range": [0, 23],
+      "facets": []
+    },
+    "author": {
+      "screen_name": "meathill1",
+      "name": "Meathill"
+    },
+    "replies": 19,
+    "retweets": 0,
+    "likes": 4,
+    "created_at": "Tue Mar 24 06:47:40 +0000 2026",
+    "created_timestamp": 1774334860,
+    "views": 664,
+    "is_note_tweet": false,
+    "community_note": null,
+    "replying_to_status": null,
+    "article": {
+      "title": "I Built a Code Maintenance Skill for Vibe Coding Projects — Here's How It Works",
+      "preview_text": "The Gap Between \"It Runs\" and \"It Survives\"\nVibe coding is everywhere. More and more people — many without a programming background — are shipping MVPs powered by AI. But there's an enormous gap",
+      "content": {
+        "blocks": [
+          {
+            "text": "The Gap Between \"It Runs\" and \"It Survives\""
+          },
+          {
+            "text": "Vibe coding is everywhere. More and more people — many without a programming background — are shipping MVPs powered by AI. But there's an enormous gap between code that runs and code that survives."
+          }
+        ]
+      }
+    }
+  }
+}

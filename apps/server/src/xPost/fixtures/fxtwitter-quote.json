@@ -1,0 +1,211 @@
+{
+  "code": 200,
+  "tweet": {
+    "id": "1769826435576037702",
+    "text": "You’re absolutely right @XNews. 250 million people use X every day. 550 million people visit the global town square every month.\n\nOn average, users spend 30 minutes a day on X.",
+    "raw_text": {
+      "text": "You’re absolutely right @XNews. 250 million people use X every day. 550 million people visit the global town square every month.\n\nOn average, users spend 30 minutes a day on X.",
+      "display_text_range": [0, 176],
+      "facets": [
+        {
+          "type": "mention",
+          "indices": [24, 30],
+          "original": "XNews",
+          "id": "372575989"
+        },
+        {
+          "type": "bold",
+          "indices": [32, 50]
+        },
+        {
+          "type": "bold",
+          "indices": [68, 86]
+        },
+        {
+          "type": "bold",
+          "indices": [154, 170]
+        },
+        {
+          "type": "media",
+          "indices": [177, 200],
+          "id": "1769826323579785216",
+          "display": "pic.x.com/L9mkoWll44",
+          "original": "https://t.co/L9mkoWll44",
+          "replacement": "https://x.com/XData/status/1769826435576037702/video/1"
+        }
+      ]
+    },
+    "author": {
+      "screen_name": "XData",
+      "name": "Data"
+    },
+    "replies": 207,
+    "retweets": 225,
+    "likes": 1579,
+    "created_at": "Mon Mar 18 20:41:18 +0000 2024",
+    "created_timestamp": 1710794478,
+    "views": 15265011,
+    "is_note_tweet": true,
+    "community_note": null,
+    "replying_to_status": null,
+    "media": {
+      "all": [
+        {
+          "id": "1769826323579785216",
+          "url": "https://video.twimg.com/ext_tw_video/1769826323579785216/pu/vid/avc1/1280x720/ZUAw3f7LMkhBrpOw.mp4?tag=12",
+          "thumbnail_url": "https://pbs.twimg.com/ext_tw_video_thumb/1769826323579785216/pu/img/DSaN4R_zCO8W0k_T.jpg",
+          "duration": 13.683,
+          "width": 1920,
+          "height": 1080,
+          "format": "video/mp4",
+          "type": "video",
+          "formats": [
+            {
+              "url": "https://video.twimg.com/ext_tw_video/1769826323579785216/pu/pl/e9FOwdYHWivezioq.m3u8?tag=12&v=cfc",
+              "container": "m3u8"
+            },
+            {
+              "url": "https://video.twimg.com/ext_tw_video/1769826323579785216/pu/vid/avc1/480x270/pYf3tJqTy5wkSLX1.mp4?tag=12",
+              "bitrate": 256000,
+              "container": "mp4",
+              "codec": "h264"
+            },
+            {
+              "url": "https://video.twimg.com/ext_tw_video/1769826323579785216/pu/vid/avc1/640x360/c6GemMkbtbRZlUFX.mp4?tag=12",
+              "bitrate": 832000,
+              "container": "mp4",
+              "codec": "h264"
+            },
+            {
+              "url": "https://video.twimg.com/ext_tw_video/1769826323579785216/pu/vid/avc1/1280x720/ZUAw3f7LMkhBrpOw.mp4?tag=12",
+              "bitrate": 2176000,
+              "container": "mp4",
+              "codec": "h264"
+            }
+          ],
+          "publisher": null,
+          "variants": [
+            {
+              "url": "https://video.twimg.com/ext_tw_video/1769826323579785216/pu/pl/e9FOwdYHWivezioq.m3u8?tag=12&v=cfc",
+              "bitrate": 0,
+              "content_type": "application/x-mpegURL"
+            },
+            {
+              "url": "https://video.twimg.com/ext_tw_video/1769826323579785216/pu/vid/avc1/480x270/pYf3tJqTy5wkSLX1.mp4?tag=12",
+              "bitrate": 256000,
+              "content_type": "video/mp4"
+            },
+            {
+              "url": "https://video.twimg.com/ext_tw_video/1769826323579785216/pu/vid/avc1/640x360/c6GemMkbtbRZlUFX.mp4?tag=12",
+              "bitrate": 832000,
+              "content_type": "video/mp4"
+            },
+            {
+              "url": "https://video.twimg.com/ext_tw_video/1769826323579785216/pu/vid/avc1/1280x720/ZUAw3f7LMkhBrpOw.mp4?tag=12",
+              "bitrate": 2176000,
+              "content_type": "video/mp4"
+            }
+          ]
+        }
+      ]
+    },
+    "quote": {
+      "id": "1769825845005127929",
+      "text": "X is indispensable – and the numbers prove it!\n\nWhat’s the latest @XData?",
+      "raw_text": {
+        "text": "X is indispensable – and the numbers prove it!\n\nWhat’s the latest @XData? https://t.co/HMZlHC8RwI",
+        "display_text_range": [0, 73],
+        "facets": [
+          {
+            "type": "mention",
+            "indices": [66, 72],
+            "original": "XData",
+            "id": "1526228120"
+          },
+          {
+            "type": "media",
+            "indices": [74, 97],
+            "id": "1769825807776804864",
+            "display": "pic.x.com/HMZlHC8RwI",
+            "original": "https://t.co/HMZlHC8RwI",
+            "replacement": "https://x.com/XNews/status/1769825845005127929/video/1"
+          }
+        ]
+      },
+      "author": {
+        "screen_name": "XNews",
+        "name": "News"
+      },
+      "replies": 53,
+      "retweets": 87,
+      "likes": 768,
+      "created_at": "Mon Mar 18 20:38:57 +0000 2024",
+      "created_timestamp": 1710794337,
+      "views": 440642,
+      "is_note_tweet": false,
+      "community_note": null,
+      "replying_to_status": null,
+      "media": {
+        "all": [
+          {
+            "id": "1769825807776804864",
+            "url": "https://video.twimg.com/ext_tw_video/1769825807776804864/pu/vid/avc1/1280x720/P5ieMMfJANlptpVp.mp4?tag=12",
+            "thumbnail_url": "https://pbs.twimg.com/ext_tw_video_thumb/1769825807776804864/pu/img/jLagfz6xh6AI7J0P.jpg",
+            "duration": 20.066,
+            "width": 1280,
+            "height": 720,
+            "format": "video/mp4",
+            "type": "video",
+            "formats": [
+              {
+                "url": "https://video.twimg.com/ext_tw_video/1769825807776804864/pu/pl/c9hhipOR9gOu5NmO.m3u8?tag=12",
+                "container": "m3u8"
+              },
+              {
+                "url": "https://video.twimg.com/ext_tw_video/1769825807776804864/pu/vid/avc1/480x270/Mx7qmR1TLoEx7FhN.mp4?tag=12",
+                "bitrate": 256000,
+                "container": "mp4",
+                "codec": "h264"
+              },
+              {
+                "url": "https://video.twimg.com/ext_tw_video/1769825807776804864/pu/vid/avc1/640x360/l0LIjOYgeipaWWh9.mp4?tag=12",
+                "bitrate": 832000,
+                "container": "mp4",
+                "codec": "h264"
+              },
+              {
+                "url": "https://video.twimg.com/ext_tw_video/1769825807776804864/pu/vid/avc1/1280x720/P5ieMMfJANlptpVp.mp4?tag=12",
+                "bitrate": 2176000,
+                "container": "mp4",
+                "codec": "h264"
+              }
+            ],
+            "publisher": null,
+            "variants": [
+              {
+                "url": "https://video.twimg.com/ext_tw_video/1769825807776804864/pu/pl/c9hhipOR9gOu5NmO.m3u8?tag=12",
+                "bitrate": 0,
+                "content_type": "application/x-mpegURL"
+              },
+              {
+                "url": "https://video.twimg.com/ext_tw_video/1769825807776804864/pu/vid/avc1/480x270/Mx7qmR1TLoEx7FhN.mp4?tag=12",
+                "bitrate": 256000,
+                "content_type": "video/mp4"
+              },
+              {
+                "url": "https://video.twimg.com/ext_tw_video/1769825807776804864/pu/vid/avc1/640x360/l0LIjOYgeipaWWh9.mp4?tag=12",
+                "bitrate": 832000,
+                "content_type": "video/mp4"
+              },
+              {
+                "url": "https://video.twimg.com/ext_tw_video/1769825807776804864/pu/vid/avc1/1280x720/P5ieMMfJANlptpVp.mp4?tag=12",
+                "bitrate": 2176000,
+                "content_type": "video/mp4"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

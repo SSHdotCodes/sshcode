@@ -1,0 +1,115 @@
+.gutter {
+  display: none;
+  pointer-events: none;
+}
+
+/* The whole bubble fits within the existing outer gutter, clear of the transcript. */
+@container (min-width: 1080px) {
+  /* Keep visibility below skin overrides such as Discord's global hide rule. */
+  :global(:root:not([data-chat-width="wide"]):not([data-chat-width="full"]))
+    .gutter:where(:has([data-harness-mascot])) {
+    display: block;
+    position: absolute;
+    right: 12px;
+    bottom: 16px;
+    z-index: 10;
+  }
+}
+
+.companion {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.companion:not(:has([data-harness-mascot])) {
+  display: none;
+}
+
+.companion:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.hearts {
+  position: absolute;
+  inset: 0;
+  color: light-dark(#b54268, #f495b2);
+  pointer-events: none;
+  font-size: 14px;
+}
+
+.hearts > span {
+  position: absolute;
+  top: 2px;
+  animation: heart 1.6s ease-out both;
+}
+
+@keyframes heart {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 6px) scale(0.8);
+  }
+  18% {
+    opacity: 1;
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -18px) scale(1);
+  }
+}
+
+.bubble {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  box-sizing: border-box;
+  width: 88px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px 12px 4px 12px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  text-align: center;
+  text-wrap: balance;
+  font-size: 11px;
+  line-height: 1.4;
+  pointer-events: none;
+  animation: bubble 3.6s ease both;
+}
+
+@keyframes bubble {
+  0% {
+    opacity: 0;
+  }
+  8%,
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hearts > span,
+  .bubble {
+    animation: none;
+  }
+  .hearts > span {
+    transform: translateX(-50%);
+  }
+}

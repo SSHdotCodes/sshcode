@@ -1,0 +1,19 @@
+import { describe, expect, it } from "vite-plus/test";
+
+import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
+
+describe("resolveThreadFeedFixedItemSize", () => {
+  it("leaves activity groups to native measurement", () => {
+    expect(resolveThreadFeedFixedItemSize("activity-group")).toBeUndefined();
+  });
+
+  it("keeps fixed timeline chrome on the premeasured path", () => {
+    expect(resolveThreadFeedFixedItemSize("run-fold")).toBe(42);
+    expect(resolveThreadFeedFixedItemSize("work-toggle")).toBe(28);
+  });
+
+  it("measures a work group that shows its tool calls' images", () => {
+    expect(resolveThreadFeedFixedItemSize("work-toggle", { inlineImages: true })).toBeUndefined();
+    expect(resolveThreadFeedFixedItemSize("work-toggle", { inlineImages: false })).toBe(28);
+  });
+});

@@ -1,0 +1,175 @@
+import { assert, describe, it } from "@effect/vitest";
+import { SshHttpBridgeError } from "@t3tools/ssh/errors";
+import * as Cause from "effect/Cause";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+
+import * as DesktopSshEnvironment from "../../ssh/DesktopSshEnvironment.ts";
+import {
+  DesktopSshEnvironmentRequestError,
+  disconnectSshEnvironment,
+  ensureSshEnvironment,
+  fetchSshEnvironmentDescriptor,
+  resolveSshHost,
+} from "./sshEnvironment.ts";
+
+function jsonResponse(request: HttpClientRequest.HttpClientRequest, body: unknown, status = 200) {
+  return HttpClientResponse.fromWeb(
+    request,
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    }),
+  );
+}
+
+function layerHttpClient(
+  handler: (
+    request: HttpClientRequest.HttpClientRequest,
+  ) => Effect.Effect<HttpClientResponse.HttpClientResponse, never>,
+) {
+  return Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((request) => handler(request)),
+  );
+}
+
+describe("SSH environment IPC", () => {
+  it.effect("fetches and decodes the remote environment descriptor", () => {
+    const requestUrls: string[] = [];
+    const layer = layerHttpClient((request) =>
+      Effect.sync(() => {
+        requestUrls.push(request.url);
+        return jsonResponse(request, {
+          environmentId: "remote-env",
+          label: "Remote Devbox",
+          platform: { os: "linux", arch: "x64" },
+          serverVersion: "1.2.3",
+          capabilities: { repositoryIdentity: true },
+        });
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const descriptor = yield* fetchSshEnvironmentDescriptor.handler({
+        httpBaseUrl: "http://127.0.0.1:41773/",
+      });
+
+      assert.deepEqual(descriptor, {
+        environmentId: "remote-env",
+        label: "Remote Devbox",
+        platform: { os: "linux", arch: "x64" },
+        serverVersion: "1.2.3",
+        capabilities: { repositoryIdentity: true },
+      });
+      assert.deepEqual(requestUrls, ["http://127.0.0.1:41773/.well-known/t3/environment"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("wraps schema decode failures in a typed request error", () => {
+    const layer = layerHttpClient((request) =>
+      Effect.succeed(jsonResponse(request, { environmentId: "remote-env" })),
+    );
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        fetchSshEnvironmentDescriptor.handler({
+          httpBaseUrl: "http://127.0.0.1:41773/",
+        }),
+      );
+      assert(Exit.isFailure(exit));
+      const failure = Cause.findErrorOption(exit.cause);
+      assert(Option.isSome(failure));
+      const error = failure.value;
+
+      assert.instanceOf(error, DesktopSshEnvironmentRequestError);
+      assert.equal(error.operation, "fetch-environment-descriptor");
+      assert.equal(error.cause instanceof SshHttpBridgeError, false);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("rejects non-loopback HTTP endpoints before issuing a request", () => {
+    let requestCount = 0;
+    const layer = layerHttpClient((request) =>
+      Effect.sync(() => {
+        requestCount += 1;
+        return jsonResponse(request, {});
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        fetchSshEnvironmentDescriptor.handler({
+          httpBaseUrl: "http://remote.example.com:41773/",
+        }),
+      );
+      assert(Exit.isFailure(exit));
+      const failure = Cause.findErrorOption(exit.cause);
+      assert(Option.isSome(failure));
+      const error = failure.value;
+
+      assert.instanceOf(error, DesktopSshEnvironmentRequestError);
+      assert.instanceOf(error.cause, SshHttpBridgeError);
+      assert.equal(requestCount, 0);
+    }).pipe(Effect.provide(layer));
+  });
+});
+
+describe("SSH target IPC payloads", () => {
+  const reached: Array<string> = [];
+  const layer = Layer.mock(DesktopSshEnvironment.DesktopSshEnvironment)({
+    resolveHost: (alias) =>
+      Effect.sync(() => {
+        reached.push(alias);
+        return { alias, hostname: alias, username: null, port: null };
+      }),
+    ensureEnvironment: (target) =>
+      Effect.sync(() => {
+        reached.push(target.alias);
+        return {
+          target,
+          httpBaseUrl: "http://127.0.0.1:41773/",
+          wsBaseUrl: "ws://127.0.0.1:41773/",
+          pairingToken: null,
+        };
+      }),
+    disconnectEnvironment: (target) => Effect.sync(() => void reached.push(target.alias)),
+  });
+  const target = { alias: "devbox", hostname: "devbox.example.com", username: "julius", port: 22 };
+
+  it.effect("passes ssh config aliases, hostnames and IPv6 literals through", () =>
+    Effect.gen(function* () {
+      reached.length = 0;
+      yield* resolveSshHost.handler("devbox");
+      yield* resolveSshHost.handler("fe80::1%en0");
+      yield* ensureSshEnvironment.handler({ target });
+      yield* disconnectSshEnvironment.handler({ ...target, username: null });
+      assert.deepEqual(reached, ["devbox", "fe80::1%en0", "devbox", "devbox"]);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("rejects option-shaped, spaced and control-character names before ssh runs", () =>
+    Effect.gen(function* () {
+      reached.length = 0;
+      for (const alias of ["-oProxyCommand=touch /tmp/x", "dev box", "dev\nbox", "dev\u0000box"]) {
+        assert.isTrue(Exit.isFailure(yield* Effect.exit(resolveSshHost.handler(alias))));
+      }
+      for (const bad of [
+        { ...target, alias: "-oProxyCommand=x" },
+        { ...target, hostname: "-oProxyCommand=x" },
+        { ...target, username: "-oProxyCommand=x" },
+        { ...target, hostname: "devbox\texample" },
+        { ...target, username: "julius\r" },
+      ]) {
+        assert.isTrue(Exit.isFailure(yield* Effect.exit(disconnectSshEnvironment.handler(bad))));
+        assert.isTrue(
+          Exit.isFailure(yield* Effect.exit(ensureSshEnvironment.handler({ target: bad }))),
+        );
+      }
+      assert.deepEqual(reached, []);
+    }).pipe(Effect.provide(layer)),
+  );
+});

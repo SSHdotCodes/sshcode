@@ -1,0 +1,64 @@
+name: Bug report
+description: Report broken behavior, regressions, crashes, or reliability issues.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first and keep the report focused on one problem.
+        Ideas and questions belong in Discussions. Report security problems privately (see SECURITY.md).
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Desktop app
+        - iPhone or Android app
+        - Web app or `npx sshcode`
+        - Server or an agent provider
+        - Build, CI, or release tooling
+        - Docs
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Settings → About, or the commit you built.
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, which agents (Claude Code, Codex, …) and their versions, how you connect (same machine, network, Tailscale, T3 Connect).
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Remove tokens, pairing links and anything private before pasting.
+      render: text

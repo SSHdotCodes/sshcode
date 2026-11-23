@@ -1,0 +1,30 @@
+import * as ProviderRegistry from "../ProviderRegistry.ts";
+import type { ServerProvider } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
+import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
+
+const makeProviderRegistryMock = (
+  providers: ReadonlyArray<ServerProvider> = [],
+  getProvidersForUsageLimits: ProviderRegistry.ProviderRegistry["Service"]["getProvidersForUsageLimits"] = () =>
+    Effect.succeed(providers),
+): ProviderRegistry.ProviderRegistry["Service"] => ({
+  getProviders: Effect.succeed(providers),
+  getProvidersForUsageLimits,
+  refresh: () => Effect.succeed(providers),
+  refreshInstance: () => Effect.succeed(providers),
+  refreshWorkspaceSnapshot: () => Effect.succeed(providers),
+  getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
+    Effect.succeed(makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null })),
+  setProviderMaintenanceActionState: () => Effect.succeed(providers),
+  setProviderRecentFailure: () => Effect.void,
+  setProviderRecentUse: () => Effect.void,
+  setModelUnavailable: () => Effect.void,
+  recordModelHealthEvent: () => Effect.void,
+  getModelFailures: Effect.succeed(new Map()),
+  streamChanges: Stream.empty,
+});
+
+export const layer = (...args: Parameters<typeof makeProviderRegistryMock>) =>
+  Layer.succeed(ProviderRegistry.ProviderRegistry, makeProviderRegistryMock(...args));

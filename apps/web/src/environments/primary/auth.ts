@@ -1,0 +1,564 @@
+import type {
+  AuthBrowserSessionResult,
+  AuthClientMetadata,
+  AuthEnvironmentScope,
+  AuthGrantScope,
+  AuthPairingCredentialResult,
+  ServerAuthSessionMethod,
+  AuthSessionId,
+  AuthSessionState,
+} from "@t3tools/contracts";
+import { EnvironmentHttpCommonError, PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
+import type { EnvironmentHttpCommonError as EnvironmentHttpCommonErrorType } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import { HttpClientError } from "effect/http";
+
+import {
+  getPairingTokenFromUrl,
+  stripPairingTokenFromUrl as stripPairingTokenUrl,
+} from "../../pairingUrl";
+
+import { PrimaryEnvironmentHttpClient } from "./httpClient";
+import { runPrimaryHttp } from "../../lib/runtime";
+
+const PrimaryEnvironmentRequestOperation = Schema.Literals([
+  "fetch-session-state",
+  "exchange-bootstrap-credential",
+  "fetch-environment-descriptor",
+  "create-pairing-credential",
+  "list-pairing-links",
+  "revoke-pairing-link",
+  "list-client-sessions",
+  "revoke-client-session",
+  "revoke-other-client-sessions",
+]);
+type PrimaryEnvironmentRequestOperation = typeof PrimaryEnvironmentRequestOperation.Type;
+
+export class PrimaryEnvironmentRequestError extends Schema.TaggedError<PrimaryEnvironmentRequestError>()(
+  "PrimaryEnvironmentRequestError",
+  {
+    operation: PrimaryEnvironmentRequestOperation,
+    status: Schema.Number,
+    pairingLinkId: Schema.optional(Schema.String),
+    sessionId: Schema.optional(Schema.String),
+    cause: Schema.Defect(),
+  },
+) {
+  static fromCause(input: {
+    readonly operation: PrimaryEnvironmentRequestOperation;
+    readonly cause: unknown;
+    readonly pairingLinkId?: string;
+    readonly sessionId?: string;
+  }): PrimaryEnvironmentRequestError {
+    const status = readHttpApiStatus(input.cause) ?? 500;
+    return new PrimaryEnvironmentRequestError({
+      operation: input.operation,
+      status,
+      ...(input.pairingLinkId !== undefined ? { pairingLinkId: input.pairingLinkId } : {}),
+      ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+      cause: input.cause,
+    });
+  }
+
+  override get message(): string {
+    return `Primary environment request failed during ${this.operation} (HTTP ${this.status}).`;
+  }
+}
+
+const isPrimaryEnvironmentRequestError = Schema.is(PrimaryEnvironmentRequestError);
+
+export class PrimaryEnvironmentPairingCredentialRejectedError extends Schema.TaggedError<PrimaryEnvironmentPairingCredentialRejectedError>()(
+  "PrimaryEnvironmentPairingCredentialRejectedError",
+  {
+    providedLength: Schema.Number,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return "Invalid pairing token. Check the token and try again.";
+  }
+}
+
+export const isPrimaryEnvironmentPairingCredentialRejectedError = Schema.is(
+  PrimaryEnvironmentPairingCredentialRejectedError,
+);
+
+export class PrimaryEnvironmentAuthSessionTimeoutError extends Schema.TaggedError<PrimaryEnvironmentAuthSessionTimeoutError>()(
+  "PrimaryEnvironmentAuthSessionTimeoutError",
+  {
+    timeoutMs: Schema.Number,
+    elapsedMs: Schema.Number,
+  },
+) {
+  override get message(): string {
+    return "Timed out waiting for authenticated session after bootstrap.";
+  }
+}
+
+export class PrimaryEnvironmentPairingCredentialRequiredError extends Schema.TaggedError<PrimaryEnvironmentPairingCredentialRequiredError>()(
+  "PrimaryEnvironmentPairingCredentialRequiredError",
+  {
+    providedLength: Schema.Number,
+  },
+) {
+  override get message(): string {
+    return "Enter a pairing token to continue.";
+  }
+}
+
+const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
+
+export interface ServerPairingLinkRecord {
+  readonly id: string;
+  readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
+  readonly subject: string;
+  readonly label?: string;
+  readonly createdAt: string;
+  readonly expiresAt: string;
+}
+
+export interface ServerClientSessionRecord {
+  readonly sessionId: AuthSessionId;
+  readonly subject: string;
+  readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
+  readonly method: ServerAuthSessionMethod;
+  readonly client: AuthClientMetadata;
+  readonly issuedAt: string;
+  readonly expiresAt: string;
+  readonly lastConnectedAt: string | null;
+  readonly connected: boolean;
+  readonly current: boolean;
+}
+
+type ServerAuthGateState =
+  | { status: "authenticated" }
+  | {
+      status: "requires-auth";
+      auth: AuthSessionState["auth"];
+      errorMessage?: string;
+    };
+
+let bootstrapPromise: Promise<ServerAuthGateState> | null = null;
+let resolvedAuthenticatedGateState: ServerAuthGateState | null = null;
+let explicitPairingRequested = false;
+const AUTH_SESSION_ESTABLISH_TIMEOUT_MS = 2_000;
+const AUTH_SESSION_ESTABLISH_STEP_MS = 100;
+
+export function peekPairingTokenFromUrl(): string | null {
+  return getPairingTokenFromUrl(new URL(window.location.href));
+}
+
+export function stripPairingTokenFromUrl() {
+  const url = new URL(window.location.href);
+  const next = stripPairingTokenUrl(url);
+  if (next.toString() === url.toString()) {
+    return;
+  }
+  window.history.replaceState({}, document.title, next.toString());
+}
+
+export function takePairingTokenFromUrl(): string | null {
+  const token = peekPairingTokenFromUrl();
+  if (!token) {
+    return null;
+  }
+  stripPairingTokenFromUrl();
+  return token;
+}
+
+function getDesktopBootstrapCredential(): string | null {
+  // Both backends share the same bootstrap token (DesktopBackendConfiguration
+  // mints one tokenRef and feeds it to both resolvers), so picking the
+  // primary entry is fine even when the WSL backend is also registered.
+  const bootstraps = window.desktopBridge?.getLocalEnvironmentBootstraps() ?? [];
+  const primary = bootstraps.find((entry) => entry.id === PRIMARY_LOCAL_ENVIRONMENT_ID);
+  return typeof primary?.bootstrapToken === "string" && primary.bootstrapToken.length > 0
+    ? primary.bootstrapToken
+    : null;
+}
+
+export async function fetchSessionState(): Promise<AuthSessionState> {
+  return retryTransientBootstrap(async () => {
+    try {
+      return await runPrimaryHttp(
+        PrimaryEnvironmentHttpClient.pipe(
+          Effect.flatMap((client) => client.auth.session({ headers: {} })),
+        ),
+      );
+    } catch (error) {
+      throw PrimaryEnvironmentRequestError.fromCause({
+        operation: "fetch-session-state",
+        cause: error,
+      });
+    }
+  });
+}
+
+function readHttpApiStatus(error: unknown): number | null {
+  if (isEnvironmentHttpCommonError(error)) {
+    return readEnvironmentHttpErrorStatus(error);
+  }
+  return HttpClientError.isHttpClientError(error) && error.response !== undefined
+    ? error.response.status
+    : null;
+}
+
+function readEnvironmentHttpErrorStatus(error: EnvironmentHttpCommonErrorType): number {
+  switch (error._tag) {
+    case "EnvironmentRequestInvalidError":
+      return 400;
+    case "EnvironmentAuthInvalidError":
+      return 401;
+    case "EnvironmentScopeRequiredError":
+    case "EnvironmentOperationForbiddenError":
+      return 403;
+    case "EnvironmentResourceNotFoundError":
+      return 404;
+    case "EnvironmentInternalError":
+      return 500;
+  }
+}
+
+async function exchangeBootstrapCredential(credential: string): Promise<AuthBrowserSessionResult> {
+  return retryTransientBootstrap(async () => {
+    try {
+      return await runPrimaryHttp(
+        PrimaryEnvironmentHttpClient.pipe(
+          Effect.flatMap((client) => client.auth.browserSession({ payload: { credential } })),
+        ),
+      );
+    } catch (error) {
+      if (
+        isEnvironmentHttpCommonError(error) &&
+        error._tag === "EnvironmentAuthInvalidError" &&
+        error.reason === "invalid_credential"
+      ) {
+        throw new PrimaryEnvironmentPairingCredentialRejectedError({
+          providedLength: credential.length,
+          cause: error,
+        });
+      }
+      throw PrimaryEnvironmentRequestError.fromCause({
+        operation: "exchange-bootstrap-credential",
+        cause: error,
+      });
+    }
+  });
+}
+
+async function waitForAuthenticatedSessionAfterBootstrap(): Promise<AuthSessionState> {
+  const startedAt = Date.now();
+
+  while (true) {
+    const session = await fetchSessionState();
+    if (session.authenticated) {
+      return session;
+    }
+
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= AUTH_SESSION_ESTABLISH_TIMEOUT_MS) {
+      throw new PrimaryEnvironmentAuthSessionTimeoutError({
+        timeoutMs: AUTH_SESSION_ESTABLISH_TIMEOUT_MS,
+        elapsedMs,
+      });
+    }
+
+    await waitForBootstrapRetry(AUTH_SESSION_ESTABLISH_STEP_MS);
+  }
+}
+
+const TRANSIENT_BOOTSTRAP_STATUS_CODES = new Set([502, 503, 504]);
+const BOOTSTRAP_RETRY_TIMEOUT_MS = 15_000;
+// The Mac app opens while its own server starts, which can take longer.
+const DESKTOP_BOOTSTRAP_RETRY_TIMEOUT_MS = 60_000;
+const BOOTSTRAP_RETRY_STEP_MS = 500;
+
+export async function retryTransientBootstrap<T>(operation: () => Promise<T>): Promise<T> {
+  const startedAt = Date.now();
+  const timeoutMs =
+    getDesktopBootstrapCredential() === null
+      ? BOOTSTRAP_RETRY_TIMEOUT_MS
+      : DESKTOP_BOOTSTRAP_RETRY_TIMEOUT_MS;
+  while (true) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isTransientBootstrapError(error)) {
+        throw error;
+      }
+
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw error;
+      }
+
+      await waitForBootstrapRetry(BOOTSTRAP_RETRY_STEP_MS);
+    }
+  }
+}
+
+function waitForBootstrapRetry(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+
+function isTransientBootstrapError(error: unknown): boolean {
+  if (isPrimaryEnvironmentRequestError(error)) {
+    return TRANSIENT_BOOTSTRAP_STATUS_CODES.has(error.status) || isUnansweredRequest(error.cause);
+  }
+
+  if (error instanceof TypeError) {
+    return true;
+  }
+
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+// No response at all: the server isn't listening yet, as while the Mac app's
+// own server starts. Its request error otherwise reads as an HTTP 500.
+function isUnansweredRequest(cause: unknown): boolean {
+  return (
+    cause instanceof TypeError ||
+    (HttpClientError.isHttpClientError(cause) && cause.reason._tag === "TransportError")
+  );
+}
+
+async function bootstrapServerAuth(urlCredential: string | null): Promise<ServerAuthGateState> {
+  const currentSession = await fetchSessionState();
+  if (currentSession.authenticated && !urlCredential) {
+    return { status: "authenticated" };
+  }
+
+  const bootstrapCredential = urlCredential ?? getDesktopBootstrapCredential();
+  if (!bootstrapCredential) {
+    return {
+      status: "requires-auth",
+      auth: currentSession.auth,
+    };
+  }
+
+  try {
+    await exchangeBootstrapCredential(bootstrapCredential);
+    await waitForAuthenticatedSessionAfterBootstrap();
+    return { status: "authenticated" };
+  } catch (error) {
+    return {
+      status: "requires-auth",
+      auth: currentSession.auth,
+      errorMessage: error instanceof Error ? error.message : "Authentication failed.",
+    };
+  }
+}
+
+export async function submitServerAuthCredential(credential: string): Promise<void> {
+  const trimmedCredential = credential.trim();
+  if (!trimmedCredential) {
+    throw new PrimaryEnvironmentPairingCredentialRequiredError({
+      providedLength: credential.length,
+    });
+  }
+
+  resolvedAuthenticatedGateState = null;
+  await exchangeBootstrapCredential(trimmedCredential);
+  await waitForAuthenticatedSessionAfterBootstrap();
+  resolvedAuthenticatedGateState = { status: "authenticated" };
+  bootstrapPromise = null;
+  explicitPairingRequested = false;
+  stripPairingTokenFromUrl();
+}
+
+export async function createServerPairingCredential(input?: {
+  readonly label?: string;
+  readonly scopes?: ReadonlyArray<AuthGrantScope>;
+}): Promise<AuthPairingCredentialResult> {
+  const trimmedLabel = input?.label?.trim();
+  try {
+    return await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) =>
+          client.auth.pairingCredential({
+            headers: {},
+            payload: {
+              ...(trimmedLabel ? { label: trimmedLabel } : {}),
+              ...(input?.scopes ? { scopes: input.scopes } : {}),
+            },
+          }),
+        ),
+      ),
+    );
+  } catch (error) {
+    throw PrimaryEnvironmentRequestError.fromCause({
+      operation: "create-pairing-credential",
+      cause: error,
+    });
+  }
+}
+
+export async function revokeServerPairingLink(id: string): Promise<void> {
+  try {
+    await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) => client.auth.revokePairingLink({ headers: {}, payload: { id } })),
+      ),
+    );
+  } catch (error) {
+    throw PrimaryEnvironmentRequestError.fromCause({
+      operation: "revoke-pairing-link",
+      pairingLinkId: id,
+      cause: error,
+    });
+  }
+}
+
+export async function revokeServerClientSession(sessionId: AuthSessionId): Promise<void> {
+  try {
+    await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) =>
+          client.auth.revokeClient({ headers: {}, payload: { sessionId } }),
+        ),
+      ),
+    );
+  } catch (error) {
+    throw PrimaryEnvironmentRequestError.fromCause({
+      operation: "revoke-client-session",
+      sessionId,
+      cause: error,
+    });
+  }
+}
+
+export async function revokeOtherServerClientSessions(): Promise<number> {
+  try {
+    const result = await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) => client.auth.revokeOtherClients({ headers: {} })),
+      ),
+    );
+    return result.revokedCount;
+  } catch (error) {
+    throw PrimaryEnvironmentRequestError.fromCause({
+      operation: "revoke-other-client-sessions",
+      cause: error,
+    });
+  }
+}
+
+// The Mac app's own server keeps its sign-in across launches. A launch that
+// was signed in before shows the app at once, from the saved chat list, while
+// the server starts, and confirms the sign-in once the server answers.
+const DESKTOP_SIGNED_IN_KEY = "t3code:desktop-primary-signed-in";
+const DESKTOP_CONFIRM_ATTEMPTS = 3;
+let desktopSignInConfirmation: Promise<void> | null = null;
+
+function rememberDesktopSignIn(signedIn: boolean) {
+  try {
+    if (signedIn) window.localStorage.setItem(DESKTOP_SIGNED_IN_KEY, "1");
+    else window.localStorage.removeItem(DESKTOP_SIGNED_IN_KEY);
+  } catch {
+    // Storage is unavailable; launches simply wait for the server.
+  }
+}
+
+function desktopSignedInBefore(): boolean {
+  try {
+    return window.localStorage.getItem(DESKTOP_SIGNED_IN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+async function confirmDesktopSignIn(): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    let result: ServerAuthGateState;
+    try {
+      result = await bootstrapServerAuth(null);
+    } catch (error) {
+      // Each try already waits out a starting server; a slower start gets another.
+      if (attempt >= DESKTOP_CONFIRM_ATTEMPTS) throw error;
+      await waitForBootstrapRetry(1_000);
+      continue;
+    }
+    if (result.status === "authenticated") return;
+    // Signed out since the last launch: load again for the sign-in screen.
+    rememberDesktopSignIn(false);
+    resolvedAuthenticatedGateState = null;
+    window.location.reload();
+    return;
+  }
+}
+
+/** Settles once the Mac app's server has confirmed a sign-in shown before it answered. */
+export function confirmedDesktopSignIn(): Promise<void> | null {
+  return desktopSignInConfirmation;
+}
+
+export async function resolveInitialServerAuthGateState(): Promise<ServerAuthGateState> {
+  // An explicit pairing link replaces this browser's grant, even when the
+  // current cookie or a cached gate already authenticates it. Keep that intent
+  // after stripping the token, which causes the router to load this gate again.
+  if (window.location.pathname.replace(/\/+$/, "") !== "/pair") {
+    explicitPairingRequested = false;
+  } else if (peekPairingTokenFromUrl()) {
+    explicitPairingRequested = true;
+  }
+  if (explicitPairingRequested) {
+    const currentSession = await fetchSessionState();
+    return { status: "requires-auth", auth: currentSession.auth };
+  }
+
+  const urlCredential = takePairingTokenFromUrl();
+  const previousPromise = bootstrapPromise;
+  if (urlCredential) {
+    resolvedAuthenticatedGateState = null;
+  } else {
+    if (previousPromise) {
+      return previousPromise;
+    }
+
+    if (resolvedAuthenticatedGateState?.status === "authenticated") {
+      return resolvedAuthenticatedGateState;
+    }
+
+    if (getDesktopBootstrapCredential() !== null && desktopSignedInBefore()) {
+      resolvedAuthenticatedGateState = { status: "authenticated" };
+      desktopSignInConfirmation = confirmDesktopSignIn();
+      // A server that never answers leaves the connection's own retries to report it.
+      desktopSignInConfirmation.catch(() => undefined);
+      return resolvedAuthenticatedGateState;
+    }
+  }
+
+  const nextPromise = previousPromise
+    ? previousPromise
+        .catch(() => undefined)
+        .then(() => {
+          resolvedAuthenticatedGateState = null;
+          return bootstrapServerAuth(urlCredential);
+        })
+    : bootstrapServerAuth(urlCredential);
+  bootstrapPromise = nextPromise;
+  return nextPromise
+    .then((result) => {
+      if (bootstrapPromise === nextPromise && result.status === "authenticated") {
+        resolvedAuthenticatedGateState = result;
+      }
+      if (getDesktopBootstrapCredential() !== null) {
+        rememberDesktopSignIn(result.status === "authenticated");
+      }
+      return result;
+    })
+    .finally(() => {
+      if (bootstrapPromise === nextPromise) {
+        bootstrapPromise = null;
+      }
+    });
+}
+
+export function __resetServerAuthBootstrapForTests() {
+  bootstrapPromise = null;
+  resolvedAuthenticatedGateState = null;
+  explicitPairingRequested = false;
+  desktopSignInConfirmation = null;
+}

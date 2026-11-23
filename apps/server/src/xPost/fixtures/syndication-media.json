@@ -1,0 +1,130 @@
+{
+  "favorite_count": 567,
+  "created_at": "2025-07-30T15:45:37.000Z",
+  "entities": {
+    "media": [
+      {
+        "display_url": "pic.x.com/L0EEo3Lx19",
+        "expanded_url": "https://x.com/NASAJPL/status/1950583566947213444/video/1",
+        "indices": [266, 289],
+        "url": "https://t.co/L0EEo3Lx19"
+      }
+    ],
+    "urls": [
+      {
+        "display_url": "go.nasa.gov/3U5mf9i",
+        "expanded_url": "http://go.nasa.gov/3U5mf9i",
+        "indices": [242, 265],
+        "url": "https://t.co/m1uEXR5QqR"
+      }
+    ],
+    "user_mentions": [
+      {
+        "id_str": "11348282",
+        "indices": [57, 62],
+        "name": "NASA",
+        "screen_name": "NASA"
+      },
+      {
+        "id_str": "2253142422",
+        "indices": [67, 72],
+        "name": "ISRO",
+        "screen_name": "isro"
+      }
+    ]
+  },
+  "id_str": "1950583566947213444",
+  "text": "Launch success! NISAR is in orbit and communicating with @NASA and @ISRO teams after launching from India this morning 🚀\n\nThe mission will study Earth’s land and ice surfaces, providing critical insight into how our planet changes over time. https://t.co/m1uEXR5QqR https://t.co/L0EEo3Lx19",
+  "user": {
+    "name": "NASA JPL",
+    "screen_name": "NASAJPL"
+  },
+  "mediaDetails": [
+    {
+      "expanded_url": "https://x.com/NASAJPL/status/1950583566947213444/video/1",
+      "ext_alt_text": "A blue-hued room filled with NISAR team members is shown during launch. In the background is the JPL Caltech, NASA, and NISAR logos alongside an American flag. Toward the left side of the room is a screen displaying a NISAR illustration. Each person is wearing a headset and a tan-colored NISAR team polo.",
+      "media_url_https": "https://pbs.twimg.com/media/GxHdAf0bgAAPO76.jpg",
+      "type": "photo",
+      "url": "https://t.co/L0EEo3Lx19"
+    },
+    {
+      "expanded_url": "https://x.com/NASAJPL/status/1950583566947213444/video/1",
+      "media_url_https": "https://pbs.twimg.com/amplify_video_thumb/1950582192369004544/img/t8Ln3nL6kcIRjFWp.jpg",
+      "type": "video",
+      "url": "https://t.co/L0EEo3Lx19",
+      "video_info": {
+        "aspect_ratio": [16, 9],
+        "duration_millis": 66594,
+        "variants": [
+          {
+            "content_type": "application/x-mpegURL",
+            "url": "https://video.twimg.com/amplify_video/1950582192369004544/pl/dNvw6-Jdx8W7NVjo.m3u8"
+          },
+          {
+            "bitrate": 256000,
+            "content_type": "video/mp4",
+            "url": "https://video.twimg.com/amplify_video/1950582192369004544/vid/avc1/480x270/tFAqbAX-SUg8X6Iy.mp4"
+          },
+          {
+            "bitrate": 832000,
+            "content_type": "video/mp4",
+            "url": "https://video.twimg.com/amplify_video/1950582192369004544/vid/avc1/640x360/m6CFUmX4pP8BzkNk.mp4"
+          },
+          {
+            "bitrate": 2176000,
+            "content_type": "video/mp4",
+            "url": "https://video.twimg.com/amplify_video/1950582192369004544/vid/avc1/1280x720/pvtMy1nrV3rQNc_u.mp4"
+          }
+        ]
+      }
+    },
+    {
+      "expanded_url": "https://x.com/NASAJPL/status/1950583566947213444/video/1",
+      "ext_alt_text": "A close-up shot shows a container of lucky peanuts with a NISAR sticker on it. NISAR team members in tan-colored polos are sitting at stations with headsets on. In the background are the JPL Caltech, NASA, and NISAR logos alongside the American flag. The room is a blue hue.",
+      "media_url_https": "https://pbs.twimg.com/media/GxHdZRdbsAAqxXa.jpg",
+      "type": "photo",
+      "url": "https://t.co/L0EEo3Lx19"
+    }
+  ],
+  "photos": [
+    {
+      "url": "https://pbs.twimg.com/media/GxHdAf0bgAAPO76.jpg"
+    },
+    {
+      "url": "https://pbs.twimg.com/media/GxHdZRdbsAAqxXa.jpg"
+    }
+  ],
+  "video": {
+    "aspectRatio": [16, 9],
+    "contentType": "media_entity",
+    "durationMs": 66594,
+    "mediaAvailability": {
+      "status": "available"
+    },
+    "poster": "https://pbs.twimg.com/amplify_video_thumb/1950582192369004544/img/t8Ln3nL6kcIRjFWp.jpg",
+    "variants": [
+      {
+        "type": "application/x-mpegURL",
+        "src": "https://video.twimg.com/amplify_video/1950582192369004544/pl/dNvw6-Jdx8W7NVjo.m3u8"
+      },
+      {
+        "type": "video/mp4",
+        "src": "https://video.twimg.com/amplify_video/1950582192369004544/vid/avc1/480x270/tFAqbAX-SUg8X6Iy.mp4"
+      },
+      {
+        "type": "video/mp4",
+        "src": "https://video.twimg.com/amplify_video/1950582192369004544/vid/avc1/640x360/m6CFUmX4pP8BzkNk.mp4"
+      },
+      {
+        "type": "video/mp4",
+        "src": "https://video.twimg.com/amplify_video/1950582192369004544/vid/avc1/1280x720/pvtMy1nrV3rQNc_u.mp4"
+      }
+    ],
+    "videoId": {
+      "type": "tweet",
+      "id": "1950583566947213444"
+    },
+    "viewCount": 0
+  },
+  "conversation_count": 41
+}

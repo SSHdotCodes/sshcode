@@ -1,0 +1,260 @@
+import { assert, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import { describe } from "vite-plus/test";
+
+import * as OpenCode2Client from "./OpenCode2Client.ts";
+
+const INFO_BODY = '{"version":"2.0.18","pid":4242,"urls":[],"paths":{"tmp":"/tmp"}}';
+
+/** Sends one request through the client and returns the Authorization header it carried. */
+const authorizationFor = (password: string | Redacted.Redacted) => {
+  const seen: Array<string | undefined> = [];
+  const layerCapturing = Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((request) =>
+      Effect.sync(() => {
+        seen.push(request.headers.authorization);
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response(INFO_BODY, { headers: { "content-type": "application/json" } }),
+        );
+      }),
+    ),
+  );
+  return Effect.gen(function* () {
+    const opencode = yield* OpenCode2Client.OpenCode2Client;
+    const { client } = yield* opencode.connect({ baseUrl: "http://127.0.0.1:4096", password });
+    yield* client.server.info();
+    return seen[0];
+  }).pipe(Effect.provide(OpenCode2Client.layer.pipe(Layer.provide(layerCapturing))));
+};
+
+const utf8Basic = (password: string) =>
+  `Basic ${Buffer.from(`opencode:${password}`, "utf8").toString("base64")}`;
+
+describe("OpenCode2Client authorization", () => {
+  // OpenCode decodes Basic credentials as UTF-8. Latin-1 (`btoa`) encoding gets
+  // `pässwörd` rejected with a 401 and throws on characters such as `€`.
+  it.effect("encodes non-ASCII passwords as UTF-8", () =>
+    Effect.gen(function* () {
+      assert.strictEqual(yield* authorizationFor("pässwörd"), utf8Basic("pässwörd"));
+      assert.strictEqual(yield* authorizationFor("pass€word"), utf8Basic("pass€word"));
+      assert.strictEqual(yield* authorizationFor(Redacted.make("pässwörd")), utf8Basic("pässwörd"));
+    }),
+  );
+});
+
+describe("OpenCode2Client usage limits", () => {
+  it.effect("reads the connected workspace and maps Go and Console budgets", () =>
+    Effect.gen(function* () {
+      let workspace = "wrk_remote";
+      let usageURL: string | undefined;
+      const transport = HttpClient.make((request) => {
+        assert.isTrue(request.headers.authorization === utf8Basic("remote-password"));
+        assert.deepStrictEqual(Array.from(request.urlParams), [
+          ["location[directory]", "/remote/project"],
+        ]);
+        if (request.url === "https://remote.example/prefix/api/provider")
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json({
+                data: [
+                  { id: "opencode", integrationID: "opencode" },
+                  { id: "console-custom", integrationID: "opencode" },
+                  { id: "opencode-go", integrationID: "opencode" },
+                  { id: "anthropic", integrationID: "anthropic" },
+                  { id: "byok" },
+                ],
+              }),
+            ),
+          );
+        assert.strictEqual(
+          request.url,
+          "https://remote.example/prefix/api/experimental/usage/limits",
+        );
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            Response.json({
+              location: { directory: "/remote/project" },
+              data: {
+                workspace: {
+                  id: workspace,
+                  name: workspace,
+                  usageURL: usageURL ?? "https://opencode.ai/console/" + workspace,
+                },
+                go: {
+                  rolling: { percent: 23, limited: false, resetsAt: 1793491200000 },
+                  weekly: { percent: 99, limited: true, resetsAt: 1793491200000 },
+                  monthly: { percent: 12, limited: false, resetsAt: 1793491200000 },
+                },
+                budgets: [
+                  {
+                    id: "all",
+                    limit: 20,
+                    spent: 15,
+                    scope: "combined",
+                    per: "set",
+                    coverage: "all",
+                    models: [],
+                    vendors: [],
+                    picked: false,
+                    shared: true,
+                    resetsAt: 1793491200000,
+                  },
+                  {
+                    id: "models",
+                    limit: 10,
+                    spent: 12,
+                    scope: "each",
+                    per: "model",
+                    coverage: "models",
+                    models: [
+                      { providerID: "opencode", modelID: "a", name: "Model A", spent: 12 },
+                      { providerID: "opencode", modelID: "b", name: "Model B", spent: 2 },
+                    ],
+                    vendors: [],
+                    picked: true,
+                    shared: false,
+                    resetsAt: 1793491200000,
+                  },
+                  {
+                    id: "zz_missing",
+                    limit: 10,
+                    spent: 10,
+                    scope: "each",
+                    per: "model",
+                    coverage: "models",
+                    models: [{ providerID: "opencode", modelID: "unknown", name: "Unknown spend" }],
+                    shared: false,
+                    resetsAt: 1793491200000,
+                  },
+                  {
+                    id: "zero",
+                    limit: 0,
+                    spent: 0,
+                    scope: "each",
+                    per: "set",
+                    coverage: "all",
+                    models: [],
+                    vendors: [],
+                    picked: false,
+                    shared: false,
+                    resetsAt: 1793491200000,
+                  },
+                ],
+              },
+            }),
+          ),
+        );
+      });
+      const opencode = yield* OpenCode2Client.make.pipe(
+        Effect.provideService(HttpClient.HttpClient, transport),
+      );
+      const api = yield* opencode.connect({
+        baseUrl: "https://remote.example/prefix",
+        password: "remote-password",
+      });
+      const first = yield* api.usageLimits("/remote/project");
+      assert.isDefined(first);
+      assert.deepStrictEqual(
+        first?.windows.map((window) => window.usedPercent),
+        [23, 100, 12, 75, 100, 20, 100, 100],
+      );
+      assert.isTrue(
+        first?.windows.every((window) => window.resetsAt === "2026-11-01T00:00:00.000Z"),
+      );
+      assert.include(first?.windows[3]?.label ?? "", "Shared");
+      assert.include(first?.windows[4]?.label ?? "", "Model A");
+      assert.deepStrictEqual(first?.windows[4]?.modelIds, ["opencode/a"]);
+      assert.strictEqual(first?.windows[3]?.modelIds, undefined);
+      assert.deepStrictEqual(first?.windows[3]?.providerIds, ["opencode", "console-custom"]);
+      assert.deepStrictEqual(first?.windows[7]?.modelIds, []);
+      assert.include(first?.windows[7]?.label ?? "", "Most used model");
+      assert.strictEqual(first?.credentialFingerprint, undefined);
+      workspace = "wrk_switched";
+      const next = yield* api.usageLimits("/remote/project");
+      assert.strictEqual(next?.externalUsage?.label, "wrk_switched");
+      assert.strictEqual(next?.externalUsage?.url, "https://opencode.ai/console/wrk_switched");
+      for (const url of [
+        "not a URL",
+        "javascript:alert(1)",
+        "custom-app://usage",
+        "file:///tmp/usage",
+      ]) {
+        usageURL = url;
+        const invalid = yield* api.usageLimits("/remote/project");
+        assert.strictEqual(invalid?.externalUsage, undefined);
+        assert.deepStrictEqual(invalid?.windows, next?.windows);
+      }
+      usageURL = "http://console.example/workspace/usage";
+      assert.strictEqual((yield* api.usageLimits("/remote/project"))?.externalUsage?.url, usageURL);
+    }),
+  );
+
+  it.effect("recognizes an older server's SPA fallback", () =>
+    Effect.gen(function* () {
+      const opencode = yield* OpenCode2Client.make.pipe(
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response("<!doctype html><title>OpenCode</title>", {
+                  headers: { "content-type": "text/html; charset=utf-8" },
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+      const api = yield* opencode.connect({ baseUrl: "https://old.example", password: "secret" });
+      assert.strictEqual(yield* api.usageLimits("/remote"), undefined);
+    }),
+  );
+
+  it.effect("distinguishes missing endpoints, signed out, and failed remote probes", () =>
+    Effect.gen(function* () {
+      for (const [status, body, reason] of [
+        [404, {}, undefined],
+        [405, {}, undefined],
+        [200, { location: { directory: "/remote" }, data: null }, "unsupported"],
+        [
+          200,
+          {
+            location: { directory: "/remote" },
+            data: { workspace: { id: "wrk_zen", usageURL: "https://opencode.ai" }, budgets: [] },
+          },
+          "unsupported",
+        ],
+        [503, {}, "probeFailed"],
+        [401, {}, "probeFailed"],
+        [200, { data: { workspace: {} } }, "probeFailed"],
+      ] as const) {
+        const opencode = yield* OpenCode2Client.make.pipe(
+          Effect.provideService(
+            HttpClient.HttpClient,
+            HttpClient.make((request) =>
+              Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(body, { status }))),
+            ),
+          ),
+        );
+        const api = yield* opencode.connect({
+          baseUrl: "https://remote.example",
+          password: "secret",
+        });
+        const result = yield* api.usageLimits("/remote");
+        if (reason === undefined) assert.strictEqual(result, undefined);
+        else assert.strictEqual(result?.unavailable?.reason, reason);
+        if ("data" in body && body.data === null)
+          assert.include(result?.unavailable?.message ?? "", "signed in");
+      }
+    }),
+  );
+});

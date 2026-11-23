@@ -1,0 +1,17 @@
+{
+  "subagentOrchestrationBytes": 1789,
+  "subagentAcpBootstrapAddedBytes": 2780,
+  "claudeSystemAppendBytes": 6811,
+  "codexAdditionalContextBytes": 6811,
+  "codexRepeatedTurnAddedBytes": 0,
+  "codexPlanFallbackBytes": 2994,
+  "acpBootstrapAddedBytes": 7861,
+  "acpRepeatedTurnAddedBytes": 0,
+  "acpModeChangeAddedBytes": 472,
+  "cursorBootstrapAddedBytes": 6916,
+  "cursorRepeatedTurnAddedBytes": 0,
+  "openCodeSystemBytes": 6813,
+  "mcpToolListJsonBytes": 85519,
+  "agentMcpToolListJsonBytes": 56266,
+  "agentMcpToolOutputSchemaJsonBytes": 66213
+}

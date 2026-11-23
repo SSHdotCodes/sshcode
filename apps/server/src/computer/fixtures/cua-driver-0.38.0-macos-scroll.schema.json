@@ -1,0 +1,70 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "amount": {
+      "maximum": 50,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "by": {
+      "enum": ["line", "page"],
+      "type": "string"
+    },
+    "delivery_mode": {
+      "enum": ["background", "foreground"],
+      "type": "string"
+    },
+    "direction": {
+      "enum": ["up", "down", "left", "right"],
+      "type": "string"
+    },
+    "element_token": {
+      "pattern": "^s[0-9a-f]{8}:[0-9]+$",
+      "type": "string"
+    },
+    "pid": {
+      "type": "integer"
+    },
+    "scope": {
+      "enum": ["window", "desktop"],
+      "type": "string"
+    },
+    "session": {
+      "type": "string"
+    },
+    "target": {
+      "additionalProperties": true,
+      "properties": {
+        "display_id": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": ["window", "desktop"],
+          "type": "string"
+        },
+        "pid": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window_id": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": ["kind"],
+      "type": "object"
+    },
+    "window_id": {
+      "type": "integer"
+    },
+    "x": {
+      "type": "number"
+    },
+    "y": {
+      "type": "number"
+    }
+  },
+  "required": ["direction"],
+  "type": "object",
+  "$comment": "Native macOS input shape captured from checksum-verified cua-driver 0.38.0 describe scroll. Descriptions/default annotations omitted; validation constraints unchanged. Archive SHA256 2bb8dc4a7e69185ffd04c4a9c0eab590bd2c54b72c2c1be13ab675be4f487732; source https://github.com/trycua/cua/blob/85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs (MIT)."
+}

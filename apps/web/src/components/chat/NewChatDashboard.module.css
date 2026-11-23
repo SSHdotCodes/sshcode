@@ -1,0 +1,704 @@
+.horizon {
+  --horizon-size: 2048px 896px;
+  /* The arc's crown sits 50px below the image center; shifts place it in each layout. */
+  --horizon-position: 50% calc(50% - 28px);
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--background);
+}
+/* 4px mosaic tiles with baked-in hairline gaps, matched 1:1 to device pixels at 1x and 2x. */
+.glow,
+.rim,
+.glint {
+  position: absolute;
+  inset: 0;
+  mask-position: var(--horizon-position);
+  mask-size: var(--horizon-size);
+  mask-repeat: no-repeat;
+  image-rendering: pixelated;
+  transition:
+    background-color 240ms ease-out,
+    opacity 600ms ease-out;
+}
+/* Atmosphere, not a second hero: the prompt stays the brightest thing on screen. */
+.glow {
+  mask-image: url("@t3tools/client-runtime/assets/new-chat-horizon-glow.png");
+  background-color: var(--horizon-glow);
+  opacity: 0.3;
+}
+.rim,
+.glint {
+  mask-image: url("@t3tools/client-runtime/assets/new-chat-horizon-rim.png");
+}
+@media (min-resolution: 2dppx) {
+  .glow {
+    mask-image: url("@t3tools/client-runtime/assets/new-chat-horizon-glow@2x.png");
+  }
+  .rim,
+  .glint {
+    mask-image: url("@t3tools/client-runtime/assets/new-chat-horizon-rim@2x.png");
+  }
+}
+.rim {
+  background-color: var(--horizon-rim-light);
+  opacity: 0.55;
+}
+:global(.dark) .glow {
+  opacity: 0.34;
+}
+:global(.dark) .rim {
+  background-color: var(--horizon-rim-dark);
+  opacity: 0.62;
+}
+/* Conversations keep the same scene, set below the reading column and dimmed. */
+.horizon[data-docked] {
+  --horizon-position: 50% calc(100% + 190px);
+}
+.horizon[data-docked] .glow {
+  opacity: 0.12;
+}
+.horizon[data-docked] .rim {
+  opacity: 0.24;
+}
+/*
+ * The arc follows the chat, in step with the mascot. While the agent works the glow
+ * breathes and a light travels the rim; while it waits on you the arc holds brighter and still.
+ */
+.glint {
+  display: none;
+  overflow: hidden;
+}
+.glint::before {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 34%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--horizon-rim-light) 45%,
+    var(--horizon-rim-light) 55%,
+    transparent
+  );
+  content: "";
+  transform: translateX(-100%);
+  /* Sixteen steps a second: enough for a slow light, a quarter of the frames. */
+  animation: horizon-glint 9s steps(144, jump-none) infinite;
+  will-change: transform;
+}
+:global(.dark) .glint::before {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--horizon-rim-dark) 45%,
+    var(--horizon-rim-dark) 55%,
+    transparent
+  );
+}
+.horizon[data-mood="working"] .glint {
+  display: block;
+  opacity: 0.7;
+}
+.horizon[data-mood="working"] .glow {
+  animation: horizon-breathe 6s steps(12, jump-none) infinite alternate;
+}
+.horizon[data-mood="waiting"] .glow {
+  opacity: 0.2;
+}
+.horizon[data-mood="waiting"] .rim {
+  opacity: 0.5;
+}
+/* A turn you watched finish: one sunrise over the arc. One that failed: the light drops. */
+.horizon[data-mood="done"] .glow {
+  animation: horizon-rise-glow 2.6s ease-out 1;
+}
+.horizon[data-mood="done"] .rim {
+  animation: horizon-rise-rim 2.6s ease-out 1;
+}
+.horizon[data-mood="failed"] .glow {
+  opacity: 0.05;
+}
+.horizon[data-mood="failed"] .rim {
+  opacity: 0.12;
+}
+/* Kept low: the last lines of a long conversation sit over this glow. */
+@keyframes horizon-breathe {
+  from {
+    opacity: 0.1;
+  }
+  to {
+    opacity: 0.2;
+  }
+}
+@keyframes horizon-rise-glow {
+  22% {
+    opacity: 0.36;
+  }
+}
+@keyframes horizon-rise-rim {
+  22% {
+    opacity: 0.72;
+  }
+}
+@keyframes horizon-glint {
+  to {
+    transform: translateX(295%);
+  }
+}
+:global([data-chat-backdrop-visible]) :global([data-timeline-loading]) {
+  background: transparent;
+}
+:global([data-chat-backdrop-visible]) :global([data-chat-composer-main-surface]) {
+  background: var(--chat-composer-glass-surface, var(--card));
+}
+/* Reduced motion keeps the states, without anything moving: working is a steady lift. */
+@media (prefers-reduced-motion: reduce) {
+  .glow,
+  .rim {
+    transition: none;
+    animation: none !important;
+  }
+  .horizon[data-mood="working"] .glint {
+    display: none;
+  }
+  .horizon[data-mood="working"] .glow {
+    opacity: 0.18;
+  }
+  .horizon[data-mood="working"] .rim {
+    opacity: 0.36;
+  }
+}
+.overlay {
+  overflow-y: auto;
+  padding-block: 164px 28px;
+  scrollbar-width: thin;
+  container-type: inline-size;
+}
+.overlay > :global(.chat-composer-lane) {
+  margin-block: auto;
+}
+.frame {
+  container-type: inline-size;
+}
+/* Neutral ink: only the horizon carries the harness color. */
+.dashboard {
+  --home-ink: var(--foreground);
+  --home-muted: var(--muted-foreground);
+  --home-cell-0: color-mix(in srgb, var(--muted-foreground) 12%, transparent);
+  --home-cell-1: color-mix(in srgb, var(--foreground) 22%, var(--card));
+  --home-cell-2: color-mix(in srgb, var(--foreground) 42%, var(--card));
+  --home-cell-3: color-mix(in srgb, var(--foreground) 64%, var(--card));
+  --home-cell-4: color-mix(in srgb, var(--foreground) 88%, var(--card));
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 22px;
+  color: var(--home-ink);
+  text-align: left;
+}
+/* Glass over the scene, at the user's glass setting: the arc reads through, softened. */
+.card {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--card) calc(var(--glass-opacity, 80%) - 30%), transparent);
+  -webkit-backdrop-filter: blur(var(--glass-blur, 12px)) saturate(var(--glass-saturation, 1.1));
+  backdrop-filter: blur(var(--glass-blur, 12px)) saturate(var(--glass-saturation, 1.1));
+}
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .card {
+    background: var(--card);
+  }
+}
+/*
+ * Right now spans the top when anything is running. Under it, Activity beside Usage (about
+ * the same height), then This month across the row below. Without Usage, This month takes
+ * its place. (Activity used to span two rows beside both and stood half empty.)
+ */
+.dashboard > .now {
+  grid-column: 1 / -1;
+  padding-block: 14px 8px;
+}
+/* Until an agent is ready, setup leads, across the top. */
+.dashboard > .setup {
+  grid-column: 1 / -1;
+  padding-block: 14px 10px;
+}
+.setup .card-heading {
+  margin-bottom: 4px;
+}
+.setup .card-heading > .more {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+.setup .card-heading > .more:disabled {
+  cursor: default;
+}
+.setup-lead {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--home-muted);
+}
+.setup-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+  margin-inline: -8px;
+}
+.setup-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 34px;
+  padding-inline: 8px;
+  font-size: 12px;
+}
+.setup-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.setup-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--home-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.setup-action {
+  flex-shrink: 0;
+  height: 24px;
+  padding-inline: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--home-ink);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+}
+.setup-action:hover {
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.setup-action:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+.activity {
+  grid-column: 1;
+}
+.usage {
+  grid-column: 2;
+}
+.month {
+  grid-column: 1 / -1;
+}
+.dashboard[data-no-usage] .month {
+  grid-column: 2;
+}
+.now .card-heading {
+  margin-bottom: 6px;
+}
+.now .card-heading > .more {
+  align-self: center;
+}
+.now[data-needs-you] .card-heading > .more {
+  color: var(--home-ink);
+}
+/* Two columns of rows while the lane has room, so four chats take two lines. */
+.now-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+  margin-inline: -8px;
+}
+.now-list[data-single] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.now-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 32px;
+  padding-inline: 8px;
+  border-radius: 8px;
+  color: inherit;
+  font-size: 12px;
+  text-decoration: none;
+  outline: none;
+}
+.now-row:hover,
+.now-row:focus-visible {
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.now-row:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+.now-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.now-status {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 6px;
+  min-width: 0;
+  max-width: 55%;
+  overflow: hidden;
+  color: var(--home-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A bare text node in a flex box clips mid-word; its own box ends in an ellipsis. */
+.now-status-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.now-status i {
+  flex-shrink: 0;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+.now-row[data-tone="asking"] .now-status {
+  color: var(--warning-foreground, var(--home-ink));
+  font-weight: 500;
+}
+.now-more {
+  display: block;
+  padding: 4px 0 6px;
+}
+.card-heading,
+.card-heading h2,
+.card-footer,
+.quota-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.card-heading {
+  margin-bottom: 16px;
+}
+.card-heading h2 {
+  justify-content: start;
+  font-size: 13px;
+  font-weight: 500;
+}
+.card-heading h2 svg {
+  width: 14px;
+  height: 14px;
+  color: var(--home-muted);
+}
+.card-heading > span,
+.card-footer,
+.source,
+.more,
+.quota p {
+  font-size: 11px;
+  color: var(--home-muted);
+}
+.more {
+  align-self: start;
+  text-decoration: none;
+}
+.more:hover {
+  color: var(--home-ink);
+}
+/* Cells stay small and square at any width: at most 14px, as on the phone. */
+.heatmap {
+  display: grid;
+  grid-template-rows: repeat(7, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 3px;
+  max-width: calc(26 * 14px + 25 * 3px);
+}
+.heatmap > span {
+  aspect-ratio: 1;
+
+  border-radius: 2px;
+  background: var(--home-cell-0);
+}
+.heatmap > [data-future] {
+  visibility: hidden;
+}
+.heatmap [data-level="1"] {
+  background: var(--home-cell-1);
+}
+.heatmap [data-level="2"],
+.legend [data-level="2"] {
+  background: var(--home-cell-2);
+}
+.heatmap [data-level="3"] {
+  background: var(--home-cell-3);
+}
+.heatmap [data-level="4"],
+.legend [data-level="4"] {
+  background: var(--home-cell-4);
+}
+.card-footer {
+  margin-top: 12px;
+}
+.card-footer strong {
+  color: var(--home-ink);
+  font-weight: 500;
+}
+.source {
+  margin-top: 8px;
+  line-height: 1.5;
+}
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.legend i {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--home-cell-0);
+}
+.quota-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.quota-label {
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+.quota-label > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quota-label strong {
+  flex-shrink: 0;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.quota-track {
+  height: 4px;
+  background: var(--home-cell-0);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.quota-track > span {
+  display: block;
+  height: 100%;
+  background: color-mix(in srgb, var(--foreground) 72%, var(--card));
+  border-radius: inherit;
+}
+.quota p {
+  margin-top: 5px;
+}
+/* One of the user's accounts: the whole row starts this chat on it. */
+.account {
+  all: unset;
+  display: block;
+  box-sizing: border-box;
+  margin: -6px -8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.account[aria-pressed="true"] {
+  cursor: default;
+}
+.account:not([aria-pressed="true"]):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+.account:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+.account:not([aria-pressed="true"]) .quota-label > span,
+.account:not([aria-pressed="true"]) .quota-label strong {
+  color: var(--home-muted);
+}
+.account:not([aria-pressed="true"]) .quota-track > span {
+  background: color-mix(in srgb, var(--foreground) 38%, var(--card));
+}
+.quota-label em {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10px;
+  font-style: normal;
+  line-height: 15px;
+  color: var(--home-ink);
+}
+/* The other account says what a click does, only while pointed at. */
+.account:not([aria-pressed="true"]) .quota-label em {
+  opacity: 0;
+  color: var(--home-muted);
+}
+.account:not([aria-pressed="true"]):hover .quota-label em,
+.account:not([aria-pressed="true"]):focus-visible .quota-label em {
+  opacity: 1;
+}
+.account-note {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--home-muted);
+}
+/* The numbers, then their picture across the rest of the row. */
+.month-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: end;
+  gap: 36px;
+}
+.dashboard[data-no-usage] .month-body {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+.month-stats {
+  display: flex;
+  gap: 28px;
+}
+.pace-plot {
+  position: relative;
+  height: 64px;
+}
+.pace-plot svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.pace-plot path {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pace-plot .pace-area {
+  fill: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.pace-current {
+  stroke: var(--home-ink);
+  stroke-width: 1.5px;
+}
+.pace-previous {
+  stroke: var(--home-muted);
+  stroke-width: 1px;
+  stroke-dasharray: 3 4;
+  opacity: 0.75;
+}
+/* Today, as a dot the stretched drawing cannot squash. */
+.pace-plot > i {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  border-radius: 50%;
+  background: var(--home-ink);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--card) 80%, transparent);
+}
+/* What last month reached, sitting on the end of its line. */
+.pace-plot > span {
+  position: absolute;
+  transform: translate(-100%, -100%);
+  padding-bottom: 3px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--home-muted);
+}
+.pace-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--home-muted);
+}
+.pace-legend {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.pace-legend i {
+  width: 12px;
+  border-top: 1.5px solid var(--home-ink);
+}
+.pace-legend i[data-previous] {
+  margin-left: 6px;
+  border-top: 1px dashed var(--home-muted);
+}
+.month-stats > div > span {
+  color: var(--home-muted);
+  font-size: 11px;
+}
+.month-stats > div > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 5px;
+}
+.month-stats strong {
+  font-size: 28px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  letter-spacing: -1px;
+}
+.delta {
+  font-size: 12px;
+  color: var(--home-muted);
+  font-variant-numeric: tabular-nums;
+}
+@container (max-width: 540px) {
+  .dashboard {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    margin-top: 16px;
+  }
+  .activity,
+  .usage,
+  .month,
+  .dashboard[data-no-usage] .month {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .now-list,
+  .setup-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .card {
+    padding: 15px;
+    border-radius: 18px;
+  }
+  .month-stats {
+    gap: 36px;
+  }
+  .month-body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .legend {
+    display: none;
+  }
+}

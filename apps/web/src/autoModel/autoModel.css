@@ -1,0 +1,54 @@
+/* Room for the pill (24px + its 8px offset, less the body's own bottom padding). The editor
+   gives up the same amount of its minimum height, so a one or two line prompt does not move. */
+[data-chat-composer-surface][data-auto-model-suggesting] [data-chat-composer-body] {
+  padding-bottom: calc(0.5rem + 26px);
+}
+[data-chat-composer-surface][data-auto-model-suggesting] [data-composer-rich-text] {
+  min-height: calc(var(--spacing) * 19.5 - 26px);
+}
+[data-auto-model-pill] {
+  animation: auto-model-enter 180ms ease-out both;
+}
+[data-auto-model-pill][data-exiting] {
+  animation: auto-model-exit 180ms ease-in both;
+  pointer-events: none;
+}
+[data-auto-model-spark] {
+  animation: auto-model-twinkle 500ms ease-out 1;
+}
+@keyframes auto-model-enter {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes auto-model-exit {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+}
+@keyframes auto-model-twinkle {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.2) rotate(12deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-auto-model-pill],
+  [data-auto-model-pill][data-exiting],
+  [data-auto-model-spark] {
+    animation: none;
+  }
+}

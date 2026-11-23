@@ -1,0 +1,13 @@
+diff --git a/dist/chunks/index.DzobfTyw.js b/dist/chunks/index.DzobfTyw.js
+index 08c3c116fbf8fe4685b45dee57f0f645b1270d81..440733df3ab77cf6495883b3487b1ea6ea53324b 100644
+--- a/dist/chunks/index.DzobfTyw.js
++++ b/dist/chunks/index.DzobfTyw.js
+@@ -21434,6 +21434,8 @@ class Vitest {
+ 				this._checkUnhandledErrors(errors);
+ 			});
+ 			await this._traces?.finish();
++			// SSHCode patch: the forks pool's transformed-module copies live in _tmpDir and were never removed.
++			await rm(this._tmpDir, { recursive: true, force: true }).catch(noop$1);
+ 		})();
+ 		return this.closingPromise;
+ 	}

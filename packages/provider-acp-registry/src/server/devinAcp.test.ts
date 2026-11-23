@@ -1,0 +1,123 @@
+import {
+  MessageId,
+  ProviderDriverKind,
+  ProviderThreadId,
+  ProviderTurnId,
+} from "@t3tools/contracts";
+import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
+import * as EffectAcpErrors from "effect-acp/errors";
+
+import { steerDevinTurn } from "./devinAcp.ts";
+
+// Devin answers a mid-turn prompt only when the turn it joined ends (or fails it at once).
+const setup = (reply: "pending" | "refused" = "pending") =>
+  Effect.gen(function* () {
+    const answer = yield* Deferred.make<void, EffectAcpErrors.AcpRequestError>();
+    const ended = yield* Deferred.make<void>();
+    const sent: Array<{ method: string; payload: unknown }> = [];
+    let cancels = 0;
+    const runtime = {
+      request: (method: string, payload: unknown) =>
+        Effect.sync(() => sent.push({ method, payload })).pipe(
+          Effect.andThen(
+            reply === "refused"
+              ? Effect.fail(EffectAcpErrors.AcpRequestError.invalidParams("busy"))
+              : Deferred.await(answer).pipe(Effect.as({ stopReason: "end_turn" })),
+          ),
+        ),
+      cancel: Effect.sync(() => {
+        cancels++;
+      }),
+    };
+    const steer = (text: string) =>
+      steerDevinTurn({
+        driver: ProviderDriverKind.make("acpRegistry"),
+        runtime: runtime as never,
+        sessionId: "session",
+        text,
+        messageId: MessageId.make("message"),
+        providerTurnId: ProviderTurnId.make("turn"),
+        providerThreadId: ProviderThreadId.make("thread"),
+        turnOver: { await: Deferred.await(ended), isDone: Deferred.isDone(ended) },
+      });
+    return { steer, answer, ended, sent, cancels: () => cancels };
+  });
+
+describe("steerDevinTurn", () => {
+  it.effect("sends the message as a prompt into the running turn", () =>
+    Effect.gen(function* () {
+      const { steer, sent, cancels } = yield* setup();
+      const fiber = yield* steer("use tabs").pipe(Effect.forkChild);
+      yield* TestClock.adjust("2 seconds");
+      yield* Fiber.join(fiber);
+      assert.deepEqual(sent, [
+        {
+          method: "session/prompt",
+          payload: { sessionId: "session", prompt: [{ type: "text", text: "use tabs" }] },
+        },
+      ]);
+      assert.equal(cancels(), 0);
+    }),
+  );
+
+  it.effect("counts a prompt that returns with the turn as delivered", () =>
+    Effect.gen(function* () {
+      const { steer, answer, ended, cancels } = yield* setup();
+      const fiber = yield* steer("wrap up").pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(ended, undefined);
+      yield* Deferred.succeed(answer, undefined);
+      yield* Fiber.join(fiber);
+      assert.equal(cancels(), 0);
+    }),
+  );
+
+  it.effect("cancels the turn Devin starts when the steer arrives after the end", () =>
+    Effect.gen(function* () {
+      const { steer, ended, cancels } = yield* setup();
+      const fiber = yield* steer("too late").pipe(Effect.flip, Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(ended, undefined);
+      yield* TestClock.adjust("2 seconds");
+      const error = yield* Fiber.join(fiber);
+      assert.equal(error._tag, "ProviderAdapterSteerRunUnsupportedError");
+      assert.equal(cancels(), 1);
+    }),
+  );
+
+  it.effect("hands back a late refusal without cancelling the session's next prompt", () =>
+    Effect.gen(function* () {
+      const { steer, answer, ended, cancels } = yield* setup();
+      const result = yield* steer("next").pipe(Effect.flip, Effect.forkChild);
+      yield* TestClock.adjust("1 millis");
+      yield* Deferred.succeed(ended, undefined);
+      yield* TestClock.adjust("1 millis");
+      yield* Deferred.fail(answer, EffectAcpErrors.AcpRequestError.invalidParams("turn ended"));
+      assert.equal((yield* Fiber.join(result))._tag, "ProviderAdapterSteerRunUnsupportedError");
+      assert.equal(cancels(), 0);
+    }),
+  );
+
+  it.effect("hands the message back without sending when the turn is already over", () =>
+    Effect.gen(function* () {
+      const { steer, ended, sent } = yield* setup();
+      yield* Deferred.succeed(ended, undefined);
+      const error = yield* steer("next").pipe(Effect.flip);
+      assert.equal(error._tag, "ProviderAdapterSteerRunUnsupportedError");
+      assert.deepEqual(sent, []);
+    }),
+  );
+
+  it.effect("hands the message back when Devin refuses the prompt", () =>
+    Effect.gen(function* () {
+      const { steer, cancels } = yield* setup("refused");
+      const error = yield* steer("hello").pipe(Effect.flip);
+      assert.equal(error._tag, "ProviderAdapterSteerRunUnsupportedError");
+      assert.equal(cancels(), 0);
+    }),
+  );
+});

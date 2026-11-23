@@ -1,0 +1,155 @@
+import { useAtomValue } from "@effect/atom-react";
+import { useRoute, type RouteProp } from "@react-navigation/native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  EnvironmentId,
+  ThreadId,
+  type ScopedProjectRef,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
+import { threadDetailToShell } from "@t3tools/client-runtime/state/threads";
+import * as Option from "effect/Option";
+
+import { retainThreadCache } from "../persistence/thread-cache-retention";
+import { scopedThreadKey } from "../lib/scopedEntities";
+import { useProject, useThreadShell } from "../state/entities";
+import { useEnvironmentThread } from "../state/threads";
+import {
+  resolvePendingThreadCreation,
+  selectThreadCreationDetail,
+  pendingThreadCreationOutcomesAtom,
+  pendingThreadCreationShell,
+  type PendingThreadCreation,
+} from "./pending-thread-creation";
+import {
+  useRemoteEnvironmentRuntime,
+  useSavedRemoteConnection,
+} from "./use-remote-environment-registry";
+import { useThreadOutboxMessages } from "./use-thread-outbox";
+type ThreadSelectionRouteParams = {
+  readonly environmentId?: string | string[];
+  readonly threadId?: string | string[];
+};
+
+// A blank param (a hand-typed deep link) is treated as missing, since branded
+// IDs reject whitespace-only values.
+function firstRouteParam(value: string | string[] | undefined): string | null {
+  const first = Array.isArray(value) ? value[0] : value;
+  return first === undefined || first.trim().length === 0 ? null : first;
+}
+
+function useResolvedThreadSelection(params: ThreadSelectionRouteParams | undefined) {
+  const routeParams = params ?? {};
+  const routeThreadRef = useMemo<ScopedThreadRef | null>(() => {
+    const environmentId = firstRouteParam(routeParams.environmentId);
+    const threadId = firstRouteParam(routeParams.threadId);
+    if (!environmentId || !threadId) {
+      return null;
+    }
+
+    return {
+      environmentId: EnvironmentId.make(environmentId),
+      threadId: ThreadId.make(threadId),
+    };
+  }, [routeParams.environmentId, routeParams.threadId]);
+  const lastRouteThreadRef = useRef<ScopedThreadRef | null>(null);
+  if (routeThreadRef !== null) {
+    lastRouteThreadRef.current = routeThreadRef;
+  }
+  const selectedThreadRef = routeThreadRef ?? lastRouteThreadRef.current;
+  useEffect(() => {
+    const selected = routeThreadRef ?? lastRouteThreadRef.current;
+    if (selected === null) return;
+    return retainThreadCache(selected.environmentId, selected.threadId);
+  }, [routeThreadRef]);
+  const selectedThreadShell = useThreadShell(selectedThreadRef);
+  const selectedThreadKey =
+    selectedThreadRef === null
+      ? null
+      : scopedThreadKey(selectedThreadRef.environmentId, selectedThreadRef.threadId);
+  const queuedMessagesByThreadKey = useThreadOutboxMessages();
+  const creationOutcome = useAtomValue(pendingThreadCreationOutcomesAtom);
+  // A creation the outbox still holds or just delivered: the thread screen
+  // opened before the server made the thread, so present a stand-in shell.
+  const { pendingCreation, detailRef: selectedThreadDetailRef } = useMemo(
+    () =>
+      selectThreadCreationDetail({
+        threadRef: selectedThreadRef,
+        threadKey: selectedThreadKey,
+        queuedMessagesByThreadKey,
+        outcomes: creationOutcome,
+      }),
+    [selectedThreadRef, selectedThreadKey, queuedMessagesByThreadKey, creationOutcome],
+  );
+  const [previousCreation, setPreviousCreation] = useState<PendingThreadCreation | null>(null);
+  // Normal selection is shell-only. Detail readers subscribe separately; only
+  // optimistic creation needs the projection here until its prompt arrives.
+  const needsDetail =
+    selectedThreadShell === null || pendingCreation !== null || previousCreation !== null;
+  const selectedThreadDetailState = useEnvironmentThread(
+    needsDetail ? (selectedThreadDetailRef?.environmentId ?? null) : null,
+    needsDetail ? (selectedThreadDetailRef?.threadId ?? null) : null,
+  );
+  const selectedThreadDetail = Option.getOrNull(selectedThreadDetailState.data);
+  const selectedThread = useMemo(
+    () =>
+      selectedThreadShell ??
+      (selectedThreadRef !== null && selectedThreadDetail !== null
+        ? threadDetailToShell(selectedThreadRef.environmentId, selectedThreadDetail)
+        : pendingCreation !== null
+          ? pendingThreadCreationShell(pendingCreation.message)
+          : null),
+    [pendingCreation, selectedThreadDetail, selectedThreadRef, selectedThreadShell],
+  );
+  const selectedThreadCreation = resolvePendingThreadCreation({
+    threadKey: selectedThreadKey,
+    pending: pendingCreation,
+    previous: previousCreation,
+    detail: selectedThreadDetail,
+  });
+  if (previousCreation !== selectedThreadCreation) {
+    setPreviousCreation(selectedThreadCreation);
+  }
+  const selectedProjectRef = useMemo<ScopedProjectRef | null>(
+    () =>
+      selectedThread === null
+        ? null
+        : {
+            environmentId: selectedThread.environmentId,
+            projectId: selectedThread.projectId,
+          },
+    [selectedThread],
+  );
+  const selectedThreadProject = useProject(selectedProjectRef);
+  const selectedEnvironmentId = selectedThread?.environmentId ?? null;
+  const selectedEnvironmentConnection = useSavedRemoteConnection(selectedEnvironmentId);
+  const selectedEnvironmentRuntime = useRemoteEnvironmentRuntime(selectedEnvironmentId);
+
+  return useMemo(
+    () => ({
+      selectedThreadRef,
+      selectedThread,
+      selectedThreadCreation,
+      selectedThreadDetailRef,
+      selectedThreadProject,
+      selectedEnvironmentConnection,
+      selectedEnvironmentRuntime,
+    }),
+    [
+      selectedEnvironmentConnection,
+      selectedEnvironmentRuntime,
+      selectedThread,
+      selectedThreadCreation,
+      selectedThreadDetailRef,
+      selectedThreadProject,
+      selectedThreadRef,
+    ],
+  );
+}
+
+type ThreadSelectionState = ReturnType<typeof useResolvedThreadSelection>;
+
+export function useThreadSelection(): ThreadSelectionState {
+  const route = useRoute<RouteProp<Record<string, ThreadSelectionRouteParams | undefined>>>();
+  return useResolvedThreadSelection(route.params);
+}

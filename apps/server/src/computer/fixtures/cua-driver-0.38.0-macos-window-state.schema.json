@@ -1,0 +1,70 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "capture_mode": {
+      "enum": ["ax", "vision"],
+      "type": "string"
+    },
+    "display_only": {
+      "type": "boolean"
+    },
+    "full_output": {
+      "type": "boolean"
+    },
+    "include_accessibility_tree": {
+      "type": "boolean"
+    },
+    "include_screenshot": {
+      "type": "boolean"
+    },
+    "max_depth": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "max_dimension": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "max_elements": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "max_image_dimension": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "pid": {
+      "type": "integer"
+    },
+    "query": {
+      "type": "string"
+    },
+    "screenshot_out_file": {
+      "type": "string"
+    },
+    "session": {
+      "type": "string"
+    },
+    "since": {
+      "type": "string"
+    },
+    "timeout_ms": {
+      "maximum": 120000,
+      "minimum": 100,
+      "type": "integer"
+    },
+    "tree_format": {
+      "enum": ["markdown", "elements", "both"],
+      "type": "string"
+    },
+    "verbose": {
+      "type": "boolean"
+    },
+    "window_id": {
+      "type": "integer"
+    }
+  },
+  "required": ["pid", "window_id"],
+  "type": "object",
+  "$comment": "Native macOS input shape captured from checksum-verified cua-driver 0.38.0 describe get_window_state. Descriptions/default annotations omitted; validation constraints unchanged. Archive SHA256 2bb8dc4a7e69185ffd04c4a9c0eab590bd2c54b72c2c1be13ab675be4f487732; source https://github.com/trycua/cua/blob/85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs (MIT)."
+}

@@ -1,0 +1,6784 @@
+{
+  "format": 1,
+  "metrics": {
+    "failures": 0,
+    "contextBudget": {
+      "subagentOrchestrationBytes": 1959,
+      "subagentAcpBootstrapAddedBytes": 2940,
+      "claudeSystemAppendBytes": 7202,
+      "codexAdditionalContextBytes": 7202,
+      "codexRepeatedTurnAddedBytes": 0,
+      "codexPlanFallbackBytes": 2994,
+      "acpBootstrapAddedBytes": 8242,
+      "acpRepeatedTurnAddedBytes": 0,
+      "acpModeChangeAddedBytes": 472,
+      "cursorBootstrapAddedBytes": 7307,
+      "cursorRepeatedTurnAddedBytes": 0,
+      "openCodeSystemBytes": 7204,
+      "mcpToolListJsonBytes": 87939,
+      "agentMcpToolListJsonBytes": 58155,
+      "agentMcpToolOutputSchemaJsonBytes": 64201
+    },
+    "schemaAudit": {
+      "descriptionBytes": 16737,
+      "repeatedDescriptionBytes": 4885,
+      "repeatedOutputSchemaBytes": 14180
+    },
+    "mcpResults": {
+      "task-status-completed": {
+        "bytes": 376,
+        "estimatedTokens": 94
+      },
+      "task-status-running": {
+        "bytes": 365,
+        "estimatedTokens": 92
+      },
+      "thread-recovered-false": {
+        "bytes": 1362,
+        "estimatedTokens": 341
+      },
+      "thread-recovered-true": {
+        "bytes": 1374,
+        "estimatedTokens": 344
+      }
+    },
+    "appMessages": {
+      "held-updates": {
+        "bytes": 180,
+        "estimatedTokens": 45
+      },
+      "idle-wake": {
+        "bytes": 35,
+        "estimatedTokens": 9
+      }
+    },
+    "tools": {
+      "ask_user": {
+        "descriptionBytes": 277,
+        "inputSchemaBytes": 1431,
+        "outputSchemaBytes": 172
+      },
+      "cloud_session_move": {
+        "descriptionBytes": 442,
+        "inputSchemaBytes": 219,
+        "outputSchemaBytes": 427
+      },
+      "cloud_session_return": {
+        "descriptionBytes": 249,
+        "inputSchemaBytes": 46,
+        "outputSchemaBytes": 427
+      },
+      "cloud_session_status": {
+        "descriptionBytes": 142,
+        "inputSchemaBytes": 46,
+        "outputSchemaBytes": 427
+      },
+      "computer_action": {
+        "descriptionBytes": 250,
+        "inputSchemaBytes": 965,
+        "outputSchemaBytes": 2
+      },
+      "computer_open": {
+        "descriptionBytes": 240,
+        "inputSchemaBytes": 109,
+        "outputSchemaBytes": 2
+      },
+      "computer_release": {
+        "descriptionBytes": 106,
+        "inputSchemaBytes": 113,
+        "outputSchemaBytes": 86
+      },
+      "computer_screenshot": {
+        "descriptionBytes": 184,
+        "inputSchemaBytes": 113,
+        "outputSchemaBytes": 4
+      },
+      "computer_snapshot": {
+        "descriptionBytes": 209,
+        "inputSchemaBytes": 229,
+        "outputSchemaBytes": 2
+      },
+      "computer_status": {
+        "descriptionBytes": 165,
+        "inputSchemaBytes": 65,
+        "outputSchemaBytes": 2
+      },
+      "council": {
+        "descriptionBytes": 410,
+        "inputSchemaBytes": 987,
+        "outputSchemaBytes": 490
+      },
+      "create_threads": {
+        "descriptionBytes": 382,
+        "inputSchemaBytes": 1659,
+        "outputSchemaBytes": 850
+      },
+      "debug_log": {
+        "descriptionBytes": 332,
+        "inputSchemaBytes": 316,
+        "outputSchemaBytes": 667
+      },
+      "delegate_task": {
+        "descriptionBytes": 835,
+        "inputSchemaBytes": 3880,
+        "outputSchemaBytes": 2778
+      },
+      "delete_scheduled_task": {
+        "descriptionBytes": 109,
+        "inputSchemaBytes": 99,
+        "outputSchemaBytes": 138
+      },
+      "device_close": {
+        "descriptionBytes": 112,
+        "inputSchemaBytes": 222,
+        "outputSchemaBytes": 85
+      },
+      "device_list": {
+        "descriptionBytes": 241,
+        "inputSchemaBytes": 133,
+        "outputSchemaBytes": 2016
+      },
+      "device_open": {
+        "descriptionBytes": 253,
+        "inputSchemaBytes": 427,
+        "outputSchemaBytes": 611
+      },
+      "device_screenshot": {
+        "descriptionBytes": 138,
+        "inputSchemaBytes": 106,
+        "outputSchemaBytes": 4
+      },
+      "list_api_keys": {
+        "descriptionBytes": 190,
+        "inputSchemaBytes": 46,
+        "outputSchemaBytes": 230
+      },
+      "list_scheduled_tasks": {
+        "descriptionBytes": 159,
+        "inputSchemaBytes": 71,
+        "outputSchemaBytes": 3058
+      },
+      "model_preferences": {
+        "descriptionBytes": 572,
+        "inputSchemaBytes": 128,
+        "outputSchemaBytes": 839
+      },
+      "monitor_list": {
+        "descriptionBytes": 156,
+        "inputSchemaBytes": 46,
+        "outputSchemaBytes": 923
+      },
+      "monitor_start": {
+        "descriptionBytes": 1029,
+        "inputSchemaBytes": 979,
+        "outputSchemaBytes": 196
+      },
+      "monitor_stop": {
+        "descriptionBytes": 171,
+        "inputSchemaBytes": 87,
+        "outputSchemaBytes": 84
+      },
+      "orchestrator_capabilities": {
+        "descriptionBytes": 408,
+        "inputSchemaBytes": 293,
+        "outputSchemaBytes": 3304
+      },
+      "prepare_api_key": {
+        "descriptionBytes": 400,
+        "inputSchemaBytes": 153,
+        "outputSchemaBytes": 304
+      },
+      "preview_act": {
+        "descriptionBytes": 868,
+        "inputSchemaBytes": 1111,
+        "outputSchemaBytes": 2018
+      },
+      "preview_dialog": {
+        "descriptionBytes": 254,
+        "inputSchemaBytes": 418,
+        "outputSchemaBytes": 3129
+      },
+      "preview_evaluate": {
+        "descriptionBytes": 365,
+        "inputSchemaBytes": 831,
+        "outputSchemaBytes": 953
+      },
+      "preview_navigate": {
+        "descriptionBytes": 225,
+        "inputSchemaBytes": 1985,
+        "outputSchemaBytes": 3129
+      },
+      "preview_open": {
+        "descriptionBytes": 652,
+        "inputSchemaBytes": 1206,
+        "outputSchemaBytes": 3129
+      },
+      "preview_recording_start": {
+        "descriptionBytes": 114,
+        "inputSchemaBytes": 169,
+        "outputSchemaBytes": 1013
+      },
+      "preview_recording_stop": {
+        "descriptionBytes": 289,
+        "inputSchemaBytes": 169,
+        "outputSchemaBytes": 1104
+      },
+      "preview_resize": {
+        "descriptionBytes": 276,
+        "inputSchemaBytes": 1647,
+        "outputSchemaBytes": 2132
+      },
+      "preview_set_appearance": {
+        "descriptionBytes": 259,
+        "inputSchemaBytes": 483,
+        "outputSchemaBytes": 998
+      },
+      "preview_snapshot": {
+        "descriptionBytes": 645,
+        "inputSchemaBytes": 1270,
+        "outputSchemaBytes": 4
+      },
+      "preview_status": {
+        "descriptionBytes": 397,
+        "inputSchemaBytes": 169,
+        "outputSchemaBytes": 3129
+      },
+      "preview_wait_for": {
+        "descriptionBytes": 154,
+        "inputSchemaBytes": 814,
+        "outputSchemaBytes": 931
+      },
+      "qa_sandbox": {
+        "descriptionBytes": 172,
+        "inputSchemaBytes": 245,
+        "outputSchemaBytes": 17
+      },
+      "read_x_post": {
+        "descriptionBytes": 162,
+        "inputSchemaBytes": 296,
+        "outputSchemaBytes": 440
+      },
+      "request_api_key": {
+        "descriptionBytes": 350,
+        "inputSchemaBytes": 529,
+        "outputSchemaBytes": 1155
+      },
+      "request_secret": {
+        "descriptionBytes": 449,
+        "inputSchemaBytes": 1074,
+        "outputSchemaBytes": 1155
+      },
+      "schedule_task": {
+        "descriptionBytes": 967,
+        "inputSchemaBytes": 2436,
+        "outputSchemaBytes": 2971
+      },
+      "scheduled_task_runs": {
+        "descriptionBytes": 82,
+        "inputSchemaBytes": 170,
+        "outputSchemaBytes": 999
+      },
+      "search_x": {
+        "descriptionBytes": 147,
+        "inputSchemaBytes": 170,
+        "outputSchemaBytes": 79
+      },
+      "t3_pending_request_list": {
+        "descriptionBytes": 107,
+        "inputSchemaBytes": 70,
+        "outputSchemaBytes": 114
+      },
+      "t3_pending_request_read": {
+        "descriptionBytes": 121,
+        "inputSchemaBytes": 125,
+        "outputSchemaBytes": 664
+      },
+      "t3_pending_request_respond": {
+        "descriptionBytes": 122,
+        "inputSchemaBytes": 163,
+        "outputSchemaBytes": 98
+      },
+      "t3_thread_interrupt": {
+        "descriptionBytes": 260,
+        "inputSchemaBytes": 290,
+        "outputSchemaBytes": 272
+      },
+      "t3_thread_list": {
+        "descriptionBytes": 368,
+        "inputSchemaBytes": 554,
+        "outputSchemaBytes": 1724
+      },
+      "t3_thread_read": {
+        "descriptionBytes": 1432,
+        "inputSchemaBytes": 676,
+        "outputSchemaBytes": 4246
+      },
+      "t3_thread_send": {
+        "descriptionBytes": 808,
+        "inputSchemaBytes": 420,
+        "outputSchemaBytes": 804
+      },
+      "t3_thread_update": {
+        "descriptionBytes": 418,
+        "inputSchemaBytes": 804,
+        "outputSchemaBytes": 991
+      },
+      "t3_thread_wait": {
+        "descriptionBytes": 319,
+        "inputSchemaBytes": 234,
+        "outputSchemaBytes": 334
+      },
+      "t3_workflow_stop": {
+        "descriptionBytes": 318,
+        "inputSchemaBytes": 129,
+        "outputSchemaBytes": 23
+      },
+      "task_cancel": {
+        "descriptionBytes": 284,
+        "inputSchemaBytes": 344,
+        "outputSchemaBytes": 192
+      },
+      "task_status": {
+        "descriptionBytes": 633,
+        "inputSchemaBytes": 273,
+        "outputSchemaBytes": 2778
+      },
+      "usage_limits": {
+        "descriptionBytes": 158,
+        "inputSchemaBytes": 180,
+        "outputSchemaBytes": 3931
+      },
+      "webhook_preview": {
+        "descriptionBytes": 77,
+        "inputSchemaBytes": 400,
+        "outputSchemaBytes": 279
+      },
+      "workflow": {
+        "descriptionBytes": 321,
+        "inputSchemaBytes": 989,
+        "outputSchemaBytes": 1076
+      }
+    },
+    "replays": {
+      "acp_elicitation/acpRegistry": {
+        "content": {
+          "instructions": {
+            "bytes": 545,
+            "estimatedTokens": 137
+          },
+          "prompts": {
+            "bytes": 254,
+            "estimatedTokens": 64
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 799,
+          "estimatedTokens": 200
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "claude_background_monitor_wake/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 444,
+            "estimatedTokens": 111
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 548,
+          "estimatedTokens": 137
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 46,
+          "estimatedTokens": 12
+        },
+        "providerNativeToolResults": {
+          "bytes": 59,
+          "estimatedTokens": 15
+        }
+      },
+      "claude_background_subagent_after_root/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 635,
+            "estimatedTokens": 159
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 739,
+          "estimatedTokens": 185
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 3,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 16,
+          "estimatedTokens": 4
+        },
+        "providerNativeToolResults": {
+          "bytes": 20,
+          "estimatedTokens": 5
+        }
+      },
+      "claude_background_subagent_lifecycle/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 1061,
+            "estimatedTokens": 266
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 1165,
+          "estimatedTokens": 292
+        },
+        "contentSends": 5,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 7,
+        "toolCalls": 5,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 78,
+          "estimatedTokens": 20
+        },
+        "providerNativeToolResults": {
+          "bytes": 307,
+          "estimatedTokens": 77
+        }
+      },
+      "claude_background_task_after_root/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 585,
+            "estimatedTokens": 147
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 689,
+          "estimatedTokens": 173
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 247,
+          "estimatedTokens": 62
+        }
+      },
+      "claude_background_task_interrupt/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 520,
+            "estimatedTokens": 130
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 624,
+          "estimatedTokens": 156
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 250,
+          "estimatedTokens": 63
+        }
+      },
+      "claude_background_task_wake/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 452,
+            "estimatedTokens": 113
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 556,
+          "estimatedTokens": 139
+        },
+        "contentSends": 3,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 3,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 66,
+          "estimatedTokens": 17
+        },
+        "providerNativeToolResults": {
+          "bytes": 250,
+          "estimatedTokens": 63
+        }
+      },
+      "claude_background_wake_before_queued_prompt/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 966,
+            "estimatedTokens": 242
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 1070,
+          "estimatedTokens": 268
+        },
+        "contentSends": 5,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 6,
+        "toolCalls": 6,
+        "toolFailures": 1,
+        "persistedNotificationPayloads": {
+          "bytes": 52,
+          "estimatedTokens": 13
+        },
+        "providerNativeToolResults": {
+          "bytes": 824,
+          "estimatedTokens": 206
+        }
+      },
+      "claude_background_wake_before_queued_prompt_no_echo/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 966,
+            "estimatedTokens": 242
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 1070,
+          "estimatedTokens": 268
+        },
+        "contentSends": 5,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 6,
+        "toolCalls": 6,
+        "toolFailures": 1,
+        "persistedNotificationPayloads": {
+          "bytes": 52,
+          "estimatedTokens": 13
+        },
+        "providerNativeToolResults": {
+          "bytes": 824,
+          "estimatedTokens": 206
+        }
+      },
+      "claude_compact_after_peer_turn/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 52,
+            "estimatedTokens": 13
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 156,
+          "estimatedTokens": 39
+        },
+        "contentSends": 3,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 3,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 26,
+          "estimatedTokens": 7
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "claude_compact_after_peer_turn_no_echo/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 52,
+            "estimatedTokens": 13
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 156,
+          "estimatedTokens": 39
+        },
+        "contentSends": 3,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "claude_compact_after_resume_wake/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 208,
+            "estimatedTokens": 52
+          },
+          "prompts": {
+            "bytes": 52,
+            "estimatedTokens": 13
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 260,
+          "estimatedTokens": 65
+        },
+        "contentSends": 4,
+        "repeatedParts": 1,
+        "repeated": {
+          "bytes": 104,
+          "estimatedTokens": 26
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "claude_idle_resume/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 208,
+            "estimatedTokens": 52
+          },
+          "prompts": {
+            "bytes": 107,
+            "estimatedTokens": 27
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 315,
+          "estimatedTokens": 79
+        },
+        "contentSends": 4,
+        "repeatedParts": 1,
+        "repeated": {
+          "bytes": 104,
+          "estimatedTokens": 26
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "claude_local_bash_task/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 96,
+            "estimatedTokens": 24
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 200,
+          "estimatedTokens": 50
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 40,
+          "estimatedTokens": 10
+        }
+      },
+      "claude_mcp_tool_presentation/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 296,
+            "estimatedTokens": 74
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 400,
+          "estimatedTokens": 100
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 3728,
+          "estimatedTokens": 932
+        }
+      },
+      "claude_nested_background_subagent_wake/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 741,
+            "estimatedTokens": 186
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 845,
+          "estimatedTokens": 212
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 3,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 10,
+          "estimatedTokens": 3
+        },
+        "providerNativeToolResults": {
+          "bytes": 12,
+          "estimatedTokens": 3
+        }
+      },
+      "claude_nested_subagent_model/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 455,
+            "estimatedTokens": 114
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 559,
+          "estimatedTokens": 140
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "claude_result_is_error/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 72,
+            "estimatedTokens": 18
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 176,
+          "estimatedTokens": 44
+        },
+        "contentSends": 3,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "command_output_streaming/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 252,
+            "estimatedTokens": 63
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 356,
+          "estimatedTokens": 89
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 118,
+          "estimatedTokens": 30
+        }
+      },
+      "command_output_streaming/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 252,
+            "estimatedTokens": 63
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 252,
+          "estimatedTokens": 63
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 96,
+          "estimatedTokens": 24
+        }
+      },
+      "grok_background_bash/grok": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 329,
+            "estimatedTokens": 83
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 777,
+          "estimatedTokens": 195
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 26,
+          "estimatedTokens": 7
+        },
+        "providerNativeToolResults": {
+          "bytes": 21,
+          "estimatedTokens": 6
+        }
+      },
+      "grok_background_bash_fast_wake/grok": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 329,
+            "estimatedTokens": 83
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 777,
+          "estimatedTokens": 195
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 26,
+          "estimatedTokens": 7
+        },
+        "providerNativeToolResults": {
+          "bytes": 21,
+          "estimatedTokens": 6
+        }
+      },
+      "grok_background_subagent/grok": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 300,
+            "estimatedTokens": 75
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 748,
+          "estimatedTokens": 187
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 26,
+          "estimatedTokens": 7
+        },
+        "providerNativeToolResults": {
+          "bytes": 1176,
+          "estimatedTokens": 294
+        }
+      },
+      "grok_monitor/grok": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 237,
+            "estimatedTokens": 60
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 685,
+          "estimatedTokens": 172
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 26,
+          "estimatedTokens": 7
+        },
+        "providerNativeToolResults": {
+          "bytes": 21,
+          "estimatedTokens": 6
+        }
+      },
+      "grok_prompt_error/grok": {
+        "content": {
+          "instructions": {
+            "bytes": 896,
+            "estimatedTokens": 224
+          },
+          "prompts": {
+            "bytes": 170,
+            "estimatedTokens": 43
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 1066,
+          "estimatedTokens": 267
+        },
+        "contentSends": 2,
+        "repeatedParts": 1,
+        "repeated": {
+          "bytes": 448,
+          "estimatedTokens": 112
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "grok_subagent_lineage/grok": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 52,
+            "estimatedTokens": 13
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 500,
+          "estimatedTokens": 125
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "malformed_session_update/acpRegistry": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 93,
+            "estimatedTokens": 24
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 541,
+          "estimatedTokens": 136
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "message_steering/acpRegistry": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 145,
+            "estimatedTokens": 37
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 593,
+          "estimatedTokens": 149
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "message_steering/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 112,
+            "estimatedTokens": 28
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 216,
+          "estimatedTokens": 54
+        },
+        "contentSends": 3,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "message_steering/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 112,
+            "estimatedTokens": 28
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 112,
+          "estimatedTokens": 28
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "message_steering/cursor": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 114,
+            "estimatedTokens": 29
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 218,
+          "estimatedTokens": 55
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "message_steering/grok": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 145,
+            "estimatedTokens": 37
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 593,
+          "estimatedTokens": 149
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "message_steering/pi": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 112,
+            "estimatedTokens": 28
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 112,
+          "estimatedTokens": 28
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "multi_turn/acpRegistry": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 132,
+            "estimatedTokens": 33
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 580,
+          "estimatedTokens": 145
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "multi_turn/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 99,
+            "estimatedTokens": 25
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 203,
+          "estimatedTokens": 51
+        },
+        "contentSends": 3,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "multi_turn/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 99,
+            "estimatedTokens": 25
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 99,
+          "estimatedTokens": 25
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "multi_turn/cursor": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 101,
+            "estimatedTokens": 26
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 205,
+          "estimatedTokens": 52
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "multi_turn/grok": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 132,
+            "estimatedTokens": 33
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 580,
+          "estimatedTokens": 145
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "multi_turn/muse": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 99,
+            "estimatedTokens": 25
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 203,
+          "estimatedTokens": 51
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "multi_turn/pi": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 99,
+            "estimatedTokens": 25
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 99,
+          "estimatedTokens": 25
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "multi_turn_restart/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 208,
+            "estimatedTokens": 52
+          },
+          "prompts": {
+            "bytes": 99,
+            "estimatedTokens": 25
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 307,
+          "estimatedTokens": 77
+        },
+        "contentSends": 4,
+        "repeatedParts": 1,
+        "repeated": {
+          "bytes": 104,
+          "estimatedTokens": 26
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "muse_permission/muse": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 209,
+            "estimatedTokens": 53
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 313,
+          "estimatedTokens": 79
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 267,
+          "estimatedTokens": 67
+        }
+      },
+      "muse_subagent_approval/muse": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 262,
+            "estimatedTokens": 66
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 366,
+          "estimatedTokens": 92
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 4,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 825,
+          "estimatedTokens": 207
+        }
+      },
+      "muse_subagent_interrupt/muse": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 169,
+            "estimatedTokens": 43
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 273,
+          "estimatedTokens": 69
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 16,
+          "estimatedTokens": 4
+        }
+      },
+      "muse_workflow/muse": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 225,
+            "estimatedTokens": 57
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 329,
+          "estimatedTokens": 83
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 3,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 26,
+          "estimatedTokens": 7
+        },
+        "providerNativeToolResults": {
+          "bytes": 21,
+          "estimatedTokens": 6
+        }
+      },
+      "opencode2_background/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 278,
+            "estimatedTokens": 70
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 382,
+          "estimatedTokens": 96
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 3,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 122,
+          "estimatedTokens": 31
+        },
+        "providerNativeToolResults": {
+          "bytes": 11,
+          "estimatedTokens": 3
+        }
+      },
+      "opencode2_command/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 5,
+            "estimatedTokens": 2
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 109,
+          "estimatedTokens": 28
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "opencode2_compaction/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 71,
+            "estimatedTokens": 18
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 175,
+          "estimatedTokens": 44
+        },
+        "contentSends": 3,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 3,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "opencode2_inbox/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 154,
+            "estimatedTokens": 39
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 258,
+          "estimatedTokens": 65
+        },
+        "contentSends": 4,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 2,
+          "estimatedTokens": 1
+        }
+      },
+      "opencode2_interrupt/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 82,
+            "estimatedTokens": 21
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 186,
+          "estimatedTokens": 47
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 26,
+          "estimatedTokens": 7
+        }
+      },
+      "opencode2_nested_background/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 465,
+            "estimatedTokens": 117
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 569,
+          "estimatedTokens": 143
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 4,
+        "toolCalls": 3,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 11,
+          "estimatedTokens": 3
+        }
+      },
+      "opencode2_permission/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 505,
+            "estimatedTokens": 127
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 609,
+          "estimatedTokens": 153
+        },
+        "contentSends": 5,
+        "repeatedParts": 1,
+        "repeated": {
+          "bytes": 119,
+          "estimatedTokens": 30
+        },
+        "turns": 1,
+        "toolCalls": 4,
+        "toolFailures": 3,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 125,
+          "estimatedTokens": 32
+        }
+      },
+      "opencode2_question/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 161,
+            "estimatedTokens": 41
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 265,
+          "estimatedTokens": 67
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "opencode2_resume_after_restart/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 157,
+            "estimatedTokens": 40
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 261,
+          "estimatedTokens": 66
+        },
+        "contentSends": 3,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 1,
+        "toolFailures": 1,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 17,
+          "estimatedTokens": 5
+        }
+      },
+      "opencode2_revert/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 187,
+            "estimatedTokens": 47
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 291,
+          "estimatedTokens": 73
+        },
+        "contentSends": 3,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "opencode2_simple/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 115,
+            "estimatedTokens": 29
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 219,
+          "estimatedTokens": 55
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "opencode2_skill/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 36,
+            "estimatedTokens": 9
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 140,
+          "estimatedTokens": 35
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "opencode2_subagent/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 192,
+            "estimatedTokens": 48
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 296,
+          "estimatedTokens": 74
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 4,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 54,
+          "estimatedTokens": 14
+        }
+      },
+      "opencode2_tool_call/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 115,
+            "estimatedTokens": 29
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 219,
+          "estimatedTokens": 55
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 65,
+          "estimatedTokens": 17
+        }
+      },
+      "opencode_child_approval/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 161,
+            "estimatedTokens": 41
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 265,
+          "estimatedTokens": 67
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "opencode_running_child_approval/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 161,
+            "estimatedTokens": 41
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 265,
+          "estimatedTokens": 67
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 11,
+          "estimatedTokens": 3
+        }
+      },
+      "opencode_subagent/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 161,
+            "estimatedTokens": 41
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 265,
+          "estimatedTokens": 67
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "pi_compaction/pi": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 289,
+            "estimatedTokens": 73
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 289,
+          "estimatedTokens": 73
+        },
+        "contentSends": 4,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 6,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "plan_questions/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 221,
+            "estimatedTokens": 56
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 221,
+          "estimatedTokens": 56
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "plan_questions/grok": {
+        "content": {
+          "instructions": {
+            "bytes": 545,
+            "estimatedTokens": 137
+          },
+          "prompts": {
+            "bytes": 254,
+            "estimatedTokens": 64
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 799,
+          "estimatedTokens": 200
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "plan_questions/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 221,
+            "estimatedTokens": 56
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 325,
+          "estimatedTokens": 82
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "proposed_plan/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 147,
+            "estimatedTokens": 37
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 147,
+          "estimatedTokens": 37
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "proposed_plan/cursor": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 149,
+            "estimatedTokens": 38
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 253,
+          "estimatedTokens": 64
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 29,
+        "toolFailures": 9,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 13230,
+          "estimatedTokens": 3308
+        }
+      },
+      "provider_thread_resume/pi": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 289,
+            "estimatedTokens": 73
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 289,
+          "estimatedTokens": 73
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "queued_cancelled_while_active/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 49,
+            "estimatedTokens": 13
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 49,
+          "estimatedTokens": 13
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "queued_turn/acpRegistry": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 132,
+            "estimatedTokens": 33
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 580,
+          "estimatedTokens": 145
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "queued_turn/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 99,
+            "estimatedTokens": 25
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 203,
+          "estimatedTokens": 51
+        },
+        "contentSends": 3,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "queued_turn/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 99,
+            "estimatedTokens": 25
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 99,
+          "estimatedTokens": 25
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "queued_turn/cursor": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 101,
+            "estimatedTokens": 26
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 205,
+          "estimatedTokens": 52
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "queued_turn/grok": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 132,
+            "estimatedTokens": 33
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 580,
+          "estimatedTokens": 145
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "simple/acpRegistry": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 83,
+            "estimatedTokens": 21
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 531,
+          "estimatedTokens": 133
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "simple/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 50,
+            "estimatedTokens": 13
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 154,
+          "estimatedTokens": 39
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "simple/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 50,
+            "estimatedTokens": 13
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 50,
+          "estimatedTokens": 13
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "simple/cursor": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 52,
+            "estimatedTokens": 13
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 156,
+          "estimatedTokens": 39
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "simple/grok": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 83,
+            "estimatedTokens": 21
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 531,
+          "estimatedTokens": 133
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "simple/muse": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 50,
+            "estimatedTokens": 13
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 154,
+          "estimatedTokens": 39
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "simple/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 50,
+            "estimatedTokens": 13
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 154,
+          "estimatedTokens": 39
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "simple/pi": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 50,
+            "estimatedTokens": 13
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 50,
+          "estimatedTokens": 13
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "skill_invocation/cursor": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 17,
+            "estimatedTokens": 5
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 17,
+          "estimatedTokens": 5
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 300,
+          "estimatedTokens": 75
+        }
+      },
+      "stop_background_work_after_failed_turn/acpRegistry": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 111,
+            "estimatedTokens": 28
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 559,
+          "estimatedTokens": 140
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "stop_background_work_after_release/acpRegistry": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 111,
+            "estimatedTokens": 28
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 559,
+          "estimatedTokens": 140
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "subagent/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 73,
+            "estimatedTokens": 19
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 177,
+          "estimatedTokens": 45
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 4,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 194,
+          "estimatedTokens": 49
+        }
+      },
+      "subagent/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 73,
+            "estimatedTokens": 19
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 73,
+          "estimatedTokens": 19
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 3,
+        "toolCalls": 5,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 3213,
+          "estimatedTokens": 804
+        }
+      },
+      "subagent/cursor": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 75,
+            "estimatedTokens": 19
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 179,
+          "estimatedTokens": 45
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 4,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 270,
+          "estimatedTokens": 68
+        }
+      },
+      "subagent_continue/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 156,
+            "estimatedTokens": 39
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 156,
+          "estimatedTokens": 39
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 4,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "subagent_v2/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 128,
+            "estimatedTokens": 32
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 128,
+          "estimatedTokens": 32
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "subagent_v2/muse": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 128,
+            "estimatedTokens": 32
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 232,
+          "estimatedTokens": 58
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 4,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 824,
+          "estimatedTokens": 206
+        }
+      },
+      "subagent_v2_approval/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 262,
+            "estimatedTokens": 66
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 262,
+          "estimatedTokens": 66
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 2,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "subagent_v2_nested/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 288,
+            "estimatedTokens": 72
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 288,
+          "estimatedTokens": 72
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 4,
+        "toolCalls": 4,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 58,
+          "estimatedTokens": 15
+        }
+      },
+      "subagent_v2_nested_approval/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 410,
+            "estimatedTokens": 103
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 410,
+          "estimatedTokens": 103
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 3,
+        "toolCalls": 3,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "thread_rollback/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 208,
+            "estimatedTokens": 52
+          },
+          "prompts": {
+            "bytes": 150,
+            "estimatedTokens": 38
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 358,
+          "estimatedTokens": 90
+        },
+        "contentSends": 5,
+        "repeatedParts": 1,
+        "repeated": {
+          "bytes": 104,
+          "estimatedTokens": 26
+        },
+        "turns": 3,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "thread_rollback/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 150,
+            "estimatedTokens": 38
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 150,
+          "estimatedTokens": 38
+        },
+        "contentSends": 3,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 3,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "thread_rollback/pi": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 150,
+            "estimatedTokens": 38
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 150,
+          "estimatedTokens": 38
+        },
+        "contentSends": 3,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 3,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "thread_rollback_after_restart/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 150,
+            "estimatedTokens": 38
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 150,
+          "estimatedTokens": 38
+        },
+        "contentSends": 3,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 3,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "thread_rollback_after_stop/pi": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 370,
+            "estimatedTokens": 93
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 370,
+          "estimatedTokens": 93
+        },
+        "contentSends": 4,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 4,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 48,
+          "estimatedTokens": 12
+        }
+      },
+      "thread_rollback_to_stopped_turn/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 370,
+            "estimatedTokens": 93
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 370,
+          "estimatedTokens": 93
+        },
+        "contentSends": 4,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 4,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "todo_list/acpRegistry": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 240,
+            "estimatedTokens": 60
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 688,
+          "estimatedTokens": 172
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 3,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 69,
+          "estimatedTokens": 18
+        }
+      },
+      "todo_list/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 207,
+            "estimatedTokens": 52
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 207,
+          "estimatedTokens": 52
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 1229,
+          "estimatedTokens": 308
+        }
+      },
+      "todo_list/cursor": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 209,
+            "estimatedTokens": 53
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 313,
+          "estimatedTokens": 79
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 6,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 350,
+          "estimatedTokens": 88
+        }
+      },
+      "todo_list/grok": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 240,
+            "estimatedTokens": 60
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 688,
+          "estimatedTokens": 172
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 9,
+        "toolFailures": 2,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 2637,
+          "estimatedTokens": 660
+        }
+      },
+      "tool_call_denied_write/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 250,
+            "estimatedTokens": 63
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 354,
+          "estimatedTokens": 89
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 1,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "tool_call_read_only/acpRegistry": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 200,
+            "estimatedTokens": 50
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 648,
+          "estimatedTokens": 162
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 112,
+          "estimatedTokens": 28
+        }
+      },
+      "tool_call_read_only/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 167,
+            "estimatedTokens": 42
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 271,
+          "estimatedTokens": 68
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 533,
+          "estimatedTokens": 134
+        }
+      },
+      "tool_call_read_only/cursor": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 169,
+            "estimatedTokens": 43
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 273,
+          "estimatedTokens": 69
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 270,
+          "estimatedTokens": 68
+        }
+      },
+      "tool_call_read_only/grok": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 200,
+            "estimatedTokens": 50
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 648,
+          "estimatedTokens": 162
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 112,
+          "estimatedTokens": 28
+        }
+      },
+      "tool_call_read_only_on_request/acpRegistry": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 284,
+            "estimatedTokens": 71
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 732,
+          "estimatedTokens": 183
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "tool_call_read_only_on_request/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 251,
+            "estimatedTokens": 63
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 355,
+          "estimatedTokens": 89
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 31,
+          "estimatedTokens": 8
+        }
+      },
+      "tool_call_read_only_on_request/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 251,
+            "estimatedTokens": 63
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 251,
+          "estimatedTokens": 63
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "tool_call_read_only_on_request/grok": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 284,
+            "estimatedTokens": 71
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 732,
+          "estimatedTokens": 183
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "tool_call_restricted_granular/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 251,
+            "estimatedTokens": 63
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 355,
+          "estimatedTokens": 89
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 31,
+          "estimatedTokens": 8
+        }
+      },
+      "tool_call_restricted_granular/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 251,
+            "estimatedTokens": 63
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 251,
+          "estimatedTokens": 63
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "tool_call_workspace_never/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 251,
+            "estimatedTokens": 63
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 355,
+          "estimatedTokens": 89
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 31,
+          "estimatedTokens": 8
+        }
+      },
+      "tool_call_workspace_never/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 251,
+            "estimatedTokens": 63
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 251,
+          "estimatedTokens": 63
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "turn_interrupt/acpRegistry": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 179,
+            "estimatedTokens": 45
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 627,
+          "estimatedTokens": 157
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "turn_interrupt/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 146,
+            "estimatedTokens": 37
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 250,
+          "estimatedTokens": 63
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "turn_interrupt/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 146,
+            "estimatedTokens": 37
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 146,
+          "estimatedTokens": 37
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "turn_interrupt/grok": {
+        "content": {
+          "instructions": {
+            "bytes": 448,
+            "estimatedTokens": 112
+          },
+          "prompts": {
+            "bytes": 179,
+            "estimatedTokens": 45
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 627,
+          "estimatedTokens": 157
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "turn_interrupt/muse": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 146,
+            "estimatedTokens": 37
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 250,
+          "estimatedTokens": 63
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "turn_interrupt/opencode": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 146,
+            "estimatedTokens": 37
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 250,
+          "estimatedTokens": 63
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 0,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "turn_interrupt_mid_tool/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 220,
+            "estimatedTokens": 55
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 324,
+          "estimatedTokens": 81
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "turn_interrupt_mid_tool/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 220,
+            "estimatedTokens": 55
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 220,
+          "estimatedTokens": 55
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "turn_interrupt_mid_tool/cursor": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 222,
+            "estimatedTokens": 56
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 326,
+          "estimatedTokens": 82
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "turn_interrupt_mid_tool/pi": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 220,
+            "estimatedTokens": 55
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 220,
+          "estimatedTokens": 55
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 15,
+          "estimatedTokens": 4
+        }
+      },
+      "turn_interrupt_restart/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 208,
+            "estimatedTokens": 52
+          },
+          "prompts": {
+            "bytes": 277,
+            "estimatedTokens": 70
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 485,
+          "estimatedTokens": 122
+        },
+        "contentSends": 4,
+        "repeatedParts": 1,
+        "repeated": {
+          "bytes": 104,
+          "estimatedTokens": 26
+        },
+        "turns": 2,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      },
+      "web_search/claudeAgent": {
+        "content": {
+          "instructions": {
+            "bytes": 104,
+            "estimatedTokens": 26
+          },
+          "prompts": {
+            "bytes": 98,
+            "estimatedTokens": 25
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 202,
+          "estimatedTokens": 51
+        },
+        "contentSends": 2,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 2,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 78,
+          "estimatedTokens": 20
+        }
+      },
+      "web_search/codex": {
+        "content": {
+          "instructions": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "prompts": {
+            "bytes": 98,
+            "estimatedTokens": 25
+          },
+          "toolSchemas": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "toolResults": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "wakes": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          },
+          "notifications": {
+            "bytes": 0,
+            "estimatedTokens": 0
+          }
+        },
+        "total": {
+          "bytes": 98,
+          "estimatedTokens": 25
+        },
+        "contentSends": 1,
+        "repeatedParts": 0,
+        "repeated": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "turns": 1,
+        "toolCalls": 1,
+        "toolFailures": 0,
+        "persistedNotificationPayloads": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        },
+        "providerNativeToolResults": {
+          "bytes": 0,
+          "estimatedTokens": 0
+        }
+      }
+    }
+  }
+}

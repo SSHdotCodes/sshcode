@@ -1,0 +1,679 @@
+import { describe, expect, it, vi } from "vite-plus/test";
+import { EnvironmentId } from "@t3tools/contracts";
+
+import {
+  filterAvailableSettingsSearchItems,
+  getSettingsSearchTargetScope,
+  getThreadAutoSettlementSearchAvailability,
+  isSettingsOverviewVisible,
+  isSettingsSearchScopeAvailable,
+  resolveMovedSettingsPath,
+  searchableSetting,
+  searchSettings,
+  SETTINGS_NAV_GROUPS,
+  SETTINGS_SEARCH_ITEMS,
+  SETTINGS_SECTION_LABELS,
+  type SettingsSearchItem,
+} from "./settingsSearch";
+
+const ITEMS: ReadonlyArray<SettingsSearchItem> = [
+  {
+    id: "word-wrap",
+    title: "Word wrap",
+    to: "/settings/general",
+    searchTerms: ["long lines in code previews"],
+  },
+  {
+    id: "network-access",
+    title: "Network access",
+    to: "/settings/connections",
+    searchTerms: ["remote pairing backend"],
+  },
+  {
+    id: "providers",
+    title: "Providers",
+    to: "/settings/providers",
+    searchTerms: ["claude codex agents"],
+  },
+  {
+    id: "provider-updates",
+    title: "Update checks",
+    to: "/settings/general",
+  },
+  {
+    id: "automatic-updates",
+    title: "Automatic updates",
+    to: "/settings/general",
+  },
+];
+
+describe("searchSettings", () => {
+  it.each([
+    ["follow-up behavior", "follow-up-behavior", "Follow-up messages"],
+    ["follow-up messages", "follow-up-behavior", "Follow-up messages"],
+    ["default diff file state", "default-diff-file-state", "Diff files"],
+    ["diff files", "default-diff-file-state", "Diff files"],
+  ])("finds renamed settings using %s", (query, id, title) => {
+    expect(searchSettings(query)).toContainEqual(expect.objectContaining({ id, title }));
+  });
+
+  it("keeps stage-dependent environment labels reachable inside Advanced", () => {
+    expect(searchSettings("environment identification")).toContainEqual(
+      expect.objectContaining({
+        id: "environment-identification",
+        targetId: "advanced-interface",
+        to: "/settings/appearance",
+      }),
+    );
+  });
+
+  it.each(["dither", "running chat background", "harness tint", "keep backdrop"])(
+    "finds the per-device chat backdrop with %s",
+    (query) => {
+      expect(searchSettings(query)).toContainEqual(
+        expect.objectContaining({
+          id: "chat-backdrop",
+          to: "/settings/appearance",
+        }),
+      );
+    },
+  );
+  it.each(["auto", "suggest model", "simple task", "recommend a model"])(
+    "finds the Auto model suggestions switch with %s",
+    (query) => {
+      expect(searchSettings(query)).toContainEqual(
+        expect.objectContaining({ id: "auto-model", to: "/settings/general" }),
+      );
+    },
+  );
+  it.each(["OTel", "OTLP", "telemetry export", "Grafana"])(
+    "finds environment telemetry settings for %s",
+    (query) => {
+      expect(searchSettings(query)).toContainEqual(
+        expect.objectContaining({
+          id: "telemetry-export",
+          to: "/settings/diagnostics",
+          targetId: "telemetry-export",
+          scope: "environment",
+        }),
+      );
+    },
+  );
+  it.each(["send shortcut", "multiline", "new line"])("finds Send shortcut for %s", (query) => {
+    expect(searchSettings(query).map((item) => item.id)).toContain("send-shortcut");
+  });
+
+  it("matches titles, sections, and remembered setting details", () => {
+    expect(searchSettings("word", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
+    expect(searchSettings("network", ITEMS).map((item) => item.id)).toEqual(["network-access"]);
+    expect(searchSettings("connections", ITEMS).map((item) => item.id)).toEqual(["network-access"]);
+    expect(searchSettings("claude", ITEMS).map((item) => item.id)).toEqual(["providers"]);
+    expect(searchSettings("long lines", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
+  });
+
+  it("matches normalized title substrings", () => {
+    expect(searchSettings("  WORD   WRAP  ", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
+    expect(searchSettings("glass").map((item) => item.id)).toEqual(["setting-glass-opacity"]);
+    expect(searchSettings("panel animations").map((item) => item.id)).toEqual(["panel-animations"]);
+    expect(searchSettings("thè\u{1ab0}mes")[0]?.id).toBe("theme");
+    const localeLowerCase = vi.spyOn(String.prototype, "toLocaleLowerCase").mockReturnValue("gıt");
+    try {
+      expect(searchSettings("GIT")[0]?.id).toBe("git-fetch-interval");
+      expect(localeLowerCase).not.toHaveBeenCalled();
+    } finally {
+      localeLowerCase.mockRestore();
+    }
+    expect(searchSettings("xyzzy")).toEqual([]);
+  });
+
+  it("keeps catalog order for multiple title matches", () => {
+    expect(searchSettings("update", ITEMS).map((item) => item.id)).toEqual([
+      "provider-updates",
+      "automatic-updates",
+    ]);
+  });
+
+  it("matches query words across fields and ranks the strongest result first", () => {
+    expect(searchSettings("pairing remote", ITEMS).map((item) => item.id)).toEqual([
+      "network-access",
+    ]);
+    expect(
+      searchSettings("remote pairing")
+        .slice(0, 2)
+        .map((item) => item.id),
+    ).toEqual(["network-access", "connections-environment"]);
+  });
+
+  it("finds settings that used to be reachable only through their section", () => {
+    expect(searchSettings("pull request template")[0]?.id).toBe("follow-change-request-templates");
+    expect(searchSettings("git security keys")[0]?.id).toBe("git-fetch-interval");
+    expect(searchSettings("push notifications")[0]?.id).toBe("publish-agent-activity");
+    expect(searchSettings("battery saver")[0]?.id).toBe("background-activity");
+    expect(searchSettings("binary path")[0]?.id).toBe("providers");
+    expect(searchSettings("Antigravity")[0]?.id).toBe("providers");
+    expect(searchSettings("Google sign in")[0]?.id).toBe("providers");
+    expect(searchSettings("authorized clients")[0]?.id).toBe("connections-environment");
+    expect(searchSettings("administrative access")[0]?.id).toBe("connections-environment");
+  });
+
+  it("finds environment-scoped SSHCode tool settings", () => {
+    expect(searchSettings("provider overrides").map((item) => item.id)).toContain("tools");
+    expect(searchSettings("SSHCode tools").map((item) => item.id)).toContain("tools");
+    expect(getSettingsSearchTargetScope("tools")).toMatchObject({
+      title: "Skills & tools",
+      scope: "environment",
+    });
+  });
+
+  it("lists thread confirmations in panel order", () => {
+    expect(searchSettings("confirmation").map((item) => item.id)).toEqual([
+      "unpin-confirmation",
+      "archive-confirmation",
+      "delete-confirmation",
+    ]);
+  });
+
+  it.each(["usage providers", "CLIProxyAPI", "CLI proxy hub", "management key"])(
+    "finds usage-provider management by %s",
+    (query) => {
+      expect(searchSettings(query)[0]).toMatchObject({
+        id: "usage-providers",
+        to: "/settings/providers",
+      });
+    },
+  );
+
+  it("returns no results for an empty query", () => {
+    expect(searchSettings("   ", ITEMS)).toEqual([]);
+  });
+
+  it("hides desktop-only settings from browser search", () => {
+    expect(SETTINGS_SEARCH_ITEMS.some((item) => item.id === "quit-confirmation")).toBe(true);
+    expect(searchSettings("hold to quit")).toEqual([]);
+    expect(searchSettings("wsl")).toEqual([]);
+    expect(searchSettings("update track")).toEqual([]);
+  });
+
+  it("finds the About update rows", () => {
+    expect(searchSettings("check for updates").map((item) => item.id)).toContain("app-version");
+    expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === "update-track")).toMatchObject({
+      title: "Update track",
+      to: "/settings/general",
+      releaseChannelOnly: true,
+    });
+  });
+
+  it("hides macOS-only settings on other platforms", () => {
+    vi.stubGlobal("navigator", { platform: "Win32" });
+    try {
+      expect(searchSettings("font smoothing")).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("registers the WSL backend as a desktop-only setting", () => {
+    expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === "wsl-backend")).toMatchObject({
+      id: "wsl-backend",
+      title: "WSL backend",
+      to: "/settings/connections",
+      desktopOnly: true,
+      windowsOnly: true,
+    });
+  });
+
+  it("hides settings whose controls are unavailable", () => {
+    const available = filterAvailableSettingsSearchItems({
+      hasCloudPublicConfig: false,
+      hasEnvironment: false,
+      hasProviderSettingsEnvironment: false,
+      hasMacProviderSettingsEnvironment: false,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: false,
+    });
+
+    const gatedIds = new Set<string>([
+      "follow-change-request-templates",
+      "git-fetch-interval",
+      "network-access",
+      "publish-agent-activity",
+      "provider-health-check-interval",
+      "cursor-keychain-usage",
+      "source-control-writer-model",
+      "review-guide-model",
+      "review-guide-instructions",
+      "source-control-writing-style",
+      "t3-connect",
+      "hold-webhooks-while-offline",
+      "tailscale-https",
+      "wsl-backend",
+      "auto-settle-inactive-threads",
+      "auto-settle-merged-threads",
+      "days-before-auto-settle",
+    ]);
+    expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
+  });
+
+  it("offers Cursor Keychain settings only when a macOS provider environment is available", () => {
+    const availability = {
+      hasCloudPublicConfig: false,
+      hasEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      hasMacProviderSettingsEnvironment: false,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: false,
+    };
+    const itemIds = (macAvailable: boolean) =>
+      filterAvailableSettingsSearchItems({
+        ...availability,
+        hasMacProviderSettingsEnvironment: macAvailable,
+      }).map((item) => item.id);
+    expect(itemIds(false)).not.toContain("cursor-keychain-usage");
+    expect(itemIds(true)).toContain("cursor-keychain-usage");
+  });
+
+  it("keeps the local toggle searchable without offering hidden host publishing controls", () => {
+    const availability = {
+      hasCloudPublicConfig: true,
+      hasEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      hasMacProviderSettingsEnvironment: false,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: false,
+    };
+    const remoteOnly = filterAvailableSettingsSearchItems({
+      ...availability,
+      localEnvironmentDisabled: true,
+    }).map((item) => item.id);
+    expect(remoteOnly).toContain("local-environment");
+    expect(remoteOnly).not.toContain("t3-connect");
+    expect(remoteOnly).not.toContain("publish-agent-activity");
+    expect(remoteOnly).not.toContain("wsl-backend");
+    // Browsers without access:write still render CloudLinkRow for their host.
+    const browser = filterAvailableSettingsSearchItems(availability).map((item) => item.id);
+    expect(browser).toContain("publish-agent-activity");
+  });
+
+  it("offers webhook holding only while the managed tunnel is on, like its row", () => {
+    const availability = {
+      hasCloudPublicConfig: true,
+      hasEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      hasMacProviderSettingsEnvironment: false,
+      canManageLocalBackend: true,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: false,
+    };
+    const itemIds = (managedTunnelActive: boolean) =>
+      filterAvailableSettingsSearchItems({ ...availability, managedTunnelActive }).map(
+        (item) => item.id,
+      );
+    expect(itemIds(false)).not.toContain("hold-webhooks-while-offline");
+    expect(itemIds(true)).toContain("hold-webhooks-while-offline");
+  });
+
+  it("shows automatic settlement settings when the server supports them", () => {
+    const available = filterAvailableSettingsSearchItems({
+      hasCloudPublicConfig: false,
+      hasEnvironment: false,
+      hasProviderSettingsEnvironment: false,
+      hasMacProviderSettingsEnvironment: false,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: true,
+    });
+
+    expect(searchSettings("auto-settle", available).map((item) => item.id)).toEqual([
+      "auto-settle-inactive-threads",
+      "auto-settle-merged-threads",
+      "days-before-auto-settle",
+    ]);
+  });
+
+  it("finds keybinding commands by label, command id, and default key", () => {
+    expect(searchSettings("toggle sidebar")[0]?.id).toBe("keybinding-sidebar.toggle");
+    expect(searchSettings("sidebar.toggle")[0]?.id).toBe("keybinding-sidebar.toggle");
+    expect(searchSettings("mod+b")[0]?.id).toBe("keybinding-sidebar.toggle");
+    expect(searchSettings("copy link")[0]).toMatchObject({
+      id: "keybinding-thread.copyReference",
+      to: "/settings/keybindings",
+    });
+  });
+
+  it("ranks keybinding commands after other settings", () => {
+    const ids = searchSettings("model").map((item) => item.id);
+    expect(ids[0]).toBe("default-harness");
+    expect(ids.indexOf("keybinding-modelPicker.toggle")).toBeGreaterThan(
+      ids.indexOf("text-generation-model"),
+    );
+  });
+
+  it("sends commands without a default binding to the section", () => {
+    expect(searchSettings("thread.stop")[0]).toMatchObject({
+      id: "keybinding-thread.stop",
+      targetId: "keybindings",
+    });
+    expect(searchSettings("sidebar.toggle")[0]?.targetId).toBeUndefined();
+  });
+
+  it("keeps catalog result ids unique", () => {
+    const ids = SETTINGS_SEARCH_ITEMS.map((item) => item.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("serves anchor props to panels from the catalog", () => {
+    expect(searchableSetting("word-wrap")).toEqual({ id: "word-wrap", title: "Word wrap" });
+    expect(searchableSetting("archive")).toEqual({ id: "archive", title: "Archived chats" });
+  });
+
+  it("routes appearance settings to their current section", () => {
+    expect(searchSettings("theme")[0]).toMatchObject({
+      id: "theme",
+      to: "/settings/appearance",
+    });
+    expect(searchSettings("word wrap")[0]).toMatchObject({
+      id: "word-wrap",
+      to: "/settings/appearance",
+    });
+    expect(searchSettings("new chat dashboard")[0]).toMatchObject({
+      id: "new-chat-dashboard",
+      to: "/settings/appearance",
+    });
+    expect(searchSettings("environment identification")[0]).toMatchObject({
+      id: "environment-identification",
+      to: "/settings/appearance",
+      targetId: "advanced-interface",
+    });
+  });
+
+  it("routes conditional window capture settings to the stable toggle row", () => {
+    const targets = [
+      "capture accessibility data",
+      "capture shortcut",
+      "capture sound",
+      "capture flash",
+      "capture animations",
+    ].map((query) => {
+      const match = searchSettings(query)[0];
+      return [match?.id, match?.targetId];
+    });
+
+    expect(targets).toEqual([
+      ["snap-shot-accessibility", "snap-shot-enabled"],
+      ["snap-shot-shortcut", "snap-shot-enabled"],
+      ["snap-shot-sound", "snap-shot-enabled"],
+      ["snap-shot-flash", "snap-shot-enabled"],
+      ["snap-shot-animations", "snap-shot-enabled"],
+    ]);
+  });
+
+  it("routes browser recording quality to integrations", () => {
+    const result = searchSettings("recording frame rate")[0];
+    expect(result).toMatchObject({
+      id: "browser-recording-frame-rate",
+      to: "/settings/integrations",
+    });
+    expect(result).not.toHaveProperty("targetId");
+  });
+
+  it("routes where links open to integrations", () => {
+    expect(searchSettings("open links in")[0]).toMatchObject({
+      id: "browser-link-target",
+      to: "/settings/integrations",
+    });
+    expect(searchSettings("external links")[0]).toMatchObject({ id: "browser-link-target" });
+  });
+
+  it("finds the default browser profile action in the profiles list", () => {
+    expect(searchSettings("default profile")[0]).toMatchObject({
+      id: "browser-default-profile",
+      to: "/settings/integrations",
+      targetId: "browser-profiles",
+    });
+  });
+
+  it.each([
+    ["default model", "default-harness", "/settings/general"],
+    ["new threads", "new-threads", "/settings/general"],
+    ["agent browser access", "agent-browser-access", "/settings/integrations"],
+    ["automatically pull", "automatic-pull", "/settings/source-control"],
+    ["actions", "project-actions", "/settings/projects"],
+    ["project overview", "project-overview", "/settings/projects"],
+  ])("routes %s to its owning category", (query, id, to) => {
+    expect(searchSettings(query)[0]).toMatchObject({ id, to });
+  });
+
+  it("keeps environment settings discoverable without a primary environment", () => {
+    const available = filterAvailableSettingsSearchItems({
+      hasCloudPublicConfig: false,
+      hasEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      hasMacProviderSettingsEnvironment: false,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: true,
+    });
+    expect(searchSettings("writing style", available)[0]?.id).toBe("source-control-writing-style");
+    expect(searchSettings("auto-settle", available)).toHaveLength(3);
+  });
+});
+
+describe("settings search targets", () => {
+  it.each(["handoff-brief", "handoff-brief-writer"])(
+    "opens %s from every environment selection, as the chat's handoff menu links it",
+    (id) => {
+      const target = getSettingsSearchTargetScope(id)!;
+      expect(isSettingsSearchScopeAvailable(target.scope, "all")).toBe(true);
+      expect(isSettingsSearchScopeAvailable(target.scope, "environment")).toBe(true);
+    },
+  );
+  it("requires an environment for the resolved telemetry export destination", () => {
+    const result = searchSettings("OpenTelemetry export").find(
+      (item) => item.id === "telemetry-export",
+    )!;
+    const target = getSettingsSearchTargetScope(result.targetId ?? result.id)!;
+    expect(isSettingsSearchScopeAvailable(target.scope, "all")).toBe(false);
+    expect(isSettingsSearchScopeAvailable(target.scope, "project")).toBe(false);
+    expect(isSettingsSearchScopeAvailable(target.scope, "environment")).toBe(true);
+  });
+  it.each([
+    "auto-settle-inactive-threads",
+    "auto-settle-merged-threads",
+    "days-before-auto-settle",
+  ])("retains the capability requirement for %s", (targetId) => {
+    expect(getSettingsSearchTargetScope(targetId)).toMatchObject({
+      scope: "project-defaults",
+      requiresThreadAutoSettlement: true,
+    });
+  });
+
+  it("treats device-local rows as reachable from every selection", () => {
+    const setting = getSettingsSearchTargetScope("time-format")!;
+    expect(setting).toEqual({ title: "Time format", scope: null });
+    expect(isSettingsSearchScopeAvailable(setting.scope, "project")).toBe(true);
+    expect(isSettingsSearchScopeAvailable(setting.scope, "all")).toBe(true);
+    expect(getSettingsSearchTargetScope("appearance")).toMatchObject({ scope: null });
+    expect(getSettingsSearchTargetScope("missing-setting")).toBeNull();
+  });
+
+  it.each(["all", "environment", "project", "checkout"] as const)(
+    "makes browser access editable at the %s scope",
+    (kind) => {
+      const setting = getSettingsSearchTargetScope("agent-browser-access")!;
+      expect(isSettingsSearchScopeAvailable(setting.scope, kind)).toBe(true);
+      expect(isSettingsSearchScopeAvailable(setting.scope, "unavailable")).toBe(false);
+    },
+  );
+
+  it("lets project-scopable rows resolve at every server-backed scope", () => {
+    const model = getSettingsSearchTargetScope("text-generation-model")!;
+    expect(isSettingsSearchScopeAvailable(model.scope, "all")).toBe(true);
+    expect(isSettingsSearchScopeAvailable(model.scope, "environment")).toBe(true);
+    expect(isSettingsSearchScopeAvailable(model.scope, "project")).toBe(true);
+  });
+
+  it("reaches source control discovery and git fetch interval from the default scope", () => {
+    for (const id of ["source-control", "git-fetch-interval"]) {
+      const item = getSettingsSearchTargetScope(id)!;
+      expect(isSettingsSearchScopeAvailable(item.scope, "all")).toBe(true);
+      expect(isSettingsSearchScopeAvailable(item.scope, "environment")).toBe(true);
+      expect(isSettingsSearchScopeAvailable(item.scope, "project")).toBe(false);
+    }
+  });
+
+  it("keeps environment-wide settings out of project scopes", () => {
+    const updates = getSettingsSearchTargetScope("provider-update-checks")!;
+    expect(updates.scope).toBe("environment-defaults");
+    expect(isSettingsSearchScopeAvailable(updates.scope, "environment")).toBe(true);
+    expect(isSettingsSearchScopeAvailable(updates.scope, "all")).toBe(true);
+    expect(isSettingsSearchScopeAvailable(updates.scope, "project")).toBe(false);
+    const streaming = getSettingsSearchTargetScope("response-streaming")!;
+    expect(streaming.scope).toBe("project-defaults");
+    expect(isSettingsSearchScopeAvailable(streaming.scope, "project")).toBe(true);
+    for (const id of ["legacy-plan-mode", "legacy-context-window-indicator", "legacy-sidebar"]) {
+      expect(getSettingsSearchTargetScope(id)!.scope).toBeNull();
+    }
+  });
+});
+
+describe("auto-settlement search availability", () => {
+  function environment(id: string, { connected = true, loaded = true, supported = true } = {}) {
+    return {
+      environmentId: EnvironmentId.make(id),
+      connection: { phase: connected ? ("connected" as const) : ("offline" as const) },
+      serverConfig: loaded
+        ? { environment: { capabilities: { threadAutoSettlement: supported } } }
+        : null,
+    };
+  }
+
+  const capable = environment("capable");
+  const unsupported = environment("unsupported", { supported: false });
+  const offline = environment("offline", { connected: false });
+  const loading = environment("loading", { loaded: false });
+  const environments = [capable, unsupported, offline, loading];
+
+  it("keeps results discoverable when one connected environment supports them", () => {
+    const availability = getThreadAutoSettlementSearchAvailability(environments);
+    expect(availability.eligibleEnvironmentIds).toEqual([capable.environmentId]);
+    const items = filterAvailableSettingsSearchItems({
+      hasCloudPublicConfig: false,
+      hasEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      hasMacProviderSettingsEnvironment: false,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: availability.eligibleEnvironmentIds.length > 0,
+    });
+    expect(searchSettings("auto-settle", items).map((item) => item.id)).toEqual([
+      "auto-settle-inactive-threads",
+      "auto-settle-merged-threads",
+      "days-before-auto-settle",
+    ]);
+  });
+
+  it("offers only capable environments when an aggregate has mixed capabilities", () => {
+    expect(
+      getThreadAutoSettlementSearchAvailability(environments, {
+        kind: "all",
+        environmentIds: environments.map((entry) => entry.environmentId),
+      }),
+    ).toEqual({ eligibleEnvironmentIds: [capable.environmentId], isTargetAvailable: false });
+  });
+
+  it("allows a capable named environment regardless of other environments' capabilities", () => {
+    expect(
+      getThreadAutoSettlementSearchAvailability(environments, {
+        kind: "environment",
+        environmentIds: [capable.environmentId],
+      }).isTargetAvailable,
+    ).toBe(true);
+  });
+
+  it.each([unsupported, offline, loading])(
+    "does not render the target on $environmentId or silently fall back",
+    (selected) => {
+      expect(
+        getThreadAutoSettlementSearchAvailability(environments, {
+          kind: "environment",
+          environmentIds: [selected.environmentId],
+        }),
+      ).toEqual({ eligibleEnvironmentIds: [capable.environmentId], isTargetAvailable: false });
+    },
+  );
+
+  it("offers a capable environment instead of a dead target at an unavailable scope", () => {
+    expect(
+      getThreadAutoSettlementSearchAvailability(environments, {
+        kind: "unavailable",
+        environmentIds: [capable.environmentId],
+      }),
+    ).toEqual({ eligibleEnvironmentIds: [capable.environmentId], isTargetAvailable: false });
+  });
+
+  it("ignores offline and unloaded targets when all connected targets support the setting", () => {
+    const selected = [capable, offline, loading];
+    expect(
+      getThreadAutoSettlementSearchAvailability(selected, {
+        kind: "all",
+        environmentIds: selected.map((entry) => entry.environmentId),
+      }).isTargetAvailable,
+    ).toBe(true);
+  });
+
+  it("offers no unavailable environments when none can render the setting", () => {
+    const selected = [unsupported, offline, loading];
+    expect(
+      getThreadAutoSettlementSearchAvailability(selected, {
+        kind: "all",
+        environmentIds: selected.map((entry) => entry.environmentId),
+      }),
+    ).toEqual({ eligibleEnvironmentIds: [], isTargetAvailable: false });
+    expect(getThreadAutoSettlementSearchAvailability([]).eligibleEnvironmentIds).toEqual([]);
+  });
+});
+
+describe("settings sidebar scope", () => {
+  it("shows Overview only for project and checkout targets", () => {
+    expect(isSettingsOverviewVisible({})).toBe(false);
+    expect(isSettingsOverviewVisible({ machine: "remote" })).toBe(false);
+    expect(isSettingsOverviewVisible({ project: "project" })).toBe(true);
+    expect(isSettingsOverviewVisible({ project: "project", checkout: "checkout" })).toBe(true);
+  });
+});
+
+describe("settings regroup", () => {
+  it("puts every page except Diagnostics in exactly one sidebar group", () => {
+    const grouped = SETTINGS_NAV_GROUPS.flatMap((group) => group.paths);
+    expect(new Set(grouped).size).toBe(grouped.length);
+    expect(grouped.toSorted()).toEqual(
+      Object.keys(SETTINGS_SECTION_LABELS)
+        .filter((path) => path !== "/settings/diagnostics")
+        .toSorted(),
+    );
+  });
+
+  it("sends old links to rows that moved pages", () => {
+    expect(resolveMovedSettingsPath("/settings/general", "#time-format")).toBe("/settings/chats");
+    expect(resolveMovedSettingsPath("/settings/general", "quit-confirmation")).toBe(
+      "/settings/chats",
+    );
+    expect(resolveMovedSettingsPath("/settings/general", "skills")).toBe("/settings/tools");
+    expect(resolveMovedSettingsPath("/settings/appearance", "diff-color-scheme")).toBe(
+      "/settings/chats",
+    );
+    expect(resolveMovedSettingsPath("/settings/integrations", "api-keys")).toBe(
+      "/settings/providers",
+    );
+  });
+
+  it("leaves rows that stayed put and unknown anchors alone", () => {
+    expect(resolveMovedSettingsPath("/settings/general", "background-activity")).toBeNull();
+    expect(resolveMovedSettingsPath("/settings/chats", "time-format")).toBeNull();
+    expect(resolveMovedSettingsPath("/settings/projects", "project-defaults")).toBeNull();
+    expect(resolveMovedSettingsPath("/settings/general", "")).toBeNull();
+  });
+});

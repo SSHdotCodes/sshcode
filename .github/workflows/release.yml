@@ -1,0 +1,89 @@
+name: Release
+
+# Builds the macOS disk image for a version tag (v1.2.3) and attaches it to a draft GitHub
+# release. The app is ad hoc signed and not notarized (see packaging/macos/Read me first.txt).
+#
+# The build loads only the four public T3 Connect identifiers from .env.example.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build, without the leading v (for example 1.2.3)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS disk image
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "Not a version: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Build the disk image
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          # Keep the builder's paths out of the bundled resource monitor.
+          RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=/sshcode --remap-path-prefix=/Users/runner=~ -C link-arg=-Wl,-S
+        run: |
+          node scripts/update-release-package-versions.ts "$VERSION"
+          node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64 \
+            --build-version "$VERSION" --output-dir release
+
+      - name: Check the app
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          dmg="release/SSHCode-$VERSION-arm64.dmg"
+          test -f "$dmg"
+          mount=$(hdiutil attach -nobrowse -readonly "$dmg" | grep -o '/Volumes/.*' | head -1)
+          codesign --verify --deep --strict "$mount/SSHCode.app"
+          hdiutil detach "$mount" -quiet
+          shasum -a 256 "$dmg" > "$dmg.sha256"
+
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "v$VERSION" --draft --title "SSHCode $VERSION" --generate-notes \
+            release/SSHCode-"$VERSION"-arm64.dmg release/SSHCode-"$VERSION"-arm64.dmg.sha256

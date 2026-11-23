@@ -1,0 +1,28 @@
+{
+  "favorite_count": 1687,
+  "in_reply_to_status_id_str": "2036836816654147718",
+  "created_at": "2026-03-25T16:22:08.000Z",
+  "entities": {},
+  "id_str": "2036841069636370467",
+  "text": "(I cycle through all LLMs over time and all of them seem to do this so it's not any particular implementation but something deeper, e.g. maybe during training, a lot of the information in the context window is relevant to the task, so the LLMs develop a bias to use what is given,",
+  "user": {
+    "name": "Andrej Karpathy",
+    "screen_name": "karpathy"
+  },
+  "conversation_count": 150,
+  "parent": {
+    "favorite_count": 20854,
+    "retweet_count": 1047,
+    "created_at": "2026-03-25T16:05:14.000Z",
+    "entities": {},
+    "id_str": "2036836816654147718",
+    "text": "One common issue with personalization in all LLMs is how distracting memory seems to be for the models. A single question from 2 months ago about some topic can keep coming up as some kind of a deep interest of mine with undue mentions in perpetuity. Some kind of trying too hard.",
+    "user": {
+      "name": "Andrej Karpathy",
+      "screen_name": "karpathy"
+    }
+  },
+  "note_tweet": {
+    "id": "Tm90ZVR3ZWV0UmVzdWx0czoyMDM2ODQxMDY5NTYwOTQ2Njg4"
+  }
+}

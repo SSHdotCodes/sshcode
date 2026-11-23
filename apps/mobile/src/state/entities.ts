@@ -1,0 +1,162 @@
+import { useAtomValue } from "@effect/atom-react";
+import { deriveReportedModelSelection } from "@t3tools/client-runtime/state/thread-execution";
+
+import { appAtomRegistry } from "./atom-registry";
+import type {
+  EnvironmentProject,
+  EnvironmentThread,
+  EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/shell";
+import type {
+  EnvironmentId,
+  ScopedProjectRef,
+  ScopedThreadRef,
+  ServerConfig,
+  ThreadId,
+} from "@t3tools/contracts";
+import { relabelThreadLinks } from "@t3tools/shared/threadLinks";
+import { Atom } from "effect/reactivity";
+import { useMemo } from "react";
+
+import { environmentProjects } from "./projects";
+import { environmentServerConfigsAtom, serverEnvironment } from "./server";
+import {
+  createdChatShellAtom,
+  environmentThreadDetails,
+  environmentThreadShells,
+  threadPickerShells,
+} from "./threads";
+import { environmentShell } from "./shell";
+
+const EMPTY_PROJECT_ATOM = Atom.make<EnvironmentProject | null>(null).pipe(
+  Atom.withLabel("mobile-project:empty"),
+);
+const EMPTY_THREAD_SHELL_ATOM = Atom.make<EnvironmentThreadShell | null>(null).pipe(
+  Atom.withLabel("mobile-thread-shell:empty"),
+);
+const EMPTY_SERVER_CONFIG_ATOM = Atom.make<ServerConfig | null>(null).pipe(
+  Atom.withLabel("mobile-server-config:empty"),
+);
+const EMPTY_THREAD_ATOM = Atom.make<EnvironmentThread | null>(null).pipe(
+  Atom.withLabel("mobile-thread:empty"),
+);
+const EMPTY_THREAD_TITLES: ReadonlyMap<ThreadId, string> = new Map();
+
+/** Thread titles in one environment. Emits when a title changes, not on every shell update. */
+const threadTitlesAtom = Atom.family((environmentId: EnvironmentId) => {
+  let previous = EMPTY_THREAD_TITLES;
+  return Atom.make((get) => {
+    const index = get(environmentThreadShells.environmentThreadIndexAtom(environmentId));
+    const unchanged =
+      index.size === previous.size &&
+      Array.from(index).every(([threadId, shell]) => previous.get(threadId) === shell.title);
+    if (!unchanged) {
+      previous = new Map(Array.from(index, ([threadId, shell]) => [threadId, shell.title]));
+    }
+    return previous;
+  }).pipe(Atom.withLabel(`mobile-thread-titles:${environmentId}`));
+});
+
+/** Resolves when the project event reaches the live client store. */
+export function waitForProject(
+  ref: ScopedProjectRef,
+  timeoutMs = 10_000,
+): Promise<EnvironmentProject | null> {
+  const atom = environmentProjects.projectAtom(ref);
+  const current = appAtomRegistry.get(atom);
+  if (current !== null) return Promise.resolve(current);
+  return new Promise((resolve) => {
+    let unsubscribe: (() => void) | null = null;
+    const timeout = setTimeout(() => {
+      unsubscribe?.();
+      resolve(null);
+    }, timeoutMs);
+    const finish = (project: EnvironmentProject | null) => {
+      if (project === null) return;
+      clearTimeout(timeout);
+      unsubscribe?.();
+      resolve(project);
+    };
+    unsubscribe = appAtomRegistry.subscribe(atom, finish);
+    finish(appAtomRegistry.get(atom));
+  });
+}
+
+export function useProjects(): ReadonlyArray<EnvironmentProject> {
+  return useAtomValue(environmentProjects.projectsAtom);
+}
+
+const EMPTY_SHELL_LIST_ATOM = Atom.make<ReadonlyArray<EnvironmentThreadShell>>([]);
+
+export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
+  return useAtomValue(environmentThreadShells.threadShellsAtom);
+}
+
+export function useThreadPickerShells(enabled: boolean): ReadonlyArray<EnvironmentThreadShell> {
+  return useAtomValue(enabled ? threadPickerShells.threadShellsAtom : EMPTY_SHELL_LIST_ATOM);
+}
+
+export function useNavigationThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
+  return useAtomValue(environmentThreadShells.navigationThreadShellsAtom);
+}
+
+export function useProject(ref: ScopedProjectRef | null): EnvironmentProject | null {
+  return useAtomValue(ref === null ? EMPTY_PROJECT_ATOM : environmentProjects.projectAtom(ref));
+}
+
+export function useThreadShell(ref: ScopedThreadRef | null): EnvironmentThreadShell | null {
+  return useAtomValue(
+    ref === null ? EMPTY_THREAD_SHELL_ATOM : environmentThreadShells.threadShellAtom(ref),
+  );
+}
+
+export function useChildThreadInputs(ref: ScopedThreadRef) {
+  return useAtomValue(environmentThreadShells.childThreadInputsAtom(ref));
+}
+
+/** `markdown` with each thread link labeled by the thread's current title in `environmentId`. */
+export function useLiveThreadLinkLabels(markdown: string, environmentId: EnvironmentId): string {
+  const atom = useMemo(
+    () =>
+      Atom.make((get) =>
+        relabelThreadLinks(markdown, (threadId) => {
+          const title = get(threadTitlesAtom(environmentId)).get(threadId);
+          if (title !== undefined) return title;
+          const state = get(environmentShell.stateValueAtom(environmentId));
+          if (
+            state.snapshot._tag === "None" ||
+            state.snapshot.value.idleAppOwnedSubagentsOmitted !== true
+          )
+            return undefined;
+          const shell = get(createdChatShellAtom({ environmentId, threadId }));
+          return shell?.archivedAt === null && shell.deletedAt === null ? shell.title : undefined;
+        }),
+      ),
+    [markdown, environmentId],
+  );
+  return useAtomValue(atom);
+}
+
+export function useEnvironmentServerConfig(
+  environmentId: EnvironmentId | null,
+): ServerConfig | null {
+  return useAtomValue(
+    environmentId === null
+      ? EMPTY_SERVER_CONFIG_ATOM
+      : serverEnvironment.configValueAtom(environmentId),
+  );
+}
+
+export function useServerConfigs(): ReadonlyMap<EnvironmentId, ServerConfig> {
+  return useAtomValue(environmentServerConfigsAtom);
+}
+
+const selectReportedModelSelection = (thread: EnvironmentThread | null) =>
+  thread === null ? null : deriveReportedModelSelection(thread.projection);
+
+export function useThreadReportedModelSelection(ref: ScopedThreadRef | null) {
+  return useAtomValue(
+    ref === null ? EMPTY_THREAD_ATOM : environmentThreadDetails.threadAtom(ref),
+    selectReportedModelSelection,
+  );
+}

@@ -1,0 +1,722 @@
+import type {
+  OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2ThreadProjection,
+  OrchestrationV2TurnItem,
+  ThreadId,
+  TurnItemId,
+} from "@t3tools/contracts";
+
+/**
+ * Every window stops at the byte budget. A window that holds a user turn also
+ * stops at `maxUserTurns` or `maxTurnItems` rows, which keeps ordinary turns
+ * whole (V1 kept 500 activities). Any other window, such as an agent-driven
+ * thread or the inside of one very long turn, stops at `maxItems` rows.
+ */
+export const THREAD_HISTORY_PAGE_POLICY = {
+  maxUserTurns: 10,
+  maxItems: 75,
+  maxTurnItems: 500,
+  maxEncodedBytes: 1_048_576,
+} as const;
+
+/** Invalid/absent hints preserve the existing default; valid hints only shrink it. */
+export function clampSnapshotUserTurnLimit(limit?: number): number {
+  return limit === undefined || !Number.isFinite(limit)
+    ? THREAD_HISTORY_PAGE_POLICY.maxUserTurns
+    : Math.max(1, Math.min(THREAD_HISTORY_PAGE_POLICY.maxUserTurns, Math.floor(limit)));
+}
+
+export const OLDER_THREAD_USER_TURN_LIMIT = 20;
+
+/** Load conversation rows before the bulk of a turn's folded tool activity. */
+export function isConversationHistoryItem(item: Pick<OrchestrationV2TurnItem, "type">): boolean {
+  return !["command_execution", "reasoning", "file_change", "dynamic_tool"].includes(item.type);
+}
+export const THREAD_HISTORY_MAX_RAW_TURNS = 150;
+
+/** Extra rows let the projection query retain an inclusive cursor and prove another page exists. */
+export const THREAD_HISTORY_SNAPSHOT_ROW_LIMIT = THREAD_HISTORY_PAGE_POLICY.maxItems + 2;
+/** The snapshot query's row limit once the history has a user turn. */
+export const THREAD_HISTORY_TURN_SNAPSHOT_ROW_LIMIT = THREAD_HISTORY_PAGE_POLICY.maxTurnItems + 2;
+
+/** Reject absurd cursors before base64 work or JSON parse. */
+export const THREAD_HISTORY_CURSOR_MAX_LENGTH = 4_096;
+
+export type ThreadHistoryPagePolicy = {
+  readonly maxUserTurns?: number | undefined;
+  readonly maxItems: number;
+  /** Defaults to `maxItems`. */
+  readonly maxTurnItems?: number | undefined;
+  readonly maxEncodedBytes: number;
+};
+
+export type ThreadHistoryCursorPayload = {
+  readonly v: 1;
+  readonly seq: number;
+  readonly st: string;
+  readonly si: string;
+  readonly p: number;
+};
+
+type HistoryRow = Pick<
+  OrchestrationV2ProjectedTurnItem,
+  "position" | "visibility" | "sourceThreadId" | "sourceItemId"
+> & {
+  readonly item: Pick<OrchestrationV2TurnItem, "type"> & {
+    readonly id?: string;
+    readonly messageId?: string;
+    readonly inputIntent?: string;
+    readonly createdBy?: string;
+    readonly runId?: string | null;
+  };
+};
+export type SelectTimelinePageResult<Row extends HistoryRow = OrchestrationV2ProjectedTurnItem> = {
+  readonly items: ReadonlyArray<Row>;
+  readonly nextCursor: string | null;
+  readonly hasMoreHistory: boolean;
+};
+
+export type BoundedProjectionResult = {
+  readonly projection: OrchestrationV2ThreadProjection;
+  readonly historyCursor: string | null;
+  readonly hasMoreHistory: boolean;
+  /** Max ordinal across the authoritative full projection's local turnItems. */
+  readonly latestLocalTurnOrdinal: number | null;
+};
+
+export class InvalidThreadHistoryCursorError extends Error {
+  readonly _tag = "InvalidThreadHistoryCursorError";
+  constructor(message = "Invalid thread history cursor.") {
+    super(message);
+    this.name = "InvalidThreadHistoryCursorError";
+  }
+}
+
+function bytesOfJson(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+export function projectedRowEncodedBytes(row: HistoryRow): number {
+  return bytesOfJson(row);
+}
+
+/**
+ * Bounded-snapshot cost: local rows also land in `projection.turnItems`, so
+ * charge the nested item a second time. Inherited rows only appear in the
+ * visible list.
+ */
+export function projectedRowBoundedSnapshotEncodedBytes(
+  row: OrchestrationV2ProjectedTurnItem,
+  threadId: ThreadId | string,
+): number {
+  const rowBytes = projectedRowEncodedBytes(row);
+  if (row.visibility === "local" || String(row.sourceThreadId) === String(threadId)) {
+    return rowBytes + bytesOfJson(row.item);
+  }
+  return rowBytes;
+}
+
+function renumberPositions<Row extends HistoryRow>(items: ReadonlyArray<Row>): Row[] {
+  return items.map((row, position) => (row.position === position ? row : { ...row, position }));
+}
+
+function encodeCursorPayload(payload: ThreadHistoryCursorPayload): string {
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
+export function encodeThreadHistoryCursor(input: {
+  readonly snapshotSequence: number;
+  readonly sourceThreadId: ThreadId | string;
+  readonly sourceItemId: TurnItemId | string;
+  readonly position: number;
+}): string {
+  return encodeCursorPayload({
+    v: 1,
+    seq: input.snapshotSequence,
+    st: String(input.sourceThreadId),
+    si: String(input.sourceItemId),
+    p: input.position,
+  });
+}
+
+export function decodeThreadHistoryCursor(cursor: string): ThreadHistoryCursorPayload {
+  if (cursor.length === 0 || cursor.length > THREAD_HISTORY_CURSOR_MAX_LENGTH) {
+    throw new InvalidThreadHistoryCursorError();
+  }
+  let parsed: unknown;
+  try {
+    const json = Buffer.from(cursor, "base64url").toString("utf8");
+    parsed = JSON.parse(json) as unknown;
+  } catch {
+    throw new InvalidThreadHistoryCursorError();
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !("v" in parsed) ||
+    (parsed as { v: unknown }).v !== 1 ||
+    !("seq" in parsed) ||
+    typeof (parsed as { seq: unknown }).seq !== "number" ||
+    !Number.isInteger((parsed as { seq: number }).seq) ||
+    (parsed as { seq: number }).seq < 0 ||
+    !("st" in parsed) ||
+    typeof (parsed as { st: unknown }).st !== "string" ||
+    (parsed as { st: string }).st.length === 0 ||
+    !("si" in parsed) ||
+    typeof (parsed as { si: unknown }).si !== "string" ||
+    (parsed as { si: string }).si.length === 0 ||
+    !("p" in parsed) ||
+    typeof (parsed as { p: unknown }).p !== "number" ||
+    !Number.isInteger((parsed as { p: number }).p) ||
+    (parsed as { p: number }).p < 0
+  ) {
+    throw new InvalidThreadHistoryCursorError();
+  }
+  return parsed as ThreadHistoryCursorPayload;
+}
+
+function isThreadHistoryTurnStart(item: HistoryRow["item"]): boolean {
+  return (
+    item.type === "user_message" &&
+    (item.inputIntent === "turn_start" || item.inputIntent === "queued_turn")
+  );
+}
+
+/**
+ * Marks the turn starts of a chronological timeline. A wake (PR watch, task
+ * completion) starts its run with a notification instead of a user message, so
+ * a notification starts a turn when it is its run's first input. One steered
+ * into a running turn comes later. ProjectionStore's `run_starts` window query
+ * applies the same rule.
+ */
+export function threadHistoryTurnStarts(
+  items: ReadonlyArray<HistoryRow["item"]>,
+): ReadonlyArray<boolean> {
+  const startedRuns = new Set<string>();
+  return items.map((item) => {
+    if (item.type !== "user_message" && item.type !== "notification") return false;
+    const firstInput = item.runId != null && !startedRuns.has(item.runId);
+    if (item.runId != null) startedRuns.add(item.runId);
+    return item.type === "notification" ? firstInput : isThreadHistoryTurnStart(item);
+  });
+}
+
+/** Steering belongs to its existing turn and must not consume another page slot. */
+export function isThreadHistoryUserTurn(item: HistoryRow["item"]): boolean {
+  return (
+    isThreadHistoryTurnStart(item) && item.type === "user_message" && item.createdBy === "user"
+  );
+}
+
+/**
+ * Always admit at least one row so oversized items cannot deadlock paging.
+ */
+function selectOlderTimelinePage<Row extends HistoryRow>(input: {
+  readonly items: ReadonlyArray<Row>;
+  readonly exclusiveEndIndex: number;
+  readonly snapshotSequence: number;
+  readonly policy?: ThreadHistoryPagePolicy | undefined;
+  readonly rowEncodedBytes?: ((row: Row) => number) | undefined;
+}): SelectTimelinePageResult<Row> {
+  const policy = input.policy ?? THREAD_HISTORY_PAGE_POLICY;
+  const rowCost = input.rowEncodedBytes ?? projectedRowEncodedBytes;
+  const end = Math.min(Math.max(input.exclusiveEndIndex, 0), input.items.length);
+  if (end <= 0) {
+    return { items: [], nextCursor: null, hasMoreHistory: false };
+  }
+
+  const selected: Row[] = [];
+  let encodedBytes = 0;
+  let userTurns = 0;
+  let rawTurns = 0;
+  const candidates = input.items.slice(0, end);
+  const turnStarts = threadHistoryTurnStarts(candidates.map((row) => row.item));
+  const turnLimit = candidates.some((row) => isThreadHistoryUserTurn(row.item))
+    ? policy.maxUserTurns
+    : undefined;
+  const maxItems =
+    turnLimit === undefined ? policy.maxItems : (policy.maxTurnItems ?? policy.maxItems);
+  for (let index = end - 1; index >= 0; index -= 1) {
+    const row = input.items[index]!;
+    if (
+      selected.length > 0 &&
+      (selected.length >= maxItems ||
+        (turnLimit !== undefined &&
+          (userTurns >= turnLimit || rawTurns >= THREAD_HISTORY_MAX_RAW_TURNS)))
+    ) {
+      break;
+    }
+    const rowBytes = rowCost(row);
+    if (selected.length > 0 && encodedBytes + rowBytes > policy.maxEncodedBytes) break;
+    selected.push(row);
+    encodedBytes += rowBytes;
+    if (isThreadHistoryUserTurn(row.item)) userTurns += 1;
+    if (turnStarts[index]) rawTurns += 1;
+  }
+  // Inside a turn longer than the window, no selected row starts a user turn.
+  // Later pages and the snapshot query see only such rows and use `maxItems`,
+  // so this page uses it too.
+  if (userTurns === 0) selected.splice(policy.maxItems);
+  selected.reverse();
+
+  const oldest = selected[0];
+  const oldestIndex = oldest
+    ? input.items.findIndex(
+        (row) =>
+          row.sourceThreadId === oldest.sourceThreadId && row.sourceItemId === oldest.sourceItemId,
+      )
+    : -1;
+  const hasMoreHistory = oldestIndex > 0;
+  const nextCursor =
+    hasMoreHistory && oldest
+      ? encodeThreadHistoryCursor({
+          snapshotSequence: input.snapshotSequence,
+          sourceThreadId: oldest.sourceThreadId,
+          sourceItemId: oldest.sourceItemId,
+          position: oldest.position,
+        })
+      : null;
+
+  return {
+    items: renumberPositions(selected),
+    nextCursor,
+    hasMoreHistory,
+  };
+}
+
+export function selectRecentTimelineWindow(input: {
+  readonly items: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
+  readonly snapshotSequence: number;
+  readonly policy?: ThreadHistoryPagePolicy | undefined;
+  readonly rowEncodedBytes?: ((row: OrchestrationV2ProjectedTurnItem) => number) | undefined;
+}): SelectTimelinePageResult {
+  return selectOlderTimelinePage({
+    items: input.items,
+    exclusiveEndIndex: input.items.length,
+    snapshotSequence: input.snapshotSequence,
+    ...(input.policy === undefined ? {} : { policy: input.policy }),
+    ...(input.rowEncodedBytes === undefined ? {} : { rowEncodedBytes: input.rowEncodedBytes }),
+  });
+}
+
+function findCursorIndex(
+  items: ReadonlyArray<Pick<HistoryRow, "sourceThreadId" | "sourceItemId">>,
+  cursor: ThreadHistoryCursorPayload,
+): number {
+  const byIdentity = items.findIndex(
+    (row) => String(row.sourceThreadId) === cursor.st && String(row.sourceItemId) === cursor.si,
+  );
+  if (byIdentity !== -1) {
+    return byIdentity;
+  }
+  // Identity miss can happen if the cursor item was deleted; fall back to the
+  // recorded position clamped into the current timeline so pagination can
+  // continue from a stable-ish anchor rather than failing hard. Clamp to
+  // items.length (exclusive end) so a shrunken timeline never 400s forever.
+  // decodeThreadHistoryCursor already guarantees p is a non-negative integer.
+  return Math.min(cursor.p, items.length);
+}
+
+/**
+ * Older pages allow twice the turns, and a targeted page widens further so it
+ * reaches `throughEntryId`. Callers that re-bound a page must reuse this policy
+ * or they drop the target again.
+ */
+export function olderHistoryPagePolicy<Row extends HistoryRow>(input: {
+  readonly items: ReadonlyArray<Row>;
+  readonly cursor: string;
+  readonly policy?: ThreadHistoryPagePolicy | undefined;
+  readonly throughEntryId?: string | undefined;
+}): ThreadHistoryPagePolicy {
+  const policy = input.policy ?? {
+    ...THREAD_HISTORY_PAGE_POLICY,
+    maxUserTurns: OLDER_THREAD_USER_TURN_LIMIT,
+  };
+  if (input.throughEntryId === undefined) return policy;
+  const anchorIndex = findCursorIndex(input.items, decodeThreadHistoryCursor(input.cursor));
+  const targetIndex = input.items.findIndex(
+    (row) => (row.item.messageId ?? row.item.id) === input.throughEntryId,
+  );
+  if (targetIndex < 0 || targetIndex >= anchorIndex) return policy;
+  const turns = input.items
+    .slice(targetIndex, anchorIndex)
+    .filter((row) => isThreadHistoryUserTurn(row.item)).length;
+  return {
+    ...policy,
+    maxUserTurns: Math.min(
+      OLDER_THREAD_USER_TURN_LIMIT * 2,
+      Math.max(
+        OLDER_THREAD_USER_TURN_LIMIT,
+        turns + (isThreadHistoryUserTurn(input.items[targetIndex]!.item) ? 0 : 1),
+      ),
+    ),
+    maxItems: policy.maxItems * 2,
+    maxTurnItems: (policy.maxTurnItems ?? policy.maxItems) * 2,
+  };
+}
+
+export function selectHistoryPageFromCursor<Row extends HistoryRow>(input: {
+  readonly items: ReadonlyArray<Row>;
+  readonly cursor: string;
+  readonly snapshotSequence: number;
+  readonly policy?: ThreadHistoryPagePolicy | undefined;
+  readonly rowEncodedBytes?: ((row: Row) => number) | undefined;
+  readonly throughEntryId?: string | undefined;
+}): SelectTimelinePageResult<Row> {
+  const decoded = decodeThreadHistoryCursor(input.cursor);
+  return selectOlderTimelinePage({
+    items: input.items,
+    exclusiveEndIndex: findCursorIndex(input.items, decoded),
+    snapshotSequence: input.snapshotSequence,
+    ...(input.rowEncodedBytes === undefined ? {} : { rowEncodedBytes: input.rowEncodedBytes }),
+    policy: olderHistoryPagePolicy(input),
+  });
+}
+
+/**
+ * Row and byte budgets can split a turn between an interrupt result and its
+ * older request. Clients read a superseded result without a request as a
+ * legacy steer and hide it, so a page carries the requests its results need.
+ */
+export function missingInterruptRequests<Row extends HistoryRow>(
+  items: ReadonlyArray<Row>,
+  page: ReadonlyArray<Pick<HistoryRow, "item" | "sourceThreadId" | "sourceItemId">>,
+): Row[] {
+  const runs = new Set<string>();
+  for (const row of page) {
+    if (row.item.type === "run_interrupt_result" && row.item.runId != null)
+      runs.add(row.item.runId);
+  }
+  for (const row of page) {
+    if (row.item.type === "run_interrupt_request" && row.item.runId != null)
+      runs.delete(row.item.runId);
+  }
+  if (runs.size === 0) return [];
+  return items.filter(
+    (row) =>
+      row.item.type === "run_interrupt_request" &&
+      row.item.runId != null &&
+      runs.has(row.item.runId),
+  );
+}
+
+function isLocalProjectedRow(
+  projection: OrchestrationV2ThreadProjection,
+  row: OrchestrationV2ProjectedTurnItem,
+): boolean {
+  return row.visibility === "local" || String(row.sourceThreadId) === String(projection.thread.id);
+}
+
+/**
+ * Small items a window needs even when they sit outside it:
+ * - Visibility for superseded `run_interrupt_result` rows depends on a matching
+ *   `run_interrupt_request`, so a later history page that introduces the result
+ *   still has the request available for live attempt/run reducers.
+ * - A pending question or approval renders from its request item. Without it
+ *   clients drop the card while the thread list still counts it as waiting.
+ */
+function isRetainedDependencyItem(
+  item: OrchestrationV2TurnItem,
+  pendingRequestIds: ReadonlySet<string>,
+): boolean {
+  if (item.type === "run_interrupt_request") return true;
+  return (
+    (item.type === "user_input_request" || item.type === "approval_request") &&
+    pendingRequestIds.has(String(item.requestId))
+  );
+}
+
+function pendingRuntimeRequestIds(projection: OrchestrationV2ThreadProjection): Set<string> {
+  return new Set(
+    projection.runtimeRequests
+      .filter((request) => request.status === "pending")
+      .map((request) => String(request.id)),
+  );
+}
+
+function retainedDependencyTurnItems(
+  projection: OrchestrationV2ThreadProjection,
+  visible: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+): OrchestrationV2TurnItem[] {
+  const visibleLocalIds = new Set<string>();
+  for (const row of visible) {
+    if (isLocalProjectedRow(projection, row)) {
+      visibleLocalIds.add(String(row.sourceItemId));
+    }
+  }
+
+  const pendingRequestIds = pendingRuntimeRequestIds(projection);
+  const retained: OrchestrationV2TurnItem[] = [];
+  for (const item of projection.turnItems) {
+    if (!isRetainedDependencyItem(item, pendingRequestIds)) {
+      continue;
+    }
+    // Already covered by local turnItems for the visible window.
+    if (visibleLocalIds.has(String(item.id))) {
+      continue;
+    }
+    retained.push(item);
+  }
+  return retained;
+}
+
+function localTurnItemsForVisibleWindow(
+  projection: OrchestrationV2ThreadProjection,
+  visible: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
+): OrchestrationV2TurnItem[] {
+  const localIds = new Set<string>();
+  for (const row of visible) {
+    if (isLocalProjectedRow(projection, row)) {
+      localIds.add(String(row.sourceItemId));
+    }
+  }
+  if (localIds.size === 0) {
+    return [];
+  }
+  return projection.turnItems.filter((item) => localIds.has(String(item.id)));
+}
+
+function messagesForBoundedProjection(
+  projection: OrchestrationV2ThreadProjection,
+  turnItems: ReadonlyArray<OrchestrationV2TurnItem>,
+): OrchestrationV2ThreadProjection["messages"] {
+  const retainedMessageIds = new Set<string>();
+  for (const item of turnItems) {
+    if ("messageId" in item) {
+      retainedMessageIds.add(String(item.messageId));
+    }
+  }
+
+  const latestRun = projection.runs.reduce<(typeof projection.runs)[number] | null>(
+    (latest, run) => (latest === null || run.ordinal > latest.ordinal ? run : latest),
+    null,
+  );
+  const retainedRunIds = new Set<string>();
+  for (const run of projection.runs) {
+    if (
+      run.id === latestRun?.id ||
+      run.status === "preparing" ||
+      run.status === "starting" ||
+      run.status === "running" ||
+      run.status === "waiting" ||
+      run.status === "queued"
+    ) {
+      retainedRunIds.add(String(run.id));
+      retainedMessageIds.add(String(run.userMessageId));
+    }
+  }
+
+  return projection.messages.filter(
+    (message) =>
+      retainedMessageIds.has(String(message.id)) ||
+      (message.runId !== null && retainedRunIds.has(String(message.runId))) ||
+      message.delegatedCompletion !== undefined,
+  );
+}
+
+/**
+ * Max local turn ordinal over the authoritative full projection turnItems.
+ * Used as a cheap partial-timeline watermark so old missing turn-item updates
+ * cannot append newest when the bounded window has no local rows.
+ */
+export function computeLatestLocalTurnOrdinal(
+  turnItems: ReadonlyArray<{ readonly ordinal: number }>,
+): number | null {
+  let latest: number | null = null;
+  for (const item of turnItems) {
+    if (latest === null || item.ordinal > latest) {
+      latest = item.ordinal;
+    }
+  }
+  return latest;
+}
+
+/**
+ * Encoded timeline contribution for a bounded snapshot: visible rows plus the
+ * duplicated local turnItems and any retained interrupt-request dependencies.
+ */
+export function boundedTimelineEncodedBytes(input: {
+  readonly visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
+  readonly turnItems: ReadonlyArray<OrchestrationV2TurnItem>;
+}): number {
+  let total = 0;
+  for (const row of input.visibleTurnItems) {
+    total += projectedRowEncodedBytes(row);
+  }
+  for (const item of input.turnItems) {
+    total += bytesOfJson(item);
+  }
+  return total;
+}
+
+/**
+ * Builds a partial thread projection with full control-plane arrays and a
+ * bounded recent timeline window plus matching local turnItems.
+ */
+export function buildBoundedThreadProjection(input: {
+  readonly projection: OrchestrationV2ThreadProjection;
+  readonly snapshotSequence: number;
+  readonly policy?: ThreadHistoryPagePolicy | undefined;
+}): BoundedProjectionResult {
+  const policy = input.policy ?? THREAD_HISTORY_PAGE_POLICY;
+  const threadId = input.projection.thread.id;
+  const controlProjection = {
+    ...input.projection,
+    plans: input.projection.plans.filter((plan) => plan.status === "active"),
+    // Settled handoffs stay in status "ready" forever; only pending handoffs or
+    // handoffs belonging to the selected window are needed on the client.
+    contextHandoffs: input.projection.contextHandoffs.filter(
+      (handoff) => handoff.status === "pending",
+    ),
+  };
+  const latestLocalTurnOrdinal = computeLatestLocalTurnOrdinal(input.projection.turnItems);
+
+  // Reserve bytes for small dependencies that may sit outside the recent
+  // window: interrupt requests and the items of still-pending requests.
+  const dependencyReserve = (() => {
+    // Upper bound: all such items in the full projection. Window selection
+    // uses this reserve so the final contribution stays under the cap.
+    const pendingRequestIds = pendingRuntimeRequestIds(controlProjection);
+    let reserve = 0;
+    for (const item of controlProjection.turnItems) {
+      if (isRetainedDependencyItem(item, pendingRequestIds)) {
+        reserve += bytesOfJson(item);
+      }
+    }
+    return reserve;
+  })();
+  const controlBytes = bytesOfJson({
+    ...controlProjection,
+    messages: [],
+    turnItems: [],
+    visibleTurnItems: [],
+  });
+  const windowBudget = Math.max(
+    policy.maxEncodedBytes / 2,
+    policy.maxEncodedBytes - dependencyReserve - controlBytes - 1_024,
+  );
+  const windowPolicy: ThreadHistoryPagePolicy = { ...policy, maxEncodedBytes: windowBudget };
+
+  const window = selectRecentTimelineWindow({
+    items: controlProjection.visibleTurnItems,
+    snapshotSequence: input.snapshotSequence,
+    policy: windowPolicy,
+    rowEncodedBytes: (row) => projectedRowBoundedSnapshotEncodedBytes(row, threadId),
+  });
+  const visibleTurnItems = renumberPositions(window.items);
+  const windowTurnItems = localTurnItemsForVisibleWindow(controlProjection, visibleTurnItems);
+  const dependencyTurnItems = retainedDependencyTurnItems(controlProjection, visibleTurnItems);
+  const turnItemById = new Map<string, OrchestrationV2TurnItem>();
+  for (const item of windowTurnItems) {
+    turnItemById.set(String(item.id), item);
+  }
+  for (const item of dependencyTurnItems) {
+    turnItemById.set(String(item.id), item);
+  }
+  const turnItems = [...turnItemById.values()];
+
+  const visiblePlanIds = new Set(
+    turnItems.flatMap((item) =>
+      item.type === "proposed_plan" || item.type === "todo_list" ? [String(item.planId)] : [],
+    ),
+  );
+  const visibleHandoffIds = new Set(
+    turnItems.flatMap((item) => (item.type === "handoff" ? [String(item.contextHandoffId)] : [])),
+  );
+  const windowRunIds = new Set<string>();
+  for (const item of turnItems) {
+    if (item.runId !== null) windowRunIds.add(String(item.runId));
+  }
+  for (const row of visibleTurnItems) {
+    if (row.item.runId !== null) windowRunIds.add(String(row.item.runId));
+  }
+  const retainedRunHandoffIds = new Set(
+    input.projection.runs.flatMap((run) =>
+      run.contextHandoffId != null &&
+      (windowRunIds.has(String(run.id)) ||
+        run.status === "preparing" ||
+        run.status === "starting" ||
+        run.status === "running" ||
+        run.status === "waiting" ||
+        run.status === "queued")
+        ? [String(run.contextHandoffId)]
+        : [],
+    ),
+  );
+  const plans = input.projection.plans
+    .filter((plan) => plan.status === "active" || visiblePlanIds.has(String(plan.id)))
+    .map((plan) =>
+      plan.status === "active"
+        ? plan
+        : plan.kind === "proposed_plan"
+          ? { ...plan, markdown: "", detailInTurnItem: true as const }
+          : { ...plan, explanation: undefined, detailInTurnItem: true as const },
+    );
+  const contextHandoffs = input.projection.contextHandoffs
+    .filter(
+      (handoff) =>
+        handoff.status === "pending" ||
+        visibleHandoffIds.has(String(handoff.id)) ||
+        retainedRunHandoffIds.has(String(handoff.id)),
+    )
+    .map((handoff) =>
+      handoff.status === "pending"
+        ? handoff
+        : {
+            ...handoff,
+            summaryText: "",
+            ...(handoff.brief === undefined ? {} : { brief: { ...handoff.brief, text: "" } }),
+            detailInTurnItem: true as const,
+          },
+    );
+  const projection = {
+    ...controlProjection,
+    // Every node stays: history pages carry only items, and their rows find
+    // their run attempt by walking these nodes.
+    plans,
+    contextHandoffs,
+    messages: messagesForBoundedProjection(controlProjection, turnItems),
+    turnItems,
+    visibleTurnItems,
+  };
+  return {
+    projection,
+    historyCursor: window.nextCursor,
+    hasMoreHistory: window.hasMoreHistory,
+    // Always from the full projection so inherited-only windows still carry a
+    // watermark for partial live reducers.
+    latestLocalTurnOrdinal,
+  };
+}
+
+/** A media cursor can resume within a dense timeline page. */
+export function decodeThreadMediaCursor(value: string): { cursor: string; end?: number } {
+  if (value.length > 8192) throw new InvalidThreadHistoryCursorError();
+  if (!value.startsWith("m.")) {
+    decodeThreadHistoryCursor(value);
+    return { cursor: value };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(value.slice(2), "base64url").toString("utf8"));
+  } catch {
+    throw new InvalidThreadHistoryCursorError();
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !("cursor" in parsed) ||
+    typeof parsed.cursor !== "string" ||
+    !("end" in parsed) ||
+    typeof parsed.end !== "number" ||
+    !Number.isSafeInteger(parsed.end) ||
+    parsed.end < 1
+  )
+    throw new InvalidThreadHistoryCursorError();
+  decodeThreadHistoryCursor(parsed.cursor);
+  return { cursor: parsed.cursor, end: parsed.end };
+}
+
+export function encodeThreadMediaCursor(cursor: string, end: number): string {
+  return `m.${Buffer.from(JSON.stringify({ cursor, end }), "utf8").toString("base64url")}`;
+}

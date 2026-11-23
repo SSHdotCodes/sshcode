@@ -1,0 +1,112 @@
+import type { EnvironmentId, T3ProjectFileScript, ThreadId } from "@t3tools/contracts";
+import { renderToStaticMarkup } from "react-dom/server";
+import { PopoverCreateHandle } from "../ui/popover";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+const testState = vi.hoisted(() => ({
+  density: "full" as "full" | "compact" | "essential",
+  useT3ProjectFileScripts: vi.fn(),
+  projectScriptsControl: vi.fn(),
+}));
+
+vi.mock("../../hooks/useT3ProjectFileScripts", () => ({
+  useT3ProjectFileScripts: (...args: ReadonlyArray<unknown>) =>
+    testState.useT3ProjectFileScripts(...args),
+}));
+vi.mock("../BranchToolbar", () => ({
+  BranchToolbar: () => null,
+}));
+vi.mock("../ProjectScriptsControl", () => ({
+  default: (props: unknown) => {
+    testState.projectScriptsControl(props);
+    return null;
+  },
+}));
+vi.mock("./ThreadAutomationsPanel", () => ({
+  ThreadAutomationsPanel: () => null,
+}));
+vi.mock("./ThreadRelationshipsControl", () => ({
+  ThreadRelationshipsPanel: () => <section>Agents</section>,
+}));
+vi.mock("./ThreadDetailsCard", () => ({
+  ThreadDetailsCard: ({
+    children,
+  }: {
+    children: (density: typeof testState.density) => React.ReactNode;
+  }) => children(testState.density),
+}));
+
+import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./ThreadDetailsPanel";
+
+function detailsProps(environmentId: EnvironmentId, gitCwd: string): ThreadDetailsPanelProps {
+  return {
+    anchor: { current: null },
+    handle: PopoverCreateHandle(),
+    onPresentationChange: vi.fn(),
+    environmentId,
+    threadId: "thread:thread-details" as ThreadId,
+    activeProjectName: undefined,
+    activeProjectScripts: [],
+    preferredScriptId: null,
+    keybindings: [],
+    availableEditors: [],
+    showOpenInPicker: false,
+    gitCwd,
+    isGitRepo: false,
+    envLocked: false,
+    availableEnvironments: [],
+    onEnvironmentChange: vi.fn(),
+    onEnvModeChange: vi.fn(),
+    envMode: "local",
+    startFromOrigin: false,
+    onStartFromOriginChange: vi.fn(),
+    onComposerFocusRequest: vi.fn(),
+    onRunProjectScript: vi.fn(),
+    onAddProjectScript: vi.fn() as ThreadDetailsPanelProps["onAddProjectScript"],
+    onUpdateProjectScript: vi.fn() as ThreadDetailsPanelProps["onUpdateProjectScript"],
+    onDeleteProjectScript: vi.fn() as ThreadDetailsPanelProps["onDeleteProjectScript"],
+  };
+}
+
+describe("ThreadDetailsPanel", () => {
+  beforeEach(() => {
+    testState.density = "full";
+    testState.useT3ProjectFileScripts.mockReset();
+    testState.projectScriptsControl.mockReset();
+  });
+
+  it("passes checked-in t3.json scripts to the project scripts control", () => {
+    const environmentId = "environment:thread-details" as EnvironmentId;
+    const gitCwd = "/tmp/thread-details-project";
+    const fileScripts = [
+      {
+        name: "Check project",
+        command: "vp check",
+        icon: "test",
+      },
+    ] satisfies ReadonlyArray<T3ProjectFileScript>;
+    testState.useT3ProjectFileScripts.mockReturnValue(fileScripts);
+
+    const props = detailsProps(environmentId, gitCwd);
+
+    renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
+
+    expect(testState.useT3ProjectFileScripts).toHaveBeenCalledWith(environmentId, gitCwd);
+    expect(testState.projectScriptsControl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        displayMode: "panel",
+        scripts: [],
+        fileScripts,
+      }),
+    );
+  });
+});
+
+it.each(["compact", "essential"] as const)(
+  "keeps the Agents section reachable in the %s layout",
+  (density) => {
+    testState.density = density;
+    const props = detailsProps("environment:small" as EnvironmentId, "/tmp/project");
+    expect(renderToStaticMarkup(<ThreadDetailsPanel {...props} />)).toContain("Agents");
+  },
+);

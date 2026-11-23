@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:installLocation="auto">
+    <uses-feature android:name="android.hardware.vr.headtracking" android:required="true" />
+    <uses-feature android:name="oculus.software.handtracking" android:required="false" />
+    <uses-feature android:name="com.oculus.feature.PASSTHROUGH" android:required="true" />
+    <uses-feature android:name="oculus.software.overlay_keyboard" android:required="false" />
+    <uses-feature android:name="com.oculus.feature.VIRTUAL_KEYBOARD" android:required="false" />
+    <uses-permission android:name="com.oculus.permission.HAND_TRACKING" />
+    <uses-permission android:name="com.oculus.permission.RENDER_MODEL" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="horizonos.permission.HEADSET_CAMERA" />
+    <uses-feature android:name="android.hardware.camera2.any" android:required="false" />
+    <queries><intent><action android:name="android.speech.RecognitionService" /></intent></queries>
+    <application android:allowBackup="false" android:dataExtractionRules="@xml/data_extraction_rules" android:label="SSHCode" android:icon="@drawable/ic_sshcode" android:theme="@style/AppTheme"
+        android:hardwareAccelerated="true" android:networkSecurityConfig="@xml/network_security_config">
+        <meta-data android:name="com.oculus.supportedDevices" android:value="quest3|quest3s" />
+        <meta-data android:name="com.oculus.handtracking.version" android:value="V2.0" />
+        <meta-data android:name="com.oculus.vr.focusaware" android:value="true" />
+        <uses-native-library android:name="libossdk.oculus.so" android:required="true" />
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
+            android:configChanges="screenSize|screenLayout|orientation|keyboardHidden|keyboard|navigation|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="com.oculus.intent.category.VR" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+                <data android:host="*" />
+                <data android:path="/pair" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

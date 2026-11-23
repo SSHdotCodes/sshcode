@@ -1,0 +1,15 @@
+{
+  "favorite_count": 38011,
+  "created_at": "2025-02-02T23:17:15.000Z",
+  "entities": {},
+  "id_str": "1886192184808149383",
+  "text": "There's a new kind of coding I call \"vibe coding\", where you fully give in to the vibes, embrace exponentials, and forget that the code even exists. It's possible because the LLMs (e.g. Cursor Composer w Sonnet) are getting too good. Also I just talk to Composer with SuperWhisper",
+  "user": {
+    "name": "Andrej Karpathy",
+    "screen_name": "karpathy"
+  },
+  "conversation_count": 1498,
+  "note_tweet": {
+    "id": "Tm90ZVR3ZWV0UmVzdWx0czoxODg2MTkyMTg0NjczODI4ODY0"
+  }
+}

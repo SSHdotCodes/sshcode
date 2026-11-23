@@ -1,0 +1,271 @@
+import {
+  NodeId,
+  ProviderSessionId,
+  RuntimeRequestId,
+  TurnItemId,
+  type OrchestrationV2ThreadProjection,
+  type OrchestrationV2DomainEvent,
+  type OrchestrationV2TurnItem,
+} from "@t3tools/contracts";
+import { describe, expect, it } from "vite-plus/test";
+import {
+  applyOrchestrationV2ProjectionEvent,
+  visibleTurnItemsRevision,
+} from "./orchestrationV2Projection.ts";
+import { v2Now, v2Projection } from "./orchestrationV2TestFixtures.ts";
+import {
+  createQuestionHistoryProjector,
+  derivePendingThreadRequests,
+  hasPendingUserInputWithoutItem,
+  seedUserInputDraftAnswers,
+} from "./threadRequests.ts";
+
+const requestId = RuntimeRequestId.make("async-question");
+const nodeId = NodeId.make("async-question-node");
+
+describe("initial user input drafts", () => {
+  const questions = [
+    { id: "editor", initialAnswer: "  Proposed commit\n\n" },
+    { id: "empty", initialAnswer: "" },
+    { id: "ordinary" },
+    { id: "choices", initialAnswer: "Ignore this", allowCustomAnswer: false },
+  ];
+
+  it("seeds editable answers and preserves edits and selections on later snapshots", () => {
+    const seeded = seedUserInputDraftAnswers(questions, {});
+    expect(seeded).toEqual({
+      editor: { customAnswer: "  Proposed commit\n\n" },
+      empty: { customAnswer: "" },
+    });
+    const edits = {
+      ...seeded,
+      editor: { customAnswer: "" },
+      empty: { selectedOptionValues: ["empty"], customAnswer: "" },
+    };
+    expect(seedUserInputDraftAnswers(questions, edits)).toEqual(edits);
+    expect(
+      seedUserInputDraftAnswers(questions, { editor: { customAnswer: "Edited commit" } }).editor,
+    ).toEqual({ customAnswer: "Edited commit" });
+    expect(seedUserInputDraftAnswers(questions, {}).editor).toEqual({
+      customAnswer: "  Proposed commit\n\n",
+    });
+  });
+
+  it("seeds a question with the id __proto__ as its own draft", () => {
+    const seeded = seedUserInputDraftAnswers(
+      [
+        { id: "__proto__", initialAnswer: "Proposed" },
+        { id: "name", initialAnswer: "Control" },
+      ],
+      {},
+    );
+
+    expect(JSON.stringify(seeded)).toBe(
+      '{"__proto__":{"customAnswer":"Proposed"},"name":{"customAnswer":"Control"}}',
+    );
+  });
+});
+const projection: OrchestrationV2ThreadProjection = {
+  ...v2Projection,
+  runtimeRequests: [
+    {
+      id: requestId,
+      nodeId,
+      providerTurnId: null,
+      nativeRequestRef: null,
+      kind: "user_input",
+      status: "pending",
+      responseCapability: { type: "message" },
+      createdAt: v2Now,
+      resolvedAt: null,
+    },
+  ],
+  turnItems: [
+    {
+      id: TurnItemId.make("async-question-item"),
+      threadId: v2Projection.thread.id,
+      runId: null,
+      nodeId,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "completed",
+      title: null,
+      startedAt: v2Now,
+      completedAt: v2Now,
+      updatedAt: v2Now,
+      type: "user_input_request",
+      requestId,
+      responseMode: "message",
+      questions: [
+        {
+          id: "next",
+          header: "Next",
+          question: "What should happen next?",
+          required: true,
+          allowCustomAnswer: false,
+          options: [{ label: "Continue", value: "  continue  ", description: "Resume work" }],
+        },
+      ],
+    },
+  ],
+};
+
+describe("pending v2 questions", () => {
+  it("keeps message responses available after the originating runtime exits", () => {
+    expect(projection.providerSessions).toEqual([]);
+    expect(derivePendingThreadRequests(projection).userInputs).toEqual([
+      {
+        requestId,
+        createdAt: "2026-06-20T00:00:00.000Z",
+        responseCapability: "message",
+        responseMode: "message",
+        dismissible: true,
+        questions: [
+          {
+            id: "next",
+            header: "Next",
+            question: "What should happen next?",
+            required: true,
+            allowCustomAnswer: false,
+            multiSelect: false,
+            options: [{ label: "Continue", value: "  continue  ", description: "Resume work" }],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("only marks asynchronous questions as dismissible", () => {
+    const live = {
+      ...projection,
+      runtimeRequests: projection.runtimeRequests.map((request) => ({
+        ...request,
+        responseCapability: {
+          type: "live" as const,
+          providerSessionId: ProviderSessionId.make("live-session"),
+        },
+      })),
+      turnItems: projection.turnItems.map((item) =>
+        item.type === "user_input_request" ? { ...item, responseMode: undefined } : item,
+      ),
+    };
+    expect(derivePendingThreadRequests(live).userInputs[0]?.dismissible).toBe(false);
+  });
+
+  it("flags a pending question whose item the saved copy lacks", () => {
+    expect(hasPendingUserInputWithoutItem(projection)).toBe(false);
+    expect(hasPendingUserInputWithoutItem({ ...projection, turnItems: [] })).toBe(true);
+    const answered = {
+      runtimeRequests: projection.runtimeRequests.map((request) => ({
+        ...request,
+        status: "resolved" as const,
+      })),
+      turnItems: [],
+    };
+    expect(hasPendingUserInputWithoutItem(answered)).toBe(false);
+  });
+
+  it("removes answered requests from the composer while retaining their answers in projection data", () => {
+    const answered = {
+      ...projection,
+      runtimeRequests: projection.runtimeRequests.map((request) => ({
+        ...request,
+        status: "resolved" as const,
+        resolvedAt: v2Now,
+        answers: { next: "  continue  " },
+      })),
+    };
+    expect(derivePendingThreadRequests(answered).userInputs).toEqual([]);
+    expect(answered.runtimeRequests[0]?.answers).toEqual({ next: "  continue  " });
+  });
+});
+
+it("restores old text answers without mutating history or replacing unchanged rows", () => {
+  const project = createQuestionHistoryProjector();
+  const item = projection.turnItems[0]!;
+  const row = {
+    item,
+    position: 0,
+    sourceItemId: item.id,
+    sourceThreadId: item.threadId,
+    visibility: "local" as const,
+  };
+  const rows = [row];
+  const pending = { visibleTurnItems: rows, runtimeRequests: projection.runtimeRequests };
+  expect(project(pending)).toBe(rows);
+  const answered = {
+    ...pending,
+    runtimeRequests: [
+      {
+        ...projection.runtimeRequests[0]!,
+        status: "resolved" as const,
+        answers: { next: "Continue" },
+      },
+    ],
+  };
+  const result = project(answered);
+  expect(result[0]?.item).toMatchObject({
+    questionAnswer: {
+      answers: { next: "Continue" },
+      attachmentsByQuestionId: {},
+      questionTextById: { next: "What should happen next?" },
+    },
+  });
+  expect(row.item).not.toHaveProperty("questionAnswer");
+  expect(project(answered)).toBe(result);
+  expect(project({ ...answered, visibleTurnItems: [...rows] })[0]).toBe(result[0]);
+});
+
+it("preserves restored question history and update metadata while another row streams", () => {
+  const project = createQuestionHistoryProjector();
+  const question = projection.turnItems[0]!;
+  const command: Extract<OrchestrationV2TurnItem, { readonly type: "command_execution" }> = {
+    ...question,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    id: TurnItemId.make("streaming-tool"),
+    type: "command_execution" as const,
+    input: "git status",
+    output: "before",
+    exitCode: 0,
+  };
+  const rows = [question, command].map((item, position) => ({
+    item,
+    position,
+    sourceItemId: item.id,
+    sourceThreadId: item.threadId,
+    visibility: "local" as const,
+  }));
+  const answered = {
+    ...projection,
+    turnItems: [question, command],
+    visibleTurnItems: rows,
+    runtimeRequests: [
+      {
+        ...projection.runtimeRequests[0]!,
+        status: "resolved" as const,
+        answers: { next: "Continue" },
+      },
+    ],
+  };
+  const restored = project(answered);
+  const next = applyOrchestrationV2ProjectionEvent(answered, {
+    id: "tool-output",
+    type: "turn-item.updated",
+    threadId: question.threadId,
+    occurredAt: v2Now,
+    payload: { ...command, output: "after" },
+  } as OrchestrationV2DomainEvent)!;
+  const updated = project(next);
+  expect(updated[0]).toBe(restored[0]);
+  expect(updated[0]?.item).toMatchObject({ questionAnswer: { answers: { next: "Continue" } } });
+  expect(updated[1]?.item).toMatchObject({ output: "after" });
+  expect(visibleTurnItemsRevision(updated)).toMatchObject({
+    previousRevision: visibleTurnItemsRevision(restored).revision,
+    index: 1,
+  });
+});

@@ -1,0 +1,108 @@
+--- a/ios/segments/ENRMCodeBlockContainerView.m
++++ b/ios/segments/ENRMCodeBlockContainerView.m
+@@ -5,6 +5,7 @@
+ #import "ENRMHorizontalScrollView.h"
+ #import "MarkdownASTNode.h"
+ #import "PasteboardUtils.h"
++#import <QuartzCore/QuartzCore.h>
+ #if TARGET_OS_OSX
+ #import "ENRMMenuAction.h"
+ #endif
+@@ -292,6 +293,9 @@
+   UIButton *_copyButton;
+   UIButton *_wrapButton;
+   UITapGestureRecognizer *_tapRecognizer;
++  // The check drawn over the copy button after a copy, and the glyph it stands in for.
++  CAShapeLayer *_copiedCheckLayer;
++  UIImage *_copyGlyph;
+ #else
+   NSFont *_headerFont;
+   NSButton *_copyButton;
+@@ -711,11 +715,87 @@
+ - (NSString *)fencedMarkdown
+ {
+   return ENRMCodeBlockFencedMarkdown(_cachedCode, _cachedLanguage, _fenceChar);
++}
++
++#if !TARGET_OS_OSX
++// After a copy the glyph gives way to a check drawn stroke by stroke, then returns. A blank
++// image of the same size holds the button's layout meanwhile.
++- (void)hideCopiedCheck
++{
++  [_copiedCheckLayer removeFromSuperlayer];
++  _copiedCheckLayer = nil;
++  if (_copyGlyph == nil) {
++    return;
++  }
++  UIImage *glyph = _copyGlyph;
++  _copyGlyph = nil;
++  UIButton *button = _copyButton;
++  [UIView transitionWithView:button
++                    duration:0.18
++                     options:UIViewAnimationOptionTransitionCrossDissolve
++                  animations:^{
++                    [button setImage:glyph forState:UIControlStateNormal];
++                  }
++                  completion:nil];
++}
++
++- (void)showCopiedCheck
++{
++  [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(hideCopiedCheck) object:nil];
++  [_copiedCheckLayer removeFromSuperlayer];
++  _copiedCheckLayer = nil;
++  if (_copyGlyph == nil) {
++    UIImage *glyph = [_copyButton imageForState:UIControlStateNormal];
++    if (glyph == nil || glyph.size.width <= 0 || glyph.size.height <= 0) {
++      return;
++    }
++    _copyGlyph = glyph;
++    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:glyph.size];
++    UIImage *blank = [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
++    }];
++    [_copyButton setImage:blank forState:UIControlStateNormal];
++  }
++
++  CGRect bounds = _copyButton.bounds;
++  CGFloat side = MAX(10.0, _copyGlyph.size.height);
++  CGFloat left = CGRectGetMidX(bounds) - side / 2.0;
++  CGFloat top = CGRectGetMidY(bounds) - side / 2.0;
++  UIBezierPath *path = [UIBezierPath bezierPath];
++  [path moveToPoint:CGPointMake(left + side * 0.08, top + side * 0.56)];
++  [path addLineToPoint:CGPointMake(left + side * 0.37, top + side * 0.84)];
++  [path addLineToPoint:CGPointMake(left + side * 0.92, top + side * 0.18)];
++
++  CAShapeLayer *check = [CAShapeLayer layer];
++  check.frame = bounds;
++  check.path = path.CGPath;
++  check.fillColor = UIColor.clearColor.CGColor;
++  check.strokeColor = [_copyButton.tintColor colorWithAlphaComponent:1.0].CGColor;
++  check.lineWidth = MAX(1.4, side * 0.12);
++  check.lineCap = kCALineCapRound;
++  check.lineJoin = kCALineJoinRound;
++  [_copyButton.layer addSublayer:check];
++  _copiedCheckLayer = check;
++
++  if (!UIAccessibilityIsReduceMotionEnabled()) {
++    CABasicAnimation *draw = [CABasicAnimation animationWithKeyPath:@"strokeEnd"];
++    draw.fromValue = @0.0;
++    draw.toValue = @1.0;
++    draw.duration = 0.3;
++    draw.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
++    [check addAnimation:draw forKey:@"draw"];
++  }
++  [self performSelector:@selector(hideCopiedCheck) withObject:nil afterDelay:1.2];
+ }
++#endif
+ 
+ - (void)copyCodeToPasteboard
+ {
+   copyStringToPasteboard(_cachedCode);
++#if !TARGET_OS_OSX
++  if (_cachedCode.length > 0) {
++    [self showCopiedCheck];
++  }
++#endif
+   if (self.onCopyPress) {
+     self.onCopyPress(_cachedCode ?: @"", _cachedLanguage ?: @"");
+   }

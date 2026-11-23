@@ -192,14 +192,16 @@ const readCursor = Effect.gen(function* () {
 });
 
 /** The cursor is written with real file I/O; read until it lands (bounded). */
+// The compactor saves its cursor from a background fiber doing database work. Slow machines
+// need real time for it, not just scheduler turns, so after a quick spin this waits up to ~5 s.
 const awaitCursor = (through: number, retainedFrom = 0) =>
   Effect.gen(function* () {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
+    for (let attempt = 0; attempt < 600; attempt += 1) {
       const cursor = yield* readCursor.pipe(Effect.orElseSucceed(() => null));
       if (JSON.stringify(cursor) === JSON.stringify({ through, retainedFrom, agedThrough: 0 })) {
         return cursor;
       }
-      yield* Effect.yieldNow;
+      yield* attempt < 100 ? Effect.yieldNow : TestClock.withLive(Effect.sleep("10 millis"));
     }
     return yield* readCursor;
   });

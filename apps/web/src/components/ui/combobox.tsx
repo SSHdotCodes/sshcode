@@ -171,7 +171,7 @@ function ComboboxPopup({
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
-        className="z-[130] select-none"
+        className="z-[130] select-none [-webkit-app-region:no-drag]"
         data-slot="combobox-positioner"
         side={side}
         sideOffset={sideOffset}

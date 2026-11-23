@@ -48,6 +48,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("excludes the open model picker from Electron window dragging", () => {
+  const popup = document.querySelector("[data-model-picker-popup]");
+  expect(popup?.classList.contains("[-webkit-app-region:no-drag]")).toBe(true);
+});
+
 it.each(["wheel", "touchmove"])(
   "allows %s in every picker column but blocks the background",
   (type) => {

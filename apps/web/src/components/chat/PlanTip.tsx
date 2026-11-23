@@ -131,7 +131,7 @@ export const PlanTip = memo(function PlanTip(props: {
             aria-label="Plan suggestion"
             initialFocus={false}
             finalFocus={false}
-            className="flex items-center gap-2 rounded-md border bg-popover px-2 py-1 text-xs leading-snug text-popover-foreground shadow-md/5 outline-none transition-opacity data-ending-style:opacity-0 data-starting-style:opacity-0"
+            className="flex items-center gap-2 rounded-md border bg-popover px-2 py-1 text-xs leading-snug text-popover-foreground shadow-md/5 outline-none transition-opacity data-ending-style:opacity-0 data-starting-style:opacity-0 [-webkit-app-region:no-drag]"
           >
             <span>{copy.message}</span>
             <InlineButton

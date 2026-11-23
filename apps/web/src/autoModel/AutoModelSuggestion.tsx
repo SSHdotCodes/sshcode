@@ -179,7 +179,7 @@ export function AutoModelSuggestion(props: {
             initialFocus={false}
             finalFocus={false}
             data-auto-model-pill
-            className="relative flex h-6 max-w-max items-center whitespace-nowrap rounded-full border border-border/70 bg-popover text-xs text-popover-foreground shadow-sm data-withdrawn:text-muted-foreground"
+            className="relative flex h-6 max-w-max items-center whitespace-nowrap rounded-full border border-border/70 bg-popover text-xs text-popover-foreground shadow-sm data-withdrawn:text-muted-foreground [-webkit-app-region:no-drag]"
             data-exiting={exiting || undefined}
             data-withdrawn={withdrawn || undefined}
           >

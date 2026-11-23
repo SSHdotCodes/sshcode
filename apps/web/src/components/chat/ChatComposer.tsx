@@ -1136,7 +1136,7 @@ function ComposerCommandMenuLayer(props: { anchor: HTMLElement | null; children:
 
   return createPortal(
     <div
-      className="pointer-events-auto fixed z-40 flex flex-col"
+      className="pointer-events-auto fixed z-40 flex flex-col [-webkit-app-region:no-drag]"
       data-composer-drawer-layer="true"
       style={{
         bottom: position.bottom,

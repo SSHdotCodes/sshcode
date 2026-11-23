@@ -151,7 +151,7 @@ export function AssistantSelectionToolbar({
       ref={toolbarRef}
       role="toolbar"
       aria-label="Selection actions"
-      className="fixed z-50 flex max-w-[calc(100vw-1rem)] items-center gap-1"
+      className="fixed z-50 flex max-w-[calc(100vw-1rem)] items-center gap-1 [-webkit-app-region:no-drag]"
       style={{ left: selection.position.x, top: selection.position.y }}
       onPointerDown={(event) => event.preventDefault()}
       onKeyDown={(event) => {

@@ -97,7 +97,7 @@ function AutocompletePopup({
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
-        className="z-[130] select-none"
+        className="z-[130] select-none [-webkit-app-region:no-drag]"
         data-slot="autocomplete-positioner"
         side={side}
         sideOffset={sideOffset}

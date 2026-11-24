@@ -20,6 +20,7 @@ import {
   collectLimitNotices,
   collectLimitPools,
   displayLimitWindows,
+  displayProviderUsageWindows,
   elapsedShare,
   formatAsOf,
   formatResetsIn,
@@ -1977,6 +1978,11 @@ describe("Antigravity limit presentation", () => {
       "3p-weekly",
     ]);
     expect(windows.map((window) => window.remainingPercent)).toEqual([80, 90, 10, 0]);
+    expect(
+      displayProviderUsageWindows(antigravity.driver, antigravity.usageLimits!.windows).map(
+        (window) => window.id,
+      ),
+    ).toEqual(["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"]);
   });
 });
 

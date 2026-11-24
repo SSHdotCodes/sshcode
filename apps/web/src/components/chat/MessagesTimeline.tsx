@@ -77,6 +77,7 @@ import {
   liveThoughtLine,
   resolveWorkEntryToolPresentation,
   resolveViewedImageAsset,
+  runningToolStatusLabel,
   workEntryViewedImagePath,
 } from "@t3tools/client-runtime/work-log/presentation";
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
@@ -171,6 +172,7 @@ import {
   EyeIcon,
   GitForkIcon,
   GlobeIcon,
+  PinIcon,
   HashIcon,
   type LucideIcon,
   MessageCircleIcon,
@@ -453,6 +455,10 @@ interface TimelineRowSharedState {
     readonly sourceThreadId: ThreadId;
     readonly runId: RunId;
   }) => Promise<void>;
+  /** Messages pinned in this chat; their pin buttons show filled. */
+  pinnedMessageIds: ReadonlySet<MessageId>;
+  /** Pins or unpins an agent message; null hides the pin buttons. */
+  onToggleMessagePin: ((messageId: MessageId, pinned: boolean, text: string) => void) | null;
   onRollbackCheckpoint: (input: {
     readonly checkpointId: string;
     readonly scopeId: string;
@@ -491,6 +497,7 @@ interface TimelineRowActivityState {
   backgroundWorktreeSetup: WorktreeSetupSnapshot | null;
 }
 
+const NO_PINNED_MESSAGES: ReadonlySet<MessageId> = new Set();
 const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
 const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
 
@@ -633,6 +640,10 @@ interface MessagesTimelineProps {
     readonly sourceThreadId: ThreadId;
     readonly runId: RunId;
   }) => Promise<void>;
+  /** Messages pinned in this chat; their pin buttons show filled. */
+  pinnedMessageIds?: ReadonlySet<MessageId>;
+  /** Pins or unpins an agent message; absent hides the pin buttons. */
+  onToggleMessagePin?: (messageId: MessageId, pinned: boolean, text: string) => void;
   onRollbackCheckpoint: (input: {
     readonly checkpointId: string;
     readonly scopeId: string;
@@ -752,6 +763,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onOpenThread,
   parentThreadLink = null,
   onForkFromRun,
+  pinnedMessageIds = NO_PINNED_MESSAGES,
+  onToggleMessagePin,
   onRollbackCheckpoint,
   supportsConversationRollback,
   onRevertToTurnCount,
@@ -1187,6 +1200,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
   // Rows that arrive while the chat is open rise into place (see timelineArrivals.ts).
   noteTimelineRows(listIdentityKey, rows, performance.now());
   const completedMediaJump = useRef<string | null>(null);
+  const cancelJumpSettle = useRef<(() => void) | null>(null);
+  useEffect(() => () => cancelJumpSettle.current?.(), []);
   useEffect(() => {
     const jumpKey = mediaJump ? `${listIdentityKey}:${mediaJump.sequence}` : null;
     if (!mediaJump || completedMediaJump.current === jumpKey) return;
@@ -1253,7 +1268,64 @@ const ConversationTimeline = memo(function ConversationTimeline({
     if (!list) return;
     completedMediaJump.current = jumpKey;
     onManualNavigation();
-    void list.scrollToIndex({ index: rowIndex, animated: true, viewOffset: 24 });
+    cancelJumpSettle.current?.();
+    let cancelled = false;
+    let frame: number | null = null;
+    const viewport = list.getScrollableNode();
+    const cancel = () => {
+      cancelled = true;
+      if (frame !== null) cancelAnimationFrame(frame);
+      viewport?.removeEventListener("wheel", cancel);
+      viewport?.removeEventListener("touchmove", cancel);
+      viewport?.removeEventListener("pointerdown", cancel);
+      if (cancelJumpSettle.current === cancel) cancelJumpSettle.current = null;
+    };
+    cancelJumpSettle.current = cancel;
+    viewport?.addEventListener("wheel", cancel, { passive: true });
+    viewport?.addEventListener("touchmove", cancel, { passive: true });
+    viewport?.addEventListener("pointerdown", cancel, { passive: true });
+    const rowKey = row.id;
+    void Promise.resolve(
+      list.scrollToIndex({ index: rowIndex, animated: true, viewOffset: 24 }),
+    ).then(() => {
+      // A far row is first reached on estimated heights and can land well off
+      // target; aim again until it is measured and holds still, as position
+      // restore does. The user's own scrolling ends this.
+      let frames = 0;
+      let stableFrames = 0;
+      const reconcile = () => {
+        if (cancelled) return;
+        if (++frames > 120) return cancel();
+        const state = list.getState();
+        const index = state.indexByKey(rowKey);
+        const element = index === undefined ? undefined : state.elementAtIndex(index);
+        const scroller = list.getScrollableNode();
+        if (!element || !scroller) {
+          frame = requestAnimationFrame(reconcile);
+          return;
+        }
+        const offset = Math.max(
+          0,
+          Math.min(
+            scroller.scrollTop +
+              element.getBoundingClientRect().top -
+              scroller.getBoundingClientRect().top -
+              24,
+            scroller.scrollHeight - scroller.clientHeight,
+          ),
+        );
+        if (Math.abs(scroller.scrollTop - offset) > 1) {
+          stableFrames = 0;
+          void Promise.resolve(list.scrollToOffset({ offset, animated: false })).then(() => {
+            if (!cancelled) frame = requestAnimationFrame(reconcile);
+          });
+          return;
+        }
+        if (++stableFrames >= 2) cancel();
+        else frame = requestAnimationFrame(reconcile);
+      };
+      if (!cancelled) frame = requestAnimationFrame(reconcile);
+    });
     onMediaJumpHandled?.(mediaJump.sequence);
   }, [
     mediaJump,
@@ -1684,6 +1756,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
       onOpenTurnDiff,
       onOpenThread,
       onForkFromRun,
+      pinnedMessageIds,
+      onToggleMessagePin: onToggleMessagePin ?? null,
       onRollbackCheckpoint,
       onToggleTurnFold,
       onToggleAttemptFold,
@@ -1728,6 +1802,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
       onOpenTurnDiff,
       onOpenThread,
       onForkFromRun,
+      pinnedMessageIds,
+      onToggleMessagePin,
       onRollbackCheckpoint,
       onToggleTurnFold,
       onToggleAttemptFold,
@@ -4120,6 +4196,34 @@ function AssistantForkButton({
   );
 }
 
+/** Pins an agent message to the chat's pinned messages, or unpins it. */
+function MessagePinButton({ message }: { readonly message: ChatMessage }) {
+  const ctx = use(TimelineRowCtx);
+  if (ctx.onToggleMessagePin === null) return null;
+  const toggle = ctx.onToggleMessagePin;
+  const pinned = ctx.pinnedMessageIds.has(message.id);
+  const label = pinned ? "Unpin message" : "Pin message";
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            aria-pressed={pinned}
+            aria-label={label}
+            onClick={() => toggle(message.id, !pinned, message.text)}
+          />
+        }
+      >
+        <PinIcon className={cn("size-3", pinned && "fill-current text-foreground")} />
+      </TooltipTrigger>
+      <TooltipPopup side="top">{label}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 function AssistantMetaTimelineRow({
   row,
 }: {
@@ -4184,6 +4288,9 @@ function AssistantMessageMeta({
       />
       {projectedItem?.item.type === "assistant_message" ? (
         <AssistantForkButton projectedItem={projectedItem} />
+      ) : null}
+      {!message.streaming && message.role === "assistant" ? (
+        <MessagePinButton message={message} />
       ) : null}
       {!message.streaming && (
         <Tooltip>
@@ -5161,7 +5268,14 @@ function ThinkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "think
   const { isCompacting, isPreparingWorktree } = use(TimelineRowActivityCtx);
   // Reserve the activity row during setup so the handoff keeps the same height.
   if (isPreparingWorktree || isCompacting) return <WorkLogRow label="" />;
-  const activity = <LiveActivityRow label={row.writing ? "Writing…" : "Thinking…"} />;
+  const runningTool = row.runningToolLabel !== undefined;
+  const activity = (
+    <LiveActivityRow
+      label={row.runningToolLabel ?? (row.writing ? "Writing…" : "Thinking…")}
+      active={runningTool}
+      shimmer={runningTool}
+    />
+  );
   const { groupId } = row;
   if (groupId === undefined) return activity;
   return (
@@ -5422,6 +5536,8 @@ function LiveWorkEntryTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "
               >
                 {row.entry.detail ?? label}
               </ReactMarkdown>
+            ) : row.shimmer ? (
+              runningToolStatusLabel(label)
             ) : threadLabel ? (
               <ThreadReadLabel
                 label={threadLabel}
@@ -5436,6 +5552,7 @@ function LiveWorkEntryTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "
           toolIcon={row.entry.toolIcon ?? row.entry.toolSource?.icon}
           failed={failed}
           active={row.active}
+          shimmer={row.shimmer === true}
         />
       </button>
       {viewedImagePaths.length > 0 ? <WorkViewedImages paths={viewedImagePaths} /> : null}
@@ -5466,6 +5583,8 @@ export function toolGroupSummaryIconName(
       return "t3-code";
     case "browser":
       return "browser";
+    case "computer":
+      return "computer";
     case "x":
       return "x-logo";
     case "device":

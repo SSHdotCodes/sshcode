@@ -94,14 +94,22 @@ describe("thread workflows", () => {
   });
 
   it.each([
-    { driver: "acpRegistry", steer: false, interrupt: true, canPromote: false },
-    { driver: "acpRegistry", steer: true, interrupt: true, canPromote: true },
-    { driver: "antigravity", steer: false, interrupt: true, canPromote: true },
-    { driver: "antigravity", steer: true, interrupt: true, canPromote: true },
-    { driver: "antigravity", steer: false, interrupt: false, canPromote: false },
+    { driver: "acpRegistry", steer: false, interrupt: true, canPromote: false, canSendNow: true },
+    { driver: "acpRegistry", steer: true, interrupt: true, canPromote: true, canSendNow: false },
+    { driver: "antigravity", steer: false, interrupt: true, canPromote: true, canSendNow: false },
+    { driver: "antigravity", steer: true, interrupt: true, canPromote: true, canSendNow: false },
+    { driver: "antigravity", steer: false, interrupt: false, canPromote: false, canSendNow: false },
+    {
+      driver: "codex",
+      steer: true,
+      interrupt: true,
+      canPromote: false,
+      canSendNow: true,
+      steeringUnavailable: true,
+    },
   ])(
     "sorts queued messages and gates promotion for $driver (native=$steer, interrupt=$interrupt)",
-    ({ driver, steer, interrupt, canPromote }) => {
+    ({ driver, steer, interrupt, canPromote, canSendNow, steeringUnavailable }) => {
       const state = deriveThreadQueueWorkflowState({
         thread: { id: "thread", activeProviderThreadId: "provider-thread" },
         runs: [
@@ -110,6 +118,7 @@ describe("thread workflows", () => {
             status: "running",
             providerThreadId: "provider-thread",
             activeAttemptId: "attempt-active",
+            rootNodeId: "node-active",
             ordinal: 1,
           },
           { id: "later", status: "queued", userMessageId: "message-later", ordinal: 3 },
@@ -141,7 +150,9 @@ describe("thread workflows", () => {
           {
             id: "provider-turn-active",
             runAttemptId: "attempt-active",
+            nodeId: "node-active",
             status: "running",
+            steeringUnavailable,
           },
         ],
         providerThreads: [
@@ -172,6 +183,9 @@ describe("thread workflows", () => {
       expect(state.activeRun?.id).toBe("active");
       expect(state.canReorder).toBe(true);
       expect(state.canPromoteToSteer).toBe(canPromote);
+      expect(state.canSendSteer).toBe(canPromote);
+      expect(state.canSendNow).toBe(canSendNow);
+      if (steeringUnavailable !== undefined) expect(state.steeringUnavailableReason).toBeTruthy();
     },
   );
 

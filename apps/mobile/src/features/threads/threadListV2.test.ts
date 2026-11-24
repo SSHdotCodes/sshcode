@@ -2085,13 +2085,11 @@ describe("restored settled history", () => {
     ]);
   });
 
-  it("marks the shelf as search-expanded only while a query forces it open", () => {
+  it("lists search results without the settled shelf, which returns as a toggle after", () => {
     const searching = build({ searchQuery: "idea" });
-    const searchShelf = buildThreadListV2ListItems({ layout: searching, pendingTasks: [] }).find(
-      (item) => item.type === "v2-settled-shelf",
-    )!;
-    expect(searchShelf.type === "v2-settled-shelf" && searchShelf.searchExpanded).toBe(true);
-    expect(searchShelf.type === "v2-settled-shelf" && searchShelf.expanded).toBe(true);
+    const searchItems = buildThreadListV2ListItems({ layout: searching, pendingTasks: [] });
+    // A search is one ranked list: settled matches are rows in it, under no shelf header.
+    expect(searchItems.some((item) => item.type === "v2-settled-shelf")).toBe(false);
 
     const expandedByUser = buildThreadListV2ListItems({
       layout: build({ settledShelfExpanded: true }),
@@ -2099,8 +2097,6 @@ describe("restored settled history", () => {
       settledShelfExpanded: true,
     }).find((item) => item.type === "v2-settled-shelf")!;
     expect(expandedByUser.type === "v2-settled-shelf" && expandedByUser.searchExpanded).toBe(false);
-    // Clearing the search must re-render the header back into a toggle.
-    expect(threadListV2ListItemsAreEqual(searchShelf, expandedByUser)).toBe(false);
   });
 
   it("shows snoozed matches while a search is active, as it does settled ones", () => {
@@ -2116,10 +2112,12 @@ describe("restored settled history", () => {
       now: NOW,
     });
     expect(layout.items.map((item) => item.thread.id)).toEqual(["login-fix"]);
+    expect(layout.items[0]).toMatchObject({ snoozed: true });
+    // One ranked list while searching: no shelf header between the matches.
     const shelf = buildThreadListV2ListItems({ layout, pendingTasks: [] }).find(
       (item) => item.type === "v2-snoozed-shelf",
     );
-    expect(shelf).toMatchObject({ expanded: true, searchExpanded: true });
+    expect(shelf).toBeUndefined();
   });
 
   it("gives a row a fresh swipe layer when it moves between the list and the open shelf", () => {

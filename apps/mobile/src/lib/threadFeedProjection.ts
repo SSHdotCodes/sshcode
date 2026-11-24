@@ -399,7 +399,7 @@ function sameFeedEntry(a: StabilizableThreadFeedEntry, b: StabilizableThreadFeed
     }
     case "thinking": {
       const right = b as Extract<ThreadFeedEntry, { readonly type: "thinking" }>;
-      return a.runId === right.runId;
+      return a.runId === right.runId && a.label === right.label && a.shimmer === right.shimmer;
     }
     case "html-render": {
       const right = b as Extract<ThreadFeedEntry, { readonly type: "html-render" }>;

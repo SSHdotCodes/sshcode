@@ -6,6 +6,14 @@ import { cn } from "~/lib/utils";
 import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { ComposerControlIcon, type ComposerControlSize } from "./ComposerControl";
 
+/** An ACP agent's Speed select (Devin): "fast", which Devin's SWE models call Lightning, against "standard". */
+export function acpSpeedChoices(descriptor: ProviderOptionDescriptor) {
+  if (descriptor.id !== "speed" || descriptor.type !== "select") return null;
+  const on = descriptor.options.find(({ id }) => id === "fast");
+  const off = descriptor.options.find(({ id }) => id === "standard");
+  return on && off ? { on, off } : null;
+}
+
 export function getTraitsSpeedDisplay(
   provider: ProviderDriverKind,
   descriptor: ProviderOptionDescriptor,
@@ -14,6 +22,14 @@ export function getTraitsSpeedDisplay(
     return {
       label: descriptor.currentValue === true ? "Fast" : "Normal",
       speedIcon: descriptor.currentValue === true ? "fast" : null,
+    };
+  }
+  const acpSpeed = acpSpeedChoices(descriptor);
+  if (acpSpeed) {
+    const fast = getProviderOptionCurrentValue(descriptor) === acpSpeed.on.id;
+    return {
+      label: fast ? acpSpeed.on.label : acpSpeed.off.label,
+      speedIcon: fast ? "fast" : null,
     };
   }
   if (provider !== "codex" || descriptor.id !== "serviceTier" || descriptor.type !== "select") {

@@ -62,6 +62,9 @@ const Providers = Schema.Struct({
   ),
 });
 
+const ErrorBody = Schema.Struct({ message: Schema.String });
+const probeFailedMessage = "OpenCode could not read workspace usage.";
+
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 class UsageResponseTooLarge extends Schema.TaggedError<UsageResponseTooLarge>()(
   "UsageResponseTooLarge",
@@ -91,6 +94,7 @@ const readBody = <S extends Schema.Constraint>(schema: S) => {
 };
 const readLimitsBody = readBody(ResponseBody);
 const readProvidersBody = readBody(Providers);
+const readErrorBody = readBody(ErrorBody);
 
 const resetTime = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
 const budgetPercent = (spent: number, limit: number) =>
@@ -113,15 +117,19 @@ export const readServerUsageLimits = Effect.fn("OpenCode2Client.usageLimits")(fu
         response.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() === "text/html")
     )
       return undefined;
-    const body = yield* HttpClientResponse.filterStatusOk(response).pipe(
-      Effect.flatMap(readLimitsBody),
-    );
-    if (body.data === null)
+    // OpenCode names the upstream cause, such as an expired Console login, in its error body.
+    if (response.status < 200 || response.status >= 300)
       return makeUnavailableUsageLimits({
         checkedAt,
-        reason: "unsupported",
-        message: "No OpenCode Console workspace is signed in.",
+        reason: "probeFailed",
+        message: yield* readErrorBody(response).pipe(
+          Effect.map((error) => error.message.trim() || probeFailedMessage),
+          Effect.orElseSucceed(() => probeFailedMessage),
+        ),
       });
+    const body = yield* readLimitsBody(response);
+    // OpenCode needs no Console workspace, so its absence is not worth a notice.
+    if (body.data === null) return makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });
     const { go, budgets, workspace } = body.data;
     const consoleProviders = budgets.some(
       (budget) => budget.coverage === "all" && budget.per === "set",
@@ -227,7 +235,7 @@ export const readServerUsageLimits = Effect.fn("OpenCode2Client.usageLimits")(fu
       makeUnavailableUsageLimits({
         checkedAt,
         reason: "probeFailed",
-        message: "OpenCode could not read workspace usage.",
+        message: probeFailedMessage,
       }),
     ),
   );

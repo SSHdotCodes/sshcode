@@ -189,6 +189,17 @@ describe("applyOrchestrationV2ProjectionEvent", () => {
     expect(next?.providerTurns[0]?.status).toBe("completed");
     expect(next?.providerTurns[0]?.tokenUsage).toEqual(running.tokenUsage);
     expect(next?.providerTurns[0]?.generation).toEqual(running.generation);
+
+    const declined = applyOrchestrationV2ProjectionEvent(next!, {
+      ...event,
+      type: "provider-turn.updated",
+      payload: { ...running, steeringUnavailable: true },
+    });
+    expect(declined?.providerTurns[0]).toMatchObject({
+      status: "completed",
+      completedAt: now,
+      steeringUnavailable: true,
+    });
   });
 
   it("applies thread lifecycle payloads instead of leaving stale metadata", () => {

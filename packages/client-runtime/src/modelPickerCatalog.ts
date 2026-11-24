@@ -295,6 +295,10 @@ export function createModelPickerCatalog<T extends ModelRouteSource>(
       registryAgentId(provider, configs.get(source.instanceId) ?? {}) === icon.acpAgentId
     );
   };
+  // Antigravity is Google's own harness for Gemini alongside Gemini CLI, though it does not hide
+  // OpenCode Gemini gateways (its plan lacks models such as Carbon).
+  const isOwnHarness = (source: ModelRouteSource) =>
+    isNative(source) || (source.driver === "antigravity" && modelVendorFamily(source) === "gemini");
   const nativeFamilies = new Set<string>();
   for (const provider of input.providers) {
     if (
@@ -326,7 +330,7 @@ export function createModelPickerCatalog<T extends ModelRouteSource>(
     if (provider.driver === "antigravity") {
       // Its Gemini routes are the native ones.
       return (
-        !isNative(source) &&
+        !isOwnHarness(source) &&
         (provider.auth.type === "oauth-personal" || provider.auth.type === "oauth-business")
       );
     }
@@ -376,7 +380,7 @@ export function createModelPickerCatalog<T extends ModelRouteSource>(
       isDeliberate(source)
     )
       return false;
-    return family !== null && nativeFamilies.has(family) && !isNative(source);
+    return family !== null && nativeFamilies.has(family) && !isOwnHarness(source);
   };
   const selected = new Set(input.selected?.map(routeKey));
   const curatedVisible = (source: T) => {
@@ -389,7 +393,7 @@ export function createModelPickerCatalog<T extends ModelRouteSource>(
     )
       return false;
     if (isDeliberate(source)) return true;
-    if (!isNative(source) && !isCuratedModel(source)) return false;
+    if (!isOwnHarness(source) && !isCuratedModel(source)) return false;
     if (isAliasCopy(source)) return false;
     return !isOld(source);
   };
@@ -436,7 +440,7 @@ export function createModelPickerCatalog<T extends ModelRouteSource>(
       const source = sourceByRef.get(routeKey(canonicalRef));
       const existing = model.routes.find((route) => modelRouteHasSlug(route, canonicalRef));
       if (existing && (!source || !nativeRoutingHides(source))) return canonicalRef;
-      const native = model.routes.filter((route) => isNative(route.source));
+      const native = model.routes.filter((route) => isOwnHarness(route.source));
       const route = defaultModelRoute({ ...model, routes: native });
       return route ? { instanceId: route.source.instanceId, slug: route.source.slug } : null;
     },

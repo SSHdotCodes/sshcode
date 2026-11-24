@@ -43,6 +43,8 @@ import {
   PreviewAutomationError,
   type PreviewAutomationSnapshot,
 } from "@t3tools/contracts";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import { compactDynamicToolOutput } from "@t3tools/shared/toolOutput";
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as BrowserObservations from "../preview/BrowserObservations.ts";
@@ -524,8 +526,97 @@ const previewSnapshotFailure = <E>(cause: Cause.Cause<E>) => {
   }).pipe(Effect.as(result));
 };
 
+const isCallToolResult = Schema.is(McpSchema.CallToolResult);
+const MAX_RECORDED_MCP_OUTPUT_BYTES = 16_384;
+
+function truncateRecordedText(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  const cut = Buffer.from(text, "utf8")
+    .subarray(0, maxBytes)
+    .toString("utf8")
+    .replace(/\uFFFD$/u, "");
+  return `${cut}…`;
+}
+
+function boundRecordedJson(value: unknown, maxBytes: number): unknown {
+  if (value === undefined) return undefined;
+  let json: string;
+  try {
+    json = JSON.stringify(value) ?? String(value);
+  } catch {
+    return undefined;
+  }
+  if (Buffer.byteLength(json, "utf8") <= maxBytes) return value;
+  return truncateRecordedText(json, maxBytes);
+}
+
+/**
+ * Produces a bounded, image-free copy of an MCP `CallToolResult` so ACP
+ * harnesses that omit MCP outputs on `tool_call_update` (such as `agy acp`)
+ * still retain delegation IDs, MCP error flags, and readable output.
+ */
+function recordedMcpToolOutput(result: McpSchema.CallToolResult): unknown | undefined {
+  const textBlocks: Array<{ readonly type: "text"; readonly text: string }> = [];
+  let remainingTextBytes = MAX_RECORDED_MCP_OUTPUT_BYTES;
+  for (const block of result.content) {
+    if (block.type !== "text" || block.text.length === 0 || remainingTextBytes <= 0) continue;
+    const text = truncateRecordedText(block.text, remainingTextBytes);
+    remainingTextBytes -= Buffer.byteLength(text, "utf8");
+    textBlocks.push({ type: "text", text });
+  }
+  if (result.isError === true) {
+    const structured =
+      result.structuredContent === undefined
+        ? undefined
+        : boundRecordedJson(result.structuredContent, MAX_RECORDED_MCP_OUTPUT_BYTES);
+    return {
+      isError: true,
+      ...(structured === undefined ? {} : { structuredContent: structured }),
+      ...(textBlocks.length > 0 ? { content: textBlocks } : {}),
+    };
+  }
+  if (result.structuredContent !== undefined) {
+    const bounded = boundRecordedJson(result.structuredContent, MAX_RECORDED_MCP_OUTPUT_BYTES);
+    if (typeof bounded !== "string") return bounded;
+    const compact = compactDynamicToolOutput(result);
+    return compact !== undefined ? compact : bounded;
+  }
+  if (textBlocks.length === 0) return undefined;
+  if (textBlocks.length === 1) {
+    const only = textBlocks[0]!.text;
+    try {
+      const parsed: unknown = JSON.parse(only);
+      if (parsed !== null && typeof parsed === "object") return parsed;
+    } catch {
+      // Non-JSON text result: keep the bounded content block.
+    }
+  }
+  return textBlocks;
+}
+
+const recordMcpToolCallResult = (
+  mcpSessions: McpProviderSessions.McpProviderSessions["Service"] | undefined,
+  toolName: string,
+  payload: unknown,
+  result: unknown,
+): Effect.Effect<void> => {
+  if (mcpSessions === undefined || !isCallToolResult(result)) return Effect.void;
+  return Effect.serviceOption(McpInvocationContext.McpInvocationContext).pipe(
+    Effect.flatMap((invocation) => {
+      const threadId = Option.isSome(invocation) ? invocation.value.thread?.threadId : undefined;
+      if (threadId === undefined) return Effect.void;
+      const output = recordedMcpToolOutput(result);
+      if (output === undefined) return Effect.void;
+      return mcpSessions.recordToolResult(threadId, toolName, payload, output);
+    }),
+  );
+};
+
 const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot")(function* () {
   const server = yield* McpServer.McpServer;
+  const mcpSessions = Option.getOrUndefined(
+    yield* Effect.serviceOption(McpProviderSessions.McpProviderSessions),
+  );
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   const qa = yield* QaSandbox.QaSandbox;
   const threads = yield* ThreadManagementService.ThreadManagementService;
@@ -632,6 +723,7 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
             );
           });
         }),
+        Effect.tap((result) => recordMcpToolCallResult(mcpSessions, tool.name, payload, result)),
       ),
   });
 });
@@ -716,6 +808,9 @@ const registerImageTool = <T extends Tool.Any, E, R>(
 ) =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
+    const mcpSessions = Option.getOrUndefined(
+      yield* Effect.serviceOption(McpProviderSessions.McpProviderSessions),
+    );
     yield* server.addTool({
       tool: new McpSchema.Tool({
         name: tool.name,
@@ -782,6 +877,7 @@ const registerImageTool = <T extends Tool.Any, E, R>(
               );
             });
           }),
+          Effect.tap((result) => recordMcpToolCallResult(mcpSessions, tool.name, payload, result)),
         ),
     });
   });
@@ -883,10 +979,12 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
     result: McpSchema.CallToolResult,
   ) => string | McpSchema.CallToolResult | undefined,
 ) => {
-  const isCallToolResult = Schema.is(McpSchema.CallToolResult);
   const registration = Layer.effectDiscard(
     Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
+      const mcpSessions = Option.getOrUndefined(
+        yield* Effect.serviceOption(McpProviderSessions.McpProviderSessions),
+      );
       yield* McpServer.registerToolkit(toolkit).pipe(
         Effect.provideService(McpServer.McpServer, {
           ...server,
@@ -926,6 +1024,9 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
                       }),
                     );
                   }),
+                  Effect.tap((result) =>
+                    recordMcpToolCallResult(mcpSessions, entry.tool.name, payload, result),
+                  ),
                 ),
             });
           },

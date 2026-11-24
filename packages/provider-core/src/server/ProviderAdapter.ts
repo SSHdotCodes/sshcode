@@ -98,6 +98,8 @@ export const ProviderAdapterV2Event = Schema.Union([
     type: Schema.Literal("provider_thread.updated"),
     driver: ProviderDriverKind,
     providerThread: OrchestrationV2ProviderThread,
+    /** Persist updates reported outside an active provider turn. */
+    sessionScoped: Schema.optional(Schema.Literal(true)),
     /**
      * Set when the provider rewound its own conversation outside T3, for
      * example a Pi extension moving the session-tree leaf back. Lists every
@@ -118,6 +120,8 @@ export const ProviderAdapterV2Event = Schema.Union([
     type: Schema.Literal("node.updated"),
     driver: ProviderDriverKind,
     node: OrchestrationV2ExecutionNode,
+    /** The provider started this work after its app turn had already settled. */
+    sessionScoped: Schema.optional(Schema.Literal(true)),
   }),
   Schema.Struct({
     type: Schema.Literal("subagent.updated"),
@@ -133,6 +137,7 @@ export const ProviderAdapterV2Event = Schema.Union([
     type: Schema.Literal("turn_item.updated"),
     driver: ProviderDriverKind,
     turnItem: OrchestrationV2TurnItem,
+    sessionScoped: Schema.optional(Schema.Literal(true)),
   }),
   /**
    * Raw output from a running command. Never persisted: the session manager
@@ -528,7 +533,6 @@ export interface ProviderAdapterV2RuntimeRequestResponseInput {
 
 export interface ProviderAdapterV2ThreadSnapshot {
   readonly providerThread: OrchestrationV2ProviderThread;
-  readonly providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
   readonly messages: ReadonlyArray<OrchestrationV2ConversationMessage>;
   /** Ids in `messages` that hold the agent's reasoning, not its reply. */
   readonly reasoningMessageIds?: ReadonlyArray<OrchestrationV2ConversationMessage["id"]>;

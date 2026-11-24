@@ -37,6 +37,22 @@ export function fastModeControl(descriptor: ProviderOptionDescriptor) {
       offValue: false,
       choices: null,
       label: descriptor.currentValue === true ? "Fast" : "Off",
+      switchLabel: "Fast",
+    };
+  }
+  if (descriptor.id === "speed" && descriptor.type === "select") {
+    // An ACP agent's Speed (Devin): "fast", which Devin's SWE models call Lightning.
+    const on = descriptor.options.find((choice) => choice.id === "fast");
+    const off = descriptor.options.find((choice) => choice.id === "standard");
+    if (!on || !off) return null;
+    const enabled = getProviderOptionCurrentValue(descriptor) === on.id;
+    return {
+      enabled,
+      onValue: on.id,
+      offValue: off.id,
+      choices: null,
+      label: enabled ? on.label : "Off",
+      switchLabel: on.label,
     };
   }
   if (descriptor.id !== "serviceTier" || descriptor.type !== "select") return null;
@@ -58,6 +74,7 @@ export function fastModeControl(descriptor: ProviderOptionDescriptor) {
     offValue: off.id,
     choices: choices.length > 2 ? choices : null,
     label: choices.find((choice) => choice.id === value)?.label ?? "Off",
+    switchLabel: "Fast",
   };
 }
 

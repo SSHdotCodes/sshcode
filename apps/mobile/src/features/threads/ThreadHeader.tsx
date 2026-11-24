@@ -109,14 +109,6 @@ export function ThreadHeader(
                 }
               : null,
           ],
-          [
-            "git",
-            {
-              accessibilityLabel: "Open git controls",
-              icon: "point.topleft.down.curvedto.point.bottomright.up",
-              onPress: props.onOpenGitInspector,
-            },
-          ],
         ],
         visibleHeaderItems,
       ),
@@ -140,7 +132,6 @@ export function ThreadHeader(
     props.onOpenFilesInspector,
     onOpenTerminal,
     onMergeBack,
-    props.onOpenGitInspector,
     toggleAuxiliaryPane,
     props.onReturnToThread,
     props.hasThreadCwd,

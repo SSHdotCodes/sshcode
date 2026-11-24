@@ -171,6 +171,75 @@ export function chatNaming(
   return { named, share: words.length > 0 ? named / (10 * words.length) : 0, inTitle, covered };
 }
 
+/** A chat as a list search reads it: its name, plus extra terms such as its pull request. */
+export interface SearchableChat extends NameableChat {
+  readonly extraTerms?: ReadonlyArray<string> | undefined;
+}
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * How well a chat list search names a chat, or null when it doesn't match. Higher is better:
+ * the title is what was typed (6) or starts with it (5), has it as words together (4), has
+ * every word in any order ("black simul" for "Build Black Hole Simulation", 3), gets the
+ * rest from its model or harness (2), or only contains the typed letters (1, also a pull
+ * request term). Each of 5, 4 and 3 gains a half when the words are whole ones. Filler
+ * words ("the", "chat") don't have to match.
+ */
+export function chatTitleSearchScore(query: string, chat: SearchableChat): number | null {
+  const phrase = query.trim().toLowerCase().replace(/\s+/g, " ");
+  if (phrase.length === 0) return null;
+  const title = chat.title.toLowerCase().replace(/\s+/g, " ");
+  if (title === phrase) return 6;
+  // Whole words beat a word that only starts with what was typed ("test" over "testing").
+  const wholeWords = (pattern: string) =>
+    new RegExp(`(?:^|[^\\p{L}\\p{N}])${pattern}(?![\\p{L}\\p{N}])`, "u").test(title);
+  const escaped = escapeRegExp(phrase);
+  if (title.startsWith(phrase)) return wholeWords(escaped) ? 5.5 : 5;
+  if (new RegExp(`(?:^|[^\\p{L}\\p{N}])${escaped}`, "u").test(title)) {
+    return wholeWords(escaped) ? 4.5 : 4;
+  }
+  const words = chatMentionWords(query);
+  if (words.length > 0) {
+    const naming = chatNaming(words, chat);
+    if (naming.inTitle === words.length) {
+      const titleWords = new Set(wordsOf(chat.title));
+      return words.every((word) => titleWords.has(word)) ? 3.5 : 3;
+    }
+    if (naming.inTitle > 0 && naming.covered === words.length) return 2;
+  }
+  if (title.includes(phrase)) return 1;
+  return chat.extraTerms?.some((term) => term.toLowerCase().includes(phrase)) ? 1 : null;
+}
+
+/**
+ * The chats a list search names, best first (`chatTitleSearchScore`). Equal matches keep the
+ * order `items` came in (a list's usual order: pinned as arranged, working, then history),
+ * or with `activityMsOf`, the most recently active first. Lists used to keep their usual
+ * order outright, which buried the chat a search named under weaker matches.
+ */
+export function rankChatsByTitleSearch<T>(
+  items: ReadonlyArray<T>,
+  query: string,
+  chatOf: (item: T) => SearchableChat,
+  activityMsOf?: (item: T) => number,
+): T[] {
+  const activity = (item: T) => {
+    const ms = activityMsOf?.(item) ?? 0;
+    return Number.isFinite(ms) ? ms : 0;
+  };
+  return items
+    .flatMap((item, index) => {
+      const score = chatTitleSearchScore(query, chatOf(item));
+      return score === null ? [] : [{ item, index, score, activityMs: activity(item) }];
+    })
+    .sort(
+      (left, right) =>
+        right.score - left.score || right.activityMs - left.activityMs || left.index - right.index,
+    )
+    .map(({ item }) => item);
+}
+
 const NAMED_CHATS_ADDED_LIMIT = 20;
 
 /**

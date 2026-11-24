@@ -47,6 +47,7 @@ describe("pending timeline messages", () => {
       runId: null,
       id: "thinking",
       createdAt: "2026-09-06T11:00:00.000Z",
+      label: "Thinking…",
     } as const;
     const entries = appendPendingThreadMessages(
       [activity],

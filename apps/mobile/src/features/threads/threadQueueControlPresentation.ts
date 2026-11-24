@@ -9,6 +9,7 @@ export interface ThreadQueueRowControls {
   readonly canMoveDown: boolean;
   readonly canMoveUp: boolean;
   readonly canSteer: boolean;
+  readonly canSendNow: boolean;
   readonly dismissAccessibilityLabel: string;
   readonly displayText: string;
   readonly isEditing: boolean;
@@ -18,6 +19,7 @@ export function resolveThreadQueueRowControls(input: {
   readonly busy: boolean;
   readonly editBlocked?: boolean;
   readonly canPromoteToSteer: boolean;
+  readonly canSendNow?: boolean;
   readonly canReorder: boolean;
   readonly index: number;
   /** This row's message is already open in the composer. */
@@ -36,6 +38,7 @@ export function resolveThreadQueueRowControls(input: {
     canMoveDown: mutationEnabled && input.canReorder && input.index < input.queuedCount - 1,
     canMoveUp: mutationEnabled && input.canReorder && input.index > 0,
     canSteer: mutationEnabled && input.canPromoteToSteer && !isEditing,
+    canSendNow: mutationEnabled && input.canSendNow === true && !isEditing,
     dismissAccessibilityLabel: REMOVE_QUEUED_MESSAGE_ACCESSIBILITY_LABEL,
     // Show context chips by their labels; editing and sending keep the original text.
     displayText: replaceComposerContextReferences(

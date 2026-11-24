@@ -9,6 +9,7 @@ import type {
 import { rememberedAccountFailure } from "@t3tools/contracts";
 import {
   collectProviderUsageLimits,
+  displayProviderUsageWindows,
   formatDuration,
   type LimitPace,
   limitsNotice,
@@ -130,7 +131,10 @@ export function ThreadDetailsUsage({
             tooltip={<span className="text-foreground">{notice}</span>}
           />
         ) : (
-          limits?.windows.map((window) => <LimitRow key={window.id} window={window} now={now} />)
+          (limits && provider
+            ? displayProviderUsageWindows(provider.driver, limits.windows)
+            : (limits?.windows ?? [])
+          ).map((window) => <LimitRow key={window.id} window={window} now={now} />)
         )}
       </div>
     </ThreadDetailsSection>

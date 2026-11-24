@@ -319,9 +319,10 @@ it.effect.each(
               sizeBytes: 10,
             },
           ],
-          dispatchMode: mailbox
-            ? { type: "queue_after_active" }
-            : { type: "steer_active", targetRunId: first.runId },
+          dispatchMode:
+            mailbox || timing === "native declined"
+              ? { type: "queue_after_active" }
+              : { type: "steer_active", targetRunId: first.runId },
           createdBy: mailbox ? "agent" : "user",
           creationSource: mailbox ? "server" : "web",
           ...(mailbox
@@ -335,15 +336,46 @@ it.effect.each(
             : {}),
         });
         if (timing !== "before dispatch") yield* dispatchSteer;
+        if (timing === "native declined") {
+          const queued = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+            (run) => run.userMessageId === messageId && run.status === "queued",
+          )!;
+          yield* orchestrator.dispatch({
+            type: "queued-message.promote-to-steer",
+            commandId: CommandId.make("promote:first"),
+            threadId,
+            queuedRunId: queued.id,
+            targetRunId: first.runId,
+          });
+        }
         if (timing === "after delivery") yield* worker.drain();
         if (timing === "without native steering" || timing === "native declined") {
           yield* worker.drain();
           const queued = yield* orchestrator.getThreadProjection(threadId);
           assert.equal(started.length, 1);
           assert.equal(queued.runs[0]?.status, "running");
-          const followUp = queued.runs.find((run) => run.userMessageId === messageId);
+          const followUp = queued.runs.find(
+            (run) => run.userMessageId === messageId && run.status === "queued",
+          );
           assert.equal(followUp?.status, "queued");
           if (timing === "native declined") {
+            assert.equal(queued.providerTurns[0]?.steeringUnavailable, true);
+            assert.isDefined(followUp);
+            for (const tap of [1, 2]) {
+              const result = yield* orchestrator
+                .dispatch({
+                  type: "queued-message.promote-to-steer",
+                  commandId: CommandId.make(`promote:${tap}`),
+                  threadId,
+                  queuedRunId: followUp!.id,
+                  targetRunId: first.runId,
+                })
+                .pipe(Effect.flip);
+              assert.equal(result._tag, "OrchestratorDispatchError");
+            }
+            yield* worker.drain();
+            assert.equal(steerCalls, 1);
+            assert.deepEqual((yield* orchestrator.getThreadProjection(threadId)).runs, queued.runs);
             const requeued = queued.turnItems.find(
               (item) => item.type === "user_message" && item.messageId === messageId,
             );
@@ -502,6 +534,7 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
   name: string,
   canRestart = false,
   transition: "apply_on_next_turn" | "restart_session" = "apply_on_next_turn",
+  steerUnavailable = false,
 ) {
   const cwd = yield* checkpointWorkspace(name);
   const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
@@ -543,6 +576,9 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
                 status: "running",
                 startedAt: now,
                 completedAt: null,
+                ...(steerUnavailable && started.length === 1
+                  ? { steeringUnavailable: true as const }
+                  : {}),
               },
             });
           });
@@ -686,6 +722,116 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
   });
   return { events, started, steered, layer, startFirstTurn };
 });
+
+it.effect.each(["interrupt", "hold", "send-now"] as const)(
+  "delivers the original queued run after %s",
+  (mode) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { started, steered, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
+          `unsteerable-queue-${mode}`,
+          true,
+          "apply_on_next_turn",
+          true,
+        );
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const threadId = yield* startFirstTurn;
+          const sink = yield* EventSink.EventSinkV2;
+          const afterSequence = yield* sink.latestSequence();
+          const first = started[0]!;
+          for (const id of ["next", "later"]) {
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(id),
+              threadId,
+              messageId: MessageId.make(id),
+              text: id,
+              attachments: [],
+              dispatchMode: { type: "steer_active", targetRunId: first.runId },
+              createdBy: "user",
+              creationSource: "web",
+            });
+          }
+          yield* worker.drain();
+          const queued = (yield* orchestrator.getThreadProjection(threadId)).runs.filter(
+            (run) => run.status === "queued",
+          );
+          assert.lengthOf(queued, 2);
+          const selected = queued[mode === "send-now" ? 1 : 0]!;
+          const command = {
+            type: "run.interrupt",
+            commandId: CommandId.make("interrupt"),
+            threadId,
+            runId: first.runId,
+            keepHelpers: true,
+            ...(mode === "send-now" ? { sendQueuedRunId: selected.id } : {}),
+          } as const;
+          yield* orchestrator.dispatch(
+            mode === "hold"
+              ? {
+                  type: "thread.stop",
+                  commandId: command.commandId,
+                  threadId,
+                  // This fake provider has no delegated tasks to stop.
+                  stopDelegatedTasks: false,
+                }
+              : command,
+          );
+          if (mode === "send-now") {
+            yield* orchestrator.dispatch(command);
+            const competing = yield* orchestrator
+              .dispatch({
+                ...command,
+                commandId: CommandId.make("competing"),
+                sendQueuedRunId: queued[0]!.id,
+              })
+              .pipe(Effect.flip);
+            assert.equal(competing._tag, "OrchestratorDispatchError");
+          }
+          yield* worker.drain();
+          if (mode === "hold") {
+            const held = yield* orchestrator.getThreadProjection(threadId);
+            assert.deepEqual(
+              held.runs.map((run) => run.status),
+              ["interrupted", "queued", "queued"],
+            );
+            assert.isTrue(held.runs.slice(1).every((run) => run.queueHeld === true));
+            assert.lengthOf(started, 1);
+            yield* orchestrator.dispatch({
+              type: "queue.resume",
+              commandId: CommandId.make("send-held"),
+              threadId,
+            });
+          }
+          yield* sink.stream({ afterSequence }).pipe(
+            Stream.filter(
+              ({ event }) =>
+                event.type === "run.updated" &&
+                event.payload.id === selected.id &&
+                event.payload.status === "starting",
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+          );
+          yield* worker.drain();
+          const after = yield* orchestrator.getThreadProjection(threadId);
+          assert.deepEqual(steered, []);
+          assert.deepEqual(
+            started.map((turn) => turn.runId),
+            [first.runId, selected.id],
+          );
+          assert.equal(started[1]?.message.messageId, selected.userMessageId);
+          assert.lengthOf(after.runs, 3);
+          assert.isUndefined(after.runs.find((run) => run.id === selected.id)?.sendNext);
+          assert.isFalse(
+            after.runs.some((run) => run.status === "queued" && run.queueHeld === true),
+          );
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+);
 
 it.effect.each(
   [false, true].flatMap((canRestart) =>

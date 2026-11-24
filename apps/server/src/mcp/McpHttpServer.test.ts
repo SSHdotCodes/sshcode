@@ -35,6 +35,7 @@ import * as ServerConfig from "../config.ts";
 import * as ServerHttp from "../http.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as McpToolAccessTestkit from "./McpToolAccess.testkit.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -1221,4 +1222,84 @@ it.effect("admits provider and OAuth client credentials and points only clients 
       expect((yield* foreignOrigin("OPTIONS", undefined)).status).toBe(403);
     }),
   ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "records bounded MCP tool outputs and errors in McpProviderSessions for thread callers",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const okTool = Tool.make("delegate_task", {
+          description: "Test delegate tool",
+          parameters: Schema.Struct({ task: Schema.String }),
+          success: Schema.Struct({ taskId: Schema.String, childThreadId: Schema.String }),
+          failure: OrchestratorMcpFailure,
+          failureMode: "return",
+        });
+        const toolkit = Toolkit.make(okTool);
+        const handlers = McpToolAccess.toLayer(toolkit, {
+          delegate_task: McpToolAccess.reads(({ task }) =>
+            task === "fail"
+              ? Effect.fail(
+                  new OrchestratorMcpFailure({
+                    code: "invalid_request",
+                    message: "delegation failed",
+                  }),
+                )
+              : Effect.succeed({ taskId: "task-1", childThreadId: "child-1" }),
+          ),
+        });
+        const layer = McpHttpServer.toolkitRegistration(toolkit, handlers).pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpProviderSessions.layer),
+          Layer.provide(ServerSettings.layerTest({})),
+        );
+        const ctx = yield* Layer.build(layer);
+        const server = yield* McpServer.McpServer.pipe(Effect.provide(ctx));
+        const sessions = yield* McpProviderSessions.McpProviderSessions.pipe(Effect.provide(ctx));
+        const threadInvocation = {
+          ...invocation,
+          capabilities: new Set(["orchestration"] as const),
+        };
+        yield* server
+          .callTool({ name: "delegate_task", arguments: { task: "review" } })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, threadInvocation),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+        yield* server
+          .callTool({ name: "delegate_task", arguments: { task: "fail" } })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, threadInvocation),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+        // External OAuth callers have no thread session and must not record.
+        yield* server.callTool({ name: "delegate_task", arguments: { task: "external" } }).pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, {
+            ...threadInvocation,
+            thread: undefined,
+            client: { sessionId: "ext-1", label: "External", access: "read-only" as const },
+          }),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+
+        // Two delegate_task results wait: arguments that match neither must not guess one.
+        const ambiguous = yield* sessions.takeToolResult(threadId, "delegate_task", {
+          task: "reported differently",
+        });
+        expect(ambiguous).toBeUndefined();
+        const okOutput = yield* sessions.takeToolResult(threadId, "delegate_task", {
+          task: "review",
+        });
+        expect(okOutput).toEqual({ taskId: "task-1", childThreadId: "child-1" });
+        const errOutput = yield* sessions.takeToolResult(threadId, "delegate_task", {
+          task: "fail",
+        });
+        expect(errOutput).toMatchObject({ isError: true });
+        const noneLeft = yield* sessions.takeToolResult(threadId, "delegate_task", {
+          task: "external",
+        });
+        expect(noneLeft).toBeUndefined();
+      }),
+    ),
 );

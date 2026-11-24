@@ -19,8 +19,15 @@ import { resolveMediaSource } from "@t3tools/client-runtime/media-source";
 import { parseChangeRequestUrl } from "@t3tools/shared/changeRequestUrl";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
 import { formatTokens } from "@t3tools/shared/usageFormat";
-import { classifyToolActivity } from "@t3tools/shared/toolActivity";
+import {
+  classifyToolActivity,
+  collectToolFilePaths,
+  dynamicToolTitle,
+  formatReadToolLabel,
+  formatSearchToolLabel,
+} from "@t3tools/shared/toolActivity";
 import { toolOutputIndicatesFailure } from "@t3tools/shared/toolOutput";
+import { commandProgramName } from "./commandLabel.ts";
 
 import {
   summarizeT3ToolCalls,
@@ -104,6 +111,7 @@ export type ToolGroupAction =
   | "command"
   | "thread-create"
   | "browser"
+  | "computer"
   | "x"
   | "device"
   | "code-search"
@@ -221,6 +229,116 @@ export function liveActivityToolStatus(status: string | undefined, presentTense:
   }
   if (presentTense || status === "inProgress") return "inProgress";
   return "completed";
+}
+
+const GENERIC_COMMAND_TITLES = new Set(["Ran command", "Run command", "Command"]);
+
+export function commandlessCommandLabel(
+  entry: WorkLogPresentationEntry,
+  status = liveActivityToolStatus(entry.toolLifecycleStatus, false),
+): string | null {
+  if (entry.itemType !== "command_execution" || entry.command?.trim()) return null;
+  const title = (
+    entry.structuredPayload ? entry.structuredPayload.title : entry.toolTitle || entry.label
+  )?.trim();
+  if (title && !GENERIC_COMMAND_TITLES.has(normalizeCompactToolLabel(title))) return null;
+  switch (status) {
+    case "inProgress":
+      return "Running command";
+    case "failed":
+      return "Failed command";
+    case "declined":
+      return "Declined command";
+    case "stopped":
+      return "Stopped command";
+    default:
+      return "Ran command";
+  }
+}
+
+function workEntryIsRunningTool(entry: WorkLogPresentationEntry): boolean {
+  if (entry.toolLifecycleStatus !== "inProgress") return false;
+  switch (entry.itemType) {
+    case "command_execution":
+    case "dynamic_tool":
+    case "file_change":
+    case "file_search":
+    case "web_search":
+      return true;
+    case undefined:
+      return entry.tone === "tool" || entry.command !== undefined;
+    default:
+      return false;
+  }
+}
+
+/** Compare start times, using transcript order to break ties. */
+export function isNewerRunningTool(
+  entry: WorkLogPresentationEntry,
+  current: WorkLogPresentationEntry | undefined,
+): boolean {
+  return (
+    workEntryIsRunningTool(entry) &&
+    (current === undefined || Date.parse(entry.createdAt) >= Date.parse(current.createdAt))
+  );
+}
+
+export function runningToolStatusLabel(label: string): string {
+  return `${label.replace(/(?:…|\.{3})$/u, "")}…`;
+}
+
+/** Wording shared by the live work group and the separate status row. */
+export function liveToolActivityLabel(
+  entry: WorkLogPresentationEntry,
+  presentTense: boolean,
+): string | null {
+  const status = liveActivityToolStatus(entry.toolLifecycleStatus, presentTense);
+  const presentation = resolveWorkEntryToolPresentation({ ...entry, toolLifecycleStatus: status });
+  if (presentation) return presentation.displayName;
+  const command = entry.command?.trim();
+  if (command) {
+    const verb =
+      status === "inProgress"
+        ? "Running"
+        : status === "failed"
+          ? "Failed"
+          : status === "declined"
+            ? "Declined"
+            : status === "stopped"
+              ? "Stopped"
+              : "Ran";
+    return `${verb} ${commandProgramName(command) ?? "command"}`;
+  }
+  const commandless = commandlessCommandLabel(entry, status);
+  if (commandless !== null) return commandless;
+  if (!workEntryIsRunningTool(entry)) return null;
+
+  const item = entry.structuredPayload;
+  switch (item?.type) {
+    case "command_execution":
+      return item.title?.trim() || "Running command";
+    case "web_search":
+      return item.patterns?.join(", ") || item.title?.trim() || "Web search";
+    case "file_search":
+      return item.title?.trim() || formatSearchToolLabel(item) || "File search";
+    case "file_change":
+      return item.fileName;
+    case "dynamic_tool": {
+      const data = { input: item.input };
+      const action = toolGroupAction(entry);
+      const paths = action === "read" ? collectToolFilePaths(data) : [];
+      const title =
+        dynamicToolTitle(item.toolName, item.input, item.title) ??
+        (paths[0] ? formatReadToolLabel(paths[0], paths.length - 1) : undefined) ??
+        (action === "search" || action === "code-search"
+          ? formatSearchToolLabel(data)
+          : undefined) ??
+        (item.title?.trim() || item.toolName || "Tool call");
+      return title.charAt(0).toUpperCase() + title.slice(1);
+    }
+    default:
+      return null;
+  }
 }
 
 /** Resolves tool identity before choosing labels or icons in either client. */
@@ -474,6 +592,7 @@ export function toolGroupAction(entry: WorkLogPresentationEntry): ToolGroupActio
   const presentation = resolveWorkEntryToolPresentation(entry);
   if (presentation?.action !== undefined) return presentation.action;
   if (presentation?.icon === "browser") return "browser";
+  if (presentation?.icon === "computer") return "computer";
   if (presentation?.icon === "x-logo") return "x";
   if (presentation?.icon === "device") return "device";
   if (entry.requestKind === "file-read" || entry.viewedImagePath !== undefined) return "read";
@@ -520,6 +639,9 @@ export function toolGroupAction(entry: WorkLogPresentationEntry): ToolGroupActio
 }
 
 export function workEntryViewedImagePath(entry: WorkLogPresentationEntry): string | null {
+  if (entry.toolLifecycleStatus === "failed") {
+    return null;
+  }
   const viewedImagePath = entry.viewedImagePath?.trim();
   if (
     viewedImagePath !== undefined &&
@@ -621,6 +743,8 @@ function toolGroupActionLabel(action: ToolGroupAction, count: number): string {
       return `Created ${count} ${count === 1 ? "thread" : "threads"}`;
     case "device":
       return `Used device controls ${count} ${count === 1 ? "time" : "times"}`;
+    case "computer":
+      return `Used computer controls ${count} ${count === 1 ? "time" : "times"}`;
     case "browser":
       return `Used browser ${count} ${count === 1 ? "time" : "times"}`;
     case "x":

@@ -8,6 +8,7 @@ import {
   CommandId,
   EventId,
   MessageId,
+  NodeId,
   ProjectId,
   ProviderInstanceId,
   RuntimeRequestId,
@@ -16,6 +17,7 @@ import {
   TurnItemId,
   type ChatAttachment,
   type OrchestrationV2Command,
+  type OrchestrationV2RuntimeRequest,
   type OrchestrationV2ServerCommand,
   type OrchestrationV2StoredEvent,
   type UserInputAttachments,
@@ -37,8 +39,21 @@ const layerIntakeTest = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-question-intake-",
 }).pipe(Layer.provideMerge(NodeServices.layer), Layer.provideMerge(ServerSettings.layerTest()));
 
-const layerFailingDispatch = (captured: OrchestrationV2ServerCommand[]) =>
+const questionRecords =
+  (
+    runtimeRequests: ReadonlyArray<OrchestrationV2RuntimeRequest> = [],
+  ): ThreadManagementService.ThreadManagementServiceShape["getThreadRecords"] =>
+  () =>
+    Effect.succeed({ runtimeRequests } as unknown as Effect.Success<
+      ReturnType<ThreadManagementService.ThreadManagementServiceShape["getThreadRecords"]>
+    >);
+
+const layerFailingDispatch = (
+  captured: OrchestrationV2ServerCommand[],
+  runtimeRequests?: ReadonlyArray<OrchestrationV2RuntimeRequest>,
+) =>
   Layer.mock(ThreadManagementService.ThreadManagementService)({
+    getThreadRecords: questionRecords(runtimeRequests),
     dispatch: (command) => {
       captured.push(command);
       return Effect.fail(
@@ -166,6 +181,50 @@ it.effect("claims question uploads and passes readable paths through the V2 requ
       "Selected option",
       `Attached image "screen.png": "${path}"`,
     ]);
+  }).pipe(Effect.provide(layerIntakeTest)),
+);
+
+it.effect("claims async question uploads without rewriting the answer text", () =>
+  Effect.gen(function* () {
+    const { attachmentsDir } = yield* ServerConfig.ServerConfig;
+    const id = ChatAttachmentId.make(createPendingAttachmentId()!);
+    const requestId = RuntimeRequestId.make("request-async");
+    NodeFS.writeFileSync(NodePath.join(attachmentsDir, `${id}.png`), new Uint8Array([1, 2, 3]));
+    const captured: OrchestrationV2ServerCommand[] = [];
+    yield* dispatchCommand({
+      type: "runtime-request.respond",
+      commandId: CommandId.make("async-answer"),
+      threadId: ThreadId.make("thread-async"),
+      requestId,
+      answers: { q: "" },
+      attachmentsByQuestionId: {
+        q: [{ type: "image", id, name: "screen.png", mimeType: "image/png", sizeBytes: 3 }],
+      },
+    }).pipe(
+      Effect.provide(
+        layerFailingDispatch(captured, [
+          {
+            id: requestId,
+            nodeId: NodeId.make("node-async"),
+            providerTurnId: null,
+            nativeRequestRef: null,
+            kind: "user_input",
+            status: "pending",
+            responseCapability: { type: "message" },
+            createdAt: NOW,
+            resolvedAt: null,
+          },
+        ]),
+      ),
+      Effect.result,
+    );
+    const command = captured[0];
+    if (command?.type !== "runtime-request.respond") throw new Error("Expected an answer");
+    expect(command.answers).toEqual({ q: "" });
+    const claimed = command.attachmentsByQuestionId?.q?.[0];
+    expect(claimed?.id).not.toBe(id);
+    const path = claimed && resolveAttachmentPath({ attachmentsDir, attachment: claimed });
+    expect(path && NodeFS.readFileSync(path)).toEqual(Buffer.from([1, 2, 3]));
   }).pipe(Effect.provide(layerIntakeTest)),
 );
 
@@ -357,6 +416,7 @@ it.effect("releases claimed copies when the command was already rejected", () =>
     }).pipe(
       Effect.provide(
         Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadRecords: questionRecords(),
           dispatch: (command) =>
             Effect.fail(
               new OrchestratorCommandPreviouslyRejectedError({
@@ -427,6 +487,7 @@ it.effect("releases claimed copies when dispatch replays an earlier accepted res
     }).pipe(
       Effect.provide(
         Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadRecords: questionRecords(),
           dispatch: () => Effect.succeed({ sequence: 1, storedEvents }),
         }),
       ),
@@ -483,6 +544,7 @@ it.effect("releases claimed copies when the recorded answer has no attachments",
     }).pipe(
       Effect.provide(
         Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadRecords: questionRecords(),
           dispatch: () => Effect.succeed({ sequence: 1, storedEvents }),
         }),
       ),
@@ -534,6 +596,7 @@ it.effect("releases claimed copies when the recorded answer was text-only", () =
     }).pipe(
       Effect.provide(
         Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadRecords: questionRecords(),
           dispatch: () => Effect.succeed({ sequence: 1, storedEvents }),
         }),
       ),
@@ -592,6 +655,7 @@ it.effect("retains claimed copies referenced by a fresh recorded answer", () =>
     }).pipe(
       Effect.provide(
         Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadRecords: questionRecords(),
           // A fresh commit records exactly the attachments this attempt claimed.
           dispatch: (command) =>
             Effect.succeed({
@@ -672,6 +736,7 @@ it.effect.each(["message.dispatch", "runtime-request.respond"] as const)(
       }).pipe(
         Effect.provide(
           Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getThreadRecords: questionRecords(),
             withIntakeReceipt: (_command, run) => run(false),
             dispatch: (command) => {
               if (command.type === "runtime-request.respond") {
@@ -833,6 +898,7 @@ it.effect("a retried response re-claims the preserved pending uploads", () =>
     const retry = yield* dispatchCommand(command).pipe(
       Effect.provide(
         Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadRecords: questionRecords(),
           dispatch: (dispatched) => {
             captured.push(dispatched);
             return Effect.succeed({ sequence: 1, storedEvents: [] });
@@ -921,6 +987,7 @@ it.effect.each(["disabled provider", "terminal handoff"] as const)(
       }).pipe(
         Effect.provide(
           Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getThreadRecords: questionRecords(),
             sendToThread: (input) =>
               Effect.fail(
                 refusal === "terminal handoff"

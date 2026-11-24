@@ -109,7 +109,9 @@ import {
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
 import { OPENCODE_PROVIDER, openCodePermissionRequestKind } from "../adapter.ts";
-import { openCodeToolTurnItem } from "../toolItems.ts";
+import { HTML_RENDER_TOOL_NAME } from "@t3tools/shared/htmlRender";
+import { compactDynamicToolOutput } from "@t3tools/shared/toolOutput";
+import { openCodeCodeModeToolCalls, openCodeToolTurnItem } from "../toolItems.ts";
 
 const OpenCode2ProviderCapabilities = {
   sessions: {
@@ -281,6 +283,7 @@ interface ActiveTurn {
   readonly steers: Set<string>;
   /** This turn's steers OpenCode delivered or cancelled: a retried one is not sent again. */
   readonly settledInbox: Set<string>;
+  readonly recoveredCodeModeWrappers: Set<string>;
   /** How the last execution ended, while the turn waits for the one that delivers its steers. */
   heldEnd: TurnTerminal | undefined;
   /**
@@ -358,7 +361,6 @@ interface OpenBlock {
 interface ThreadState {
   readonly sessionId: string;
   providerThread: OrchestrationV2ProviderThread;
-  readonly providerTurns: Map<string, OrchestrationV2ProviderTurn>;
   active: ActiveTurn | undefined;
   /** What the native session runs now, so a changed selection is switched before prompting. */
   model: ModelRef | undefined;
@@ -989,7 +991,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     ): ThreadState => ({
       sessionId,
       providerThread,
-      providerTurns: new Map(),
       active: undefined,
       model: undefined,
       unsettled: false,
@@ -1268,6 +1269,46 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           },
         ),
       });
+      const metadata = result?.metadata;
+      if (
+        tool.name !== "execute" ||
+        metadata === null ||
+        typeof metadata !== "object" ||
+        !("toolCalls" in metadata) ||
+        turn.recoveredCodeModeWrappers.has(nativeId)
+      )
+        return;
+      turn.recoveredCodeModeWrappers.add(nativeId);
+      const owner = rootOf(state).providerThread.appThreadId ?? turn.input.threadId;
+      const calls = openCodeCodeModeToolCalls(metadata, yield* mcpServerNameFor(owner));
+      const keyedCalls = calls.map((call) => ({
+        ...call,
+        key: `${call.name}:${McpProviderSessions.hashToolInput(call.input)}`,
+      }));
+      const repeats = new Map<string, number>();
+      for (const { key } of keyedCalls) repeats.set(key, (repeats.get(key) ?? 0) + 1);
+      for (const { index, name, input, key } of keyedCalls) {
+        if (repeats.get(key) !== 1) continue;
+        const output = yield* mcpSessions.takeToolResult(owner, name, input, { exact: true });
+        if (output === undefined) continue;
+        const itemId = `${nativeId}:${name}:${index}`;
+        const compact = compactDynamicToolOutput(output);
+        const nestedStatus = compact?.isError ? "failed" : "completed";
+        yield* emitNode(state, turn, itemId, "tool_call", nestedStatus, startedAt, updatedAt);
+        yield* emit({
+          type: "turn_item.updated",
+          driver,
+          turnItem: {
+            ...itemBase(state, turn, itemId, nestedStatus, startedAt, updatedAt, updatedAt),
+            type: "dynamic_tool",
+            title: null,
+            toolName: `t3-code.${name}`,
+            input:
+              name === HTML_RENDER_TOOL_NAME ? { title: input.title, height: input.height } : input,
+            output,
+          },
+        });
+      }
     });
 
     /** The turn's compaction item; its summary is the text OpenCode carries forward. */
@@ -1319,12 +1360,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       return ids.length === 0 ? {} : { retainedRuntimeRequestIds: ids };
     };
 
-    const emitProviderTurn = (
-      state: ThreadState,
-      turn: ActiveTurn,
-      providerTurn: OrchestrationV2ProviderTurn,
-    ) => {
-      state.providerTurns.set(String(providerTurn.id), providerTurn);
+    const emitProviderTurn = (turn: ActiveTurn, providerTurn: OrchestrationV2ProviderTurn) => {
       return emit({
         type: "provider_turn.updated",
         driver,
@@ -1357,6 +1393,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       unsent: false,
       steers: new Set(),
       settledInbox: new Set(),
+      recoveredCodeModeWrappers: new Set(),
       heldEnd: undefined,
       awaitingStart: options.awaitingStart,
       scope: options.scope,
@@ -1729,7 +1766,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           completedAt: null,
         },
       });
-      yield* emitProviderTurn(child, turn, providerTurn);
+      yield* emitProviderTurn(turn, providerTurn);
       const prompt = subagent.prompt;
       subagent.prompt = undefined;
       if (prompt !== undefined && prompt.length > 0) {
@@ -1846,7 +1883,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       yield* emitCompaction(state, turn, terminal.status === "failed" ? "failed" : "interrupted");
       const window = windowOf(turn.input.runtimePolicy.cwd, turn.input.modelSelection.model);
       const lastStep = turn.lastStep;
-      yield* emitProviderTurn(state, turn, {
+      yield* emitProviderTurn(turn, {
         ...turn.providerTurn,
         status: terminal.status,
         completedAt,
@@ -2319,7 +2356,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         const generation = generationSnapshot(turn.generation.meter);
         if (generation !== undefined) {
           turn.providerTurn = { ...turn.providerTurn, generation };
-          yield* emitProviderTurn(state, turn, turn.providerTurn);
+          yield* emitProviderTurn(turn, turn.providerTurn);
         }
       }
       switch (event.type) {
@@ -3436,7 +3473,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         ];
       });
       const lastUser = history.findLast((message) => message.type === "user")?.id;
-      const state = threads.get(sessionId);
       return {
         providerThread: {
           ...providerThread,
@@ -3445,7 +3481,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           status: "idle" as const,
           updatedAt: snapshotAt,
         },
-        providerTurns: state === undefined ? [] : [...state.providerTurns.values()],
         messages,
         runtimeRequests: [],
       };
@@ -3591,7 +3626,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           });
         }
         state.active = turn;
-        yield* emitProviderTurn(state, turn, providerTurn);
+        yield* emitProviderTurn(turn, providerTurn);
         state.providerThread = {
           ...state.providerThread,
           status: "active",
@@ -4472,26 +4507,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (boundary !== null) {
             yield* rollBackTo(sessionId, SessionMessage.ID.make(boundary));
           }
-          // The turns after the target left the history with their messages.
-          // The snapshot lists the ones kept as T3 recorded them, which a
-          // runtime that loaded the session after they ran never saw.
-          const keptOrdinal = target.type === "provider_turn" ? target.providerTurn.ordinal : 0;
-          const loaded = threads.get(sessionId);
-          for (const [id, turn] of loaded?.providerTurns ?? []) {
-            if (turn.ordinal > keptOrdinal) loaded?.providerTurns.delete(id);
-          }
-          const snapshot = yield* snapshotOf(providerThread, sessionId);
-          const kept = new Map(
-            rollbackInput.providerThreadTurns
-              .filter(
-                (turn) =>
-                  turn.providerThreadId === providerThread.id && turn.ordinal <= keptOrdinal,
-              )
-              .map((turn) => [turn.id, turn] as const),
-          );
-          for (const turn of snapshot.providerTurns) kept.set(turn.id, turn);
           // The snapshot's head is the last user message OpenCode kept.
-          return { ...snapshot, providerTurns: [...kept.values()] };
+          return yield* snapshotOf(providerThread, sessionId);
         }).pipe(
           exclusive(rollbackInput.providerThread),
           Effect.mapError((cause) =>

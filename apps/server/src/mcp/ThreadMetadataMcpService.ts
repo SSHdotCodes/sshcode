@@ -17,6 +17,7 @@ import * as Layer from "effect/Layer";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
+import { dispatchFailure } from "./threadAccess.ts";
 
 export class ThreadMetadataMcpService extends Context.Service<
   ThreadMetadataMcpService,
@@ -63,14 +64,20 @@ function commandId(input: {
   );
 }
 
-function metadataCommand(input: {
+function updateCommand(input: {
   readonly commandId: CommandId;
   readonly threadId: ThreadId;
   readonly projectId: OrchestrationV2AppThread["projectId"];
   readonly update: ThreadMetadataMcpUpdateInput;
 }): Extract<
   OrchestrationV2Command,
-  { readonly type: "thread.metadata.update" | "thread.settle" | "thread.unsettle" }
+  {
+    readonly type:
+      | "thread.metadata.update"
+      | "thread.settle"
+      | "thread.unsettle"
+      | "queued-run.cancel";
+  }
 > {
   switch (input.update.action) {
     case "rename":
@@ -112,6 +119,13 @@ function metadataCommand(input: {
         commandId: input.commandId,
         threadId: input.threadId,
         reason: "user",
+      };
+    case "cancel_queued":
+      return {
+        type: "queued-run.cancel",
+        commandId: input.commandId,
+        threadId: input.threadId,
+        runId: input.update.runId!,
       };
   }
 }
@@ -197,7 +211,7 @@ const make = Effect.gen(function* () {
     });
     const dispatched = yield* threadManagement
       .dispatch(
-        metadataCommand({
+        updateCommand({
           commandId: updateCommandId,
           threadId,
           projectId: target.thread.projectId,
@@ -206,10 +220,12 @@ const make = Effect.gen(function* () {
       )
       .pipe(
         Effect.mapError((error) =>
-          failure(
-            "orchestration_error",
-            `Unable to ${input.action} for thread ${threadId}: ${errorMessage(error)}`,
-          ),
+          input.action === "cancel_queued"
+            ? dispatchFailure(error)
+            : failure(
+                "orchestration_error",
+                `Unable to ${input.action} for thread ${threadId}: ${errorMessage(error)}`,
+              ),
         ),
       );
     const resultEvent = dispatched.storedEvents.find((stored) =>
@@ -220,7 +236,9 @@ const make = Effect.gen(function* () {
       resultEvent?.type === "thread.settled" ||
       resultEvent?.type === "thread.unsettled"
         ? resultEvent.payload
-        : undefined;
+        : input.action === "cancel_queued"
+          ? target.thread
+          : undefined;
     // Settling a settled thread (or the reverse) changes nothing and emits no event.
     if (thread === undefined && (input.action === "settle" || input.action === "unsettle")) {
       thread = (yield* threadManagement

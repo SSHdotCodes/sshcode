@@ -3,6 +3,7 @@ import { DiscordMemberList } from "../discord/DiscordMemberList";
 import { Dialog, DialogHeader, DialogPopup, DialogTitle } from "../ui/dialog";
 import { CasualVoiceControl } from "../discord/CasualVoiceControl";
 import { ComputerUseStatus } from "../computer-use/ComputerUseStatus";
+import { PinnedMessagesControl } from "./PinnedMessagesControl";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
@@ -475,6 +476,13 @@ export const ChatHeader = memo(function ChatHeader({
             environmentId={activeThreadEnvironmentId}
             threadId={activeThreadId}
           />
+          {isServerThread ? (
+            <PinnedMessagesControl
+              discord
+              environmentId={activeThreadEnvironmentId}
+              threadId={activeThreadId}
+            />
+          ) : null}
           {onOpenMedia ? (
             <button
               type="button"
@@ -710,6 +718,12 @@ export const ChatHeader = memo(function ChatHeader({
         />
       ) : null}
       <ComputerUseStatus environmentId={activeThreadEnvironmentId} threadId={activeThreadId} />
+      {isServerThread ? (
+        <PinnedMessagesControl
+          environmentId={activeThreadEnvironmentId}
+          threadId={activeThreadId}
+        />
+      ) : null}
       {onOpenMedia ? (
         <span className="[-webkit-app-region:no-drag]">
           <Button

@@ -170,9 +170,8 @@ function replacementKey(event: OrchestrationV2DomainEvent): string | null {
     case "context-transfer.updated":
       return `${event.threadId}:${event.type}:${event.payload.id}`;
     case "provider-turn.updated":
-      // Omitted tokenUsage and generation inherit the preceding values in the
-      // client reducer. Keep the last explicit value AND the last state without it.
-      return `${event.threadId}:${event.type}:${event.payload.id}:${event.payload.tokenUsage === undefined}:${event.payload.generation === undefined}`;
+      // Usage, generation and steering availability can be inherited from a prior update.
+      return `${event.threadId}:${event.type}:${event.payload.id}:${event.payload.tokenUsage === undefined}:${event.payload.generation === undefined}:${event.payload.steeringUnavailable ?? ""}`;
     default:
       return null;
   }

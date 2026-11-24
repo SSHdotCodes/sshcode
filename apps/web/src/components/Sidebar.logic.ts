@@ -6,7 +6,10 @@ import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/mod
 import { failureNeedsYou } from "@t3tools/client-runtime/state/thread-inbox";
 import * as DateTime from "effect/DateTime";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import { liftNamedChats } from "@t3tools/client-runtime/composerThreadItems";
+import {
+  liftNamedChats,
+  rankChatsByTitleSearch,
+} from "@t3tools/client-runtime/composerThreadItems";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
 import {
@@ -1459,10 +1462,10 @@ export { sortPinnedThreadsByOrderKey as sortPinnedThreadsForSidebar } from "@t3t
 const EMPTY_CONTENT_MATCH_KEYS: ReadonlySet<string> = new Set<string>();
 
 /**
- * Search the already-ordered sidebar thread collection by title or linked PR,
- * plus any thread whose messages the server matched (`contentMatchKeys`, keyed
- * by `threadSearchMatchKey`). Keeping the input order means lifecycle ordering
- * (active, snoozed, settled) remains stable while the user narrows the list.
+ * Search the already-ordered sidebar thread collection by title or linked PR, best named
+ * first (`rankChatsByTitleSearch`; equal matches keep the sidebar's lifecycle order), plus
+ * any thread whose messages the server matched (`contentMatchKeys`, keyed by
+ * `threadSearchMatchKey`).
  */
 export function searchSidebarThreads<
   T extends {
@@ -1477,14 +1480,16 @@ export function searchSidebarThreads<
 ): T[] {
   const normalizedQuery = query.trim().toLowerCase();
   if (normalizedQuery.length === 0) return [];
-  const titleMatches: T[] = [];
+  // Best named first; equal matches keep the sidebar's order (active, snoozed, settled).
+  const titleMatches = rankChatsByTitleSearch(threads, query, (thread) => ({
+    title: thread.title,
+    extraTerms: threadPullRequestSearchTerms(thread),
+  }));
+  const titled = new Set(titleMatches);
   const contentMatches: T[] = [];
   for (const thread of threads) {
-    const matchesTitle = [thread.title, ...threadPullRequestSearchTerms(thread)].some((term) =>
-      term.toLowerCase().includes(normalizedQuery),
-    );
-    if (matchesTitle) {
-      titleMatches.push(thread);
+    if (titled.has(thread)) {
+      continue;
     } else if (
       contentMatchKeys.size > 0 &&
       contentMatchKeys.has(

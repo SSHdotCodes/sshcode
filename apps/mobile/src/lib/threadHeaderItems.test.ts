@@ -8,23 +8,23 @@ import {
 
 const availableItems: ReadonlyArray<readonly [ThreadHeaderItem, string | null]> = [
   ["files", "files-button"],
-  ["git", "git-menu"],
   ["terminal", "terminal-menu"],
   ["sideChat", "side-chat-button"],
 ];
 
 describe("thread header items", () => {
-  it("defaults to side chat and git controls for existing and new devices", () => {
+  it("defaults to side chat alone for existing and new devices", () => {
     expect(filterThreadHeaderItems(availableItems, resolveThreadHeaderItems(undefined))).toEqual([
-      "git-menu",
       "side-chat-button",
     ]);
   });
 
   it("preserves platform ordering when files and terminal are enabled", () => {
-    expect(
-      filterThreadHeaderItems(availableItems, ["terminal", "files", "sideChat", "git"]),
-    ).toEqual(["files-button", "git-menu", "terminal-menu", "side-chat-button"]);
+    expect(filterThreadHeaderItems(availableItems, ["terminal", "files", "sideChat"])).toEqual([
+      "files-button",
+      "terminal-menu",
+      "side-chat-button",
+    ]);
   });
 
   it("returns no placeholders with only one or no shortcuts enabled", () => {
@@ -38,18 +38,17 @@ describe("thread header items", () => {
         [
           ["sideChat", null],
           ["terminal", undefined],
-          ["git", "git-menu"],
+          ["files", "files-button"],
         ],
-        ["sideChat", "terminal", "git"],
+        ["sideChat", "terminal", "files"],
       ),
-    ).toEqual(["git-menu"]);
+    ).toEqual(["files-button"]);
   });
 
-  it("deduplicates stored shortcuts and ignores unknown or contextual actions", () => {
-    expect(sanitizeThreadHeaderItems(["files", "git", "git", "mergeBack", null, 42])).toEqual([
-      "files",
-      "git",
-    ]);
+  it("deduplicates stored shortcuts and ignores unknown, retired or contextual actions", () => {
+    expect(
+      sanitizeThreadHeaderItems(["files", "terminal", "terminal", "git", "mergeBack", null, 42]),
+    ).toEqual(["files", "terminal"]);
     expect(sanitizeThreadHeaderItems([])).toEqual([]);
     expect(sanitizeThreadHeaderItems({ files: true })).toBeUndefined();
   });

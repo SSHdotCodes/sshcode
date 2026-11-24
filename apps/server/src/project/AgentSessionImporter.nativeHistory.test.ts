@@ -70,7 +70,6 @@ const makeHarness = Effect.fnUntraced(function* () {
                       )
                     : Effect.succeed({
                         providerThread,
-                        providerTurns: [],
                         runtimeRequests: [],
                         reasoningMessageIds: [MessageId.make("native:Thinking")],
                         messages: [

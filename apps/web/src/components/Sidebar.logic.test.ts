@@ -1335,8 +1335,20 @@ describe("searchSidebarThreads", () => {
       ),
     );
 
-  it("matches thread titles case-insensitively and preserves their order", () => {
-    expect(searchSidebarThreads(threads, "work")).toEqual([threads[0], threads[2]]);
+  it("matches thread titles case-insensitively, the title starting with the words first", () => {
+    expect(searchSidebarThreads(threads, "work")).toEqual([threads[2], threads[0]]);
+  });
+
+  it("keeps the sidebar order among equal matches", () => {
+    const fixes = [
+      searchThread("fix-b", "Fix login", "Alpha"),
+      searchThread("fix-a", "Fix logout", "Alpha"),
+    ];
+    expect(searchSidebarThreads(fixes, "fix")).toEqual(fixes);
+  });
+
+  it("finds a title by its words in any order", () => {
+    expect(searchSidebarThreads(threads, "cleanup worktree")).toEqual([threads[2]]);
   });
 
   it("does not match project metadata", () => {
@@ -1349,23 +1361,23 @@ describe("searchSidebarThreads", () => {
 
   it("appends content-only matches after every title match", () => {
     expect(searchSidebarThreads(threads, "work", contentKeys("thread-2"))).toEqual([
-      threads[0],
       threads[2],
+      threads[0],
       threads[1],
     ]);
   });
 
   it("lists a thread matching both title and content once", () => {
     expect(searchSidebarThreads(threads, "work", contentKeys("thread-1"))).toEqual([
-      threads[0],
       threads[2],
+      threads[0],
     ]);
   });
 
   it("ignores content matches for threads outside the sidebar collection", () => {
     expect(searchSidebarThreads(threads, "work", contentKeys("thread-missing"))).toEqual([
-      threads[0],
       threads[2],
+      threads[0],
     ]);
   });
 });

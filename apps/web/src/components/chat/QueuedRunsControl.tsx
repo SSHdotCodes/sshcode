@@ -14,6 +14,7 @@ import {
   GripVerticalIcon,
   ListOrderedIcon,
   PencilIcon,
+  SendIcon,
 } from "lucide-react";
 import { useId, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 
@@ -68,7 +69,10 @@ export function QueuedRunsControl({
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun);
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun);
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
+  const interrupt = useAtomCommand(threadEnvironment.interruptTurn);
+  const resume = useAtomCommand(threadEnvironment.resumeThreadQueue);
   const [expanded, setExpanded] = useState(true);
+  const [resuming, setResuming] = useState(false);
   const queueListId = useId();
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
   // Live drag-reorder state: the dragged run and the queue index the row
@@ -87,6 +91,13 @@ export function QueuedRunsControl({
   const queued = workflow?.queuedRuns ?? [];
   const activeRun = workflow?.activeRun ?? null;
   const canReorder = workflow?.canReorder === true;
+  const isHeld = workflow?.isHeld === true;
+  const queueLabel = isHeld ? "Queue held" : "Queued";
+  const deliveryAction = workflow?.canSendNow
+    ? "sendNow"
+    : workflow?.canPromoteToSteer
+      ? "steer"
+      : null;
   const queuedImageAttachmentIds = useMemo(() => {
     const ids: string[] = [];
     for (const { attachments } of workflow?.queuedRuns ?? []) {
@@ -152,6 +163,7 @@ export function QueuedRunsControl({
               };
             }),
         steerWhenLive: run.steerWhenLiveRunId === activeRun?.id && workflow?.canSendSteer === true,
+        sendNext: run.sendNext === true,
         pending: false,
       };
     }),
@@ -164,6 +176,7 @@ export function QueuedRunsControl({
       attachments: [] as ReadonlyArray<ContractChatAttachment>,
       thumbnails: (message.attachments ?? []).filter(isImageAttachment),
       steerWhenLive: false,
+      sendNext: false,
       pending: !message.acknowledged,
     })),
   ];
@@ -191,18 +204,26 @@ export function QueuedRunsControl({
     void move(runId, queued[insertIndex]?.run.id ?? null);
   };
 
-  const steerInFlightRef = useRef(false);
-  const steer = async (queuedRunId: RunId) => {
-    if (activeRun === null || !workflow?.canPromoteToSteer || steerInFlightRef.current) return;
-    steerInFlightRef.current = true;
+  const deliveryInFlightRef = useRef(false);
+  const deliver = async (queuedRunId: RunId, action: "steer" | "sendNow") => {
+    const allowed = action === "steer" ? workflow?.canPromoteToSteer : workflow?.canSendNow;
+    if (activeRun === null || !allowed || deliveryInFlightRef.current) return;
+    deliveryInFlightRef.current = true;
     setBusyRunId(queuedRunId);
     try {
-      await promote({
-        environmentId: props.environmentId,
-        input: { threadId: props.threadId, queuedRunId, targetRunId: activeRun.id },
-      });
+      if (action === "sendNow") {
+        await interrupt({
+          environmentId: props.environmentId,
+          input: { threadId: props.threadId, runId: activeRun.id, sendQueuedRunId: queuedRunId },
+        });
+      } else {
+        await promote({
+          environmentId: props.environmentId,
+          input: { threadId: props.threadId, queuedRunId, targetRunId: activeRun.id },
+        });
+      }
     } finally {
-      steerInFlightRef.current = false;
+      deliveryInFlightRef.current = false;
       setBusyRunId(null);
     }
   };
@@ -211,7 +232,7 @@ export function QueuedRunsControl({
     steerNext(repeat) {
       const next = queued[0];
       if (!next || !workflow?.canPromoteToSteer) return false;
-      if (!repeat && busyRunId === null) void steer(next.run.id);
+      if (!repeat && busyRunId === null) void deliver(next.run.id, "steer");
       return true;
     },
     // Declines while a queued message is already being edited so the key keeps
@@ -272,12 +293,44 @@ export function QueuedRunsControl({
           <ComposerBanner.Icon>
             <ListOrderedIcon />
           </ComposerBanner.Icon>
-          <ComposerBanner.Content className="text-muted-foreground">Queued</ComposerBanner.Content>
+          <ComposerBanner.Content className="text-muted-foreground">
+            {queueLabel}
+          </ComposerBanner.Content>
           <ComposerBanner.Actions>
             <ComposerBanner.Count>{items.length}</ComposerBanner.Count>
             <ComposerBanner.ToggleIcon expanded={expanded} />
           </ComposerBanner.Actions>
         </ComposerBanner.Row>
+        {isHeld ? (
+          <ComposerBanner.Row>
+            <ComposerBanner.Actions className="ml-auto">
+              <Button
+                size="xs"
+                variant="ghost-muted"
+                disabled={resuming || busyRunId !== null}
+                onClick={async () => {
+                  setResuming(true);
+                  try {
+                    await resume({
+                      environmentId: props.environmentId,
+                      input: { threadId: props.threadId },
+                    });
+                  } finally {
+                    setResuming(false);
+                  }
+                }}
+              >
+                Send queued messages
+              </Button>
+            </ComposerBanner.Actions>
+          </ComposerBanner.Row>
+        ) : expanded && workflow?.steeringUnavailableReason ? (
+          <ComposerBanner.Row>
+            <ComposerBanner.Content className="text-muted-foreground">
+              {workflow.steeringUnavailableReason}
+            </ComposerBanner.Content>
+          </ComposerBanner.Row>
+        ) : null}
         <ComposerBanner.Scroll className={cn("max-h-32", !expanded && "hidden")}>
           <ComposerBanner.Children render={<ol />} id={queueListId}>
             {items.map((item) => {
@@ -419,6 +472,9 @@ export function QueuedRunsControl({
                         Steers when the agent starts
                       </span>
                     ) : null}
+                    {item.sendNext && !isHeld ? (
+                      <span className="text-xs text-muted-foreground">Sending next</span>
+                    ) : null}
                     <Tooltip>
                       <TooltipTrigger render={<span className="min-w-0 flex-1 truncate" />}>
                         {previewText}
@@ -474,32 +530,30 @@ export function QueuedRunsControl({
                               : `Edit in the composer${item.serverIndex === queued.length - 1 && props.editShortcutLabel ? ` (${props.editShortcutLabel})` : ""}`}
                           </TooltipPopup>
                         </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger render={<span className="flex shrink-0" />}>
-                            <Button
-                              size="xs"
-                              variant="ghost-muted"
-                              disabled={
-                                item.runId === null ||
-                                busyRunId !== null ||
-                                !workflow?.canPromoteToSteer
-                              }
-                              onClick={() => {
-                                if (item.runId !== null) {
-                                  void steer(item.runId);
-                                }
-                              }}
-                            >
-                              <CornerUpRightIcon />
-                              Steer
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipPopup>
-                            {activeRun === null
-                              ? "There is no active run to steer"
-                              : `Send as a steer instead${item.serverIndex === 0 && props.steerShortcutLabel ? ` (${props.steerShortcutLabel})` : ""}`}
-                          </TooltipPopup>
-                        </Tooltip>
+                        {deliveryAction && rowRunId !== null ? (
+                          <Tooltip>
+                            <TooltipTrigger render={<span className="flex shrink-0" />}>
+                              <Button
+                                size="xs"
+                                variant="ghost-muted"
+                                disabled={busyRunId !== null}
+                                onClick={() => void deliver(rowRunId, deliveryAction)}
+                              >
+                                {deliveryAction === "sendNow" ? (
+                                  <SendIcon />
+                                ) : (
+                                  <CornerUpRightIcon />
+                                )}
+                                {deliveryAction === "sendNow" ? "Send now" : "Steer"}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipPopup>
+                              {deliveryAction === "sendNow"
+                                ? "Stops the current reply and sends this message"
+                                : `Send as a steer instead${item.serverIndex === 0 && props.steerShortcutLabel ? ` (${props.steerShortcutLabel})` : ""}`}
+                            </TooltipPopup>
+                          </Tooltip>
+                        ) : null}
                         <Tooltip>
                           <TooltipTrigger
                             render={

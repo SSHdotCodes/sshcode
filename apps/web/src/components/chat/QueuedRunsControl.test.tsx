@@ -1,9 +1,14 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   projection: null as unknown,
   workflow: null as unknown,
+  interrupt: vi.fn(async () => undefined),
+  resume: vi.fn(async () => undefined),
 }));
 
 vi.mock("@t3tools/client-runtime/environment", () => ({
@@ -23,11 +28,18 @@ vi.mock("../../state/threads", () => ({
     cancelQueuedRun: Symbol("cancelQueuedRun"),
     promoteQueuedRun: Symbol("promoteQueuedRun"),
     reorderQueuedRun: Symbol("reorderQueuedRun"),
+    interruptTurn: "interrupt",
+    resumeThreadQueue: "resume",
   },
 }));
 
 vi.mock("../../state/use-atom-command", () => ({
-  useAtomCommand: () => async () => undefined,
+  useAtomCommand: (command: unknown) =>
+    command === "interrupt"
+      ? state.interrupt
+      : command === "resume"
+        ? state.resume
+        : async () => undefined,
 }));
 
 vi.mock("../../assets/assetUrls", () => ({
@@ -36,6 +48,66 @@ vi.mock("../../assets/assetUrls", () => ({
 }));
 
 import { QueuedRunsControl } from "./QueuedRunsControl";
+
+it.each([false, true])("offers the correct action for a held=%s queue", async (isHeld) => {
+  state.projection = { projection: { messages: [{ id: "message:queued" }] } };
+  state.workflow = {
+    activeRun: isHeld ? null : { id: "run:active" },
+    canPromoteToSteer: false,
+    canSendNow: !isHeld,
+    steeringUnavailableReason: isHeld ? null : "This turn can't accept a steer.",
+    isHeld,
+    queuedRuns: [
+      {
+        run: { id: "run:queued", userMessageId: "message:queued" },
+        text: "Queued follow-up",
+        attachments: [],
+      },
+    ],
+  };
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <QueuedRunsControl
+          environmentId={"environment:test" as never}
+          threadId={"thread:test" as never}
+          optimisticMessages={[]}
+          editingRunId={null}
+          onEditQueuedRun={() => undefined}
+          onCancelEdit={() => undefined}
+          onImageExpand={() => undefined}
+        />,
+      ),
+    );
+    const buttons = Array.from(host.querySelectorAll("button"));
+    expect(buttons.some((button) => button.textContent?.trim() === "Steer")).toBe(false);
+    expect(host.textContent).toContain(isHeld ? "Queue held" : "This turn can't accept a steer.");
+    const action = buttons.find(
+      (button) => button.textContent?.trim() === (isHeld ? "Send queued messages" : "Send now"),
+    );
+    expect(action).toBeDefined();
+    await act(async () => action!.click());
+    if (isHeld) {
+      expect(state.resume).toHaveBeenCalledWith({
+        environmentId: "environment:test",
+        input: { threadId: "thread:test" },
+      });
+    } else {
+      expect(state.interrupt).toHaveBeenCalledWith({
+        environmentId: "environment:test",
+        input: { threadId: "thread:test", runId: "run:active", sendQueuedRunId: "run:queued" },
+      });
+    }
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    vi.unstubAllGlobals();
+  }
+});
 
 describe("QueuedRunsControl automatic completion delivery", () => {
   it("does not render a queue control when only hidden delivery remains", () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  ANTIGRAVITY_DEFAULT_MODEL,
   DEFAULT_SERVER_SETTINGS,
   ProjectId,
   ProviderDriverKind,
@@ -16,6 +17,7 @@ import {
   describeUnavailableModelSelection,
   groupByProvider,
   isModelSelectionUnavailable,
+  providerDisplayLabel,
   resolveDefaultableModelSelection,
   resolveNewTaskModelSelection,
   resolveNewTaskDraftSelection,
@@ -510,6 +512,64 @@ describe("mobile model options", () => {
       expect(buildModelOptions(null, selection, undefined, null)[0]?.isUnavailable).not.toBe(true);
       expect(isModelSelectionUnavailable(unknownConfig, selection, null)).toBe(false);
       expect(resolveSelectableModelSelection(unknownConfig, selection, null)).toBeNull();
+    });
+
+    it("allows sending after a restart when auth is unchecked and resolves ANTIGRAVITY_DEFAULT_MODEL via aliases", () => {
+      const restartedConfig = {
+        providers: [
+          {
+            instanceId: selection.instanceId,
+            driver: "antigravity",
+            enabled: true,
+            installed: true,
+            status: "warning",
+            auth: { status: "unknown" },
+            models: [],
+          },
+        ],
+      } as unknown as ServerConfig;
+      expect(isModelSelectionUnavailable(restartedConfig, selection, null)).toBe(false);
+      expect(providerDisplayLabel({ driver: "antigravity", instanceId: "antigravity" })).toBe(
+        "Antigravity",
+      );
+
+      const aliasedConfig = {
+        providers: [
+          {
+            instanceId: selection.instanceId,
+            driver: "antigravity",
+            displayName: "Google Work",
+            enabled: true,
+            installed: true,
+            status: "ready",
+            auth: { status: "authenticated" },
+            models: [
+              {
+                ...model,
+                aliases: [ANTIGRAVITY_DEFAULT_MODEL],
+              },
+            ],
+          },
+        ],
+      } as unknown as ServerConfig;
+      const defaultSelection = {
+        instanceId: selection.instanceId,
+        model: ANTIGRAVITY_DEFAULT_MODEL,
+      };
+      expect(isModelSelectionUnavailable(aliasedConfig, defaultSelection, null)).toBe(false);
+      const options = buildModelOptions(aliasedConfig, defaultSelection, undefined, null);
+      const aliasedOption = options.find(
+        (option) => option.selection.model === ANTIGRAVITY_DEFAULT_MODEL,
+      );
+      expect(aliasedOption).toMatchObject({
+        label: model.name,
+        capabilities: model.capabilities,
+      });
+      expect(aliasedOption?.isUnavailable).not.toBe(true);
+      expect(modelSelectionForDispatch(aliasedConfig, defaultSelection)).toEqual({
+        ...defaultSelection,
+        options: [{ id: "native-option", value: "current/default" }],
+      });
     });
   });
 

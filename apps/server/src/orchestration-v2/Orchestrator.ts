@@ -44,6 +44,8 @@ import {
   isProviderNativeSubagentThread,
   MessageId,
   NodeId,
+  THREAD_PINNED_MESSAGES_LIMIT,
+  type ThreadPinnedMessage,
   type ModelSelection,
   OrchestrationV2Command,
   type OrchestrationV2InternalCommand,
@@ -906,6 +908,29 @@ function lastDeliveredRunForProviderThread(
       (run.status === "completed" ||
         projection.providerTurns.some((turn) => turn.runAttemptId === run.activeAttemptId)),
   );
+}
+
+/**
+ * A chat's pinned messages after pinning or unpinning one: a new pin goes last, pinning a pinned
+ * message keeps its place, and past the limit the oldest pins drop.
+ */
+export function withMessagePin(
+  pins: ReadonlyArray<ThreadPinnedMessage>,
+  change: {
+    readonly messageId: MessageId;
+    readonly pinned: boolean;
+    readonly preview?: string | undefined;
+  },
+  now: DateTime.Utc,
+): ReadonlyArray<ThreadPinnedMessage> {
+  const others = pins.filter((pin) => pin.messageId !== change.messageId);
+  if (!change.pinned) return others;
+  if (others.length !== pins.length) return pins;
+  const preview = change.preview?.trim();
+  return [
+    ...others,
+    { messageId: change.messageId, pinnedAt: now, ...(preview ? { preview } : {}) },
+  ].slice(-THREAD_PINNED_MESSAGES_LIMIT);
 }
 
 const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(function* () {
@@ -1957,8 +1982,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
         updatedAt: now,
       };
+      const { sendNext: _sendNext, ...queuedRunForStart } = queuedRun;
       const startingRun: OrchestrationV2Run = {
-        ...queuedRun,
+        ...queuedRunForStart,
         ordinal,
         status: "starting",
         queuePosition: null,
@@ -3500,6 +3526,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 : {}),
             ...(command.branch === undefined ? {} : { branch: command.branch }),
             ...(command.worktreePath === undefined ? {} : { worktreePath: command.worktreePath }),
+            ...(command.messagePin === undefined
+              ? {}
+              : {
+                  pinnedMessages: withMessagePin(
+                    thread.pinnedMessages ?? [],
+                    command.messagePin,
+                    now,
+                  ),
+                }),
             ...(command.linkedPullRequest === undefined
               ? {}
               : {
@@ -4492,13 +4527,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const providerSessionId = providerThread.providerSessionId;
       const providerTurn = input.projection.providerTurns.find(
         (candidate) =>
-          candidate.runAttemptId === targetRun.activeAttemptId && candidate.status === "running",
+          candidate.nodeId === rootNodeId &&
+          candidate.runAttemptId === targetRun.activeAttemptId &&
+          candidate.status === "running",
       );
       if (providerTurn === undefined) {
         return yield* new OrchestratorDispatchError({
           commandId: input.command.commandId,
           commandType: input.command.type,
           cause: `No running provider turn found for active run ${targetRun.id}.`,
+        });
+      }
+      if (!input.forceRestart && providerTurn.steeringUnavailable !== undefined) {
+        return yield* new OrchestratorDispatchError({
+          commandId: input.command.commandId,
+          commandType: input.command.type,
+          cause: "This turn can't be steered. Use Send now to interrupt it.",
         });
       }
       const sessionOption = yield* providerSessions.get(providerSessionId).pipe(
@@ -5193,12 +5237,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   });
 
   const dispatchMessage = (
-    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+    command: Extract<OrchestrationV2ServerCommand, { readonly type: "message.dispatch" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
   ) =>
     Effect.gen(function* () {
       let projection = yield* getProjectionWithPendingEvents(command.threadId, events, command);
+      if (command.declinedSteerTurnId !== undefined) {
+        const turn = projection.providerTurns.find(
+          (turn) =>
+            turn.id === command.declinedSteerTurnId &&
+            turn.status === "running" &&
+            turn.steeringUnavailable === undefined,
+        );
+        if (turn !== undefined) {
+          yield* emit(
+            events,
+            command,
+          )({
+            type: "provider-turn.updated",
+            threadId: command.threadId,
+            nodeId: turn.nodeId,
+            occurredAt: yield* DateTime.now,
+            payload: { ...turn, steeringUnavailable: true },
+          });
+        }
+      }
       const scheduledProviderRetries = projection.runs.filter(
         (run) => run.automaticProviderRetry?.status === "scheduled",
       );
@@ -5587,6 +5651,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (dispatchMode.type === "steer_active") {
         const targetRunId = dispatchMode.targetRunId;
         const target = projection.runs.find((run) => run.id === targetRunId);
+        const runningTurn = projection.providerTurns.find(
+          (turn) =>
+            turn.nodeId === target?.rootNodeId &&
+            turn.runAttemptId === target?.activeAttemptId &&
+            turn.status === "running",
+        );
         const providerThread = projection.providerThreads.find(
           (thread) => thread.id === target?.providerThreadId,
         );
@@ -5607,10 +5677,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           (target.status === "preparing" ||
             target.status === "starting" ||
             target.status === "waiting" ||
-            (target.status === "running" &&
-              !projection.providerTurns.some(
-                (turn) => turn.runAttemptId === target.activeAttemptId && turn.status === "running",
-              )) ||
+            (target.status === "running" && runningTurn === undefined) ||
+            runningTurn?.steeringUnavailable !== undefined ||
             providerSteeringExecution(session) === null)
         ) {
           if (
@@ -5629,11 +5697,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ) &&
             (target.status === "preparing" ||
               target.status === "starting" ||
-              (target.status === "running" &&
-                !projection.providerTurns.some(
-                  (turn) =>
-                    turn.runAttemptId === target.activeAttemptId && turn.status === "running",
-                ))) &&
+              (target.status === "running" && runningTurn === undefined)) &&
             (session === undefined || providerSteeringExecution(session) !== null)
           ) {
             steerWhenLiveRunId = target.id;
@@ -5892,6 +5956,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const sentByUserFromClient =
         command.createdBy === "user" &&
         (command.creationSource === "web" || command.creationSource === "mobile") &&
+        command.declinedSteerTurnId === undefined &&
         command.scheduledTaskId === undefined;
       const heldRunsToRelease =
         (sentByUserFromClient || retrySource !== undefined) &&
@@ -8731,9 +8796,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           });
         }
         const replies: string[] = [];
+        const attachments: ChatAttachment[] = [];
         for (const question of approvalTurnItem.questions) {
           const answer = messageAnswerText(command.answers?.[question.id]);
-          if (answer.length === 0) {
+          const files = command.attachmentsByQuestionId?.[question.id] ?? [];
+          if (answer.length === 0 && files.length === 0) {
             if (question.required === false) continue;
             return yield* new OrchestratorDispatchError({
               commandId: command.commandId,
@@ -8741,7 +8808,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               cause: "Answer each question before sending.",
             });
           }
-          replies.push(`${question.question}\n${answer}`);
+          replies.push(answer ? `${question.question}\n${answer}` : question.question);
+          attachments.push(...files);
         }
         if (replies.length === 0) {
           return yield* new OrchestratorDispatchError({
@@ -8791,7 +8859,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             threadId: command.threadId,
             messageId: MessageId.make(`async-answer:${command.requestId}`),
             text: replies.join("\n\n"),
-            attachments: [],
+            attachments,
             createdBy: "user",
             creationSource: "server",
             dispatchMode,
@@ -10575,6 +10643,55 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         },
       );
       let run = threadRecords.runs.find((candidate) => candidate.id === command.runId);
+      if (command.sendQueuedRunId !== undefined) {
+        if (
+          command.keepHelpers !== true ||
+          command.holdQueue === true ||
+          run?.status !== "running" ||
+          (yield* stopReachedRun(command, command.threadId, run.id))
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "The active turn has changed. Check the queue and try again.",
+          });
+        }
+        const queuedRun = threadRecords.runs.find(
+          (candidate) => candidate.id === command.sendQueuedRunId && candidate.status === "queued",
+        );
+        const message =
+          queuedRun === undefined
+            ? undefined
+            : (yield* loadProjectionForCommand(command, ["messages"], {
+                messageIds: [queuedRun.userMessageId],
+              })).messages[0];
+        if (
+          queuedRun === undefined ||
+          message?.createdBy !== "user" ||
+          message.notification !== undefined ||
+          message.delegatedCompletion !== undefined ||
+          threadRecords.runs.some(
+            (run) => run.status === "queued" && (run.queueHeld === true || run.sendNext === true),
+          )
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "This message is no longer ready to send from the queue.",
+          });
+        }
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "run.updated",
+          threadId: command.threadId,
+          runId: queuedRun.id,
+          providerInstanceId: queuedRun.providerInstanceId,
+          occurredAt: yield* DateTime.now,
+          payload: { ...queuedRun, sendNext: true },
+        });
+      }
       if (
         !forAccountMove &&
         run !== undefined &&
@@ -13997,7 +14114,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 const session = projection.providerSessions.find(
                   (candidate) => candidate.id === providerThread?.providerSessionId,
                 );
-                if (providerSteeringExecution(session) === null) {
+                if (
+                  providerSteeringExecution(session) === null ||
+                  projection.providerTurns.some(
+                    (turn) =>
+                      turn.id === event.payload.id && turn.steeringUnavailable !== undefined,
+                  )
+                ) {
                   if (session !== undefined) pendingSteerThreads.delete(threadId);
                   return;
                 }

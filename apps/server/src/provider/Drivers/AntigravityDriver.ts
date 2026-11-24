@@ -50,6 +50,7 @@ import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSession
 import type { ServerProviderDraft } from "@t3tools/provider-core/server/snapshotProbe";
 import {
   retireAntigravityRuntimeTempDirs,
+  removeAntigravityCliSessionFiles,
   removeAntigravitySessionFiles,
 } from "../acp/AntigravitySessionFiles.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -362,6 +363,7 @@ export const AntigravityDriver: ProviderDriver<
         };
       });
 
+      const cliDataDirectory = path.join(userHome, ".gemini", "antigravity-cli");
       const makeDisposableRuntime = Effect.fn("AntigravityDriver.makeDisposableRuntime")(function* (
         input: Pick<AntigravityAcpRuntimeInput, "onAuthorizationUrl">,
       ) {
@@ -379,11 +381,20 @@ export const AntigravityDriver: ProviderDriver<
           );
         let sessionId: string | undefined;
         yield* Effect.addFinalizer(() =>
-          removeAntigravitySessionFiles({
-            profileDirectory,
-            sessionId,
-            cwd,
-          }).pipe(
+          Effect.all(
+            [
+              removeAntigravityCliSessionFiles({
+                dataDirectory: cliDataDirectory,
+                sessionId,
+              }),
+              removeAntigravitySessionFiles({
+                profileDirectory,
+                sessionId,
+                cwd,
+              }),
+            ],
+            { discard: true },
+          ).pipe(
             Effect.provideService(FileSystem.FileSystem, fileSystem),
             Effect.provideService(Path.Path, path),
           ),
@@ -543,6 +554,7 @@ export const AntigravityDriver: ProviderDriver<
         makeRuntime,
         withProcess: authFlow.withProcess,
         defaultModel,
+        childWorkDirectories: [path.join(profileDirectory, "antigravity-acp"), cliDataDirectory],
         quotaWindowIds: (model) =>
           provider.snapshot.getSnapshot.pipe(
             Effect.map((snapshot) => antigravityModelWindowIds(snapshot, model)),
@@ -574,13 +586,14 @@ export const AntigravityDriver: ProviderDriver<
         withProcess: authFlow.withProcess,
         defaultModel,
         profileDirectory,
-        cliDataDirectory: path.join(userHome, ".gemini", "antigravity-cli"),
+        cliDataDirectory,
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
       );
       const textGeneration = yield* makeAntigravityTextGeneration({
         profileDirectory,
+        cliDataDirectory,
         defaultModel,
         withProcess: authFlow.withProcess,
         makeRuntime: (cwd) =>

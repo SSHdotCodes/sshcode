@@ -1,4 +1,9 @@
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
+import {
+  ANTIGRAVITY_DEFAULT_MODEL,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { deriveProviderInstanceEntries } from "../../providerInstances";
 import {
@@ -115,6 +120,32 @@ describe("resolveContextWindowModelDisplayName", () => {
         new Map(),
       ),
     ).toBe("custom-model");
+  });
+
+  it("matches model aliases such as antigravity-default", () => {
+    const instanceId = ProviderInstanceId.make("antigravity");
+    const modelOptionsByInstance = new Map([
+      [
+        instanceId,
+        [
+          {
+            slug: "gemini-4-neon",
+            name: "Gemini 4 Neon",
+            aliases: [ANTIGRAVITY_DEFAULT_MODEL],
+          },
+        ],
+      ],
+    ]);
+
+    expect(
+      resolveContextWindowModelDisplayName(
+        {
+          instanceId,
+          model: ANTIGRAVITY_DEFAULT_MODEL,
+        },
+        modelOptionsByInstance,
+      ),
+    ).toBe("Gemini 4 Neon");
   });
 });
 

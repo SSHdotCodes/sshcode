@@ -396,6 +396,47 @@ async function waitForThreadShell(
   });
 }
 
+/** Pins this agent message to the chat's pinned messages (the header's pin), or unpins it. */
+function AssistantPinButton(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly messageId: MessageId;
+  readonly text: string;
+  readonly iconColor: ColorValue;
+}) {
+  const thread = useThreadShell(scopeThreadRef(props.environmentId, props.threadId));
+  const setPin = useAtomCommand(threadEnvironment.pinMessage, "pin message");
+  const pinned = thread?.pinnedMessages?.some((pin) => pin.messageId === props.messageId) ?? false;
+  if (thread === null) return null;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={pinned ? "Unpin message" : "Pin message"}
+      accessibilityState={{ selected: pinned }}
+      onPress={() => {
+        void Haptics.selectionAsync();
+        void setPin({
+          environmentId: props.environmentId,
+          input: {
+            threadId: props.threadId,
+            messageId: props.messageId,
+            pinned: !pinned,
+            text: props.text,
+          },
+        });
+      }}
+      className="h-7 w-7 items-center justify-center"
+    >
+      <SymbolView
+        name={pinned ? "pin.fill" : "pin"}
+        size={13}
+        tintColor={props.iconColor}
+        type="monochrome"
+      />
+    </Pressable>
+  );
+}
+
 function AssistantForkButton(props: {
   readonly environmentId: EnvironmentId;
   readonly iconColor: ColorValue;
@@ -1467,7 +1508,14 @@ function renderFeedEntry(
   }
 
   if (entry.type === "thinking") {
-    return <ThreadWorkingRow rowSizing={props.workRowSizing} iconSubtleColor={iconSubtleColor} />;
+    return (
+      <ThreadWorkingRow
+        rowSizing={props.workRowSizing}
+        iconSubtleColor={iconSubtleColor}
+        label={entry.label}
+        shimmer={entry.shimmer === true}
+      />
+    );
   }
 
   if (entry.type === "viewed-images") {
@@ -2043,6 +2091,15 @@ function renderFeedEntry(
                 iconColor={iconSubtleColor}
                 projectedItem={message.projectedItem}
                 sourceTitle={props.threadTitle}
+              />
+            ) : null}
+            {message.projectedItem ? (
+              <AssistantPinButton
+                environmentId={props.environmentId}
+                threadId={props.threadId}
+                messageId={message.id}
+                text={renderedText}
+                iconColor={iconSubtleColor}
               />
             ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">

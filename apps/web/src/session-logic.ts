@@ -27,6 +27,7 @@ import {
 import type { HtmlRenderReference } from "@t3tools/shared/htmlRender";
 import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
 import { monitorNotificationLabel } from "@t3tools/client-runtime/work-log/monitor-notification";
+import { resumedRestartNoticeIds } from "@t3tools/client-runtime/work-log/restart-notice";
 import type { McpAppReference } from "@t3tools/shared/mcpApp";
 import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
 import {
@@ -640,9 +641,11 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
         : [],
     ),
   );
+  const resumedRestartNotices = resumedRestartNoticeIds(input.visibleTurnItems);
   for (const row of input.visibleTurnItems) {
     const { item } = row;
     if (turnItemIsWorkspacePreparation(item)) continue;
+    if (resumedRestartNotices.has(item.id)) continue;
     // Task progress belongs in the composer, not between conversation entries.
     if (item.type === "todo_list" || item.type === "checkpoint") continue;
     // A thought joins the transcript as a collapsed row once it is complete; while it

@@ -322,3 +322,14 @@ it("summarizes X searches", () => {
     failedCount: 0,
   });
 });
+
+it("summarizes computer and workflow tools", () => {
+  expect(summarizeT3ToolCalls("computer", [completed({})])).toEqual({
+    label: "Used computer controls 1 time",
+    failedCount: 0,
+  });
+  expect(summarizeT3ToolCalls("workflow", [completed({ action: "list" })])).toEqual({
+    label: "Managed agent teams 1 time",
+    failedCount: 0,
+  });
+});

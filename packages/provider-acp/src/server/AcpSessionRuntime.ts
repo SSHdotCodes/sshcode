@@ -1297,6 +1297,7 @@ export class AcpSessionRuntime extends Context.Service<
       options?: {
         readonly dispatched?: Deferred.Deferred<void>;
         readonly released?: Deferred.Deferred<void>;
+        readonly isSteer?: boolean;
       },
     ) => Effect.Effect<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>;
     /**
@@ -2365,21 +2366,33 @@ export const make = (
           );
         });
 
+      const additionalDirectories = options.additionalDirectories?.length
+        ? { additionalDirectories: options.additionalDirectories }
+        : {};
+
       const setupSession = Effect.gen(function* () {
         let sessionId: string;
         let sessionSetupResult:
           | EffectAcpSchema.LoadSessionResponse
           | EffectAcpSchema.NewSessionResponse
           | EffectAcpSchema.ResumeSessionResponse;
-        const additionalDirectories = options.additionalDirectories?.length
-          ? { additionalDirectories: options.additionalDirectories }
-          : {};
         if (options.resumeSessionId) {
           sessionId = options.resumeSessionId;
-          if (
-            initializeResult.agentCapabilities?.loadSession === true &&
-            options.resumeMethod !== "resume"
-          ) {
+          const canLoad = initializeResult.agentCapabilities?.loadSession === true;
+          const canResume = initializeResult.agentCapabilities?.sessionCapabilities?.resume != null;
+          if (options.resumeMethod === "resume" && canResume) {
+            const resumePayload = {
+              sessionId,
+              cwd: options.cwd,
+              ...additionalDirectories,
+              mcpServers: sessionMcpServers(initializeResult),
+            } satisfies EffectAcpSchema.ResumeSessionRequest;
+            sessionSetupResult = yield* runLoggedRequest(
+              "session/resume",
+              resumePayload,
+              acp.agent.resumeSession(resumePayload),
+            );
+          } else if (canLoad) {
             const loadPayload = {
               sessionId,
               cwd: options.cwd,
@@ -2387,7 +2400,7 @@ export const make = (
               mcpServers: sessionMcpServers(initializeResult),
             } satisfies EffectAcpSchema.LoadSessionRequest;
             sessionSetupResult = yield* runLoadSessionWithReplayIdle(loadPayload, initializeResult);
-          } else if (initializeResult.agentCapabilities?.sessionCapabilities?.resume != null) {
+          } else if (canResume) {
             const resumePayload = {
               sessionId,
               cwd: options.cwd,
@@ -2629,6 +2642,9 @@ export const make = (
             const requestPayload = {
               sessionId,
               cwd: options.cwd,
+              ...(options.additionalDirectories?.length
+                ? { additionalDirectories: options.additionalDirectories }
+                : {}),
               mcpServers: sessionMcpServers(started.initializeResult, activationOptions),
             } satisfies EffectAcpSchema.LoadSessionRequest;
             return runLoadSessionWithReplayIdle(requestPayload, started.initializeResult);
@@ -2641,6 +2657,9 @@ export const make = (
             const requestPayload = {
               sessionId,
               cwd: options.cwd,
+              ...(options.additionalDirectories?.length
+                ? { additionalDirectories: options.additionalDirectories }
+                : {}),
               mcpServers: sessionMcpServers(started.initializeResult, activationOptions),
             } satisfies EffectAcpSchema.ResumeSessionRequest;
             return runLoggedRequest(
@@ -2657,6 +2676,9 @@ export const make = (
             const requestPayload = {
               sessionId,
               cwd: options.cwd,
+              ...(options.additionalDirectories?.length
+                ? { additionalDirectories: options.additionalDirectories }
+                : {}),
               mcpServers: sessionMcpServers(started.initializeResult, activationOptions),
             } satisfies EffectAcpSchema.ForkSessionRequest;
             return runLoggedRequest(

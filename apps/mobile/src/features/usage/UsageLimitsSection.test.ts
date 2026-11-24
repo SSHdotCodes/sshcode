@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ProviderDriverKind } from "@t3tools/contracts";
 import { beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
@@ -37,7 +37,9 @@ vi.mock("@effect/atom-react", () => ({ useAtomValue: () => state.presentations }
 vi.mock("react-native", () => ({ Alert: {}, Pressable: "button", View: "div" }));
 vi.mock("../../components/AppText", () => ({ AppText: "span" }));
 vi.mock("../../components/ProviderIcon", () => ({ ProviderIcon: () => null }));
-vi.mock("./usageProviders", () => ({ useProviderColors: () => ({}) }));
+vi.mock("./usageProviders", () => ({
+  useProviderColors: () => ({ codex: "#codex", claude: "#claude", antigravity: "#8c7bd1" }),
+}));
 vi.mock("../threads/use-visible-second-clock", () => ({ useVisibleMinuteClock: () => Date.now() }));
 vi.mock("../../state/environment-labels", () => ({
   useEnvironmentDisplayLabels: () => new Map(),
@@ -49,7 +51,7 @@ vi.mock("../../state/presentation", () => ({
 vi.mock("../../state/server", () => ({ serverEnvironment: { refreshProviders: null } }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.refreshProviders }));
 
-import { useRefreshLimits } from "./UsageLimitsSection";
+import { usageBarColorKind, useRefreshLimits } from "./UsageLimitsSection";
 import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
 
 beforeEach(() => {
@@ -123,4 +125,11 @@ it("does not let an older multi-environment batch clear a newer failure for the 
   bFirst.resolve({ _tag: "Success" });
   await older;
   expect(read(selected).failedLabels).toEqual(["A"]);
+});
+
+it("maps Antigravity, Codex, and Claude drivers to their chart series color kind", () => {
+  expect(usageBarColorKind(ProviderDriverKind.make("antigravity"))).toBe("antigravity");
+  expect(usageBarColorKind(ProviderDriverKind.make("codex"))).toBe("codex");
+  expect(usageBarColorKind(ProviderDriverKind.make("claudeAgent"))).toBe("claude");
+  expect(usageBarColorKind(ProviderDriverKind.make("cursor"))).toBeNull();
 });

@@ -216,6 +216,7 @@ export interface InterruptThreadTurnInput extends ThreadCommandInput {
   readonly runId?: RunId;
   readonly subagentId?: NodeId;
   readonly keepHelpers?: boolean;
+  readonly sendQueuedRunId?: RunId;
   /** Temporary caller compatibility while UI naming moves from turns to runs. */
   readonly turnId?: string;
 }
@@ -551,6 +552,34 @@ export const reorderActiveThread = Effect.fn("EnvironmentCommands.reorderActiveT
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     orderKey: input.orderKey,
+  });
+});
+
+/** The start of a message as one line, for its pin in the pinned list. */
+export function pinnedMessagePreview(text: string): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length <= 240 ? line : `${line.slice(0, 239).trimEnd()}…`;
+}
+
+export interface SetMessagePinInput extends ThreadCommandInput {
+  readonly messageId: import("@t3tools/contracts").MessageId;
+  readonly pinned: boolean;
+  /** The message's text; its start is kept for the pinned list. */
+  readonly text?: string;
+}
+/** Pins or unpins one message in the chat's pinned messages. */
+export const setMessagePin = Effect.fn("EnvironmentCommands.setMessagePin")(function* (
+  input: SetMessagePinInput,
+) {
+  return yield* dispatch({
+    type: "thread.metadata.update",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    messagePin: {
+      messageId: input.messageId,
+      pinned: input.pinned,
+      ...(input.pinned && input.text ? { preview: pinnedMessagePreview(input.text) } : {}),
+    },
   });
 });
 
@@ -940,7 +969,11 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     runId,
-    ...(input.keepHelpers === true ? { keepHelpers: true } : { holdQueue: true }),
+    ...(input.sendQueuedRunId !== undefined
+      ? { keepHelpers: true, sendQueuedRunId: input.sendQueuedRunId }
+      : input.keepHelpers === true
+        ? { keepHelpers: true }
+        : { holdQueue: true }),
   });
 });
 

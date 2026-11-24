@@ -543,11 +543,13 @@ export interface LimitPool {
   readonly unread: readonly LimitAccount[];
 }
 
-/** Show Cursor's two usable pools instead of a combined percentage when both are available. */
-export function displayLimitWindows(pool: LimitPool) {
-  if (pool.driver === "antigravity") {
+/** Order provider limit windows for display (pairing Antigravity buckets, showing Cursor's two pools). */
+export function displayProviderUsageWindows<
+  W extends Pick<ServerProviderUsageWindow, "id" | "kind">,
+>(driver: ServerProvider["driver"], windows: readonly W[]): readonly W[] {
+  if (driver === "antigravity") {
     // Keep each model group's five-hour and weekly buckets next to one another.
-    return [...pool.windows].sort(
+    return [...windows].sort(
       (left, right) =>
         Number(!left.id.startsWith("gemini-")) - Number(!right.id.startsWith("gemini-")) ||
         left.id
@@ -556,13 +558,18 @@ export function displayLimitWindows(pool: LimitPool) {
         WINDOW_KIND_ORDER[left.kind] - WINDOW_KIND_ORDER[right.kind],
     );
   }
-  if (pool.driver !== "cursor") return pool.windows;
-  const hasAuto = pool.windows.some((window) => window.id === "autoPercentUsed");
-  const hasApi = pool.windows.some((window) => window.id === "apiPercentUsed");
+  if (driver !== "cursor") return windows;
+  const hasAuto = windows.some((window) => window.id === "autoPercentUsed");
+  const hasApi = windows.some((window) => window.id === "apiPercentUsed");
   const hasBothPools = hasAuto && hasApi;
-  return pool.windows
+  return windows
     .filter((window) => !hasBothPools || window.id !== "totalPercentUsed")
     .sort((left, right) => cursorUsageWindowRank(left.id) - cursorUsageWindowRank(right.id));
+}
+
+/** Show Cursor's two usable pools instead of a combined percentage when both are available. */
+export function displayLimitWindows(pool: LimitPool) {
+  return displayProviderUsageWindows(pool.driver, pool.windows);
 }
 
 const WINDOW_KIND_ORDER: Record<ServerProviderUsageWindow["kind"], number> = {

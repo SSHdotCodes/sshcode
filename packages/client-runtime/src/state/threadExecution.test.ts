@@ -320,6 +320,50 @@ describe("thread execution presentation", () => {
 
     expect(threadRuntimeHasInterruptibleRun(runtime)).toBe(true);
   });
+
+  it("parks runtime at idle with null activityStartedAt while an open-prompt provider thread waits on background work", () => {
+    const running = run("run-open-wait", 1, "running");
+    const providerThreadId = v2Projection.thread.activeProviderThreadId!;
+    const projection = {
+      ...v2Projection,
+      runs: [running],
+      providerThreads: [
+        {
+          id: providerThreadId,
+          driver: ProviderDriverKind.make("antigravity"),
+          providerInstanceId: v2Projection.thread.providerInstanceId,
+          providerSessionId: null,
+          appThreadId: v2Projection.thread.id,
+          ownerNodeId: null,
+          nativeThreadRef: null,
+          nativeConversationHeadRef: null,
+          status: "active" as const,
+          firstRunOrdinal: 1,
+          lastRunOrdinal: 1,
+          handoffIds: [],
+          forkedFrom: null,
+          pendingBackgroundTasks: [
+            {
+              taskId: "bench-1",
+              kind: "command" as const,
+              wakesAgent: true as const,
+              description: "Run benchmark",
+            },
+          ],
+          waitingOnBackgroundWork: true as const,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    };
+
+    const runtime = deriveThreadRuntime(projection);
+    expect(runtime).toMatchObject({
+      status: "idle",
+      activeRunId: running.id,
+      activityStartedAt: null,
+    });
+  });
 });
 
 describe("deriveRunlessWorkStartedAt", () => {
@@ -669,6 +713,17 @@ describe("presentPendingBackgroundWork", () => {
         { taskId: "b", kind: "monitor", description: "Watch PR checks" },
       ]),
     ).toMatchObject({ title: "Waiting on 1 command and 1 monitor", waiting: true });
+  });
+
+  it("shows a command that will wake the agent as waiting", () => {
+    expect(
+      presentPendingBackgroundWork([
+        { taskId: "bench", kind: "command", description: "Run benchmark", wakesAgent: true },
+      ]),
+    ).toMatchObject({
+      title: "Waiting on 1 background command · Run benchmark",
+      waiting: true,
+    });
   });
 
   it("groups work by kind, subagents first, and keeps each name", () => {

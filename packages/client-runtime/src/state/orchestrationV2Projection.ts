@@ -399,14 +399,29 @@ export function applyOrchestrationV2ProjectionEvent(
     case "provider-turn.updated": {
       // Updates that omit live usage or the generation rate keep the last ones reported.
       const current = base.providerTurns.find((turn) => turn.id === event.payload.id);
+      if (
+        current !== undefined &&
+        event.payload.status === "running" &&
+        event.payload.steeringUnavailable === true
+      ) {
+        return {
+          ...base,
+          providerTurns: upsertEntity(base.providerTurns, {
+            ...current,
+            steeringUnavailable: true,
+          }),
+        };
+      }
       const tokenUsage = event.payload.tokenUsage ?? current?.tokenUsage;
       const generation = event.payload.generation ?? current?.generation;
+      const steeringUnavailable = event.payload.steeringUnavailable ?? current?.steeringUnavailable;
       return {
         ...base,
         providerTurns: upsertEntity(base.providerTurns, {
           ...event.payload,
           ...(tokenUsage === undefined ? {} : { tokenUsage }),
           ...(generation === undefined ? {} : { generation }),
+          ...(steeringUnavailable === undefined ? {} : { steeringUnavailable }),
         }),
       };
     }

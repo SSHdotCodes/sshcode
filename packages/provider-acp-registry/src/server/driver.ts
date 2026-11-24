@@ -64,6 +64,7 @@ import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpRegistryAuth from "./auth.ts";
 import * as AcpRegistryAuthenticationState from "./authenticationState.ts";
+import { withDevinLightningSpeed } from "./devinAcp.ts";
 import { makeDevinUsageLimitsProbe } from "./devinUsageLimits.ts";
 import { makeAcpRegistryLearnedModelOptions } from "./learnedModelOptions.ts";
 
@@ -704,7 +705,14 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           );
           return next;
         });
+      const isDevin = effectiveConfig.source === "registry" && effectiveConfig.agentId === "devin";
       const withLiveRuntimeState = (input: ServerProvider) =>
+        withLiveRuntimeStateUndecorated(input).pipe(
+          Effect.map((provider) =>
+            isDevin ? { ...provider, models: withDevinLightningSpeed(provider.models) } : provider,
+          ),
+        );
+      const withLiveRuntimeStateUndecorated = (input: ServerProvider) =>
         Effect.gen(function* () {
           if (input.auth.status === "unauthenticated") yield* confirmedAuthentication.set(false);
           const provider =
@@ -739,7 +747,6 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
         Effect.flatMap(withLiveRuntimeState),
       );
-      const isDevin = effectiveConfig.source === "registry" && effectiveConfig.agentId === "devin";
       const devinUsageProbe = isDevin
         ? yield* makeDevinUsageLimitsProbe({
             settings: effectiveConfig,

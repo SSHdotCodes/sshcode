@@ -11,7 +11,7 @@
   "cursorBootstrapAddedBytes": 6916,
   "cursorRepeatedTurnAddedBytes": 0,
   "openCodeSystemBytes": 6813,
-  "mcpToolListJsonBytes": 85519,
-  "agentMcpToolListJsonBytes": 56266,
-  "agentMcpToolOutputSchemaJsonBytes": 66213
+  "mcpToolListJsonBytes": 85382,
+  "agentMcpToolListJsonBytes": 56129,
+  "agentMcpToolOutputSchemaJsonBytes": 66107
 }

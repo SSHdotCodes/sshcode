@@ -1580,9 +1580,27 @@ describe("AcpRuntimeModel", () => {
     expect(second.pendingOutputBytes).toBeUndefined();
   });
 
-  it("trims full ACP terminal output by a further 1 MiB at a UTF-8 boundary", () => {
-    const cap = 16 * 1024 * 1024;
-    const step = 1024 * 1024;
+  it("retains only the terminal output tail the projection reads", () => {
+    const projectedChars = 320 * 1024;
+    let state: ReturnType<typeof applyAcpAgentTerminalUpdate> | undefined;
+    let full = "";
+    for (let index = 0; index < 64; index += 1) {
+      const text = `${index % 10}`.repeat(64 * 1024 - 1) + "é";
+      full += text;
+      state = applyAcpAgentTerminalUpdate(state, {
+        sessionUpdate: "terminal_output_chunk",
+        terminalId: "terminal-tail",
+        data: Buffer.from(text).toString("base64"),
+      });
+    }
+    expect(state!.outputBytes).toBeLessThanOrEqual(4 * projectedChars);
+    expect(state!.outputBytes).toBe(Buffer.byteLength(state!.output));
+    expect(state!.output.slice(-projectedChars)).toBe(full.slice(-projectedChars));
+  });
+
+  it("trims full ACP terminal output by a further 256 KiB at a UTF-8 boundary", () => {
+    const cap = 1280 * 1024;
+    const step = 256 * 1024;
     const chunk = (text: string | Uint8Array) => ({
       sessionUpdate: "terminal_output_chunk" as const,
       terminalId: "terminal-cap",
@@ -1601,7 +1619,7 @@ describe("AcpRuntimeModel", () => {
     expect(full.outputBytes).toBe(cap);
     expect(full.output.length).toBe(cap - 1);
 
-    // The cut at one byte past the cap plus 1 MiB falls inside "é", so the whole character goes.
+    // The cut at one byte past the cap plus 256 KiB falls inside "é", so the whole character goes.
     const trimmed = applyAcpAgentTerminalUpdate(full, chunk("c"));
     expect(trimmed.outputBytes).toBe(cap - step - 1);
     expect(trimmed.output.length).toBe(cap - step - 1);
@@ -1815,6 +1833,21 @@ describe("extractMcpToolCallIdentity", () => {
     });
   });
 
+  it.each(["Run mcp_github_create_issue", "Running create_issue", "MCP Tool create_issue"])(
+    "leaves %s outside T3 MCP when its own arguments name a T3 tool",
+    (title) => {
+      const toolCall = toolCallFromUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "call-foreign",
+        kind: "execute",
+        title,
+        status: "in_progress",
+        rawInput: { ServerName: "t3-code", ToolName: "delegate_task", Arguments: {} },
+      });
+      expect(extractMcpToolCallIdentity(toolCall)?.server).not.toBe("t3-code");
+    },
+  );
+
   it("recovers T3 identity from acp-mcp-call fallback commands", () => {
     const toolCall = toolCallFromUpdate({
       sessionUpdate: "tool_call",
@@ -1946,6 +1979,24 @@ describe("extractMcpToolCallIdentity", () => {
       expect(extractMcpToolCallIdentity(toolCall), title).toEqual({
         server: "t3-code",
         tool: "delegate_task",
+      });
+    }
+
+    for (const [title, tool] of [
+      ["Run mcp_t3-code_computer_status", "computer_status"],
+      ["Run mcp_t3-code_computer_screenshot", "computer_screenshot"],
+      ["Run mcp_t3-code_workflow", "workflow"],
+    ] as const) {
+      const toolCall = toolCallFromUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: `convention-${tool}`,
+        kind: "other",
+        title,
+        status: "pending",
+      });
+      expect(extractMcpToolCallIdentity(toolCall), title).toEqual({
+        server: "t3-code",
+        tool,
       });
     }
   });

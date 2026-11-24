@@ -74,7 +74,6 @@ type HeaderItems = HeaderItem[];
 type ThreadGitHeaderActionItems = {
   readonly terminal: HeaderItem;
   readonly files: HeaderItem;
-  readonly git: HeaderItem;
 };
 type QuickActionIcon =
   | "arrow.down.circle"
@@ -349,82 +348,12 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         type: "button",
         variant: "plain",
       },
-      git: {
-        accessibilityLabel: "Git actions",
-        icon: { name: "point.topleft.down.curvedto.point.bottomright.up", type: "sfSymbol" },
-        identifier: "thread-right-git",
-        label: "Git",
-        menu: {
-          items: [
-            {
-              description: compactMenuStatus(props.gitStatus),
-              disabled: true,
-              icon: {
-                name: "point.topleft.down.curvedto.point.bottomright.up",
-                type: "sfSymbol",
-              },
-              label: compactMenuBranchLabel(model.currentBranchLabel),
-              onPress: (): void => {},
-              type: "action",
-            },
-            {
-              description: model.quickActionHint ?? undefined,
-              disabled: model.quickAction.disabled,
-              icon: { name: model.quickActionIcon, type: "sfSymbol" },
-              label: model.quickAction.label,
-              onPress: (): void => void model.runQuickAction(),
-              type: "action",
-            },
-            {
-              description: "Turn diffs and worktree changes",
-              disabled: !model.isRepo,
-              icon: { name: "text.bubble", type: "sfSymbol" },
-              label: "Review changes",
-              onPress: model.openReview,
-              type: "action",
-            },
-            ...(props.onMergeBack
-              ? [
-                  {
-                    description: "Bring this chat's latest turn into its source",
-                    icon: { name: "arrow.triangle.merge", type: "sfSymbol" as const },
-                    label: "Merge back to source",
-                    onPress: props.onMergeBack,
-                    type: "action" as const,
-                  },
-                ]
-              : []),
-            {
-              description: "Commit, files, branches",
-              icon: { name: "ellipsis", type: "sfSymbol" },
-              label: "More",
-              onPress: model.openGitInspector,
-              type: "action",
-            },
-          ],
-          title: "Git",
-        },
-        sharesBackground: true,
-        type: "menu",
-        variant: "plain",
-      },
     }),
     [
-      model.currentBranchLabel,
-      model.isRepo,
       model.openFiles,
-      model.openGitInspector,
-      model.openReview,
-      model.quickAction.disabled,
-      model.quickAction.label,
-      model.quickActionHint,
-      model.quickActionIcon,
-      model.runQuickAction,
       props.canOpenFiles,
       props.canOpenTerminal,
       props.canOperateTerminal,
-      props.gitStatus,
-      props.onMergeBack,
       props.onOpenNewTerminal,
       props.onOpenTerminal,
       props.onRunProjectScript,
@@ -443,7 +372,6 @@ export function useThreadGitRightHeaderItems(
     () =>
       filterThreadHeaderItems(
         [
-          ["git", actionItems.git],
           ["files", actionItems.files],
           ["terminal", actionItems.terminal],
         ],
@@ -463,7 +391,6 @@ export function useThreadGitCenterHeaderItems(
       filterThreadHeaderItems(
         [
           ["files", actionItems.files],
-          ["git", actionItems.git],
           ["terminal", actionItems.terminal],
         ],
         visibleItems,

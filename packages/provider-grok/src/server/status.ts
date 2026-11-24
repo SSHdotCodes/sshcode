@@ -13,7 +13,9 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
@@ -366,10 +368,19 @@ const discoverGrokMetadataViaAcpInitialize = (
   environment: NodeJS.ProcessEnv,
 ) =>
   Effect.gen(function* () {
+    // Grok watches its workspace during initialize. A machine-wide probe can otherwise
+    // spend its entire timeout indexing the desktop server's home directory.
+    const fs = yield* FileSystem.FileSystem;
+    const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-grok-probe-" });
+    const path = yield* Path.Path;
+    const { binaryPath } = grokSettings;
     const acp = yield* makeGrokAcpRuntime({
-      grokSettings,
+      grokSettings: {
+        binaryPath:
+          path.basename(binaryPath) === binaryPath ? binaryPath : path.resolve(binaryPath),
+      },
       environment,
-      cwd: process.cwd(),
+      cwd,
       clientInfo: { name: "t3-code-provider-probe", version: "0.0.0" },
     });
     const initialized = yield* acp.initialize();
@@ -386,7 +397,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
+  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
 > {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const fallbackModels = grokModelsFromSettings(grokSettings.customModels);

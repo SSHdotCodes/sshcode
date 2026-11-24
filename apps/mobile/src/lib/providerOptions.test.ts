@@ -35,6 +35,27 @@ const CODEX_CAPABILITIES: ModelCapabilities = {
 };
 
 describe("mobile provider options", () => {
+  it("shows an ACP Speed (Devin's Lightning) as the fast switch under its own name", () => {
+    const control = fastModeControl({
+      id: "speed",
+      label: "Speed",
+      type: "select",
+      options: [
+        { id: "standard", label: "Standard" },
+        { id: "fast", label: "Lightning" },
+      ],
+      currentValue: "fast",
+    });
+    expect(control).toMatchObject({
+      enabled: true,
+      onValue: "fast",
+      offValue: "standard",
+      choices: null,
+      label: "Lightning",
+      switchLabel: "Lightning",
+    });
+  });
+
   it("updates generic select options without knowing provider-specific ids", () => {
     const descriptors = resolveProviderOptionDescriptors({
       capabilities: CODEX_CAPABILITIES,

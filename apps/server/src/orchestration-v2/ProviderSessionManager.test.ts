@@ -2026,6 +2026,141 @@ it.effect("ProviderSessionManagerV2 drains subscribers when the provider stops",
   }),
 );
 
+it.effect("persists late context usage without a run subscriber", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    yield* Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:late-context-usage");
+      const providerSessionId = idAllocator.derive.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+      });
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+      const runtime = yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId))!;
+      const providerThread = makeProviderThread({ idAllocator, threadId, providerSessionId, now });
+      const subscription = yield* runtime.subscribeEvents!;
+      yield* Queue.offer(queue, {
+        type: "provider_thread.updated",
+        driver: CODEX_DRIVER,
+        sessionScoped: true,
+        providerThread: {
+          ...providerThread,
+          contextUsage: { usedTokens: 13101, maxTokens: 1048576 },
+        },
+      });
+      // The pump publishes this marker after persisting the session-scoped update.
+      yield* Queue.offer(queue, {
+        type: "provider_thread.updated",
+        driver: CODEX_DRIVER,
+        providerThread,
+      });
+      yield* subscription.events.pipe(
+        Stream.filter((event) => event.type === "provider_thread.updated"),
+        Stream.runHead,
+      );
+      const records = yield* projections.getThreadRecords(threadId, ["providerThreads"]);
+      assert.deepInclude(records.providerThreads[0]?.contextUsage, { usedTokens: 13101 });
+    }).pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 60_000 })));
+  }),
+);
+
+it.effect("persists post-settle command updates without a run subscriber", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    yield* Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:post-settle-command");
+      const providerSessionId = idAllocator.derive.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+      });
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+      const runtime = yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId))!;
+      const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
+      const providerThread = makeProviderThread({ idAllocator, threadId, providerSessionId, now });
+      const providerTurnId = idAllocator.derive.providerTurn({
+        driver: CODEX_DRIVER,
+        nativeTurnId: "post-settle-turn",
+      });
+      const nativeId = "post-settle-command";
+      const command = {
+        id: idAllocator.derive.turnItemFromProviderItem({
+          driver: CODEX_DRIVER,
+          nativeItemId: nativeId,
+        }),
+        threadId,
+        runId,
+        nodeId: null,
+        providerThreadId: providerThread.id,
+        providerTurnId,
+        nativeItemRef: { driver: CODEX_DRIVER, nativeId, strength: "strong" },
+        parentItemId: null,
+        ordinal: 1,
+        type: "command_execution",
+        title: "Run benchmark",
+        input: "bench",
+        startedAt: now,
+        updatedAt: now,
+      } as const;
+      for (const status of ["running", "completed"] as const) {
+        const subscription = yield* runtime.subscribeEvents!;
+        yield* Queue.offer(queue, {
+          type: "turn_item.updated",
+          driver: CODEX_DRIVER,
+          sessionScoped: true,
+          turnItem: {
+            ...command,
+            status,
+            completedAt: status === "completed" ? now : null,
+            ...(status === "running" ? { wakesAgent: true } : {}),
+          },
+        });
+        // The pump publishes this marker after committing the command update.
+        yield* Queue.offer(queue, {
+          type: "provider_thread.updated",
+          driver: CODEX_DRIVER,
+          providerThread,
+        });
+        const marker = yield* subscription.events.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "provider_thread.updated" || event.type === "turn_item.updated",
+          ),
+          Stream.runHead,
+        );
+        assert.isTrue(Option.isSome(marker) && marker.value.type === "provider_thread.updated");
+        const { turnItems } = yield* projections.getThreadRecords(threadId, ["turnItems"]);
+        assert.lengthOf(turnItems, 1);
+        assert.include(turnItems[0], { id: command.id, runId, status });
+        if (status === "running") assert.include(turnItems[0], { wakesAgent: true });
+      }
+    }).pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 60_000 })));
+  }),
+);
+
 it.effect("ProviderSessionManagerV2 fails a turn whose provider retry never resumes", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);

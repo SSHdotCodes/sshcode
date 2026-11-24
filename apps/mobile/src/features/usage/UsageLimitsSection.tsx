@@ -11,6 +11,7 @@ import {
   type UsageProviderKind,
 } from "@t3tools/contracts";
 import {
+  displayProviderUsageWindows,
   elapsedShare,
   formatDuration,
   formatResetsIn,
@@ -37,11 +38,20 @@ const PACE_LABEL = { ahead: "ahead of pace", on: "on pace", under: "under pace" 
 
 type Driver = ServerProvider["driver"];
 
+export function usageBarColorKind(driver: Driver): UsageProviderKind | null {
+  return driver === "codex"
+    ? "codex"
+    : driver === "claudeAgent"
+      ? "claude"
+      : driver === "antigravity"
+        ? "antigravity"
+        : null;
+}
+
 /** The series colour the usage chart uses for this driver, so the two views read as one. */
 function useBarColor(driver: Driver): string | null {
   const colors = useProviderColors();
-  const kind: UsageProviderKind | null =
-    driver === "codex" ? "codex" : driver === "claudeAgent" ? "claude" : null;
+  const kind = usageBarColorKind(driver);
   return kind ? colors[kind] : null;
 }
 
@@ -171,7 +181,7 @@ export function AccountLimits(props: {
         <Text className="text-sm text-foreground-muted">{notice}</Text>
       ) : (
         <View className="gap-3">
-          {limits.windows.map((window) => (
+          {displayProviderUsageWindows(props.driver, limits.windows).map((window) => (
             <WindowRow key={window.id} window={window} color={color} now={now} />
           ))}
         </View>

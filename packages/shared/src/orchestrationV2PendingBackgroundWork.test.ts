@@ -1049,3 +1049,44 @@ describe("deriveBlockedOnThreadWait", () => {
     expect(deriveBlockedOnThreadWait({ activeRun, turnItems: [] })).toBe(false);
   });
 });
+
+describe("open-prompt background wait (agy 1.5.15+)", () => {
+  it("surfaces pendingBackgroundTasks during a running run only when the active provider thread sets waitingOnBackgroundWork", () => {
+    const runningRun = { id: RunId.make("run-open"), ordinal: 1, status: "running" as const };
+    const providerThreadId = ProviderThreadId.make("pt-agy-1516");
+    const task = {
+      taskId: "cmd-bench",
+      kind: "command" as const,
+      wakesAgent: true as const,
+      description: "Run benchmark",
+    };
+
+    // Without waitingOnBackgroundWork (e.g. Claude while actively generating), active run suppresses roster.
+    expect(
+      derivePendingBackgroundWork({
+        latestRun: runningRun,
+        runs: [runningRun],
+        activeProviderThreadId: providerThreadId,
+        providerThreads: [{ id: providerThreadId, pendingBackgroundTasks: [task] }],
+        turnItems: [],
+      }),
+    ).toEqual([]);
+
+    // With waitingOnBackgroundWork: true (agy 1.5.15+ after reply closes), roster surfaces.
+    expect(
+      derivePendingBackgroundWork({
+        latestRun: runningRun,
+        runs: [runningRun],
+        activeProviderThreadId: providerThreadId,
+        providerThreads: [
+          {
+            id: providerThreadId,
+            pendingBackgroundTasks: [task],
+            waitingOnBackgroundWork: true,
+          },
+        ],
+        turnItems: [],
+      }),
+    ).toEqual([task]);
+  });
+});

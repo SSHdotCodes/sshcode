@@ -4,7 +4,11 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import type { ProviderAuthResponse, ServerProvider } from "@t3tools/contracts";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderAuthResponse,
+  type ServerProvider,
+} from "@t3tools/contracts";
 import { useRef, useState } from "react";
 import { Alert, Linking, Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -118,6 +122,12 @@ function ProviderAccount({
   const usesCredentials =
     provider.driver === "antigravity" &&
     (provider.auth.type === "gemini-api-key" || provider.auth.type === "agent-platform");
+  const signInUnchecked =
+    provider.driver === "antigravity" &&
+    provider.installed &&
+    provider.status === "warning" &&
+    provider.auth.status === "unknown" &&
+    !usesCredentials;
   const url =
     interaction?.type === "browser" || interaction?.type === "deviceCode"
       ? interaction.url
@@ -181,7 +191,7 @@ function ProviderAccount({
     <View className="border-b border-border-subtle">
       <View className="gap-2 p-4">
         <Text className="text-base font-t3-bold text-foreground">
-          {provider.displayName ?? provider.driver}
+          {provider.displayName ?? PROVIDER_DISPLAY_NAMES[provider.driver] ?? provider.driver}
         </Text>
         <Text accessibilityLiveRegion="polite" className="text-sm text-foreground-muted">
           {active || state?.phase === "failed" || state?.phase === "cancelled"
@@ -194,7 +204,9 @@ function ProviderAccount({
                   ? "No in-app sign-in advertised. Follow the provider's docs to finish setup."
                   : usesCredentials
                     ? "Connect to load models"
-                    : "Connect this provider."}
+                    : signInUnchecked
+                      ? "Installed · Sign-in not checked. Checks on first chat, or sign in below."
+                      : "Connect this provider."}
         </Text>
         {signedIn && !active && provider.auth.email?.trim() ? (
           <ProviderAccountEmail key={provider.auth.email} email={provider.auth.email} />

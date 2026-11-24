@@ -2,15 +2,18 @@ import { useMemo } from "react";
 import { accountAcceptsModel, pickAccountForNewSession } from "@t3tools/shared/accountBalance";
 import { withDefaultSelectOptions } from "@t3tools/shared/harnessDefaults";
 import type { MenuAction } from "@react-native-menu/menu";
-import type {
-  ModelCapabilities,
-  ModelSelection,
-  ProjectId,
-  RuntimeMode,
-  ServerConfig as T3ServerConfig,
-  ServerProviderRecentFailure,
+import {
+  ANTIGRAVITY_DEFAULT_MODEL,
+  PROVIDER_DISPLAY_NAMES,
+  resolveProjectProviderInstanceEnabled,
+  type ModelCapabilities,
+  type ModelSelection,
+  type ProjectId,
+  type ProviderDriverKind,
+  type RuntimeMode,
+  type ServerConfig as T3ServerConfig,
+  type ServerProviderRecentFailure,
 } from "@t3tools/contracts";
-import { resolveProjectProviderInstanceEnabled } from "@t3tools/contracts";
 import {
   buildExplicitProviderOptionSelectionsFromDescriptors,
   getProviderOptionDescriptors,
@@ -60,10 +63,13 @@ export function providerDisplayLabel(provider: {
   readonly instanceId: string;
 }): string {
   if (provider.displayName) return provider.displayName;
-  if (provider.driver === "codex") return "Codex";
-  if (provider.driver === "claudeAgent") return "Claude";
-  if (provider.driver === "pi") return "Pi";
-  return provider.instanceId;
+  return PROVIDER_DISPLAY_NAMES[provider.driver as ProviderDriverKind] ?? provider.instanceId;
+}
+
+function findCatalogModel(provider: T3ServerConfig["providers"][number] | undefined, slug: string) {
+  return provider?.models.find(
+    (candidate) => candidate.slug === slug || candidate.aliases?.includes(slug),
+  );
 }
 
 /**
@@ -197,7 +203,9 @@ export function isModelSelectionUnavailable(
       !provider.installed ||
       provider.auth.status === "unauthenticated" ||
       provider.availability === "unavailable" ||
-      !provider.models.some((model) => model.slug === selection.model))
+      (provider.auth.status !== "unknown" &&
+        !(selection.model === ANTIGRAVITY_DEFAULT_MODEL && provider.models.length > 0) &&
+        findCatalogModel(provider, selection.model) === undefined))
   );
 }
 
@@ -295,7 +303,7 @@ export function resolveDefaultableModelSelection(
     return usable;
   }
   const provider = config.providers.find((candidate) => candidate.instanceId === usable.instanceId);
-  const model = provider?.models.find((candidate) => candidate.slug === usable.model);
+  const model = findCatalogModel(provider, usable.model);
   return provider?.driver !== "antigravity" && model?.isLegacy === true ? null : usable;
 }
 
@@ -361,7 +369,9 @@ export function buildModelOptions(
     const hiddenModels = new Set(preferences?.hiddenModels ?? []);
     const order = new Map((preferences?.modelOrder ?? []).map((slug, index) => [slug, index]));
     const models = provider.models.filter(
-      (model) => includeHidden || model.isCustom || !hiddenModels.has(model.slug),
+      (model) =>
+        !(provider.driver === "antigravity" && model.slug === ANTIGRAVITY_DEFAULT_MODEL) &&
+        (includeHidden || model.isCustom || !hiddenModels.has(model.slug)),
     );
     if (order.size > 0)
       models.sort((a, b) => (order.get(a.slug) ?? Infinity) - (order.get(b.slug) ?? Infinity));
@@ -423,9 +433,7 @@ export function buildModelOptions(
         (candidate) => candidate.instanceId === fallbackModelSelection.instanceId,
       );
       const instanceConfig = config?.settings?.providerInstances[fallbackModelSelection.instanceId];
-      const model = provider?.models.find(
-        (candidate) => candidate.slug === fallbackModelSelection.model,
-      );
+      const model = findCatalogModel(provider, fallbackModelSelection.model);
       const providerDriver =
         provider?.driver ?? instanceConfig?.driver ?? fallbackModelSelection.instanceId;
       const providerLabel = providerDisplayLabel({
@@ -546,9 +554,10 @@ export function modelSelectionForDispatch(
   config: T3ServerConfig | null | undefined,
   selection: ModelSelection,
 ): ModelSelection {
-  const model = config?.providers
-    .find((provider) => provider.instanceId === selection.instanceId)
-    ?.models.find((model) => model.slug === selection.model);
+  const provider = config?.providers.find(
+    (candidate) => candidate.instanceId === selection.instanceId,
+  );
+  const model = findCatalogModel(provider, selection.model);
   const options = withDefaultSelectOptions(
     model?.capabilities?.optionDescriptors ?? [],
     selection.options,

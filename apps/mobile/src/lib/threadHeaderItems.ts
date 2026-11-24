@@ -1,7 +1,8 @@
-export const THREAD_HEADER_ITEMS = ["sideChat", "git", "files", "terminal"] as const;
+// Drop the retired Git item when reading saved chat header settings.
+export const THREAD_HEADER_ITEMS = ["sideChat", "files", "terminal"] as const;
 export type ThreadHeaderItem = (typeof THREAD_HEADER_ITEMS)[number];
 
-export const DEFAULT_THREAD_HEADER_ITEMS: readonly ThreadHeaderItem[] = ["sideChat", "git"];
+export const DEFAULT_THREAD_HEADER_ITEMS: readonly ThreadHeaderItem[] = ["sideChat"];
 
 export function sanitizeThreadHeaderItems(value: unknown): ThreadHeaderItem[] | undefined {
   if (!Array.isArray(value)) return undefined;

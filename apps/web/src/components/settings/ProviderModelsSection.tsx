@@ -7,7 +7,11 @@ import {
   type ProviderInstanceId,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import { type CustomModelDefinition, normalizeCustomModelSlug } from "@t3tools/shared/model";
+import {
+  type CustomModelDefinition,
+  isReasoningSelectDescriptor,
+  normalizeCustomModelSlug,
+} from "@t3tools/shared/model";
 
 import { cn } from "../../lib/utils";
 import { sortModelsForProviderInstance } from "../../modelOrdering";
@@ -40,7 +44,7 @@ const FILTER_THRESHOLD = 8;
  * `serviceTier` select whose fast tier is labelled "Fast" (catalog id
  * `priority`, or `fast` from the speed-tier fallback), matching the composer.
  */
-function describeModelCapabilities(model: ServerProviderModel): string[] {
+export function describeModelCapabilities(model: ServerProviderModel): string[] {
   const descriptors = model.capabilities?.optionDescriptors ?? [];
   const labels: string[] = [];
   const hasFastMode = descriptors.some(
@@ -54,12 +58,7 @@ function describeModelCapabilities(model: ServerProviderModel): string[] {
   if (descriptors.some((descriptor) => descriptor.id === "thinking")) labels.push("Thinking");
   if (
     descriptors.some(
-      (descriptor) =>
-        descriptor.type === "select" &&
-        (descriptor.id === "reasoningEffort" ||
-          descriptor.id === "effort" ||
-          descriptor.id === "reasoning" ||
-          descriptor.id === "variant"),
+      (descriptor) => isReasoningSelectDescriptor(descriptor) && descriptor.id !== "thinking",
     )
   ) {
     labels.push("Reasoning");

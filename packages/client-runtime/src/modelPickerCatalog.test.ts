@@ -618,6 +618,21 @@ describe("model picker catalog", () => {
     expect(routesOf(plan, "gemini-3.8-flash")).toEqual(["antigravity"]);
     const apiKey = [claude, google("antigravity_key", "gemini-api-key")];
     expect(routesOf(apiKey, "claude-opus-5-5")).toEqual(["claudeAgent"]);
+
+    // Even alongside Gemini CLI, Antigravity's own Gemini routes stay native (not hidden by major
+    // version on OAuth, and not hidden by Gemini CLI's native routing on an API key).
+    const geminiCli = provider(
+      "acpRegistry_gemini",
+      "acpRegistry",
+      [model("gemini-4-pro", { name: "Gemini 4 Pro" })],
+      { iconUrl: officialAcpRegistryIconUrlForAgentId("gemini")! },
+    );
+    const planWithGeminiCli = [claude, geminiCli, google("antigravity", "oauth-personal")];
+    expect(routesOf(planWithGeminiCli, "gemini-3.8-flash")).toEqual(["antigravity"]);
+    expect(routesOf(planWithGeminiCli, "gemini-4-neon")).toEqual(["antigravity"]);
+    const apiKeyWithGeminiCli = [claude, geminiCli, google("antigravity_key", "gemini-api-key")];
+    expect(routesOf(apiKeyWithGeminiCli, "gemini-4-neon")).toEqual(["antigravity_key"]);
+    expect(routesOf(apiKeyWithGeminiCli, "claude-opus-5-5")).toEqual(["claudeAgent"]);
   });
 
   it("keeps deliberate open models even when a newer generation is in a generic catalog", () => {

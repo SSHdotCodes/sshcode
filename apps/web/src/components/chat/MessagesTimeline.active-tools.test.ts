@@ -1,6 +1,10 @@
 import { RunId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import { deriveMessagesTimelineRows, liveWorkEntryLabel } from "./MessagesTimeline.logic";
+import {
+  deriveMessagesTimelineRows,
+  liveWorkEntryLabel,
+  workEntryDisplayLabel,
+} from "./MessagesTimeline.logic";
 
 describe("long active tool groups", () => {
   it.each([false, true])(
@@ -81,4 +85,89 @@ describe("live thoughts", () => {
     expect(live?.entry.id).toBe("thought-1");
     expect(live?.thought?.id).toBe("thought-1");
   });
+});
+
+describe("running tool status line", () => {
+  const runId = RunId.make("running-tool-run");
+  const createdAt = "2026-11-24T20:00:00Z";
+  const search = (id: string, running: boolean) => ({
+    id: `entry-${id}`,
+    kind: "work" as const,
+    createdAt,
+    entry: {
+      id,
+      createdAt,
+      runId,
+      label: "Run command",
+      command: id,
+      tone: "tool" as const,
+      itemType: "command_execution" as const,
+      toolLifecycleStatus: running ? ("inProgress" as const) : ("completed" as const),
+    },
+  });
+  const card = {
+    id: "card-entry",
+    kind: "event" as const,
+    createdAt: "2026-11-24T20:00:01Z",
+    projectedItem: { item: { type: "thread_created" } } as never,
+  };
+  const statusLine = (timelineEntries: ReadonlyArray<unknown>) =>
+    deriveMessagesTimelineRows({
+      timelineEntries: timelineEntries as never,
+      isWorking: true,
+      runningRunId: runId,
+      activeTurnStartedAt: createdAt,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+      expandedWorkGroupIds: new Set(),
+    }).find((row) => row.id === "live-activity-row");
+
+  it("doesn't repeat a running tool its own row already names above a card", () => {
+    expect(statusLine([search("ssh", true), card])).toBeUndefined();
+  });
+});
+
+describe("liveWorkEntryLabel for a command execution without a command", () => {
+  it.each([
+    {
+      status: "inProgress" as const,
+      active: true,
+      toolTitle: "Ran command",
+      expected: "Running command",
+    },
+    {
+      status: "inProgress" as const,
+      active: true,
+      toolTitle: "Command",
+      expected: "Running command",
+    },
+    {
+      status: "failed" as const,
+      active: false,
+      toolTitle: "Ran command",
+      expected: "Failed command",
+    },
+    {
+      status: "failed" as const,
+      active: false,
+      toolTitle: "Run command",
+      expected: "Failed command",
+    },
+  ])(
+    "labels a $status entry titled $toolTitle as $expected",
+    ({ status, active, toolTitle, expected }) => {
+      const entry = {
+        id: "work-empty-command",
+        createdAt: "2026-10-12T00:00:00Z",
+        label: "Ran command",
+        toolTitle,
+        tone: "tool" as const,
+        itemType: "command_execution" as const,
+        command: "",
+        toolLifecycleStatus: status,
+      };
+      expect(liveWorkEntryLabel(entry, undefined, active)).toBe(expected);
+      expect(workEntryDisplayLabel(entry, undefined)).toBe(expected);
+    },
+  );
 });

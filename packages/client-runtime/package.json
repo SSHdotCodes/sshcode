@@ -419,6 +419,10 @@
       "types": "./src/work-log/itemDetail.ts",
       "default": "./src/work-log/itemDetail.ts"
     },
+    "./work-log/restart-notice": {
+      "types": "./src/work-log/restartNotice.ts",
+      "default": "./src/work-log/restartNotice.ts"
+    },
     "./work-log/monitor-notification": {
       "types": "./src/work-log/monitorNotification.ts",
       "default": "./src/work-log/monitorNotification.ts"

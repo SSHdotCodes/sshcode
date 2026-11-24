@@ -1101,12 +1101,22 @@ export function upsertProviderTurn(
   next: OrchestrationV2ProviderTurn,
 ): Array<OrchestrationV2ProviderTurn> {
   const current = turns.find((turn) => turn.id === next.id);
+  // A declined steer only updates availability. A terminal provider event
+  // may have committed since the orchestrator read the running turn.
+  if (current !== undefined && next.status === "running" && next.steeringUnavailable === true) {
+    return upsertById(turns, {
+      ...current,
+      steeringUnavailable: true,
+    });
+  }
   const tokenUsage = next.tokenUsage ?? current?.tokenUsage;
   const generation = next.generation ?? current?.generation;
+  const steeringUnavailable = next.steeringUnavailable ?? current?.steeringUnavailable;
   return upsertById(turns, {
     ...next,
     ...(tokenUsage === undefined ? {} : { tokenUsage }),
     ...(generation === undefined ? {} : { generation }),
+    ...(steeringUnavailable === undefined ? {} : { steeringUnavailable }),
   });
 }
 
@@ -2334,6 +2344,9 @@ export function threadShellFromProjection(
     branch: projection.thread.branch,
     worktreePath: projection.thread.worktreePath,
     pullRequests: threadPullRequestsOf(projection.thread),
+    ...((projection.thread.pinnedMessages?.length ?? 0) === 0
+      ? {}
+      : { pinnedMessages: projection.thread.pinnedMessages }),
     ...(projection.thread.linkedPullRequest === undefined
       ? {}
       : { linkedPullRequest: projection.thread.linkedPullRequest }),
@@ -2659,6 +2672,9 @@ function shellFromState(input: {
     branch: input.state.thread.branch,
     worktreePath: input.state.thread.worktreePath,
     pullRequests: threadPullRequestsOf(input.state.thread),
+    ...((input.state.thread.pinnedMessages?.length ?? 0) === 0
+      ? {}
+      : { pinnedMessages: input.state.thread.pinnedMessages }),
     ...(input.state.thread.linkedPullRequest === undefined
       ? {}
       : { linkedPullRequest: input.state.thread.linkedPullRequest }),
@@ -3386,15 +3402,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             break;
           }
           case "provider-turn.updated": {
-            const existingRows =
-              event.payload.tokenUsage === undefined || event.payload.generation === undefined
-                ? yield* sql<PayloadRow>`
+            const existingRows = yield* sql<PayloadRow>`
                     SELECT payload_json
                     FROM orchestration_v2_projection_provider_turns
                     WHERE provider_turn_id = ${event.payload.id}
                     LIMIT 1
-                  `
-                : [];
+                  `;
             const existing = existingRows[0];
             const providerTurn =
               existing === undefined
@@ -9483,6 +9496,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     ordinal: 0,
                     status: latestRunStatus,
                   },
+            runs:
+              row.active_run_id !== null
+                ? [{ id: RunId.make(row.active_run_id), ordinal: 0, status: "running" }]
+                : [],
             providerThreads: providerThreadsByThreadId.get(thread.id) ?? [],
             turnItems: pendingTurnItemsByThreadId.get(thread.id) ?? [],
             activeProviderThreadId: thread.activeProviderThreadId,

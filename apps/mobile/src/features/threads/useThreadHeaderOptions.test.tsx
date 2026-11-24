@@ -20,13 +20,18 @@ const harness = vi.hoisted(() => ({
     hasHarnessTheme: false,
     themeVariables: {} as Record<string, string>,
     themeAppearance: "light" as "light" | "dark",
-    threadHeaderItems: ["sideChat", "git"] as readonly ThreadHeaderItem[],
+    threadHeaderItems: ["sideChat"] as readonly ThreadHeaderItem[],
   },
   splitView: false,
   isPad: false,
   nativeColumns: false,
   renderedRightItems: [] as Array<ReadonlyArray<Record<string, unknown>>>,
   navigatedRoutes: [] as string[],
+  threadShell: null as null | {
+    projectId: string;
+    pinnedMessages?: ReadonlyArray<{ messageId: string; pinnedAt: string; preview?: string }>;
+  },
+  jumps: [] as unknown[],
 }));
 
 vi.mock("@react-navigation/native", () => {
@@ -83,6 +88,10 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
 }));
 vi.mock("../computer-use/useComputerUseStatus", () => ({
   useComputerUseStatus: () => null,
+}));
+vi.mock("../../state/entities", () => ({ useThreadShell: () => harness.threadShell }));
+vi.mock("../../state/atom-registry", () => ({
+  appAtomRegistry: { set: (_atom: unknown, value: unknown) => harness.jumps.push(value) },
 }));
 
 import { ThreadHeader } from "./ThreadHeader";
@@ -154,22 +163,6 @@ function Header(props: {
   );
 }
 
-function renderedGitMenuItems(): Array<{
-  description?: unknown;
-  label?: unknown;
-  onPress?: () => void;
-}> {
-  const items = harness.renderedRightItems.at(-1) ?? [];
-  const git = items.find((item) => item.identifier === "thread-right-git") as
-    | { menu: { items: Array<{ description?: unknown; label?: unknown; onPress?: () => void }> } }
-    | undefined;
-  return git?.menu.items ?? [];
-}
-
-function renderedGitStatusDescription(): unknown {
-  return renderedGitMenuItems()[0]?.description;
-}
-
 let root: Root | null = null;
 
 function render(element: React.ReactElement) {
@@ -186,7 +179,7 @@ afterEach(() => {
     hasHarnessTheme: false,
     themeVariables: {},
     themeAppearance: "light",
-    threadHeaderItems: ["sideChat", "git"],
+    threadHeaderItems: ["sideChat"],
   };
   harness.splitView = false;
   harness.isPad = false;
@@ -194,6 +187,8 @@ afterEach(() => {
   harness.setOptionsCalls = 0;
   harness.renderedRightItems = [];
   harness.navigatedRoutes = [];
+  harness.threadShell = null;
+  harness.jumps = [];
 });
 
 describe("ThreadHeader", () => {
@@ -233,17 +228,30 @@ describe("ThreadHeader", () => {
     expect(harness.lastOptions).toHaveProperty("headerTintColor", undefined);
     expect(harness.lastOptions).toHaveProperty("contentStyle", undefined);
   });
-  it("re-applies native header items when Git status changes", () => {
+  it("shows the pinned messages menu only while the chat has pins, newest first", () => {
+    const pinnedItem = () =>
+      (harness.renderedRightItems.at(-1) ?? []).find(
+        (item) => item.identifier === "thread-right-pinned",
+      ) as
+        | { menu: { items: Array<{ label: string; onPress: () => void }>; title: string } }
+        | undefined;
+    harness.threadShell = { projectId: "project-1" };
     render(<Header gitStatus={status([])} />);
-    expect(renderedGitStatusDescription()).toBe("Clean");
+    expect(pinnedItem()).toBeUndefined();
 
-    // A refreshed status (e.g. after reconnect) must reach the Git popover even
-    // though nothing else in the header changed.
-    render(<Header gitStatus={status(["audit.txt"])} />);
-    expect(renderedGitStatusDescription()).toBe("1 changed");
-
+    harness.threadShell = {
+      projectId: "project-1",
+      pinnedMessages: [
+        { messageId: "message-old", pinnedAt: "2026-11-24T15:00:00.000Z", preview: "Old" },
+        { messageId: "message-new", pinnedAt: "2026-11-24T16:00:00.000Z" },
+      ],
+    };
     render(<Header gitStatus={status([])} />);
-    expect(renderedGitStatusDescription()).toBe("Clean");
+    expect(pinnedItem()?.menu.items.map((item) => item.label)).toEqual(["Agent message", "Old"]);
+    act(() => pinnedItem()?.menu.items[1]?.onPress());
+    expect(harness.jumps).toEqual([
+      expect.objectContaining({ messageId: "message-old", projectId: "project-1" }),
+    ]);
   });
 
   it("does not re-apply options for re-renders with equivalent header content", () => {
@@ -255,25 +263,6 @@ describe("ThreadHeader", () => {
       render(<Header gitStatus={status([])} />);
     }
     expect(harness.setOptionsCalls).toBe(applied);
-  });
-
-  it("re-applies menu actions when the default ref changes behind the same label", async () => {
-    // An unpushed commit on a branch with an open PR shows "Push" whether or not the
-    // branch is the default one, but only the default branch asks for confirmation.
-    const pushable = (isDefaultRef: boolean) =>
-      status([], {
-        isDefaultRef,
-        aheadCount: 1,
-        hasPrimaryRemote: true,
-        pr: { state: "open", url: "https://example.com/pr/1" },
-      } as Partial<VcsStatusResult>);
-    render(<Header gitStatus={pushable(false)} />);
-    expect(renderedGitMenuItems()[1]?.label).toBe("Push");
-
-    render(<Header gitStatus={pushable(true)} />);
-    expect(renderedGitMenuItems()[1]?.label).toBe("Push");
-    await act(async () => renderedGitMenuItems()[1]?.onPress?.());
-    expect(harness.navigatedRoutes).toEqual(["GitConfirm"]);
   });
 
   it.each([
@@ -297,9 +286,9 @@ describe("ThreadHeader", () => {
           .map((item) => item.identifier);
 
       render(<Header gitStatus={status([])} usesNativeHeaderGlass={glass} />);
-      expect(shortcutIds()).toEqual(["thread-right-git", "thread-right-side-chat"]);
+      expect(shortcutIds()).toEqual(["thread-right-side-chat"]);
 
-      harness.appearance.threadHeaderItems = ["sideChat", "git", "files", "terminal"];
+      harness.appearance.threadHeaderItems = ["sideChat", "files", "terminal"];
       render(<Header gitStatus={status([])} usesNativeHeaderGlass={glass} />);
       expect(shortcutIds()).toContain("thread-right-files");
       expect(shortcutIds()).toContain("thread-right-terminal");

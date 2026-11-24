@@ -14,6 +14,7 @@ import {
   classifyAntigravitySubagentToolCall,
   isAntigravityUserInputRequest,
   makeAntigravityUserInputResponse,
+  normalizeAntigravityPromptUsage,
   normalizeAntigravitySessionUpdate,
   makeAntigravityReadRepair,
   makeAntigravityStoppedTools,
@@ -25,6 +26,7 @@ import {
   mergeToolCallState,
   parseSessionUpdateEvent,
 } from "@t3tools/provider-acp/server/runtimeModel";
+import { acpToolCallDiffPatch } from "@t3tools/provider-acp/server/adapter";
 
 const isSessionNotification = Schema.is(AcpWireSchema.SessionNotification);
 
@@ -409,17 +411,23 @@ describe("Antigravity permissions and questions", () => {
   });
 
   it("bounds question text without changing choice IDs", () => {
+    const title = "Q".repeat(7_994) + "🧪";
+    const label = "O".repeat(506) + "🧪";
     const request = {
       ...questionRequest,
-      toolCall: { ...questionRequest.toolCall, title: "Question ".repeat(2_000) },
+      toolCall: { ...questionRequest.toolCall, title: title + "🚀 continued" },
       options: [
-        { optionId: "stable-choice", name: "Choice ".repeat(2_000), kind: "allow_once" as const },
+        { optionId: "stable-choice", name: label + "🚀 continued", kind: "allow_once" as const },
       ],
     };
     const question = extractAntigravityUserInputQuestion(request);
-    expect(question?.question.length).toBeLessThanOrEqual(8_000);
-    expect(question?.options[0]?.label.length).toBeLessThanOrEqual(512);
-    expect(question?.options[0]?.value).toBe("stable-choice");
+    expect(question?.question).toBe(title + "...");
+    expect(question?.options).toEqual([
+      { value: "stable-choice", label: label + "...", description: label + "..." },
+    ]);
+    expect(
+      makeAntigravityUserInputResponse(request, { interaction_9960062f: label + "..." }),
+    ).toEqual({ outcome: { outcome: "selected", optionId: "stable-choice" } });
   });
 });
 
@@ -750,5 +758,139 @@ describe("Antigravity CLI quota stops", () => {
     expect(
       antigravityPromptStopFailure({ stopReason: "end_turn", replyText, now }),
     ).toBeUndefined();
+  });
+});
+
+describe("normalizeAntigravityPromptUsage", () => {
+  it("folds agy uncached inputTokens with cachedReadTokens and cachedWriteTokens into inclusive inputTokens", () => {
+    expect(
+      normalizeAntigravityPromptUsage({
+        inputTokens: 4280,
+        outputTokens: 38,
+        cachedReadTokens: 13705,
+        cachedWriteTokens: 0,
+        thoughtTokens: 0,
+        totalTokens: 18023,
+      }),
+    ).toEqual({
+      inputTokens: 17985,
+      outputTokens: 38,
+      cachedReadTokens: 13705,
+      cachedWriteTokens: 0,
+      thoughtTokens: 0,
+      totalTokens: 18023,
+    });
+
+    expect(
+      normalizeAntigravityPromptUsage({
+        inputTokens: 100,
+        outputTokens: 50,
+        cachedReadTokens: 200,
+        cachedWriteTokens: 40,
+        thoughtTokens: 20,
+        totalTokens: 390,
+      }),
+    ).toEqual({
+      inputTokens: 340,
+      outputTokens: 50,
+      cachedReadTokens: 200,
+      cachedWriteTokens: 40,
+      thoughtTokens: 20,
+      totalTokens: 390,
+    });
+  });
+
+  it("leaves already-inclusive inputTokens and zero-cache usage unchanged", () => {
+    const inclusive = {
+      inputTokens: 17985,
+      outputTokens: 38,
+      cachedReadTokens: 13705,
+      cachedWriteTokens: 0,
+      thoughtTokens: 0,
+      totalTokens: 18023,
+    };
+    expect(normalizeAntigravityPromptUsage(inclusive)).toEqual(inclusive);
+
+    const noCache = {
+      inputTokens: 8857,
+      outputTokens: 717,
+      cachedReadTokens: 0,
+      cachedWriteTokens: 0,
+      thoughtTokens: 714,
+      totalTokens: 9574,
+    };
+    expect(normalizeAntigravityPromptUsage(noCache)).toEqual(noCache);
+  });
+});
+
+describe("normalizeAntigravitySessionUpdate large file diffs", () => {
+  it("preserves exact unified diff and structured change when editing early lines of a >8KB file", () => {
+    const oldLines = Array.from({ length: 300 }, (_, i) => `line ${i + 1}: ${"x".repeat(48)}`);
+    const newLines = [...oldLines];
+    newLines[4] = `line 5: EDITED ${"x".repeat(48)}`;
+    const oldText = `${oldLines.join("\n")}\n`;
+    const newText = `${newLines.join("\n")}\n`;
+    expect(oldText.length).toBeGreaterThan(15_000);
+
+    const normalized = normalizeAntigravitySessionUpdate({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "edit-large-1",
+        status: "completed",
+        content: [
+          {
+            type: "diff",
+            path: "/workspace/large.txt",
+            oldText,
+            newText,
+          },
+        ],
+      },
+    });
+    const parsed = parseSessionUpdateEvent(normalized).events[0];
+    if (parsed?._tag !== "ToolCallUpdated") {
+      throw new Error("Expected ToolCallUpdated event");
+    }
+    const toolCall = normalizeAntigravityToolCall(parsed.toolCall);
+    const patch = acpToolCallDiffPatch(toolCall.data.content);
+    expect(patch).toBeDefined();
+    expect(patch).toContain("@@ -2,7 +2,7 @@");
+    expect(patch).toContain("-line 5:");
+    expect(patch).toContain("+line 5: EDITED");
+    // Bound retained state so full >15KB file bodies are not kept in memory.
+    expect(JSON.stringify(toolCall.data.content).length).toBeLessThan(2_000);
+  });
+
+  it("preserves add patch headers for a large newly written file without tail-truncating headers", () => {
+    const newText = `${Array.from({ length: 300 }, (_, i) => `created line ${i + 1}: ${"y".repeat(40)}`).join("\n")}\n`;
+    expect(newText.length).toBeGreaterThan(15_000);
+
+    const normalized = normalizeAntigravitySessionUpdate({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "write-large-1",
+        status: "completed",
+        content: [
+          {
+            type: "diff",
+            path: "/workspace/created.txt",
+            newText,
+          },
+        ],
+      },
+    });
+    const parsed = parseSessionUpdateEvent(normalized).events[0];
+    if (parsed?._tag !== "ToolCallUpdated") {
+      throw new Error("Expected ToolCallUpdated event");
+    }
+    const toolCall = normalizeAntigravityToolCall(parsed.toolCall);
+    const patch = acpToolCallDiffPatch(toolCall.data.content);
+    expect(patch).toBeDefined();
+    expect(patch?.startsWith("--- /dev/null\n+++ /workspace/created.txt\n@@ -0,0 +1,300 @@")).toBe(
+      true,
+    );
+    expect(patch).toContain("+created line 1:");
   });
 });

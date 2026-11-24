@@ -1,4 +1,9 @@
-import { liftNamedChats } from "@t3tools/client-runtime/composerThreadItems";
+import {
+  chatTitleSearchScore,
+  liftNamedChats,
+  rankChatsByTitleSearch,
+  type SearchableChat,
+} from "@t3tools/client-runtime/composerThreadItems";
 import { groupComparisonThreads } from "@t3tools/client-runtime/state/model-comparison";
 import { threadHasUnseenCompletion } from "../../lib/thread-summaries";
 export { threadHasUnseenCompletion };
@@ -655,11 +660,18 @@ export function buildThreadListV2ListItems(input: {
  * user, then everything else by most recent activity. Settled threads join
  * a collapsed history shelf. Snoozed threads have their own shelf until they wake.
  */
+/** A chat as the list search reads it: title, model, harness and pull request. */
+function searchableChat(thread: EnvironmentThreadShell): SearchableChat {
+  return {
+    title: thread.title,
+    model: thread.modelSelection?.model,
+    providerInstanceId: thread.providerInstanceId,
+    extraTerms: threadPullRequestSearchTerms(thread),
+  };
+}
+
 function matchesListTitle(thread: EnvironmentThreadShell, query: string) {
-  return (
-    thread.title.toLocaleLowerCase().includes(query) ||
-    threadPullRequestSearchTerms(thread).some((term) => term.toLocaleLowerCase().includes(query))
-  );
+  return chatTitleSearchScore(query, searchableChat(thread)) !== null;
 }
 
 /**
@@ -802,6 +814,56 @@ export function buildThreadListV2Items(input: {
     } else {
       rest.push(thread);
     }
+  }
+
+  // A search lists what it names best first, in one list: the usual order (pinned, working,
+  // then settled history) buried the chat a search named under weaker matches.
+  if (query.length > 0) {
+    // In the usual order, which settles equal matches.
+    const flags = new Map<EnvironmentThreadShell, ThreadListV2Item>();
+    for (const thread of applyPendingThreadOrder(
+      sortPinnedThreadsByOrderKey(pinned),
+      "pinned",
+      pending,
+    )) {
+      flags.set(thread, { thread, snoozed: false, pinned: true });
+    }
+    for (const thread of [
+      ...sortThreadsByActivity(waitingOnYou),
+      ...sortThreadsByAsked(leading),
+      ...sortThreadsByActivity(rest),
+    ]) {
+      flags.set(thread, { thread, snoozed: false, pinned: false });
+    }
+    for (const thread of snoozed) flags.set(thread, { thread, snoozed: true, pinned: false });
+    for (const thread of sortSettledThreads(settled)) {
+      flags.set(thread, { thread, settled: true, snoozed: false, pinned: false });
+    }
+    const ranked = rankChatsByTitleSearch([...flags.keys()], query, searchableChat);
+    // Chats only the message search found keep their place after the title matches.
+    const found = new Set(ranked);
+    const items = [...ranked, ...[...flags.keys()].filter((thread) => !found.has(thread))].map(
+      (thread) => {
+        const item = flags.get(thread)!;
+        const line =
+          item.settled || item.snoozed
+            ? null
+            : pinnedWaitingLine(longRunningRowFacts(thread, nowMs));
+        return line === null ? item : { ...item, longRunningStatus: line };
+      },
+    );
+    return {
+      items,
+      pendingTasksIndex: items.length,
+      settledCount: settled.length,
+      settledShelfExpanded: true,
+      settledShelfSearchExpanded: true,
+      settledShelfHeaderIndex: null,
+      snoozedCount: snoozed.length,
+      snoozedShelfSearchExpanded: true,
+      snoozedShelfHeaderIndex: null,
+      nextSnoozeWakeAt,
+    };
   }
 
   const orderedSnoozed = [...snoozed].sort(

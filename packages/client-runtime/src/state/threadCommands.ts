@@ -50,6 +50,7 @@ import {
   type UnarchiveThreadInput,
   type UnlinkThreadPullRequestInput,
   type UnpinThreadInput,
+  type SetMessagePinInput,
   type WatchThreadPullRequestInput,
   type UnsettleThreadInput,
   type UnsnoozeThreadInput,
@@ -90,6 +91,8 @@ import {
   unarchiveThread,
   unlinkThreadPullRequest,
   unpinThread,
+  setMessagePin,
+  pinnedMessagePreview,
   unsettleThread,
   unsnoozeThread,
   updateThreadMetadata,
@@ -211,6 +214,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     unpin: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:unpin",
       execute: (input: UnpinThreadInput) => unpinThread(input),
+      scheduler,
+      concurrency,
+    }),
+    pinMessage: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:pin-message",
+      execute: (input: SetMessagePinInput) => setMessagePin(input),
       scheduler,
       concurrency,
     }),
@@ -522,6 +531,25 @@ export function createThreadEnvironmentAtoms<R, E>(
       pinnedAt: null,
       pinOrderKey: null,
     })),
+    pinMessage: optimistic.wrap(commands.pinMessage, (thread, input, now) => {
+      const others = (thread.pinnedMessages ?? []).filter(
+        (pin) => pin.messageId !== input.messageId,
+      );
+      const pinnedMessages = input.pinned
+        ? others.length === (thread.pinnedMessages ?? []).length
+          ? [
+              ...others,
+              {
+                messageId: input.messageId,
+                pinnedAt: now,
+                ...(input.text ? { preview: pinnedMessagePreview(input.text) } : {}),
+              },
+            ]
+          : (thread.pinnedMessages ?? [])
+        : others;
+      const { pinnedMessages: _previous, ...rest } = thread;
+      return pinnedMessages.length === 0 ? rest : { ...rest, pinnedMessages };
+    }),
     reorderPin: optimistic.wrap(commands.reorderPin, (thread, input) => ({
       ...thread,
       pinOrderKey: input.orderKey,

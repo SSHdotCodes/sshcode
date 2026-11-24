@@ -39,6 +39,7 @@ export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnCon
     providerTurnId: ProviderTurnId,
     turnCompleted: Schema.optional(Schema.Boolean),
     queueFollowUp: Schema.optional(Schema.Boolean),
+    steeringDeclined: Schema.optionalKey(Schema.Literal(true)),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
@@ -390,12 +391,14 @@ export const layer: Layer.Layer<
                     turnStatus !== undefined &&
                     turnStatus !== "running" &&
                     turnStatus !== "completed";
+                  const unsupported = isSteerUnsupported(cause);
                   return yield* new ProviderTurnControlError({
                     threadId: input.threadId,
                     operation: "steer",
                     providerTurnId: input.providerTurnId,
                     turnCompleted: turnStatus === "completed",
-                    queueFollowUp: isSteerUnsupported(cause) || turnEndedIncomplete,
+                    queueFollowUp: unsupported || turnEndedIncomplete,
+                    ...(unsupported && turnStatus === "running" ? { steeringDeclined: true } : {}),
                     cause,
                   });
                 }),

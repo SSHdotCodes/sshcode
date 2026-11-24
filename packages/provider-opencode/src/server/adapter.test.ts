@@ -145,6 +145,37 @@ function providerTurn(input: {
   };
 }
 
+// Read turns from the same event stream the orchestrator consumes.
+const trackTurnUpdates = Effect.fnUntraced(function* (
+  runtime: Pick<ProviderAdapter.ProviderAdapterV2SessionRuntime, "events">,
+) {
+  const first = yield* Deferred.make<OrchestrationV2ProviderTurn>();
+  let latest: OrchestrationV2ProviderTurn | undefined;
+  const events = runtime.events.pipe(
+    Stream.tap((event) =>
+      Effect.gen(function* () {
+        if (event.type === "provider_turn.updated") {
+          latest = event.providerTurn;
+          yield* Deferred.succeed(first, latest);
+        }
+      }),
+    ),
+  );
+  const awaitTurn = (status: OrchestrationV2ProviderTurn["status"]) =>
+    Effect.suspend(() =>
+      latest?.status === status
+        ? Effect.succeed(latest)
+        : events.pipe(
+            Stream.filter((event) => event.type === "provider_turn.updated"),
+            Stream.filter((event) => event.providerTurn.status === status),
+            Stream.runHead,
+            Effect.map(Option.getOrThrow),
+            Effect.map((event) => event.providerTurn),
+          ),
+    );
+  return { events, awaitTurn, firstTurn: Deferred.await(first), latestTurn: () => latest };
+});
+
 const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(function* (
   suffix: string,
   nativeSessionId: string,
@@ -251,6 +282,7 @@ const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(funct
       runtimePolicy: policy,
     });
   return {
+    ...(yield* trackTurnUpdates(runtime)),
     nativeSessionId,
     now,
     policy,
@@ -644,13 +676,11 @@ describe("OpenCodeAdapterV2", () => {
           },
         });
         yield* harness.startTurn();
-        const snapshot = yield* harness.runtime.readThreadSnapshot({
-          providerThread: harness.providerThread,
-        });
+        const turn = yield* harness.awaitTurn("running");
         const stop = yield* harness.runtime
           .interruptTurn({
             providerThread: harness.providerThread,
-            providerTurnId: snapshot.providerTurns.at(-1)!.id,
+            providerTurnId: turn.id,
           })
           .pipe(Effect.exit, Effect.forkScoped);
         if (failure === "timeout") {
@@ -1815,9 +1845,8 @@ describe("OpenCodeAdapterV2", () => {
 
       yield* Effect.promise(() => statusCalled.promise);
 
-      const snapshot = yield* runtime.readThreadSnapshot({ providerThread });
-      assert.equal(snapshot.providerTurns.at(-1)?.status, "running");
-      const activeTurn = snapshot.providerTurns.at(-1)!;
+      const tracked = yield* trackTurnUpdates(runtime);
+      const activeTurn = yield* tracked.awaitTurn("running");
       const steer = yield* runtime
         .steerTurn({
           threadId,
@@ -1923,8 +1952,7 @@ describe("OpenCodeAdapterV2", () => {
           properties: { sessionID: "native-opencode-race", status: { type: "idle" } },
         }),
       );
-      const interrupted = yield* runtime.readThreadSnapshot({ providerThread });
-      assert.equal(interrupted.providerTurns.at(-1)?.status, "interrupted");
+      yield* tracked.awaitTurn("interrupted");
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
@@ -2010,10 +2038,8 @@ describe("OpenCodeAdapterV2", () => {
           },
         }),
       );
-      const running = yield* harness.runtime.readThreadSnapshot({
-        providerThread: harness.providerThread,
-      });
-      yield* harness.runtime.events.pipe(
+      const running = yield* harness.awaitTurn("running");
+      yield* harness.events.pipe(
         Stream.tap((event) =>
           event.type === "turn.terminal" ? Deferred.succeed(terminal, undefined) : Effect.void,
         ),
@@ -2025,7 +2051,7 @@ describe("OpenCodeAdapterV2", () => {
           threadId: harness.threadId,
           runId: harness.runId,
           providerThread: harness.providerThread,
-          providerTurnId: running.providerTurns.at(-1)!.id,
+          providerTurnId: running.id,
           message: {
             messageId: MessageId.make(`message-steer-rejected-${idleTiming}`),
             text: "also cover the README",
@@ -2043,17 +2069,11 @@ describe("OpenCodeAdapterV2", () => {
           Deferred.await(terminal).pipe(Effect.as("completed")),
         );
         assert.equal(outcome, "rechecked");
-        const active = yield* harness.runtime.readThreadSnapshot({
-          providerThread: harness.providerThread,
-        });
-        assert.equal(active.providerTurns.at(-1)?.status, "running");
+        assert.equal(harness.latestTurn()?.status, "running");
         yield* Effect.promise(() => nativeEvents.push(idle));
       }
       if (idleTiming === "after-refused-connection") {
-        const active = yield* harness.runtime.readThreadSnapshot({
-          providerThread: harness.providerThread,
-        });
-        assert.equal(active.providerTurns.at(-1)?.status, "running");
+        assert.equal(harness.latestTurn()?.status, "running");
         yield* Effect.promise(() => nativeEvents.push(idle));
       }
       yield* Deferred.await(terminal);
@@ -2061,10 +2081,7 @@ describe("OpenCodeAdapterV2", () => {
         assert.equal(statusCalls, idleTiming === "idle-during-status" ? 2 : 1);
       }
 
-      const settled = yield* harness.runtime.readThreadSnapshot({
-        providerThread: harness.providerThread,
-      });
-      assert.equal(settled.providerTurns.at(-1)?.status, "completed");
+      assert.equal(harness.latestTurn()?.status, "completed");
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
@@ -2112,9 +2129,7 @@ describe("OpenCodeAdapterV2", () => {
             }),
           );
         yield* userMessage(promptIds[0]);
-        const running = yield* harness.runtime.readThreadSnapshot({
-          providerThread: harness.providerThread,
-        });
+        const running = yield* harness.awaitTurn("running");
         const received = yield* harness.runtime.events.pipe(
           Stream.takeUntil((event) => event.type === "turn.terminal"),
           Stream.runCollect,
@@ -2124,7 +2139,7 @@ describe("OpenCodeAdapterV2", () => {
           threadId: harness.threadId,
           runId: harness.runId,
           providerThread: harness.providerThread,
-          providerTurnId: running.providerTurns.at(-1)!.id,
+          providerTurnId: running.id,
           message: {
             messageId: MessageId.make("message-steer-reply-lost"),
             text: "also cover the README",
@@ -2272,7 +2287,8 @@ describe("OpenCodeAdapterV2", () => {
         modelSelection,
         runtimePolicy: policy,
       });
-      const terminalEvents = yield* runtime.events.pipe(
+      const tracked = yield* trackTurnUpdates(runtime);
+      const terminalEvents = yield* tracked.events.pipe(
         Stream.takeUntil((event) => event.type === "turn.terminal"),
         Stream.runCollect,
         Effect.forkScoped,
@@ -2323,8 +2339,7 @@ describe("OpenCodeAdapterV2", () => {
         .pipe(Effect.forkScoped);
 
       yield* Effect.promise(() => promptStarted.promise);
-      const running = yield* runtime.readThreadSnapshot({ providerThread });
-      const activeTurn = running.providerTurns.at(-1)!;
+      const activeTurn = yield* tracked.firstTurn;
       const interrupt = yield* runtime
         .interruptTurn({ providerThread, providerTurnId: activeTurn.id })
         .pipe(Effect.forkScoped);
@@ -2797,10 +2812,9 @@ describe("OpenCodeAdapterV2", () => {
       );
       assert.equal(yield* Queue.take(statusCalls), 1);
 
-      const running = yield* harness.runtime.readThreadSnapshot({
-        providerThread: harness.providerThread,
-      });
-      const activeTurn = running.providerTurns.at(-1)!;
+      const running = yield* harness.awaitTurn("running");
+      const activeTurn = running;
+      yield* harness.events.pipe(Stream.runDrain, Effect.forkScoped);
       yield* harness.runtime.steerTurn({
         threadId: harness.threadId,
         runId: harness.runId,
@@ -2817,11 +2831,8 @@ describe("OpenCodeAdapterV2", () => {
       yield* Queue.take(promptCalls);
       yield* TestClock.adjust("250 millis");
 
-      const afterRetry = yield* harness.runtime.readThreadSnapshot({
-        providerThread: harness.providerThread,
-      });
       assert.equal(statusCallCount, 1);
-      assert.equal(afterRetry.providerTurns.at(-1)?.status, "running");
+      assert.equal(harness.latestTurn()?.status, "running");
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,

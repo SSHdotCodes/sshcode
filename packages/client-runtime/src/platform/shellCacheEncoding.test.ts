@@ -1,6 +1,7 @@
 import {
   CommandId,
   EnvironmentId,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -146,6 +147,33 @@ describe("cooperative shell cache encoding", () => {
       expect(parsed.snapshot.threads[0].activityRunStartedAt).toBe(DateTime.formatIso(NOW));
       expect(parsed.snapshot.threads[1].activityRunStartedAt).toBeNull();
       expect(parsed.snapshot.archivedThreads[0].archivedAt).toBe(DateTime.formatIso(NOW));
+    }),
+  );
+
+  it.effect("stores pinned message times as ISO strings and reads them back", () =>
+    Effect.gen(function* () {
+      const pinned = {
+        ...stored,
+        snapshot: {
+          ...stored.snapshot,
+          threads: [
+            {
+              ...SHELL_SNAPSHOT.threads[0]!,
+              pinnedMessages: [
+                { messageId: MessageId.make("message-1"), pinnedAt: NOW, preview: "The plan" },
+              ],
+            },
+          ],
+        },
+      };
+      const encoded = yield* encodeStoredShellSnapshot(pinned);
+      expect(JSON.parse(encoded).snapshot.threads[0].pinnedMessages).toEqual([
+        { messageId: "message-1", pinnedAt: DateTime.formatIso(NOW), preview: "The plan" },
+      ]);
+      const decoded = yield* Schema.decodeEffect(
+        Schema.fromJsonString(StoredOrchestrationShellSnapshot),
+      )(encoded);
+      expect(decoded.snapshot.threads[0]?.pinnedMessages?.[0]?.pinnedAt).toEqual(NOW);
     }),
   );
 

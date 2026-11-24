@@ -37,13 +37,18 @@ const CARD_CLASS =
   "mx-3 my-2 rounded-xl border border-border/70 bg-background p-3 text-sm shadow-sm";
 
 /** Sends a reply on ⌘/Ctrl+Enter and abandons it on Escape. */
-function submitKeys(input: {
+export function submitKeys(input: {
   readonly value: string;
   readonly pending: boolean;
   readonly onSubmit: () => void;
   readonly onCancel?: (() => void) | undefined;
 }) {
   return (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Unclaimed, an IME Escape would reach the pull requests page and leave it.
+    if (event.nativeEvent.isComposing || event.keyCode === 229) {
+      event.stopPropagation();
+      return;
+    }
     if (event.key === "Escape" && input.onCancel) {
       event.preventDefault();
       input.onCancel();

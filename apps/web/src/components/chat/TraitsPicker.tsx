@@ -40,7 +40,7 @@ import {
   type ComposerControlSize,
 } from "./ComposerControl";
 import { useComposerMenuProps } from "./composerEventScope";
-import { TraitsSpeedBolt } from "./TraitsSpeed";
+import { acpSpeedChoices, TraitsSpeedBolt } from "./TraitsSpeed";
 import { useComposerMenuState } from "./useComposerMenuState";
 
 type ProviderOptions = ReadonlyArray<ProviderOptionSelection>;
@@ -49,13 +49,20 @@ const SAVED_OPTION_LABELS: Readonly<Record<string, string>> = {
   agent: "Agent",
   effort: "Effort",
   reasoningEffort: "Reasoning effort",
+  reasoning_effort: "Reasoning effort",
+  thinking: "Thinking",
+  thinking_level: "Thinking",
+  thought_level: "Thinking",
   variant: "Reasoning",
 };
 
 function savedOptionLabel(id: string): string {
   return (
     SAVED_OPTION_LABELS[id] ??
-    id.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/^./, (character) => character.toUpperCase())
+    id
+      .replace(/[_-]+/g, " ")
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/^./, (character) => character.toUpperCase())
   );
 }
 
@@ -595,6 +602,13 @@ export function buildTraitsTriggerDisplay(input: {
       fastModeFallbackLabel = speedLabel ?? "Normal";
       continue;
     }
+    const acpSpeed = acpSpeedChoices(descriptor);
+    if (acpSpeed) {
+      const fast = getProviderOptionCurrentValue(descriptor) === acpSpeed.on.id;
+      speedLabel = fast ? acpSpeed.on.label : null;
+      fastModeFallbackLabel = fast ? acpSpeed.on.label : acpSpeed.off.label;
+      continue;
+    }
     if (
       input.provider === "codex" &&
       descriptor.id === "serviceTier" &&
@@ -647,8 +661,7 @@ export function buildTraitsTriggerDisplay(input: {
   // Only fall back to text when fast mode is genuinely the sole trait. Keying
   // off an empty label list alone would also catch descriptors that resolved to
   // no label at all, printing a bogus "Normal" for a model without fast mode.
-  const speedIcon =
-    speedLabel === "Ultrafast" ? "ultrafast" : speedLabel === "Fast" ? "fast" : null;
+  const speedIcon = speedLabel === "Ultrafast" ? "ultrafast" : speedLabel !== null ? "fast" : null;
   if (labels.length === 0 && fastModeFallbackLabel !== null) {
     return speedIcon
       ? { label: fastModeFallbackLabel, speedIcon, beforeSpeed: "", afterSpeed: "" }

@@ -45,7 +45,7 @@ export function resolveContextWindowModelDisplayName(
 
   const selectedModel = modelOptionsByInstance
     .get(selection.instanceId)
-    ?.find((model) => model.slug === selection.model);
+    ?.find((model) => model.slug === selection.model || model.aliases?.includes(selection.model));
 
   return selectedModel ? getTriggerDisplayModelName(selectedModel) : selection.model;
 }

@@ -30,6 +30,7 @@ if (process.env.T3_ACP_ENV_LOG_PATH) {
 }
 const exitLogPath = process.env.T3_ACP_EXIT_LOG_PATH;
 const antigravityProfile = process.env.T3_ACP_ANTIGRAVITY === "1";
+const antigravityWakeSteer = process.env.T3_ACP_ANTIGRAVITY_WAKE_STEER === "1";
 const advertisedCommandNames = (process.env.T3_ACP_AVAILABLE_COMMANDS ?? "")
   .split(",")
   .map((name) => name.trim())
@@ -530,6 +531,18 @@ const program = Effect.gen(function* () {
   const resumeRelease = yield* Deferred.make<void>();
   const nativeCancelRequested = yield* Deferred.make<void>();
   const nativeCancelRelease = yield* Deferred.make<void>();
+  const wakeReplyEnded = yield* Deferred.make<void>();
+  const steerResponseReleased = yield* Deferred.make<void>();
+  const sayAntigravity = (targetSessionId: string, text: string) =>
+    agent.client.sessionUpdate({
+      sessionId: targetSessionId,
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+    });
+  const antigravityUsage = (targetSessionId: string) =>
+    agent.client.sessionUpdate({
+      sessionId: targetSessionId,
+      update: { sessionUpdate: "usage_update", used: 9000, size: 1048576 },
+    });
   const publishAntigravityCommands = (targetSessionId: string) =>
     agent.client.sessionUpdate({
       sessionId: targetSessionId,
@@ -1002,6 +1015,30 @@ const program = Effect.gen(function* () {
       }
       beginAcpMockPrompt(cancelledSessions, requestedSessionId);
       promptCount += 1;
+      if (antigravityWakeSteer) {
+        if (promptCount === 1) {
+          yield* agent.client.sessionUpdate({
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "call_fetch",
+              kind: "execute",
+              title: "Initial background command",
+              status: "in_progress",
+              rawInput: { CommandLine: "echo done", IsDaemon: true },
+            },
+          });
+          yield* sayAntigravity(requestedSessionId, "Started the command.");
+        } else {
+          // agy accepts session/prompt while a promptless reply is still streaming.
+          // That reply ends first, followed by the new prompt's own reply and response.
+          yield* Deferred.await(wakeReplyEnded);
+          yield* sayAntigravity(requestedSessionId, "STEERED");
+          yield* antigravityUsage(requestedSessionId);
+          yield* Deferred.await(steerResponseReleased);
+        }
+        return yield* finishPrompt(requestedSessionId, "end_turn");
+      }
       const idleError = process.env.T3_ACP_IDLE_ERROR;
       if (idleError === "grok-background" && promptCount === 1) {
         // The structured completion lands before the prompt settles, so it is buffered.
@@ -1399,6 +1436,33 @@ const program = Effect.gen(function* () {
             status: "completed",
             rawInput: { query: "TODO", path: "apps/web" },
           },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "structured-search-explicit-location",
+            title: "Grep",
+            kind: "search",
+            status: "completed",
+            rawInput: { query: "  README.md  " },
+            locations: [{ path: "README.md" }],
+            rawOutput: "# Title",
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "structured-search-query-only",
+            title: "Grep",
+            kind: "search",
+            status: "completed",
+            rawInput: { query: "TODO" },
+            rawOutput: "src/a.ts: TODO",
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "structured-search-query-no-output",
+            title: "Grep",
+            kind: "search",
+            status: "completed",
+            rawInput: { query: "FIXME" },
+          },
           // Grok backend searches: the query only arrives in the completed rawOutput.
           {
             sessionUpdate: "tool_call_update",
@@ -1462,6 +1526,43 @@ const program = Effect.gen(function* () {
             status: "completed",
             rawInput: { command: "cat probe.txt" },
             rawOutput: { commandLine: "cat probe.txt", exitCode: 0, combinedOutput: "after\n" },
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "antigravity-web-search",
+            title: "Web search",
+            kind: "search",
+            status: "completed",
+            rawInput: { query: "  top story on Hacker News today  " },
+            rawOutput:
+              "Sources:\n<https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQGYNzfz>.",
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "antigravity-run-search-web",
+            title: "Running search_web",
+            kind: "search",
+            status: "completed",
+            rawInput: { query: "top story on Hacker News today" },
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "antigravity-web-search-streamed",
+            title: "Web search",
+            kind: "search",
+            status: "in_progress",
+            rawInput: { query: "streamed citations" },
+            rawOutput: "Sources: https://example.com/streamed_(detail)",
+          },
+          {
+            sessionUpdate: "tool_call_content_chunk",
+            toolCallId: "antigravity-web-search-streamed",
+            content: { type: "content", content: { type: "text", text: " (updated)" } },
+          },
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "antigravity-web-search-streamed",
+            status: "completed",
           },
           {
             sessionUpdate: "compaction_update",
@@ -3181,6 +3282,30 @@ const program = Effect.gen(function* () {
   );
 
   yield* agent.handleUnknownExtRequest((method, params) => {
+    if (antigravityWakeSteer && method === "_test/complete-antigravity-command") {
+      return Effect.gen(function* () {
+        yield* agent.client.sessionUpdate({
+          sessionId,
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "call_fetch",
+            status: "completed",
+            rawOutput: { output: "done", exit_code: 0 },
+          },
+        });
+        return {};
+      });
+    }
+    if (antigravityWakeSteer && method === "_test/finish-antigravity-wake") {
+      return sayAntigravity(sessionId, "WAKE_END").pipe(
+        Effect.andThen(antigravityUsage(sessionId)),
+        Effect.andThen(Deferred.succeed(wakeReplyEnded, undefined)),
+        Effect.as({}),
+      );
+    }
+    if (antigravityWakeSteer && method === "_test/finish-antigravity-steer") {
+      return Deferred.succeed(steerResponseReleased, undefined).pipe(Effect.as({}));
+    }
     if (method === "_test/environment") {
       return Effect.succeed({
         inherited: process.env.T3_ACP_RUNTIME_AMBIENT === "sentinel",

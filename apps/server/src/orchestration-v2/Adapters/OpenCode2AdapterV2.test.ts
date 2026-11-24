@@ -73,11 +73,18 @@ const event = (
   data: Record<string, unknown>,
   /** Holds the event until a test's replay gate releases this label. */
   label?: string,
+  version = 1,
 ): ProviderReplayEntry => ({
   type: "emit_inbound",
   frame: {
     type: "sdk.event",
-    event: { id: `evt_${type.replaceAll(".", "")}0000`, created: 1, type, data, ...durable },
+    event: {
+      id: `evt_${type.replaceAll(".", "")}0000`,
+      created: 1,
+      type,
+      data,
+      durable: { ...durable.durable, version },
+    },
   },
   ...(label === undefined ? {} : { label }),
 });
@@ -891,6 +898,90 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       });
       assert.equal((yield* watch.terminal)?.status, "interrupted");
       assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("restores exact T3 MCP results from Code Mode in reported call order", () =>
+    Effect.gen(function* () {
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      yield* Effect.addFinalizer(() => sessions.clear(threadId));
+      const server = "t3-code-thread_opencode2-adapter";
+      const first = { task: "Review first" };
+      const second = { task: "Review second" };
+      const foreign = { task: "Foreign" };
+      const ambiguous = { task: "Review either" };
+      yield* sessions.recordToolResult(threadId, "delegate_task", second, { taskId: "task-2" });
+      yield* sessions.recordToolResult(threadId, "delegate_task", first, { taskId: "task-1" });
+      yield* sessions.recordToolResult(threadId, "delegate_task", foreign, { taskId: "foreign" });
+      yield* sessions.recordToolResult(threadId, "delegate_task", ambiguous, { taskId: "task-3" });
+      yield* sessions.recordToolResult(threadId, "delegate_task", ambiguous, { taskId: "task-4" });
+      const tool = { sessionID: SESSION, assistantMessageID: "msg_assistant", id: "call-execute" };
+      const call = (input: Record<string, unknown>, name = server) => ({
+        tool: `${name}.delegate_task`,
+        status: "completed",
+        input,
+      });
+      const { runtime, thread } = yield* resumed([
+        out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+        promptAccepted,
+        event("session.execution.started", { sessionID: SESSION }),
+        event("session.tool.input.started", { ...tool, name: "execute" }),
+        event("session.tool.called", {
+          ...tool,
+          name: "execute",
+          input: { code: "<script>" },
+          executed: true,
+        }),
+        event(
+          "session.tool.success",
+          {
+            ...tool,
+            content: [{ type: "text", text: "Script finished" }],
+            metadata: {
+              truncated: false,
+              toolCalls: [
+                call({ task: "Missing" }),
+                call(first),
+                call(foreign, "other"),
+                call(second),
+                call(ambiguous),
+                call({ task: "Still missing" }),
+              ],
+            },
+            executed: true,
+          },
+          undefined,
+          2,
+        ),
+        event("session.execution.succeeded", { sessionID: SESSION }),
+      ]);
+      const events = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* runtime.startTurn(turnInput(thread));
+      const received = yield* Fiber.join(events);
+      assert.isTrue(
+        received.some(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "dynamic_tool" &&
+            event.turnItem.toolName === "execute" &&
+            event.turnItem.status === "completed",
+        ),
+      );
+      const projected = received.flatMap((event) =>
+        event.type === "turn_item.updated" &&
+        event.turnItem.type === "dynamic_tool" &&
+        event.turnItem.toolName === "t3-code.delegate_task"
+          ? [event.turnItem.output]
+          : [],
+      );
+      assert.deepEqual(projected, [{ taskId: "task-1" }, { taskId: "task-2" }]);
+      assert.deepEqual(yield* sessions.takeToolResult(threadId, "delegate_task", foreign), {
+        taskId: "foreign",
+      });
     }).pipe(Effect.scoped),
   );
 
@@ -4384,7 +4475,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("drops the turns a rollback cut from the snapshot it returns", () =>
+  it.effect("reverts OpenCode at the prompt of the first turn a rollback cuts", () =>
     Effect.gen(function* () {
       const kept = `msg_t3_turn_${SESSION}:attempt:opencode2-adapter`;
       const dropped = `msg_t3_turn_${SESSION}:attempt:opencode2-adapter:2`;
@@ -4436,7 +4527,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       yield* runtime.startTurn(secondTurn(thread));
       yield* Deferred.await(bothEnded);
       const [first, second] = turns;
-      const snapshot = yield* runtime.rollbackThread({
+      yield* runtime.rollbackThread({
         providerThread: thread,
         target: {
           type: "provider_turn",
@@ -4446,10 +4537,6 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         },
         providerThreadTurns: [first!, second!],
       });
-      assert.deepEqual(
-        snapshot.providerTurns.map((turn) => turn.id),
-        [first!.id],
-      );
     }).pipe(Effect.scoped),
   );
 
@@ -4508,10 +4595,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
 
   it.effect.each([
     ["refuses to roll back a session not loaded yet while the server runs it", true],
-    [
-      "keeps the recorded turns before the target when rolling back a session not loaded yet",
-      false,
-    ],
+    ["reverts a session not loaded yet at the first recorded turn after the target", false],
   ] as const)("%s", ([, running]) =>
     Effect.gen(function* () {
       const first = `msg_t3_turn_${SESSION}:attempt:first`;
@@ -4585,10 +4669,6 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         );
       } else {
         assert.isTrue(Exit.isSuccess(rollback));
-        assert.deepEqual(
-          Exit.isSuccess(rollback) ? rollback.value.providerTurns.map((turn) => turn.id) : [],
-          [kept.id],
-        );
       }
     }).pipe(Effect.scoped),
   );
@@ -4848,7 +4928,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         out("message.list", "<any>"),
         reply("message.list", { data: [continuedHistory.data[1]], cursor: {} }),
       ]);
-      const snapshot = yield* runtime.rollbackThread({
+      yield* runtime.rollbackThread({
         providerThread: thread,
         target: {
           type: "provider_turn",
@@ -4858,10 +4938,6 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         },
         providerThreadTurns: [first, second],
       });
-      assert.deepEqual(
-        snapshot.providerTurns.map((turn) => turn.id),
-        [first.id],
-      );
     }).pipe(Effect.scoped),
   );
 

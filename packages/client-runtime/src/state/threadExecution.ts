@@ -344,15 +344,13 @@ export function deriveThreadRuntime(
     latestMatchingRun(projection, (run) => INTERRUPTIBLE_RUN_STATUSES.has(run.status))?.id ?? null;
   const failureItem = latestRootProviderFailureItem(latestRunProjection, projection.turnItems);
   const sessionError = providerSession?.lastError ?? null;
+  const parkAtIdle =
+    usageLimitedRun === null && backgroundWorkHoldsRun && latestRunProjection?.status !== "failed";
   return {
-    status: usageLimitedRun
-      ? "failed"
-      : backgroundWorkHoldsRun && latestRunProjection?.status !== "failed"
-        ? "idle"
-        : (activityRun?.status ?? "idle"),
+    status: usageLimitedRun ? "failed" : parkAtIdle ? "idle" : (activityRun?.status ?? "idle"),
     activeRunId,
     activityStartedAt:
-      liveActivityRun === null
+      parkAtIdle || liveActivityRun === null
         ? null
         : DateTime.formatIso(orchestrationV2RunWorkStartedAt(liveActivityRun)),
     providerInstanceId: projection.thread.providerInstanceId,
@@ -440,8 +438,7 @@ export interface PendingBackgroundWorkPresentation {
   readonly title: string;
   readonly items: ReadonlyArray<PendingBackgroundWorkItem>;
   /**
-   * True when the work will wake the agent (subagents, monitors). False when
-   * only commands remain, such as a dev server: the agent is done.
+   * True when the work will wake the agent.
    */
   readonly waiting: boolean;
   /** False when every outstanding item is held. */
@@ -505,6 +502,18 @@ export function presentPendingBackgroundWork(
   if (items.length === 1 && only !== undefined) {
     if (only.held !== undefined)
       return { title: formatPendingBackgroundWorkItem(only), items, waiting, running };
+    const task = tasks[0];
+    if (task?.kind === "command" && task.wakesAgent === true) {
+      const title = leadWorking
+        ? "1 background command running"
+        : "Waiting on 1 background command";
+      return {
+        title: only.label === "command" ? title : `${title} · ${only.label}`,
+        items,
+        waiting,
+        running,
+      };
+    }
     const noun = BACKGROUND_WORK_KINDS[only.kind].singular;
     const named = only.label !== noun;
     const title = waiting

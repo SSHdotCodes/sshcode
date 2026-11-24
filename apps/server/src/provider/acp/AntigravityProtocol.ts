@@ -14,10 +14,13 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 import * as AcpWireSchema from "effect-acp/schema-v1";
 
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
+import { acpToolCallDiffPatch } from "@t3tools/provider-acp/server/adapter";
 import type { AcpToolCallState } from "@t3tools/provider-acp/server/runtimeModel";
 
 const TOOL_TEXT_LIMIT = 8_000;
+const DIFF_PATCH_TEXT_LIMIT = 32_000;
 const TOOL_TEXT_TRUNCATED = "[Earlier output truncated]\n\n";
+const DIFF_PATCH_TRUNCATED = "\n... [diff truncated]";
 const QUESTION_LABEL_LIMIT = 512;
 
 const NativeToolFields = Schema.Struct({
@@ -142,11 +145,14 @@ function copyBoundedText(text: string): string {
   return Buffer.from(text, "utf16le").toString("utf16le");
 }
 
+function boundQuestionText(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const prefix = text.slice(0, limit - 3).replace(/[\uD800-\uDBFF]$/u, "");
+  return copyBoundedText(`${prefix}...`);
+}
+
 function questionLabel(option: EffectAcpSchema.PermissionOption): string {
-  const label = option.name.trim() || option.optionId;
-  return label.length > QUESTION_LABEL_LIMIT
-    ? copyBoundedText(`${label.slice(0, QUESTION_LABEL_LIMIT - 3)}...`)
-    : label;
+  return boundQuestionText(option.name.trim() || option.optionId, QUESTION_LABEL_LIMIT);
 }
 
 export function extractAntigravityUserInputQuestion(
@@ -166,10 +172,7 @@ export function extractAntigravityUserInputQuestion(
   return {
     id: request.toolCall.toolCallId,
     header: "Question",
-    question:
-      question.length > TOOL_TEXT_LIMIT
-        ? copyBoundedText(`${question.slice(0, TOOL_TEXT_LIMIT - 3)}...`)
-        : question,
+    question: boundQuestionText(question, TOOL_TEXT_LIMIT),
     multiSelect: false,
     allowCustomAnswer: false,
     options: request.options.map((option) => ({
@@ -219,6 +222,91 @@ function boundCommandOutput(text: string, limit = TOOL_TEXT_LIMIT): string {
   return copyBoundedText(`${TOOL_TEXT_TRUNCATED}${tail}`);
 }
 
+function boundDiffPatch(text: string, limit = DIFF_PATCH_TEXT_LIMIT): string {
+  if (
+    text.length <= limit ||
+    (text.length <= limit + DIFF_PATCH_TRUNCATED.length && text.endsWith(DIFF_PATCH_TRUNCATED))
+  ) {
+    return text;
+  }
+  const head = text.slice(0, limit).replace(/[\uD800-\uDBFF]$/u, "");
+  return copyBoundedText(`${head}${DIFF_PATCH_TRUNCATED}`);
+}
+
+/**
+ * Computes a compact unified patch for ACP v1 diffs whose `oldText`/`newText` exceed
+ * `TOOL_TEXT_LIMIT` before tail-truncation can erase early edits, and head-bounds v2
+ * `patch.text` so diff headers (`---`/`+++`/`@@`) stay intact on subsequent sanitizations.
+ */
+function sanitizeAntigravityDiffContent(
+  entry: Record<string, unknown>,
+  updateKind: EffectAcpSchema.ToolKind | null | undefined,
+  budget: ToolPayloadBudget,
+): EffectAcpSchema.ToolCallContent | undefined {
+  if (Array.isArray(entry.changes)) {
+    const changes = entry.changes.flatMap((candidate) => {
+      if (!Predicate.isObject(candidate)) return [];
+      const operation =
+        candidate.operation === "add" ||
+        candidate.operation === "modify" ||
+        candidate.operation === "delete"
+          ? candidate.operation
+          : undefined;
+      const path = typeof candidate.path === "string" ? candidate.path.trim() : "";
+      if (operation === undefined || path.length === 0) return [];
+      const boundedPath = boundText(path);
+      return [{ operation, path: boundedPath }];
+    });
+    if (changes.length === 0) return undefined;
+    const rawPatch = Predicate.isObject(entry.patch) ? entry.patch : undefined;
+    const rawPatchText = typeof rawPatch?.text === "string" ? rawPatch.text : undefined;
+    const boundedPatch =
+      rawPatchText !== undefined && budget.text > 0
+        ? boundDiffPatch(rawPatchText, Math.min(DIFF_PATCH_TEXT_LIMIT, budget.text))
+        : undefined;
+    if (boundedPatch !== undefined) {
+      budget.text -= boundedPatch.length;
+    }
+    const format =
+      typeof rawPatch?.format === "string" && rawPatch.format.trim().length > 0
+        ? boundText(rawPatch.format.trim(), 64)
+        : "unified";
+    return {
+      type: "diff",
+      changes,
+      ...(boundedPatch === undefined ? {} : { patch: { format, text: boundedPatch } }),
+    };
+  }
+  if (typeof entry.path !== "string" || typeof entry.newText !== "string") {
+    return undefined;
+  }
+  const path = entry.path.trim();
+  if (path.length === 0) return undefined;
+  const oldText = typeof entry.oldText === "string" ? entry.oldText : undefined;
+  const rawLength = (oldText?.length ?? 0) + entry.newText.length;
+  if (
+    (oldText?.length ?? 0) <= TOOL_TEXT_LIMIT &&
+    entry.newText.length <= TOOL_TEXT_LIMIT &&
+    rawLength <= budget.text
+  ) {
+    return Option.getOrUndefined(decodeToolCallContent(sanitizeToolValue(entry, budget, 0)));
+  }
+  const patchText = acpToolCallDiffPatch([entry]);
+  const boundedPatch =
+    patchText !== undefined && budget.text > 0
+      ? boundDiffPatch(patchText, Math.min(DIFF_PATCH_TEXT_LIMIT, budget.text))
+      : undefined;
+  if (boundedPatch !== undefined) {
+    budget.text -= boundedPatch.length;
+  }
+  const operation = updateKind === "delete" ? "delete" : oldText === undefined ? "add" : "modify";
+  return {
+    type: "diff",
+    changes: [{ operation, path: boundText(path) }],
+    ...(boundedPatch === undefined ? {} : { patch: { format: "unified", text: boundedPatch } }),
+  };
+}
+
 // 1.5 runtimes report command output as `output` and repeat it as content `text`.
 const OUTPUT_TEXT_FIELDS = new Set(["combinedOutput", "combined_output", "output", "text"]);
 
@@ -257,6 +345,9 @@ function sanitizeToolValue(
   }
   if (!Predicate.isObject(value)) {
     return value;
+  }
+  if (value.type === "diff" && Array.isArray(value.changes)) {
+    return sanitizeAntigravityDiffContent(value, undefined, budget);
   }
   const entries: Array<readonly [string, unknown]> = [];
   for (const [key, entry] of Object.entries(value)) {
@@ -373,6 +464,10 @@ export function normalizeAntigravitySessionUpdate(
   }
   const contentBudget = { nodes: 512, text: 32_000 };
   const content = update.content?.flatMap((entry) => {
+    if (entry.type === "diff") {
+      const sanitizedDiff = sanitizeAntigravityDiffContent(entry, update.kind, contentBudget);
+      return sanitizedDiff === undefined ? [] : [sanitizedDiff];
+    }
     const decoded = Option.getOrUndefined(
       decodeToolCallContent(sanitizeToolValue(entry, contentBudget, 0)),
     );
@@ -398,6 +493,60 @@ export function normalizeAntigravitySessionUpdate(
   };
 }
 
+function antigravityUpdateSteps(
+  rawInput: unknown,
+):
+  | Extract<EffectAcpSchema.SessionUpdate, { readonly sessionUpdate: "plan" }>["entries"]
+  | undefined {
+  if (!Predicate.isObject(rawInput) || !Array.isArray(rawInput.steps)) return undefined;
+  const steps: ReadonlyArray<unknown> = rawInput.steps;
+  return steps.flatMap((step) =>
+    Predicate.isObject(step) && typeof step.title === "string"
+      ? [
+          {
+            content: step.title,
+            priority: "medium",
+            status:
+              step.status === "done"
+                ? "completed"
+                : typeof step.status === "string"
+                  ? step.status
+                  : "pending",
+          },
+        ]
+      : [],
+  );
+}
+
+/**
+ * agy reports its update_steps checklist only as tool calls, never as ACP `plan` updates. Each
+ * call carrying steps becomes a plan update; its other updates name it by id only and are dropped.
+ */
+export function makeAntigravityUpdateStepsPlans() {
+  const calls = new Set<string>();
+  return (
+    notification: EffectAcpSchema.SessionNotification,
+  ): EffectAcpSchema.SessionNotification | undefined => {
+    const update = notification.update;
+    if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") {
+      return notification;
+    }
+    const key = `${notification.sessionId}\u0000${update.toolCallId}`;
+    if (
+      update.title === "Run update_steps" &&
+      (update.kind === undefined || update.kind === null || update.kind === "other")
+    ) {
+      calls.add(key);
+    }
+    if (!calls.has(key)) return notification;
+    if (update.status === "completed" || update.status === "failed") calls.delete(key);
+    const entries = antigravityUpdateSteps(update.rawInput);
+    return entries === undefined
+      ? undefined
+      : { ...notification, update: { sessionUpdate: "plan", entries } };
+  };
+}
+
 function localImagePath(imagePath: string | undefined): string | undefined {
   if (!imagePath || imagePath.length > TOOL_TEXT_LIMIT) {
     return undefined;
@@ -417,6 +566,48 @@ function localImagePath(imagePath: string | undefined): string | undefined {
     }
   }
   return /^[a-z][a-z\d+.-]*:/i.test(path) && !/^[a-z]:[\\/]/i.test(path) ? undefined : path;
+}
+
+function antigravityOrchestrationToolTitle(
+  rawTitle: string | undefined,
+  rawInput: unknown,
+): string | undefined {
+  if (rawTitle === undefined) return undefined;
+  const input = Predicate.isObject(rawInput) ? rawInput : undefined;
+  if (/^Run(?:ning)? manage_task\b/u.test(rawTitle)) {
+    const action = typeof input?.Action === "string" ? input.Action.toLowerCase() : "";
+    switch (action) {
+      case "list":
+        return "List background tasks";
+      case "status":
+        return "Check background task";
+      case "kill":
+        return "Stop background task";
+      case "send_input":
+        return "Send input to background task";
+      default:
+        return "Manage background task";
+    }
+  }
+  if (/^Run(?:ning)? manage_subagents\b/u.test(rawTitle)) {
+    const action = typeof input?.Action === "string" ? input.Action.toLowerCase() : "";
+    switch (action) {
+      case "list":
+        return "List subagents";
+      case "kill":
+        return "Stop subagent";
+      case "kill_all":
+        return "Stop all subagents";
+      default:
+        return "Manage subagents";
+    }
+  }
+  if (/^Run(?:ning)? schedule\b/u.test(rawTitle)) {
+    if (typeof input?.DurationSeconds === "number") return "Set timer";
+    if (typeof input?.CronExpression === "string") return "Schedule recurring job";
+    return "Schedule task";
+  }
+  return undefined;
 }
 
 export function normalizeAntigravityToolCall(toolCall: AcpToolCallState): AcpToolCallState {
@@ -461,11 +652,22 @@ export function normalizeAntigravityToolCall(toolCall: AcpToolCallState): AcpToo
       ...(exitCode !== undefined ? { exitCode } : {}),
     };
   }
+  const rawTitle = typeof data.title === "string" ? data.title : toolCall.title;
+  const orchestrationTitle = antigravityOrchestrationToolTitle(rawTitle, data.rawInput);
+  if (
+    orchestrationTitle !== undefined &&
+    typeof data.title !== "string" &&
+    rawTitle !== undefined
+  ) {
+    data.title = boundText(rawTitle);
+  }
+  const title =
+    orchestrationTitle ?? (toolCall.title !== undefined ? boundText(toolCall.title) : undefined);
   return {
     ...toolCall,
     ...(kind !== undefined ? { kind } : {}),
     ...(command !== undefined ? { command } : {}),
-    ...(toolCall.title !== undefined ? { title: boundText(toolCall.title) } : {}),
+    ...(title !== undefined ? { title } : {}),
     ...(command !== undefined
       ? { detail: command }
       : toolCall.detail !== undefined
@@ -519,6 +721,57 @@ export function isAntigravitySubagentReplayStart(rawPayload: unknown): boolean {
 export function antigravitySubagentOutput(toolCall: AcpToolCallState): string | undefined {
   const output = toolCall.data.rawOutput;
   return typeof output === "string" && output.trim() ? boundText(output.trim()) : undefined;
+}
+
+function nonEmptyRawField(
+  record: Record<string, unknown>,
+  keys: ReadonlyArray<string>,
+): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return boundText(value.trim());
+  }
+  return undefined;
+}
+
+/** Extracts Role/TypeName, Prompt, and explicit Model from agy 1.5 `invoke_subagent` input. */
+export function antigravitySubagentInput(toolCall: AcpToolCallState): {
+  readonly prompt: string | undefined;
+  readonly title: string | undefined;
+  readonly model: string | undefined;
+} {
+  const input = toolCall.data.rawInput;
+  if (!Predicate.isObject(input)) {
+    return { prompt: undefined, title: undefined, model: undefined };
+  }
+  const prompt = nonEmptyRawField(input, ["Prompt", "prompt"]);
+  const title = nonEmptyRawField(input, ["Role", "role", "TypeName", "typeName", "type_name"]);
+  const rawModel = nonEmptyRawField(input, ["Model", "model"]);
+  const model =
+    rawModel !== undefined && rawModel.toLowerCase() !== "inherit" ? rawModel : undefined;
+  return { prompt, title, model };
+}
+
+/**
+ * `agy acp` reports uncached input tokens in `usage.inputTokens` alongside
+ * `cachedReadTokens` and `cachedWriteTokens`, so `totalTokens` equals
+ * `inputTokens + cachedReadTokens + cachedWriteTokens + outputTokens`.
+ * `TurnTokenUsage` expects `inputTokens` to include cache read and write tokens.
+ */
+export function normalizeAntigravityPromptUsage(
+  usage: EffectAcpSchema.Usage,
+): EffectAcpSchema.Usage {
+  const cachedRead = usage.cachedReadTokens ?? 0;
+  const cachedWrite = usage.cachedWriteTokens ?? 0;
+  if (cachedRead === 0 && cachedWrite === 0) return usage;
+  const uncachedTotal = usage.inputTokens + cachedRead + cachedWrite + usage.outputTokens;
+  if (usage.totalTokens === uncachedTotal) {
+    return {
+      ...usage,
+      inputTokens: usage.inputTokens + cachedRead + cachedWrite,
+    };
+  }
+  return usage;
 }
 
 // The runtime spells the wait to its two largest units, rounded down, or names the UTC minute.
@@ -608,8 +861,10 @@ const MANAGED_RUNTIME_KILL_NOTE = /^Killed by manage_task\([^)]*\)$/u;
 
 function isAntigravityKillCall(toolCall: AcpToolCallState): boolean {
   const input = toolCall.data.rawInput;
+  const rawTitle =
+    typeof toolCall.data.title === "string" ? toolCall.data.title : (toolCall.title ?? "");
   return (
-    /^Run(?:ning)? manage_task\b/u.test(toolCall.title ?? "") &&
+    /^Run(?:ning)? manage_task\b/u.test(rawTitle) &&
     Predicate.isObject(input) &&
     typeof input.Action === "string" &&
     input.Action.toLowerCase() === "kill"

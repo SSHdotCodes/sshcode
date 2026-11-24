@@ -77,6 +77,12 @@ export function ProviderAuthenticationSection({
   const usesCredentials =
     provider.driver === "antigravity" &&
     (provider.auth.type === "gemini-api-key" || provider.auth.type === "agent-platform");
+  const signInUnchecked =
+    provider.driver === "antigravity" &&
+    provider.installed &&
+    provider.status === "warning" &&
+    provider.auth.status === "unknown" &&
+    !usesCredentials;
   const accountDescription = active
     ? auth?.phase === "starting"
       ? (auth.message ?? (usesCredentials ? "Connecting…" : "Starting sign-in…"))
@@ -97,7 +103,9 @@ export function ProviderAuthenticationSection({
           ? "No in-app sign-in advertised. Follow the provider's docs to finish setup."
           : usesCredentials
             ? `Connect on ${environmentLabel} to load models.`
-            : `Sign in on ${environmentLabel}.`;
+            : signInUnchecked
+              ? "Sign-in not checked yet. Checks on first chat, or sign in below."
+              : `Sign in on ${environmentLabel}.`;
   const statusMessage = auth?.phase === "failed" ? auth.message : null;
   const disabled = readOnly || pending || query.error !== null || isDiscovering;
   const draftId = `${auth?.flowId ?? ""}:${interaction?.id ?? ""}`;

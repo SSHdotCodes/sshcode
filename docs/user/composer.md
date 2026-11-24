@@ -136,9 +136,11 @@ are saved on the server and can be edited, reordered, or removed above the compo
 `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux uses the opposite action:
 it steers when your default is Queue and queues when your default is Steer.
 
-If Antigravity cannot steer the running turn directly, Steer stops it and sends
-your follow-up in the same conversation. Choose Queue to let the current work
-finish first.
+Some Antigravity turns support steering by interrupting and sending your follow-up.
+On Antigravity 1.5 and later, if a background update is already streaming, the
+agent finishes that update before replying to your steer. When an active turn
+cannot accept steering, the message queues. Choose **Send now** on its queued
+row to stop the current reply and send that message next.
 
 Use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on Windows and Linux to send
 the oldest queued message as a steer. This leaves the current draft intact and
@@ -312,9 +314,10 @@ Queued messages appear above the composer. Rows show a thumbnail of any attached
 the text. Drag a row by its handle to reorder it, use the handle's arrow keys, promote the message
 to a steer, or remove it.
 
-If the server restarts, saved queued messages keep their order and are held. Press
-**Resume** in an empty composer on web or desktop, or **Resume queue** in the queue
-sheet on mobile, to continue. You can edit, reorder, or remove held messages without starting them.
+**Stop reply** lets the next queued message start when the reply ends. **Stop**
+and **Stop everything** hold queued messages, as can a server restart. Choose
+**Send queued messages** in the queue to send them in order. You can edit,
+reorder, or remove held messages without starting them.
 
 The pencil on a queued row opens that message in the composer for editing. The original message
 stays in the queue until you save, and its row is highlighted while you edit. The message's

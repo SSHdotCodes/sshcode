@@ -247,3 +247,10 @@ describe("subagentSpeed", () => {
     expect(subagentSpeed(undefined)).toBeNull();
   });
 });
+
+describe("subagentSpeed", () => {
+  it("reads an ACP Speed's fast choice as fast", () => {
+    expect(subagentSpeed({ options: [{ id: "speed", value: "fast" }] })).toBe("fast");
+    expect(subagentSpeed({ options: [{ id: "speed", value: "standard" }] })).toBeNull();
+  });
+});

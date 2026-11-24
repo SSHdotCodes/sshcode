@@ -1544,6 +1544,49 @@ describe("AcpSessionRuntime", () => {
     );
   });
 
+  it.effect("forwards additionalDirectories on loadSession, resumeSession, and forkSession", () => {
+    const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
+    const attachmentsDir = "/tmp/t3-attachments-extra";
+    return Effect.gen(function* () {
+      const runtime = yield* AcpSessionRuntime.AcpSessionRuntime;
+      const started = yield* runtime.start();
+      yield* runtime.loadSession(started.sessionId);
+      yield* runtime.resumeSession(started.sessionId);
+      yield* runtime.forkSession(started.sessionId);
+
+      for (const method of ["session/new", "session/load", "session/resume", "session/fork"]) {
+        const startedEvent = requestEvents.find(
+          (event) => event.method === method && event.status === "started",
+        );
+        expect(startedEvent?.payload, method).toMatchObject({
+          additionalDirectories: [attachmentsDir],
+        });
+      }
+    }).pipe(
+      Effect.provide(
+        AcpSessionRuntime.layer({
+          authMethodId: "test",
+          spawn: {
+            command: mockAgentCommand,
+            args: mockAgentArgs,
+            env: {
+              T3_ACP_SESSION_LIFECYCLE: "1",
+            },
+          },
+          cwd: process.cwd(),
+          additionalDirectories: [attachmentsDir],
+          clientInfo: { name: "t3-test", version: "0.0.0" },
+          requestLogger: (event) =>
+            Effect.sync(() => {
+              requestEvents.push(event);
+            }),
+        }),
+      ),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    );
+  });
+
   it.effect("lists sessions without creating a disposable session", () => {
     const requestEvents: Array<AcpSessionRuntime.AcpSessionRequestLogEvent> = [];
     return Effect.gen(function* () {

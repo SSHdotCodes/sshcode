@@ -71,6 +71,24 @@ function display(descriptors: ReadonlyArray<ProviderOptionDescriptor>) {
 }
 
 describe("buildTraitsTriggerDisplay", () => {
+  it("draws an ACP Speed's fast choice (Devin's Lightning) as the bolt and drops Standard", () => {
+    const speed = (currentValue: string) =>
+      selectDescriptor(
+        "speed",
+        [
+          { id: "standard", label: "Standard" },
+          { id: "fast", label: "Lightning" },
+        ],
+        currentValue,
+      );
+    expect(display([EFFORT, speed("standard")])).toMatchObject({ label: "High", speedIcon: null });
+    expect(display([EFFORT, speed("fast")])).toMatchObject({
+      label: "High Lightning",
+      speedIcon: "fast",
+      beforeSpeed: "High",
+    });
+  });
+
   it("omits fast mode from the label entirely when it is off", () => {
     expect(display([EFFORT, fastModeDescriptor(false), CONTEXT_WINDOW])).toMatchObject({
       label: "High · 1M",
@@ -391,6 +409,46 @@ describe("buildUnavailableModelOptionDescriptors", () => {
         label: "Fast Mode",
         type: "boolean",
         currentValue: true,
+      },
+    ]);
+  });
+
+  it("formats Antigravity thought_level and snake_case option ids cleanly", () => {
+    expect(
+      buildUnavailableModelOptionDescriptors([
+        { id: "thought_level", value: "high" },
+        { id: "thinking_level", value: "xhigh" },
+        { id: "reasoning_effort", value: "medium" },
+        { id: "custom_mode", value: "strict" },
+      ]),
+    ).toEqual([
+      {
+        id: "thought_level",
+        label: "Thinking",
+        type: "select",
+        options: [{ id: "high", label: "high" }],
+        currentValue: "high",
+      },
+      {
+        id: "thinking_level",
+        label: "Thinking",
+        type: "select",
+        options: [{ id: "xhigh", label: "xhigh" }],
+        currentValue: "xhigh",
+      },
+      {
+        id: "reasoning_effort",
+        label: "Reasoning effort",
+        type: "select",
+        options: [{ id: "medium", label: "medium" }],
+        currentValue: "medium",
+      },
+      {
+        id: "custom_mode",
+        label: "Custom mode",
+        type: "select",
+        options: [{ id: "strict", label: "strict" }],
+        currentValue: "strict",
       },
     ]);
   });

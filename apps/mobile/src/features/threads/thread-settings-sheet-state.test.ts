@@ -7,6 +7,7 @@ import {
   canCommitPendingModel,
   favoritesFirst,
   modelMatchesCatalogQuery,
+  orderFavoriteRows,
   pendingModelAfterPress,
   providerSectionIsCollapsed,
   threadSettingsListItems,
@@ -90,6 +91,19 @@ describe("thread settings sheet state", () => {
       "third",
       "fourth",
     ]);
+  });
+
+  it("orders favorite rows by the saved stars even when a row displays another route", () => {
+    const gpt = modelOption("gpt-next");
+    const claude = modelOption("claude-next");
+    const claudeAlternate = { ...claude, key: "claudeAgent_max2:claude-next" };
+    const rows = [{ option: gpt }, { option: claude, routes: [claudeAlternate] }];
+
+    expect(orderFavoriteRows(rows, new Set([claudeAlternate.key, gpt.key]))).toEqual([
+      rows[1],
+      rows[0],
+    ]);
+    expect(orderFavoriteRows(rows, new Set([gpt.key, claudeAlternate.key]))).toEqual(rows);
   });
 
   it("matches visible model and provider terms", () => {

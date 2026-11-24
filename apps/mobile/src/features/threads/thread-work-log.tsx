@@ -1376,7 +1376,14 @@ export function ThreadWorkGroupToggle(props: {
   readonly iconSubtleColor: import("react-native").ColorValue;
   readonly summary: string;
   readonly summaryKind: ToolGroupSummaryKind;
-  readonly summaryToolIcon?: "browser" | "device" | "t3-code" | "pull-request" | "x-logo" | "brain";
+  readonly summaryToolIcon?:
+    | "browser"
+    | "computer"
+    | "device"
+    | "t3-code"
+    | "pull-request"
+    | "x-logo"
+    | "brain";
   readonly themeAppearance: "light" | "dark";
   readonly toolSurface?: import("@t3tools/contracts").ToolActivitySurface;
   readonly toolIcon?: ToolActivityIcon;
@@ -1563,20 +1570,23 @@ export const ThreadAgentSpawnCard = memo(function ThreadAgentSpawnCard(props: {
 export function ThreadWorkingRow(props: {
   readonly rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
   readonly iconSubtleColor: ColorValue;
+  readonly label: string;
+  readonly shimmer: boolean;
 }) {
+  const Content = props.shimmer ? ShimmeringWorkContent : ShimmerWorkContent;
   return (
     <View
       accessible
-      accessibilityLabel="Thinking…"
+      accessibilityLabel={props.label}
       className="-mx-1 min-h-8 flex-row items-center px-1.5 py-0"
       style={{ minHeight: props.rowSizing.estimatedRowHeight }}
     >
-      <ShimmerWorkContent
+      <Content
         highlighted={false}
         key={props.rowSizing.textSizeKey}
         icon="ellipsis"
         iconSubtleColor={props.iconSubtleColor}
-        label="Thinking…"
+        label={props.label}
         showIcon={false}
       />
     </View>
@@ -1689,7 +1699,9 @@ function ToolActivityImage(props: {
   );
 }
 
-export function toolGroupSummarySymbolName(kind: ToolGroupSummaryKind): AppSymbolName | "x-logo" {
+export function toolGroupSummarySymbolName(
+  kind: ToolGroupSummaryKind,
+): AppSymbolName | "computer" | "x-logo" {
   switch (kind) {
     case "pull-request":
     case "link-pr":
@@ -1706,6 +1718,8 @@ export function toolGroupSummarySymbolName(kind: ToolGroupSummaryKind): AppSymbo
       return { ios: "bubble.left", android: "chat" };
     case "command":
       return { ios: "terminal", android: "terminal" };
+    case "computer":
+      return "computer";
     case "device":
       return { ios: "iphone", android: "smartphone" };
     case "x":

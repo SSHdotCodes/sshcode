@@ -1,4 +1,4 @@
-import type { ProviderDriverKind } from "@t3tools/contracts";
+import type { ProviderDriverKind, ServerProviderModel } from "@t3tools/contracts";
 import type * as AcpSchema from "effect-acp/compat";
 import type { AcpToolCallState } from "@t3tools/provider-acp/server/runtimeModel";
 import type {
@@ -10,6 +10,40 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+
+/**
+ * Devin serves its SWE models' Lightning variants (Cerebras, billed per token, recorded as
+ * `swe-2-1-low-lightning` and the like) as the model's Speed "fast" choice, not as models of their
+ * own, so the picker names that choice the way Devin's own picker names the model.
+ */
+export function withDevinLightningSpeed(
+  models: ReadonlyArray<ServerProviderModel>,
+): ReadonlyArray<ServerProviderModel> {
+  return models.map((model) => {
+    const descriptors = model.capabilities?.optionDescriptors;
+    if (!model.slug.startsWith("swe-") || model.capabilities == null || descriptors === undefined)
+      return model;
+    let changed = false;
+    const optionDescriptors = descriptors.map((descriptor) => {
+      if (descriptor.id !== "speed" || descriptor.type !== "select") return descriptor;
+      return {
+        ...descriptor,
+        options: descriptor.options.map((option) => {
+          if (option.id !== "fast" || option.label === "Lightning") return option;
+          changed = true;
+          return {
+            ...option,
+            label: "Lightning",
+            description: "About 10× faster on Cerebras. Billed per token.",
+          };
+        }),
+      };
+    });
+    return changed
+      ? { ...model, capabilities: { ...model.capabilities, optionDescriptors } }
+      : model;
+  });
+}
 
 // How long a steer watches for the turn ending under it before calling it delivered.
 const STEER_SETTLE = "1500 millis";

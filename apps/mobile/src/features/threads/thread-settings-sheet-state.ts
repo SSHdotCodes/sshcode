@@ -28,6 +28,22 @@ export function favoritesFirst(
   return [...favorites, ...others];
 }
 
+/** Keep each row at the saved position of its earliest starred route. */
+export function orderFavoriteRows<
+  Row extends {
+    readonly option: ModelOption;
+    readonly routes?: ReadonlyArray<ModelOption> | undefined;
+  },
+>(rows: ReadonlyArray<Row>, favoriteKeys: ReadonlySet<string>): Row[] {
+  const order = new Map([...favoriteKeys].map((key, index) => [key, index]));
+  const rank = (row: Row) =>
+    (row.routes ?? []).reduce(
+      (best, route) => Math.min(best, order.get(route.key) ?? Number.MAX_SAFE_INTEGER),
+      order.get(row.option.key) ?? Number.MAX_SAFE_INTEGER,
+    );
+  return [...rows].sort((left, right) => rank(left) - rank(right));
+}
+
 /** Match the terms a user can actually see or recognize in the model picker. */
 export function modelMatchesCatalogQuery(input: {
   readonly model: ModelOption;

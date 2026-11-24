@@ -752,6 +752,11 @@ describe("buildModelPicks", () => {
   it("reads the effort from a saved model selection", () => {
     expect(effortOfSelection({ options: [{ id: "effort", value: "xhigh" }] })).toBe("xhigh");
     expect(effortOfSelection({ options: [{ id: "reasoningEffort", value: "high" }] })).toBe("high");
+    expect(effortOfSelection({ options: [{ id: "thought_level", value: "high" }] })).toBe("high");
+    expect(effortOfSelection({ options: [{ id: "thinking_level", value: "medium" }] })).toBe(
+      "medium",
+    );
+    expect(effortOfSelection({ options: [{ id: "variant", value: "max" }] })).toBe("max");
     expect(effortOfSelection({ options: [{ id: "fastMode", value: true }] })).toBeUndefined();
     expect(effortOfSelection(null)).toBeUndefined();
   });

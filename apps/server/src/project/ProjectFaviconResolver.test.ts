@@ -238,6 +238,25 @@ it.layer(layerTest)("ProjectFaviconResolverLive", (it) => {
       }),
     );
 
+    it.effect("resolves percent-encoded local icon hrefs", () =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
+        const encodedCwd = yield* makeTempDir;
+        yield* writeTextFile(encodedCwd, "index.html", '<link rel="icon" href="/team%20mark.svg">');
+        yield* writeTextFile(encodedCwd, "public/team mark.svg", "<svg>team</svg>");
+        expect(yield* resolver.resolvePath(encodedCwd)).toBe(
+          (yield* Path.Path).join(encodedCwd, "public", "team mark.svg"),
+        );
+
+        const malformedCwd = yield* makeTempDir;
+        yield* writeTextFile(malformedCwd, "index.html", '<link rel="icon" href="/100%.svg">');
+        yield* writeTextFile(malformedCwd, "public/100%.svg", "<svg>100</svg>");
+        expect(yield* resolver.resolvePath(malformedCwd)).toBe(
+          (yield* Path.Path).join(malformedCwd, "public", "100%.svg"),
+        );
+      }),
+    );
+
     it.effect("resolves icon hrefs from object-literal route metadata", () =>
       Effect.gen(function* () {
         const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;

@@ -15,14 +15,15 @@ import {
 } from "@t3tools/shared/assistantCitations";
 import { shallow } from "zustand/vanilla/shallow";
 import { renderCodexDirectivesForCopy } from "@t3tools/shared/codexMarkdownDirectives";
+import { commandDisplayText } from "@t3tools/client-runtime/work-log/command-label";
 import {
-  commandDisplayText,
-  commandProgramName,
-} from "@t3tools/client-runtime/work-log/command-label";
-import {
+  isNewerRunningTool,
   liveActivityToolStatus,
+  commandlessCommandLabel,
+  liveToolActivityLabel,
   normalizeCompactToolLabel,
   resolveWorkEntryToolPresentation,
+  runningToolStatusLabel,
   summarizeToolGroup,
   toolGroupAction,
   toolGroupSummaryKind,
@@ -224,6 +225,8 @@ export function workEntryDisplayLabel(entry: WorkLogEntry, workspaceRoot: string
   const toolPresentation = resolveWorkEntryToolPresentation(entry);
   if (toolPresentation) return toolPresentation.displayName;
   if (entry.command?.trim()) return commandDisplayText(entry.command);
+  const commandless = commandlessCommandLabel(entry);
+  if (commandless !== null) return commandless;
   const action = toolGroupAction(entry);
   if (action === "code-search" || action === "search") {
     // Adapters title file searches with their target; the item keeps only the pattern.
@@ -330,33 +333,14 @@ export function liveWorkEntryLabel(
   workspaceRoot: string | undefined,
   active: boolean,
 ) {
-  const status = liveActivityToolStatus(entry.toolLifecycleStatus, active);
   if (entry.itemType === "reasoning") {
+    const status = liveActivityToolStatus(entry.toolLifecycleStatus, active);
     return (
       entry.detail?.trim().replace(/\s+/g, " ") ||
       (status === "inProgress" ? "Thinking" : "Thought")
     );
   }
-  const toolPresentation = resolveWorkEntryToolPresentation({
-    ...entry,
-    toolLifecycleStatus: status,
-  });
-  if (toolPresentation) return toolPresentation.displayName;
-  const command = entry.command?.trim();
-  if (command) {
-    const verb =
-      status === "inProgress"
-        ? "Running"
-        : status === "failed"
-          ? "Failed"
-          : status === "declined"
-            ? "Declined"
-            : status === "stopped"
-              ? "Stopped"
-              : "Ran";
-    return `${verb} ${commandProgramName(command) ?? "command"}`;
-  }
-  return workEntryDisplayLabel(entry, workspaceRoot);
+  return liveToolActivityLabel(entry, active) ?? workEntryDisplayLabel(entry, workspaceRoot);
 }
 
 export function workEntryIsVisibleInGroup(
@@ -645,6 +629,7 @@ type MessagesTimelineRowContent =
       groupId: string;
       expanded: boolean;
       active: boolean;
+      shimmer?: true;
       /** Latest reasoning in the live group, shown above the status line. */
       thought?: WorkLogEntry;
     }
@@ -664,6 +649,7 @@ type MessagesTimelineRowContent =
       expanded?: boolean;
       /** The reply is streaming above this row: the agent is writing, not thinking. */
       writing?: true;
+      runningToolLabel?: string;
     }
   | {
       kind: "work-toggle";
@@ -677,7 +663,7 @@ type MessagesTimelineRowContent =
       summaryKind: ToolGroupSummaryKind;
       toolSurface?: WorkLogEntry["toolSurface"];
       toolIcon?: WorkLogEntry["toolIcon"];
-      summaryToolIcon?: "browser" | "device" | "t3-code" | "pull-request" | "x-logo";
+      summaryToolIcon?: "browser" | "computer" | "device" | "t3-code" | "pull-request" | "x-logo";
       hasFailure: boolean;
       /** Images the group's tools viewed, shown under the header without expanding it. */
       viewedImagePaths?: ReadonlyArray<string>;
@@ -1605,6 +1591,8 @@ export function deriveMessagesTimelineRows(input: {
       })
     : new Map<MessageId, number>();
   const nextRows: MessagesTimelineRow[] = [];
+  /** Tool calls a row already names on its own, so the bottom status line needn't repeat them. */
+  const toolsNamedInRows = new Set<string>();
   const durationStartByMessageId = computeMessageDurationStart(
     timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
   );
@@ -1656,6 +1644,18 @@ export function deriveMessagesTimelineRows(input: {
     input.isWorking &&
     entry.toolLifecycleStatus === "inProgress" &&
     (entry.runId == null ? runlessWorkActive : entry.runId === unsettledRunId);
+  let runningTool: Extract<TimelineEntry, { kind: "work" }> | undefined;
+  if (input.isWorking) {
+    for (const entry of timelineEntries) {
+      if (
+        entry.kind === "work" &&
+        workEntryIsInActiveRun(entry.entry) &&
+        isNewerRunningTool(entry.entry, runningTool?.entry)
+      ) {
+        runningTool = entry;
+      }
+    }
+  }
 
   // A steer continues the current turn. Keep its elapsed-time header below
   // the initiating prompt (or automatic wake), rather than moving it down.
@@ -1705,14 +1705,17 @@ export function deriveMessagesTimelineRows(input: {
   const latestVisibleToolEntry = visibleActiveToolEntries.findLast(
     (entry) => entry.entry.itemType !== "reasoning",
   );
-  const latestRunningToolEntry = visibleActiveToolEntries.findLast((entry) =>
-    workEntryIsActiveTurnActivity(entry.entry),
-  );
+  const carriesRunningTool =
+    runningTool !== undefined && visibleActiveToolEntries.includes(runningTool);
+  const latestRunningToolEntry = carriesRunningTool
+    ? runningTool
+    : visibleActiveToolEntries.findLast((entry) => workEntryIsActiveTurnActivity(entry.entry));
   const latestToolKeepsActivityLive =
     latestRunningToolEntry !== undefined ||
     (latestVisibleToolEntry !== undefined &&
       workEntryIndicatesToolSuccess(latestVisibleToolEntry.entry));
   const latestToolFailed =
+    runningTool === undefined &&
     latestRunningToolEntry === undefined &&
     latestVisibleToolEntry !== undefined &&
     latestVisibleToolEntry.entry.toolLifecycleStatus !== "declined" &&
@@ -1725,7 +1728,7 @@ export function deriveMessagesTimelineRows(input: {
           const groupId = workGroupId(activeWorkAnchor.id);
           return {
             kind: "work-live" as const,
-            id: latestToolKeepsActivityLive
+            id: (runningTool === undefined ? latestToolKeepsActivityLive : carriesRunningTool)
               ? LIVE_ACTIVITY_ROW_ID
               : `work-live:${activeWorkAnchor.id}`,
             createdAt: activeWorkAnchor.createdAt,
@@ -1734,6 +1737,7 @@ export function deriveMessagesTimelineRows(input: {
             groupId,
             expanded: input.expandedWorkGroupIds?.has(groupId) ?? false,
             active: latestToolKeepsActivityLive,
+            ...(carriesRunningTool ? { shimmer: true as const } : {}),
           };
         })()
       : null;
@@ -1955,6 +1959,7 @@ export function deriveMessagesTimelineRows(input: {
           workLogEntryIsToolLike(visibleGroupedEntries[0]!)
         ) {
           const singleEntry = visibleGroupedEntries[0]!;
+          toolsNamedInRows.add(singleEntry.id);
           nextRows.push({
             kind: "work",
             id: timelineEntry.id,
@@ -1999,6 +2004,7 @@ export function deriveMessagesTimelineRows(input: {
           const viewedImagePaths = workGroupViewedImagePaths(visibleGroupedEntries);
           const outputImages = workGroupOutputImages(visibleGroupedEntries);
           const imageNotices = workGroupImageNotices(visibleGroupedEntries);
+          if (singleEntry !== null) toolsNamedInRows.add(singleEntry.id);
           nextRows.push({
             kind: "work-toggle",
             id: `work-toggle:${timelineEntry.id}`,
@@ -2195,12 +2201,28 @@ export function deriveMessagesTimelineRows(input: {
   if (input.isWorking && !hasWorkingRow && activeTurnHeaderIndex === timelineEntries.length) {
     appendWorkingRow();
   }
-  if (
-    input.isWorking &&
-    !setupOwnsWorkingSlot &&
-    !hasActiveCompaction &&
-    (!hasActivityRow || latestToolFailed)
-  ) {
+  const showsActivityTail = input.isWorking && !setupOwnsWorkingSlot && !hasActiveCompaction;
+  if (showsActivityTail && runningTool !== undefined && !carriesRunningTool) {
+    // A running tool already on screen as its own row needs no second line at the bottom.
+    const runningToolShown =
+      toolsNamedInRows.has(runningTool.entry.id) ||
+      nextRows.some(
+        (row) =>
+          (row.kind === "work-live" && row.entry.id === runningTool.entry.id) ||
+          (row.kind === "work" &&
+            row.groupedEntries.some((entry) => entry.id === runningTool.entry.id)),
+      );
+    if (!runningToolShown) {
+      nextRows.push({
+        kind: "thinking",
+        id: LIVE_ACTIVITY_ROW_ID,
+        createdAt: input.activeTurnStartedAt ?? null,
+        runningToolLabel: runningToolStatusLabel(
+          liveWorkEntryLabel(runningTool.entry, undefined, true),
+        ),
+      });
+    }
+  } else if (showsActivityTail && (!hasActivityRow || latestToolFailed)) {
     // A failed latest tool hands the row back to thinking, but its group
     // stays reachable through the same disclosure the live row offers.
     const failedGroupAnchor = latestToolFailed ? activeWorkAnchor : undefined;
@@ -2687,7 +2709,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.createdAt === bt.createdAt &&
         a.groupId === bt.groupId &&
         a.expanded === bt.expanded &&
-        a.writing === bt.writing
+        a.writing === bt.writing &&
+        a.runningToolLabel === bt.runningToolLabel
       );
     }
     case "worktree-setup":
@@ -2761,6 +2784,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.groupId === bw.groupId &&
         a.expanded === bw.expanded &&
         a.active === bw.active &&
+        a.shimmer === bw.shimmer &&
         Equal.equals(a.entry, bw.entry) &&
         Equal.equals(a.groupedEntries, bw.groupedEntries)
       );

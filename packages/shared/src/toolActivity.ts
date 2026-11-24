@@ -142,6 +142,8 @@ function extractToolCommand(data: Record<string, unknown> | undefined, title: st
 
 const PATH_KEYS = [
   "path",
+  "Path",
+  "absolute_path",
   "filePath",
   "file_path",
   "relativePath",

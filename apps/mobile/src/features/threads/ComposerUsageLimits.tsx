@@ -7,7 +7,11 @@ import type {
 import { useAtomValue } from "@effect/atom-react";
 import { rememberedAccountFailure } from "@t3tools/contracts";
 import { providerHealthNotice } from "@t3tools/client-runtime/providerHealth";
-import { formatAsOf, olderReadingAt } from "@t3tools/shared/usageLimits";
+import {
+  displayProviderUsageWindows,
+  formatAsOf,
+  olderReadingAt,
+} from "@t3tools/shared/usageLimits";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Pressable, ScrollView, useWindowDimensions, View } from "react-native";
@@ -73,7 +77,7 @@ export function ComposerUsageLimits({
           return (
             <View key={account.id} className="py-2">
               {index === 0 ? <View className="items-end px-4 pb-1">{close}</View> : null}
-              {account.limits.windows.map((window) => (
+              {displayProviderUsageWindows(account.driver, account.limits.windows).map((window) => (
                 <ThreadLimitRow
                   key={window.id}
                   window={window}

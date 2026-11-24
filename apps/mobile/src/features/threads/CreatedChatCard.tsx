@@ -7,6 +7,7 @@ import {
   type EnvironmentId,
   type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
+import { getExplicitModelEffortLabel, resolveSelectableModel } from "@t3tools/shared/model";
 import { Pressable, View } from "react-native";
 import { useEnvironmentServerConfig } from "../../state/entities";
 import { createdChatShellAtom } from "../../state/threads";
@@ -26,9 +27,11 @@ export function CreatedChatCard(props: {
     (candidate) => candidate.instanceId === chat.providerInstanceId,
   );
   const navigation = useNavigation();
-  const effort = shell?.modelSelection.options?.find((option) =>
-    ["reasoningEffort", "effort", "reasoning", "variant"].includes(option.id),
-  );
+  const modelSlug = provider
+    ? resolveSelectableModel(provider.driver, chat.model, provider.models)
+    : chat.model;
+  const providerModel = provider?.models.find((candidate) => candidate.slug === modelSlug);
+  const effort = getExplicitModelEffortLabel(shell?.modelSelection, providerModel?.capabilities);
   return (
     <View className="mb-1 gap-px">
       <Pressable
@@ -56,7 +59,7 @@ export function CreatedChatCard(props: {
             <SubagentMetadata
               environmentId={props.environmentId}
               createdChat
-              effort={typeof effort?.value === "string" ? effort.value : undefined}
+              effort={effort}
               subagent={{
                 model: chat.model,
                 providerInstanceId: chat.providerInstanceId,

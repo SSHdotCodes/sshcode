@@ -8,7 +8,7 @@ export function ChatHeaderAppearanceSection() {
   return (
     <SettingsSection
       title="Chat header"
-      footer="Choose the shortcuts shown above each chat. Merge back appears when available."
+      footer="Choose the shortcuts shown above each chat. Merge back and pinned messages appear when a chat has them."
     >
       <SettingsSwitchRow
         disabled={!isReady}
@@ -16,13 +16,6 @@ export function ChatHeaderAppearanceSection() {
         label="Side chat"
         onValueChange={(visible) => setThreadHeaderItemVisible("sideChat", visible)}
         value={threadHeaderItems.includes("sideChat")}
-      />
-      <SettingsSwitchRow
-        disabled={!isReady}
-        icon="point.topleft.down.curvedto.point.bottomright.up"
-        label="Git controls"
-        onValueChange={(visible) => setThreadHeaderItemVisible("git", visible)}
-        value={threadHeaderItems.includes("git")}
       />
       <SettingsSwitchRow
         disabled={!isReady}

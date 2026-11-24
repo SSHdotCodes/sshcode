@@ -18,7 +18,7 @@ import {
 } from "@t3tools/contracts";
 
 import { pickAccountForNewSession } from "./accountBalance.ts";
-import { supersededModelVersions } from "./model.ts";
+import { isReasoningOptionId, supersededModelVersions } from "./model.ts";
 import { providerAccountKeyResolver } from "./usageLimits.ts";
 import type { ModelBenchmarkTable } from "./modelBenchmarks.ts";
 import {
@@ -647,7 +647,9 @@ export function effortOfSelection(
     | null
     | undefined,
 ): string | undefined {
-  const option = selection?.options?.find((entry) => /effort/i.test(entry.id));
+  const option = selection?.options?.find(
+    (entry) => isReasoningOptionId(entry.id) || /effort/i.test(entry.id),
+  );
   return typeof option?.value === "string" ? option.value : undefined;
 }
 

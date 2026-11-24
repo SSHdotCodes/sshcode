@@ -111,6 +111,9 @@ export function createEnvironmentThreadDetailAtoms<E>(
       return count;
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-queue-count:${key}`));
   });
+  const queueHeldAtomFamily = Atom.family((key: string) =>
+    Atom.make((get) => get(queueWorkflowAtomFamily(key))?.isHeld === true).pipe(Atom.setIdleTTL(0)),
+  );
 
   const turnSubagentsAtomFamily = Atom.family((key: string) => {
     let previous: Pick<OrchestrationV2ThreadProjection, "runs" | "subagents"> | null = null;
@@ -197,6 +200,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
     pendingRequestsAtom: (ref: ScopedThreadRef) => pendingRequestsAtomFamily(threadKey(ref)),
     queueWorkflowAtom: (ref: ScopedThreadRef) => queueWorkflowAtomFamily(threadKey(ref)),
     queuedCountAtom: (ref: ScopedThreadRef) => queuedCountAtomFamily(threadKey(ref)),
+    queueHeldAtom: (ref: ScopedThreadRef) => queueHeldAtomFamily(threadKey(ref)),
     turnSubagentsAtom: (ref: ScopedThreadRef) => turnSubagentsAtomFamily(threadKey(ref)),
     boundedWindowSequenceAtom: (ref: ScopedThreadRef) =>
       boundedWindowSequenceAtomFamily(threadKey(ref)),

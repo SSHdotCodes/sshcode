@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
+import { RunId } from "./baseSchemas.ts";
 import { ThreadMetadataMcpUpdateInput } from "./threadMetadataMcp.ts";
 
 const decodeUpdate = Schema.decodeUnknownSync(ThreadMetadataMcpUpdateInput);
@@ -35,12 +36,18 @@ describe("ThreadMetadataMcpUpdateInput", () => {
     assert.deepEqual(decodeUpdate({ action: "unlink_pull_request" }), {
       action: "unlink_pull_request",
     });
+    assert.deepEqual(decodeUpdate({ action: "cancel_queued", runId: "run:queued" }), {
+      action: "cancel_queued",
+      runId: RunId.make("run:queued"),
+    });
   });
 
   it("rejects missing action data and fields from another action", () => {
     assert.throws(() => decodeUpdate({ action: "rename" }));
     assert.throws(() => decodeUpdate({ action: "regenerate_title", title: "Not allowed" }));
     assert.throws(() => decodeUpdate({ action: "link_pull_request" }));
+    assert.throws(() => decodeUpdate({ action: "cancel_queued" }));
+    assert.throws(() => decodeUpdate({ action: "settle", runId: "run:queued" }));
     assert.throws(() =>
       decodeUpdate({
         action: "unlink_pull_request",

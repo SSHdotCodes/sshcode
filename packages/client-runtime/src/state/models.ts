@@ -1,6 +1,6 @@
 import {
   backgroundWorkHoldsCompletion,
-  backgroundWorkKindHoldsCompletion,
+  backgroundWorkTaskHoldsCompletion,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
 import { plainContextText } from "@t3tools/shared/composerContextReferences";
@@ -144,6 +144,12 @@ export interface EnvironmentThreadShell {
   /** Slot in the user-arranged active order; null for keyless active threads. */
   readonly activeOrderKey: string | null;
   readonly pullRequests: ReadonlyArray<import("@t3tools/contracts").ThreadPullRequestLink>;
+  /** Messages the user pinned, oldest pin first. Absent when there are none. */
+  readonly pinnedMessages?: ReadonlyArray<{
+    readonly messageId: import("@t3tools/contracts").MessageId;
+    readonly pinnedAt: string;
+    readonly preview?: string;
+  }>;
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
   readonly branchPullRequest?: ThreadLinkedPullRequest | null;
   /**
@@ -206,8 +212,9 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
   return {
     status,
     activeRunId: thread.activeRunId,
-    activityStartedAt:
-      thread.activityRunStartedAt === undefined
+    activityStartedAt: parkAtIdle
+      ? null
+      : thread.activityRunStartedAt === undefined
         ? undefined
         : nullableIso(thread.activityRunStartedAt),
     providerInstanceId: thread.providerInstanceId,
@@ -272,6 +279,15 @@ export function presentThreadShell(
     branch: thread.branch,
     worktreePath: thread.worktreePath,
     pullRequests: threadPullRequestsOf(thread),
+    ...((thread.pinnedMessages?.length ?? 0) === 0
+      ? {}
+      : {
+          pinnedMessages: thread.pinnedMessages!.map((pin) => ({
+            messageId: pin.messageId,
+            pinnedAt: iso(pin.pinnedAt),
+            ...(pin.preview === undefined ? {} : { preview: pin.preview }),
+          })),
+        }),
     linkedPullRequest: thread.linkedPullRequest ?? null,
     branchPullRequest: thread.branchPullRequest ?? null,
     lineage: thread.lineage,
@@ -411,7 +427,7 @@ export function resolveThreadWaitingStartedAt(input: {
   let earliestStart: string | undefined;
   let earliestMs = Number.POSITIVE_INFINITY;
   for (const task of input.pendingBackgroundTasks) {
-    if (!backgroundWorkKindHoldsCompletion(task.kind)) continue;
+    if (!backgroundWorkTaskHoldsCompletion(task)) continue;
     const startedAt = task.kind === "subagent" ? task.startedAt : undefined;
     if (startedAt === undefined) return completedAt;
     const startedMs = Date.parse(startedAt);

@@ -466,6 +466,9 @@ export function threadDetailToShell(
     linkedPullRequest: thread.linkedPullRequest ?? null,
     pullRequests: thread.pullRequests,
     branchPullRequest: thread.branchPullRequest ?? null,
+    ...((thread.pinnedMessages?.length ?? 0) === 0
+      ? {}
+      : { pinnedMessages: thread.pinnedMessages }),
     activeProviderThreadId: thread.activeProviderThreadId,
     lineage: thread.lineage,
     forkedFrom: thread.forkedFrom,

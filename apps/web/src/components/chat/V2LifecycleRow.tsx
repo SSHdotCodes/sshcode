@@ -49,6 +49,7 @@ import {
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { ArrowRightLeftIcon, ArrowRightIcon, GitForkIcon, MinusIcon, XIcon } from "lucide-react";
 
+import { getExplicitModelEffortLabel, resolveSelectableModel } from "@t3tools/shared/model";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { getProviderInstanceEntry } from "../../providerInstances";
 import { formatShortTimestamp } from "../../timestampFormat";
@@ -403,9 +404,11 @@ export function CreatedChatTimelineLink(props: {
     (candidate) => candidate.instanceId === chat.providerInstanceId,
   );
   const { modelLabel } = resolveSubagentMetadata({ model: chat.model, provider });
-  const effort = shell?.modelSelection.options?.find((option) =>
-    ["reasoningEffort", "effort", "reasoning", "variant"].includes(option.id),
-  );
+  const modelSlug = provider
+    ? resolveSelectableModel(provider.driver, chat.model, provider.models)
+    : chat.model;
+  const providerModel = provider?.models.find((candidate) => candidate.slug === modelSlug);
+  const effort = getExplicitModelEffortLabel(shell?.modelSelection, providerModel?.capabilities);
   const speed = subagentSpeed(shell?.modelSelection);
   return (
     <SubagentCard
@@ -416,11 +419,7 @@ export function CreatedChatTimelineLink(props: {
       preview={chat.preview}
       driver={provider?.driver}
       provider={provider}
-      modelLabel={[
-        modelLabel,
-        typeof effort?.value === "string" ? effort.value : null,
-        speed ? SUBAGENT_SPEED_LABELS[speed] : null,
-      ]
+      modelLabel={[modelLabel, effort ?? null, speed ? SUBAGENT_SPEED_LABELS[speed] : null]
         .filter(Boolean)
         .join(" · ")}
       speed={speed}

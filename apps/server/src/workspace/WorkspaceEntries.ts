@@ -334,7 +334,8 @@ export const make = Effect.gen(function* () {
               command: "git",
               args: ["-c", "core.fsmonitor=false", "check-ignore", "-z", "--stdin"],
               cwd: normalizedCwd,
-              stdin: `${paths.join("\0")}\0`,
+              // ./ avoids leading : pathspec magic; check-ignore rejects --literal-pathspecs.
+              stdin: `${paths.map((entryPath) => `./${entryPath}`).join("\0")}\0`,
               allowNonZeroExit: true,
               timeoutMs: 10_000,
               maxOutputBytes: 16 * 1024 * 1024,
@@ -351,7 +352,7 @@ export const make = Effect.gen(function* () {
           entries.length > IGNORE_CHECK_CHUNK_SIZE &&
           target.relativePath !== "" &&
           !throughSymlink &&
-          !/^:|[*?[\\]/.test(target.relativePath) &&
+          !/[*?[\\]/.test(target.relativePath) &&
           (yield* checkIgnore([target.relativePath]))?.exitCode === 0
         ) {
           return {
@@ -365,7 +366,9 @@ export const make = Effect.gen(function* () {
             entries.slice(offset, offset + IGNORE_CHECK_CHUNK_SIZE).map((entry) => entry.path),
           );
           if (!result || (result.exitCode !== 0 && result.exitCode !== 1)) break;
-          for (const ignoredPath of result.stdout.split("\0")) ignored.add(ignoredPath);
+          for (const ignoredPath of result.stdout.split("\0")) {
+            ignored.add(ignoredPath.replace(/^\.\//, ""));
+          }
         }
         return {
           entries: entries.map((entry) =>

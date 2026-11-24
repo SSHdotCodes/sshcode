@@ -6,6 +6,7 @@
  *
  * @module ProjectFaviconResolver
  */
+import { safeDecodeURIComponent } from "@t3tools/shared/markdownLinks";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -166,7 +167,9 @@ export const make = Effect.gen(function* () {
   const projectFileLoader = yield* T3ProjectFileLoader.T3ProjectFileLoader;
 
   const resolveIconHref = (href: string): ReadonlyArray<string> => {
-    const clean = href.replace(/^\//, "");
+    const clean = safeDecodeURIComponent(href.replace(/^\//, ""));
+    // A decoded NUL fails `stat` instead of missing.
+    if (clean.includes("\0")) return [];
     return [path.join("public", clean), clean];
   };
 

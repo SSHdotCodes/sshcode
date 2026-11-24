@@ -88,6 +88,7 @@ export function FloatingWorkingControl(props: {
   readonly agents: SubagentPillSegment | null;
   readonly onOpenAgents: () => void;
   readonly queuedCount: number;
+  readonly queueHeld?: boolean;
   readonly onOpenQueue: () => void;
   /** Extra distance to rise above the anchor, e.g. an overlay card's coverage. */
   readonly lift?: SharedValue<number>;
@@ -266,8 +267,8 @@ export function FloatingWorkingControl(props: {
       {hasQueue ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Open queue, ${props.queuedCount} messages`}
-          accessibilityHint="Opens queued messages for reordering, steering, or removal"
+          accessibilityLabel={`Open ${props.queueHeld ? "held " : ""}queue, ${props.queuedCount} messages`}
+          accessibilityHint="Opens queued message actions"
           onPress={props.onOpenQueue}
           onLayout={(event) => setQueueWidth(event.nativeEvent.layout.width)}
           style={{ maxWidth: Math.min(overlayWidth, windowWidth) * 0.45 }}
@@ -278,7 +279,7 @@ export function FloatingWorkingControl(props: {
           ) : null}
           <SymbolView name="list.number" size={13} tintColorClassName="accent-foreground-muted" />
           <Text className="shrink font-t3-medium text-xs tabular-nums" numberOfLines={1}>
-            {props.queuedCount} queued
+            {props.queuedCount} {props.queueHeld ? "held" : "queued"}
           </Text>
         </Pressable>
       ) : null}

@@ -37,6 +37,8 @@ export interface ThreadQueueWorkflowState {
   readonly canReorder: boolean;
   readonly canPromoteToSteer: boolean;
   readonly canSendSteer: boolean;
+  readonly canSendNow: boolean;
+  readonly steeringUnavailableReason: string | null;
 }
 
 export function resolveActiveThreadRun(projection: Pick<Projection, "runs">): Run | null {
@@ -141,16 +143,27 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
   const activeRun = resolveActiveThreadRun(projection);
   const session = resolveThreadProviderSession(projection);
   const capabilities = session?.capabilities.turns;
-  const hasSteerableProviderTurn =
-    activeRun?.status === "running" &&
-    activeRun.activeAttemptId !== null &&
-    projection.providerTurns.some(
-      (turn) => turn.runAttemptId === activeRun.activeAttemptId && turn.status === "running",
-    );
+  const runningTurn =
+    activeRun?.status === "running" && activeRun.activeAttemptId !== null
+      ? projection.providerTurns.find(
+          (turn) =>
+            turn.runAttemptId === activeRun.activeAttemptId &&
+            turn.nodeId === activeRun.rootNodeId &&
+            turn.status === "running",
+        )
+      : undefined;
+  const steering = providerSteeringExecution(session);
+  const steeringUnavailableReason =
+    runningTurn?.steeringUnavailable === true ||
+    (runningTurn !== undefined && session !== null && steering === null)
+      ? "This turn can't accept a steer."
+      : null;
   const userQueuedRuns = getUserQueuedThreadRuns(projection);
+  const isHeld = userQueuedRuns.some((run) => run.queueHeld === true);
   const queuedRuns = copySorted(
     userQueuedRuns,
     (left, right) =>
+      Number(right.sendNext === true) - Number(left.sendNext === true) ||
       (left.queuePosition ?? left.ordinal) - (right.queuePosition ?? right.ordinal) ||
       left.ordinal - right.ordinal,
   ).map((run) => {
@@ -168,13 +181,24 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
   return {
     activeRun,
     queuedRuns,
-    isHeld: userQueuedRuns.some((run) => run.queueHeld === true),
+    isHeld,
     canReorder: capabilities?.supportsQueuedMessages === true,
-    canPromoteToSteer: hasSteerableProviderTurn && providerSteeringExecution(session) !== null,
+    canPromoteToSteer:
+      !isHeld &&
+      runningTurn !== undefined &&
+      steeringUnavailableReason === null &&
+      steering !== null,
     canSendSteer:
       activeRun !== null &&
       activeRun.status !== "waiting" &&
-      (session === null || providerSteeringExecution(session) !== null),
+      steeringUnavailableReason === null &&
+      (session === null || steering !== null),
+    canSendNow:
+      !isHeld &&
+      steeringUnavailableReason !== null &&
+      capabilities?.supportsInterrupt === true &&
+      !userQueuedRuns.some((run) => run.sendNext === true),
+    steeringUnavailableReason,
   };
 }
 

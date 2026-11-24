@@ -317,23 +317,28 @@ function sessionKey(providerSessionId: ProviderSessionId): string {
 }
 
 /**
- * Runtime requests with no provider turn belong to the live session itself.
- * Their node and transcript item are runless too, so they bypass the normal
- * per-run subscriber and are persisted by the session event pump.
+ * The session pump persists work that can start without a run subscriber.
  */
-function sessionScopedRuntimeRequestThreadId(
+function sessionScopedEventThreadId(
   event: ProviderAdapter.ProviderAdapterV2Event,
 ): ThreadId | undefined {
   switch (event.type) {
+    case "provider_thread.updated":
+      return event.sessionScoped === true
+        ? (event.providerThread.appThreadId ?? undefined)
+        : undefined;
     case "runtime_request.updated":
       return event.runtimeRequest.providerTurnId === null ? event.threadId : undefined;
     case "node.updated":
-      return event.node.runId === null && event.node.runtimeRequestId !== null
+      return event.sessionScoped === true ||
+        (event.node.runId === null && event.node.runtimeRequestId !== null)
         ? event.node.threadId
         : undefined;
     case "turn_item.updated":
-      return event.turnItem.runId === null &&
-        (event.turnItem.type === "approval_request" || event.turnItem.type === "user_input_request")
+      return event.sessionScoped === true ||
+        (event.turnItem.runId === null &&
+          (event.turnItem.type === "approval_request" ||
+            event.turnItem.type === "user_input_request"))
         ? event.turnItem.threadId
         : undefined;
     default:
@@ -2470,17 +2475,20 @@ export const layerWithOptions = (
               ),
               Effect.andThen(
                 Effect.gen(function* () {
-                  // Some providers can block before a run subscriber exists
-                  // (project trust, login, or session-switch hooks). Persist
-                  // their runless request artifacts directly so the normal T3
-                  // request UI can answer them and unblock session setup.
-                  const threadId = sessionScopedRuntimeRequestThreadId(event);
+                  // Requests before a run and commands after it can arrive
+                  // with no run subscriber to persist them.
+                  const threadId = sessionScopedEventThreadId(event);
                   if (threadId !== undefined) {
                     yield* Effect.gen(function* () {
                       const current = (yield* Ref.get(sessions)).get(
                         sessionKey(entry.runtime.providerSessionId),
                       );
-                      if (current?.runtime !== entry.runtime) return;
+                      if (
+                        current?.runtime !== entry.runtime ||
+                        (event.type === "provider_thread.updated" &&
+                          !current.attachedThreadIds.has(threadId))
+                      )
+                        return;
                       yield* providerEventIngestor
                         .ingestNormalized({
                           providerSessionId: entry.runtime.providerSessionId,
@@ -2499,6 +2507,7 @@ export const layerWithOptions = (
                           ),
                         );
                     }).pipe(entry.requestEventPermit.withPermits(1));
+                    yield* releaseLiveOutput;
                     return;
                   }
                   yield* publishToSubscribers(entry, event);

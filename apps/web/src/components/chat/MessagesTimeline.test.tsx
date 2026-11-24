@@ -678,6 +678,75 @@ describe("MessagesTimeline", () => {
     },
   );
 
+  it("shows a running tool below later assistant text only when no row above names it", async () => {
+    vi.unstubAllGlobals();
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const props = buildProps();
+    const runId = RunId.make("parallel-tools");
+    const assistant = buildAssistantTimelineEntry("Waiting for the command.");
+    const tool = (program: string, createdAt: string, running: boolean): TimelineEntry => ({
+      kind: "work",
+      id: program,
+      createdAt,
+      entry: {
+        id: program,
+        runId,
+        createdAt,
+        label: "Run command",
+        command: program,
+        tone: "tool",
+        itemType: "command_execution",
+        toolLifecycleStatus: running ? "inProgress" : "completed",
+      },
+    });
+    const render = (sshRunning: boolean, gitRunning: boolean) =>
+      root.render(
+        <MessagesTimeline
+          {...props}
+          isWorking
+          runningRunId={runId}
+          activeTurnStartedAt={MESSAGE_CREATED_AT}
+          timelineEntries={[
+            tool("git", "2026-03-17T19:12:27.000Z", gitRunning),
+            tool("ssh", "2026-03-17T19:12:26.000Z", sshRunning),
+            { ...assistant, message: { ...assistant.message, runId } },
+          ]}
+        />,
+      );
+    const liveSlot = () => host.querySelector('[data-timeline-row-id="live-activity-row"]');
+
+    try {
+      await act(() => render(true, true));
+      expect(liveSlot()?.textContent).toContain("Running git…");
+      expect(host.querySelector('[data-timeline-row-id="work-live:git"]')?.textContent).toContain(
+        "Running ssh",
+      );
+      expect(host.textContent!.indexOf("Running git…")).toBeGreaterThan(
+        host.textContent!.indexOf("Waiting for the command."),
+      );
+
+      await act(() => render(true, false));
+      // The group row already says "Running ssh": no second line at the bottom.
+      expect(host.querySelector('[data-timeline-row-id="work-live:git"]')?.textContent).toContain(
+        "Running ssh",
+      );
+      expect(liveSlot()).toBeNull();
+      expect(host.textContent).not.toContain("Thinking…");
+
+      await act(() => render(false, false));
+      expect(liveSlot()?.textContent).toBe("Thinking…");
+    } finally {
+      await act(() => root.unmount());
+      host.remove();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("shows dynamic tool input without cached output when the row is expanded", async () => {
     activityTestState.expanded = true;
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

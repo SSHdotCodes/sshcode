@@ -5,6 +5,7 @@ import {
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
+  RunId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
@@ -65,10 +66,8 @@ export const ThreadMetadataMcpAction = Schema.Literals([
   "unlink_pull_request",
   "settle",
   "unsettle",
-]).annotate({
-  description:
-    "Metadata mutation: rename, regenerate_title, link_pull_request, unlink_pull_request, settle, or unsettle.",
-});
+  "cancel_queued",
+]);
 export type ThreadMetadataMcpAction = typeof ThreadMetadataMcpAction.Type;
 
 export const ThreadMetadataMcpPullRequest = Schema.Struct({
@@ -89,9 +88,13 @@ export const ThreadMetadataMcpUpdateInput = Schema.Struct({
   pullRequest: Schema.optional(ThreadMetadataMcpPullRequest).annotate({
     description: "Pull request to link. Required only when action is link_pull_request.",
   }),
+  runId: Schema.optional(RunId).annotate({ description: "Queued run ID for cancel_queued." }),
   clientRequestId: Schema.optional(ThreadMetadataClientRequestId),
 }).check(
   Schema.makeFilter((input) => {
+    if (input.action !== "cancel_queued" && input.runId !== undefined) {
+      return "runId is only allowed for cancel_queued.";
+    }
     switch (input.action) {
       case "rename":
         return input.title !== undefined && input.pullRequest === undefined
@@ -101,6 +104,12 @@ export const ThreadMetadataMcpUpdateInput = Schema.Struct({
         return input.pullRequest !== undefined && input.title === undefined
           ? true
           : "link_pull_request requires pullRequest and does not accept title.";
+      case "cancel_queued":
+        return input.runId !== undefined &&
+          input.title === undefined &&
+          input.pullRequest === undefined
+          ? true
+          : "cancel_queued requires runId only.";
       case "regenerate_title":
       case "unlink_pull_request":
       case "settle":

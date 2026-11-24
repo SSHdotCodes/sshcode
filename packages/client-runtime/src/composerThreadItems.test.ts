@@ -4,6 +4,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   chatMentionSearchQuery,
   chatMentionWords,
+  chatTitleSearchScore,
+  rankChatsByTitleSearch,
   matchComposerThreadItems,
   rankComposerChatMentions,
 } from "./composerThreadItems.ts";
@@ -335,6 +337,62 @@ describe("a chat described in brackets", () => {
     ).toEqual([
       ["busy", "Working"],
       ["new", "Chat"],
+    ]);
+  });
+});
+
+describe("chat list search", () => {
+  const chat = (title: string, model?: string) => ({ title, model });
+
+  it("scores the title being the words above words together above words in any order", () => {
+    expect(chatTitleSearchScore("black hole", chat("Black hole"))).toBe(6);
+    expect(chatTitleSearchScore("black hole", chat("Black hole simulation"))).toBe(5.5);
+    expect(chatTitleSearchScore("black ho", chat("Black hole simulation"))).toBe(5);
+    expect(chatTitleSearchScore("black hole", chat("Build a Black Hole Simulation"))).toBe(4.5);
+    expect(chatTitleSearchScore("black ho", chat("Build a Black Hole Simulation"))).toBe(4);
+    expect(chatTitleSearchScore("hole black", chat("Build a Black Hole Simulation"))).toBe(3.5);
+    expect(chatTitleSearchScore("black simul", chat("Build a Black Hole Simulation"))).toBe(3);
+    expect(chatTitleSearchScore("black hole muse", chat("Black Hole Sim", "muse-wonder-1.0"))).toBe(
+      2,
+    );
+    expect(chatTitleSearchScore("ack ho", chat("Black hole"))).toBe(1);
+    expect(chatTitleSearchScore("nebula", chat("Black hole"))).toBeNull();
+    expect(chatTitleSearchScore("the black hole chat", chat("Build a Black Hole Simulation"))).toBe(
+      3.5,
+    );
+  });
+
+  it("ranks the chat the words name first, then the most recent or the list order", () => {
+    const chats = [
+      { title: "Notes on black hole papers", at: 300 },
+      { title: "Pinned: update the README", at: 900 },
+      { title: "Black hole", at: 100 },
+      { title: "Build Black Hole Simulation", at: 200 },
+      { title: "Build Scientific Black Hole Sim", at: 250 },
+    ];
+    expect(
+      rankChatsByTitleSearch(
+        chats,
+        "black hole",
+        (item) => ({ title: item.title }),
+        (item) => item.at,
+      ).map((item) => item.title),
+    ).toEqual([
+      "Black hole",
+      "Notes on black hole papers",
+      "Build Scientific Black Hole Sim",
+      "Build Black Hole Simulation",
+    ]);
+    // Without activity, equal matches keep the list's order.
+    expect(
+      rankChatsByTitleSearch(chats, "black hole", (item) => ({ title: item.title })).map(
+        (item) => item.title,
+      ),
+    ).toEqual([
+      "Black hole",
+      "Notes on black hole papers",
+      "Build Black Hole Simulation",
+      "Build Scientific Black Hole Sim",
     ]);
   });
 });

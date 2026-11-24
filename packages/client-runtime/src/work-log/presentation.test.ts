@@ -883,6 +883,17 @@ describe("workEntryViewedImagePath", () => {
     ).toBe("/workspace/reference image.webp");
   });
 
+  it("omits an image whose read failed", () => {
+    expect(
+      workEntryViewedImagePath({
+        ...entry,
+        itemType: "dynamic_tool",
+        viewedImagePath: "/workspace/missing.png",
+        toolLifecycleStatus: "failed",
+      }),
+    ).toBeNull();
+  });
+
   it("rejects non-image, multi-line, and non-read details", () => {
     expect(
       workEntryViewedImagePath({ ...entry, requestKind: "file-read", detail: "a.txt" }),
@@ -1228,6 +1239,34 @@ it("groups X rows under the X mark, not the browser", () => {
       toolData: { server: "t3-code", tool: "search_x", arguments: { query: "from:xai grok" } },
     }),
   ).toBe("x");
+});
+
+it("presents and groups Antigravity Run mcp_t3-code_computer_* calls under computer", () => {
+  const entry: WorkLogPresentationEntry = {
+    id: "agy-computer-status",
+    createdAt: "2026-11-23T00:00:00Z",
+    label: "Run mcp_t3-code_computer_status",
+    toolTitle: "Run mcp_t3-code_computer_status",
+    tone: "tool",
+    itemType: "dynamic_tool",
+    toolLifecycleStatus: "completed",
+    structuredPayload: {
+      ...commandItem(),
+      type: "dynamic_tool",
+      toolName: "Run mcp_t3-code_computer_status",
+      title: "Run mcp_t3-code_computer_status",
+      input: { includeApps: true },
+    },
+  };
+  expect(resolveWorkEntryToolPresentation(entry)).toEqual({
+    displayName: "Checked computer access",
+    icon: "computer",
+  });
+  expect(toolGroupAction(entry)).toBe("computer");
+  expect(summarizeToolGroup([entry])).toEqual({
+    summary: "Used computer controls 1 time",
+    hasFailure: false,
+  });
 });
 
 describe("isChatAttachmentImagePath", () => {

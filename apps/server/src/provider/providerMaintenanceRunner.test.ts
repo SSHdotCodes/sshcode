@@ -680,7 +680,13 @@ describe("providerMaintenanceRunner", () => {
       );
 
       const fiber = yield* updater.updateProvider(NATIVE_CLI_DRIVER).pipe(Effect.forkChild);
-      yield* TestClock.adjust(Duration.seconds(1));
+      // The update first takes the cross-server lease with real file I/O, which simulated time
+      // cannot advance, so wait in real time until the installer has reported its output.
+      for (let attempt = 0; attempt < 300; attempt += 1) {
+        yield* TestClock.adjust(Duration.seconds(1));
+        if ((yield* runningMessages).length >= 3) break;
+        yield* Effect.sleep("10 millis").pipe(TestClock.withLive);
+      }
       assert.deepStrictEqual(yield* runningMessages, [
         "Checking for the latest version",
         "Running native-agent update",

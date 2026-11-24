@@ -9,6 +9,21 @@ import {
   resolveThreadQueueRowControls,
   resolveQueueDropBeforeRunId,
 } from "./threadQueueControlPresentation";
+
+it("lets a queued message send now when the workflow rules out steering", () => {
+  const row = {
+    busy: false,
+    canPromoteToSteer: false,
+    canSendNow: true,
+    canReorder: true,
+    index: 0,
+    queuedCount: 1,
+    text: "Send this",
+  };
+  expect(resolveThreadQueueRowControls(row)).toMatchObject({ canSendNow: true, canSteer: false });
+  expect(resolveThreadQueueRowControls({ ...row, busy: true }).canSendNow).toBe(false);
+  expect(resolveThreadQueueRowControls({ ...row, isEditing: true }).canSendNow).toBe(false);
+});
 import { threadDragGapOffset } from "./threadDragGap";
 
 describe("threadQueueControlPresentation", () => {

@@ -81,6 +81,8 @@ describe("resolveT3McpToolPresentation", () => {
   it("matches the separator variants ACP registry agents emit", () => {
     for (const name of [
       "mcp_t3-code_delegate_task",
+      "Run mcp_t3-code_delegate_task",
+      "Running mcp_t3-code_delegate_task?",
       "t3_code:delegate_task",
       "t3code/delegate_task",
       "t3-code delegate_task",
@@ -89,6 +91,20 @@ describe("resolveT3McpToolPresentation", () => {
     ]) {
       expect(resolveT3McpToolPresentation(name)?.displayName).toBe("Delegate a child task");
     }
+  });
+
+  it("pretty prints computer-use T3 MCP tools across provider prefixes", () => {
+    expect(resolveT3McpToolPresentation("Run mcp_t3-code_computer_status")).toEqual({
+      displayName: "Check computer access",
+      logo: "t3-code",
+    });
+    expect(resolveT3McpToolPresentation("mcp__t3-code__computer_screenshot")).toEqual({
+      displayName: "Screenshot the app on the computer",
+      logo: "t3-code",
+    });
+    expect(resolveT3McpToolSummaryAction("Run mcp_t3-code_computer_open")).toBe("computer");
+    expect(resolveT3McpToolPresentation("Run schedule")).toBeNull();
+    expect(resolveT3McpToolPresentation("Run manage_task")).toBeNull();
   });
 
   it("matches OpenCode 2's per-thread server names, whose thread ids hold underscores", () => {
@@ -101,6 +117,20 @@ describe("resolveT3McpToolPresentation", () => {
   it("keeps unknown MCP tools on the generic renderer path", () => {
     expect(resolveT3McpToolPresentation("mcp__github__search_issues")).toBeNull();
     expect(resolveT3McpToolPresentation("t3-code.not_a_real_tool")).toBeNull();
+  });
+
+  it("recognizes computer and workflow tools", () => {
+    for (const tool of [
+      "computer_status",
+      "computer_open",
+      "computer_snapshot",
+      "computer_action",
+      "computer_release",
+      "computer_screenshot",
+      "workflow",
+    ]) {
+      expect(resolveT3McpToolPresentation(`mcp_t3-code_${tool}`), tool).not.toBeNull();
+    }
   });
 });
 

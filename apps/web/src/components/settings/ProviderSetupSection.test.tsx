@@ -240,13 +240,23 @@ describe("Antigravity setup", () => {
     setup.auth = authState({ phase: "idle", flowId: null, authorizationUrl: null });
     const idleInstallation = setup.installation!;
     setup.installation = null;
-    let resolveStart: () => void = () => { throw new Error("Missing installation resolver."); };
-    setup.startInstall.mockReturnValueOnce(new Promise<{ _tag: "Success"; value: undefined }>((resolve) => {
-      resolveStart = () => resolve({ _tag: "Success", value: undefined });
-    }));
+    let resolveStart: () => void = () => {
+      throw new Error("Missing installation resolver.");
+    };
+    setup.startInstall.mockReturnValueOnce(
+      new Promise<{ _tag: "Success"; value: undefined }>((resolve) => {
+        resolveStart = () => resolve({ _tag: "Success", value: undefined });
+      }),
+    );
     const render = () => renderSetup({ provider: { ...provider, installed: false } });
     click(render(), "Install Antigravity");
-    setup.installation = { ...idleInstallation, operationId: "install-1", phase: "downloading", downloadedBytes: 1_000_000, totalBytes: 2_000_000 };
+    setup.installation = {
+      ...idleInstallation,
+      operationId: "install-1",
+      phase: "downloading",
+      downloadedBytes: 1_000_000,
+      totalBytes: 2_000_000,
+    };
     expect(() => click(render(), "Cancel installation")).toThrow("Button is disabled");
     expect(setup.cancelInstall).not.toHaveBeenCalled();
     resolveStart();
@@ -254,7 +264,10 @@ describe("Antigravity setup", () => {
     click(render(), "Cancel installation");
     await flushPromises();
     expect(setup.startInstall).toHaveBeenCalledOnce();
-    expect(setup.cancelInstall).toHaveBeenCalledWith({ environmentId, input: { instanceId, operationId: "install-1" } });
+    expect(setup.cancelInstall).toHaveBeenCalledWith({
+      environmentId,
+      input: { instanceId, operationId: "install-1" },
+    });
   });
 
   it("waits for verified auth after submitting a callback to the selected environment", async () => {
@@ -432,6 +445,26 @@ describe("Antigravity setup", () => {
     });
     expect(button(view, "Sign in")?.props.disabled).toBe(true);
     expect(setup.startAuth).not.toHaveBeenCalled();
+  });
+
+  it("explains unchecked Antigravity sign-in after restart instead of saying it is signed out", () => {
+    setup.auth = authState({ phase: "idle", flowId: null, authorizationUrl: null });
+    const view = renderSetup({
+      provider: {
+        ...provider,
+        status: "warning",
+        auth: { status: "unknown" },
+      },
+    });
+    expect(
+      visitElements(
+        view,
+        (element) =>
+          element.props.children ===
+          "Sign-in not checked yet. Checks on first chat, or sign in below.",
+      ),
+    ).not.toBeNull();
+    expect(button(view, "Sign in")).not.toBeNull();
   });
 
   it.each(["read-only", "older-server"] as const)(

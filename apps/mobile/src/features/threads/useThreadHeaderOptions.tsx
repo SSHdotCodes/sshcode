@@ -11,6 +11,11 @@ import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { dispatchHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useComputerUseStatus } from "../computer-use/useComputerUseStatus";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { pendingThreadSearchJumpAtom } from "@t3tools/client-runtime/state/thread-search";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { useThreadShell } from "../../state/entities";
+import { formatTranscriptTimestamp } from "../../lib/time";
 import {
   type ThreadGitControls,
   useThreadGitCenterHeaderItems,
@@ -18,6 +23,12 @@ import {
 } from "./ThreadGitControls";
 
 type NativeHeaderItems = ReadonlyArray<Record<string, unknown>>;
+
+/** A pin's preview as one menu line; the menu itself cuts what still runs long. */
+function pinMenuLabel(preview: string | undefined): string {
+  if (!preview) return "Agent message";
+  return preview.length <= 90 ? preview : `${preview.slice(0, 89).trimEnd()}…`;
+}
 
 /** The thread's side chat (`/btw` on Claude, `/side` on Codex), when its agent has one. */
 export interface ThreadHeaderSideChat {
@@ -51,6 +62,55 @@ export function useThreadHeaderOptions(props: {
     EnvironmentId.make(props.gitControls.environmentId),
     ThreadId.make(props.gitControls.threadId),
   );
+  const headerThread = useThreadShell(
+    scopeThreadRef(
+      EnvironmentId.make(props.gitControls.environmentId),
+      ThreadId.make(props.gitControls.threadId),
+    ),
+  );
+  const pinnedMessages = headerThread?.pinnedMessages;
+  const headerProjectId = headerThread?.projectId;
+  // Shown only while the chat has a pin; newest pin first, each one jumps to its message.
+  const pinnedHeaderItem = useMemo(() => {
+    if (!pinnedMessages || pinnedMessages.length === 0 || !headerProjectId) return null;
+    const environmentId = EnvironmentId.make(props.gitControls.environmentId);
+    const threadId = ThreadId.make(props.gitControls.threadId);
+    const label =
+      pinnedMessages.length === 1 ? "1 pinned message" : `${pinnedMessages.length} pinned messages`;
+    return {
+      accessibilityLabel: label,
+      icon: { name: "pin", type: "sfSymbol" },
+      identifier: "thread-right-pinned",
+      label: "Pinned",
+      menu: {
+        items: [...pinnedMessages].reverse().map((pin) => ({
+          description: `Pinned ${formatTranscriptTimestamp(pin.pinnedAt)}`,
+          icon: { name: "pin", type: "sfSymbol" as const },
+          label: pinMenuLabel(pin.preview),
+          onPress: () =>
+            appAtomRegistry.set(pendingThreadSearchJumpAtom, {
+              environmentId,
+              threadId,
+              projectId: headerProjectId,
+              source: "assistant",
+              snippet: "",
+              messageCreatedAt: null,
+              messageId: pin.messageId,
+            }),
+          type: "action" as const,
+        })),
+        title: "Pinned messages",
+      },
+      sharesBackground: true,
+      type: "menu",
+      variant: "plain",
+    };
+  }, [
+    headerProjectId,
+    pinnedMessages,
+    props.gitControls.environmentId,
+    props.gitControls.threadId,
+  ]);
   const sideChatLabel = props.sideChat?.label;
   const openSideChat = props.sideChat?.onOpen;
   const showsSideChat = visibleHeaderItems.includes("sideChat");
@@ -116,6 +176,7 @@ export function useThreadHeaderOptions(props: {
             },
           ]
         : []),
+      ...(pinnedHeaderItem ? [pinnedHeaderItem] : []),
       ...(sideChatHeaderItem ? [sideChatHeaderItem] : []),
       ...(onMergeBack
         ? [
@@ -136,6 +197,7 @@ export function useThreadHeaderOptions(props: {
       computerUseStatus,
       onMergeBack,
       props.onOpenMedia,
+      pinnedHeaderItem,
       sideChatHeaderItem,
       discord,
       navigation,
@@ -296,14 +358,12 @@ export function useThreadHeaderOptions(props: {
       : undefined,
     contentStyle: undefined,
   };
-  const { environmentId, threadId, gitStatus } = props.gitControls;
+  const { environmentId, threadId } = props.gitControls;
   return {
     options,
     visibleHeaderItems,
     // Header item factories are stabilized, so the native header only re-reads them when
-    // this version changes. Keying on the items keeps the Git menu status live; the menu
-    // callbacks also read state the items do not display (a "Push" item runs `push` or
-    // `commit_push` depending on the default ref), so that state is keyed too.
+    // this version changes. Keying on the items keeps menus (terminal, pinned) live.
     optionsVersion: [
       privacy,
       title,
@@ -314,9 +374,6 @@ export function useThreadHeaderOptions(props: {
       usesDuoHeader,
       environmentId,
       threadId,
-      gitStatus?.isDefaultRef,
-      gitStatus?.refName,
-      gitStatus?.pr?.url,
     ],
     sidebar: false,
     // Native items work with and without Liquid Glass. A second toolbar would

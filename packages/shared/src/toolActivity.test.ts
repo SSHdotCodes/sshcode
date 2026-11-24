@@ -177,4 +177,13 @@ describe("toolActivity", () => {
     expect(dynamicToolTitle("Skill", { skill: " " })).toBeUndefined();
     expect(dynamicToolTitle("Read", { skill: "full-send" })).toBeUndefined();
   });
+
+  it("extracts Antigravity Path and absolute_path tool inputs", () => {
+    expect(collectToolFilePaths({ input: { Path: "/repo/src/app.ts", StartLine: 1 } })).toEqual([
+      "/repo/src/app.ts",
+    ]);
+    expect(collectToolFilePaths({ input: { absolute_path: "/repo/src/view.tsx" } })).toEqual([
+      "/repo/src/view.tsx",
+    ]);
+  });
 });

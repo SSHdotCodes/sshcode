@@ -17,12 +17,14 @@ export const SUBAGENT_SPEED_LABELS: Readonly<Record<SubagentSpeed, string>> = {
   ultrafast: "Ultrafast",
 };
 
-/** The faster speed a subagent was started at: Codex's service tier or Claude's fast mode. */
+/** The faster speed a subagent was started at: Codex's service tier, Claude's fast mode or an ACP Speed. */
 export function subagentSpeed(
   selection: Pick<ModelSelection, "options"> | null | undefined,
 ): SubagentSpeed | null {
   for (const option of selection?.options ?? []) {
     if (option.id === "fastMode" && option.value === true) return "fast";
+    // An ACP agent's Speed (Devin's Lightning on SWE models).
+    if (option.id === "speed" && option.value === "fast") return "fast";
     if (option.id !== "serviceTier") continue;
     // Codex calls its Fast tier "priority".
     if (option.value === "priority" || option.value === "fast") return "fast";

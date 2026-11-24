@@ -10,6 +10,7 @@ import {
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import {
+  displayProviderUsageWindows,
   elapsedShare,
   formatDuration,
   formatResetsIn,
@@ -182,7 +183,7 @@ export function LimitWindows({
           : "grid grid-cols-[11rem_minmax(0,1fr)_7rem] gap-x-4 gap-y-1"
       }
     >
-      {windows.map((window) => {
+      {displayProviderUsageWindows(driver, windows).map((window) => {
         const pace = paceOf(window, now);
         const resetsIn = formatResetsIn(window, now);
         return (

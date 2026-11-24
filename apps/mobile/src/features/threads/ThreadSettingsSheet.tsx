@@ -140,6 +140,7 @@ import {
   favoritesFirst,
   modelFavoriteKey,
   modelMatchesCatalogQuery,
+  orderFavoriteRows,
   pendingModelAfterPress,
   providerSectionIsCollapsed,
   threadSettingsListItems,
@@ -1231,10 +1232,12 @@ function favoriteCatalogItems(
   isNarrowed: boolean,
 ): ReadonlyArray<ThreadSettingsCatalogItem> {
   // Favorites mix makers under one header, so each row carries its maker's mark.
-  const rows = makerCatalogItems(
-    { ...session, providerFilter: FAVORITES_PROVIDER_FILTER },
-    true,
-  ).flatMap((item) => (item.kind === "model" ? [item] : []));
+  const rows = orderFavoriteRows(
+    makerCatalogItems({ ...session, providerFilter: FAVORITES_PROVIDER_FILTER }, true).flatMap(
+      (item) => (item.kind === "model" ? [item] : []),
+    ),
+    session.favoriteKeys,
+  );
   if (rows.length === 0) return [];
   const collapsed = providerSectionIsCollapsed({
     defaultExpanded: true,
@@ -1446,7 +1449,7 @@ function ThreadSettingsOptionsItem(props: {
               <SwitchRow
                 key={descriptor.id}
                 isLast={isLast}
-                label="Fast"
+                label={fast.switchLabel}
                 fast
                 value={fast.enabled}
                 onValueChange={(value) =>

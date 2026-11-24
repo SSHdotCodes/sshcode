@@ -25,11 +25,15 @@ export function queuedRunsInDeliveryOrder(
         (left.queuePosition ?? left.ordinal) - (right.queuePosition ?? right.ordinal) ||
         left.ordinal - right.ordinal,
     );
-  const completions = queued.filter((run) => automaticCompletionMessageIds.has(run.userMessageId));
-  const messages = queued.filter((run) => !automaticCompletionMessageIds.has(run.userMessageId));
+  const completions = queued.filter(
+    (run) => run.sendNext !== true && automaticCompletionMessageIds.has(run.userMessageId),
+  );
+  const messages = queued.filter(
+    (run) => run.sendNext !== true && !automaticCompletionMessageIds.has(run.userMessageId),
+  );
   // Completions and messages each keep their queue order and interleave by request time,
   // so neither kind can hold the other back while more of it keeps arriving.
-  const ordered: Array<OrchestrationV2Run> = [];
+  const ordered = queued.filter((run) => run.sendNext === true);
   let completionIndex = 0;
   let messageIndex = 0;
   for (;;) {

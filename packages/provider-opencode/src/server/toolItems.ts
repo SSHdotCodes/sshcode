@@ -3,6 +3,7 @@
  * Both report a tool as a name, a JSON input, text output, and free-form
  * metadata; only how they deliver those differs.
  */
+import { resolveT3McpToolId } from "@t3tools/shared/t3McpToolPresentation";
 import type { OrchestrationV2TurnItem } from "@t3tools/contracts";
 import { formatReadToolLabel, formatSearchToolLabel } from "@t3tools/shared/toolActivity";
 
@@ -69,6 +70,34 @@ function stableJson(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+/** OpenCode reports the calls inside execute as ordered metadata with their original input. */
+export function openCodeCodeModeToolCalls(metadata: unknown, server: string) {
+  if (
+    typeof metadata !== "object" ||
+    metadata === null ||
+    !("toolCalls" in metadata) ||
+    !Array.isArray(metadata.toolCalls)
+  )
+    return [];
+  const prefix = `${server}.`;
+  return metadata.toolCalls.flatMap((call: unknown, index) => {
+    if (typeof call !== "object" || call === null) return [];
+    const { tool, input, status } = call as Record<string, unknown>;
+    if (
+      status !== "completed" ||
+      typeof tool !== "string" ||
+      !tool.startsWith(prefix) ||
+      typeof input !== "object" ||
+      input === null ||
+      Array.isArray(input)
+    )
+      return [];
+    const name = tool.slice(prefix.length);
+    if (resolveT3McpToolId(`t3-code.${name}`) !== name) return [];
+    return [{ index, name, input: input as Record<string, unknown> }];
+  });
 }
 
 /**

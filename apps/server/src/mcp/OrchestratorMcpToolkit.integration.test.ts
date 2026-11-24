@@ -37,6 +37,7 @@ import {
   type ProviderOptionDescriptor,
   ProviderThreadId,
   ProviderTurnId,
+  type RunId,
   type ScheduledTask,
   RuntimeRequestId,
   ScheduledTaskId,
@@ -1694,6 +1695,7 @@ describe("orchestrator MCP toolkit", () => {
                 action: expect.any(Object),
                 title: expect.any(Object),
                 pullRequest: expect.any(Object),
+                runId: expect.any(Object),
               },
             });
             const deniedThreadUpdate = yield* invokeAs(
@@ -3068,13 +3070,51 @@ describe("orchestrator MCP toolkit", () => {
             expect(steeredSource.runs.find((run) => run.id === activeRun.id)?.status).toBe(
               "running",
             );
-            // Cancel the follow-up so the active run's interrupt flow below is unchanged.
             yield* orchestrator.dispatch({
               type: "queued-run.cancel",
               commandId: CommandId.make("command:mcp-active:cancel-queued-steer"),
               threadId: activeThread.threadId,
               runId: steered.runId!,
             });
+            const messageToCancel = MessageId.make("message:mcp-cancel-queued-user");
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              threadId: activeThread.threadId,
+              commandId: CommandId.make("command:mcp-active:queued-user"),
+              messageId: messageToCancel,
+              text: "Queued user message",
+              attachments: [],
+              dispatchMode: { type: "queue_after_active" },
+              createdBy: "user",
+              creationSource: "web",
+            });
+            const runToCancel = (yield* orchestrator.getThreadProjection(
+              activeThread.threadId,
+            )).runs.find((run) => run.userMessageId === messageToCancel)!;
+            expect(runToCancel.status).toBe("queued");
+            const cancelQueued = (runId: RunId) =>
+              invoke("t3_thread_update", {
+                threadId: activeThread.threadId,
+                action: "cancel_queued",
+                runId,
+              });
+            expect(declaredFailure(yield* cancelQueued(activeRun.id))).toMatchObject({
+              code: "orchestration_error",
+              message: expect.stringContaining("is not queued"),
+            });
+            expect((yield* cancelQueued(runToCancel.id)).structuredContent).toMatchObject({
+              threadId: activeThread.threadId,
+              action: "cancel_queued",
+            });
+            expect(declaredFailure(yield* cancelQueued(runToCancel.id))).toMatchObject({
+              code: "orchestration_error",
+              message: expect.stringContaining("is not queued"),
+            });
+            expect(
+              (yield* orchestrator.getThreadProjection(activeThread.threadId)).runs.find(
+                (run) => run.id === runToCancel.id,
+              )?.status,
+            ).toBe("cancelled");
             const interruptCall = yield* invoke("t3_thread_interrupt", {
               threadId: activeThread.threadId,
               reason: "The orchestration loop has enough evidence.",

@@ -74,14 +74,16 @@ export type T3McpToolSummaryAction =
   | "write-pr-guides"
   | "read-pr-guide"
   | "browser"
+  | "computer"
   | "device"
+  | "workflow"
   | "html-preview"
   | "html-render";
 
 export interface T3McpToolDefinition {
   readonly displayName: string;
   readonly labels: readonly [action: string, running: string, completed: string, detail: string];
-  readonly icon: "t3-code" | "browser" | "device" | "pull-request" | "x-logo";
+  readonly icon: "t3-code" | "browser" | "computer" | "device" | "pull-request" | "x-logo";
   readonly summaryAction: T3McpToolSummaryAction;
 }
 
@@ -304,6 +306,43 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "device",
   ),
   device_close: tool(["Close", "Closing", "Closed", "a device"], "device", "device"),
+  computer_status: tool(
+    ["Check", "Checking", "Checked", "computer access"],
+    "computer",
+    "computer",
+  ),
+  computer_open: tool(
+    ["Open", "Opening", "Opened", "an app on the computer"],
+    "computer",
+    "computer",
+  ),
+  computer_snapshot: tool(
+    ["Inspect", "Inspecting", "Inspected", "the app on the computer"],
+    "computer",
+    "computer",
+  ),
+  computer_action: tool(
+    ["Act in", "Acting in", "Acted in", "the app on the computer"],
+    "computer",
+    "computer",
+  ),
+  computer_release: tool(
+    ["Release", "Releasing", "Released", "computer control"],
+    "computer",
+    "computer",
+  ),
+  computer_screenshot: tool(
+    [
+      "Take a screenshot of",
+      "Taking a screenshot of",
+      "Took a screenshot of",
+      "the app on the computer",
+    ],
+    "computer",
+    "computer",
+    "Screenshot the app on the computer",
+  ),
+  workflow: tool(["Manage", "Managing", "Managed", "an agent team"], "workflow"),
   run_scheduled_task_now: tool(
     ["Run", "Running", "Requested a run of", "a scheduled task"],
     "schedule-run",
@@ -383,7 +422,11 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
 export const T3_MCP_TOOL_NAMES: ReadonlySet<string> = new Set(Object.keys(T3_MCP_TOOLS));
 
 function normalizeT3McpToolLabel(value: string): string {
-  return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
+  return value
+    .replace(/^\s*Run(?:ning)?\s+/i, "")
+    .replace(/\?\s*$/, "")
+    .replace(/\s+(?:complete|completed)\s*$/i, "")
+    .trim();
 }
 
 /**

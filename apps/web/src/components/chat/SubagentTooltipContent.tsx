@@ -11,8 +11,8 @@ import {
   resolveSubagentMetadata,
   subagentDetailPreview,
 } from "@t3tools/client-runtime/state/subagent-display";
-import { getModelSelectionStringOptionValue, resolveSelectableModel } from "@t3tools/shared/model";
-import { getTraitsSpeedDisplay, TraitsSpeedIcon } from "./TraitsSpeed";
+import { getExplicitModelEffortLabel, resolveSelectableModel } from "@t3tools/shared/model";
+import { acpSpeedChoices, getTraitsSpeedDisplay, TraitsSpeedIcon } from "./TraitsSpeed";
 import type { ReactNode } from "react";
 import {
   BotIcon,
@@ -74,9 +74,7 @@ export function SubagentTooltipContent(props: {
     childModel === (modelSlug ?? model) && childSelection?.instanceId === props.providerInstanceId
       ? childSelection
       : undefined;
-  const effort = ["reasoningEffort", "effort", "reasoning", "variant"]
-    .map((id) => getModelSelectionStringOptionValue(matchingSelection, id))
-    .find(Boolean);
+  const effort = getExplicitModelEffortLabel(matchingSelection, providerModel?.capabilities);
   const speed = provider
     ? providerModel?.capabilities?.optionDescriptors
         ?.map((descriptor) => {
@@ -92,8 +90,8 @@ export function SubagentTooltipContent(props: {
             });
           }
           if (
-            provider.driver === "codex" &&
-            descriptor.id === "serviceTier" &&
+            ((provider.driver === "codex" && descriptor.id === "serviceTier") ||
+              acpSpeedChoices(descriptor) !== null) &&
             descriptor.type === "select" &&
             typeof saved?.value === "string" &&
             descriptor.options.some((option) => option.id === saved.value)

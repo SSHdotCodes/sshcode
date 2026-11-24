@@ -69,15 +69,24 @@ const makeFixture = Effect.fn("makeAntigravityTextGenerationFixture")(function* 
   const path = yield* Path.Path;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-antigravity-text-test-" });
   const profileDirectory = path.join(root, "profile");
+  const cliDataDirectory = path.join(root, "cli-data");
   const projectDirectory = path.join(root, "project");
   const conversations = path.join(profileDirectory, "antigravity-acp", "conversations");
+  const cliConversations = path.join(cliDataDirectory, "conversations");
+  const cliAnnotations = path.join(cliDataDirectory, "annotations");
   const nativeSessionId = options.sessionId ?? SESSION_ID;
   const sessionBase = path.join(conversations, SESSION_ID);
   const brainDirectory = path.join(profileDirectory, "antigravity-acp", "brain", SESSION_ID);
+  const cliSessionBase = path.join(cliConversations, SESSION_ID);
+  const cliAnnotation = path.join(cliAnnotations, `${SESSION_ID}.pbtxt`);
+  const cliBrainDirectory = path.join(cliDataDirectory, "brain", SESSION_ID);
   yield* fs.makeDirectory(projectDirectory, { recursive: true });
   yield* fs.makeDirectory(conversations, { recursive: true });
+  yield* fs.makeDirectory(cliConversations, { recursive: true });
+  yield* fs.makeDirectory(cliAnnotations, { recursive: true });
   yield* fs.writeFileString(path.join(projectDirectory, "keep.txt"), "untouched");
   yield* fs.writeFileString(path.join(conversations, "user-session.db"), "keep native history");
+  yield* fs.writeFileString(path.join(cliConversations, "user-session.db"), "keep cli history");
   const enteredPrompt = yield* Deferred.make<void>();
   const state = {
     workspaces: [] as Array<string>,
@@ -152,6 +161,14 @@ const makeFixture = Effect.fn("makeAntigravityTextGenerationFixture")(function* 
             yield* fs.writeFileString(`${sessionBase}.meta`, metadata).pipe(Effect.orDie);
             yield* fs
               .writeFileString(path.join(brainDirectory, "output.txt"), "helper artifact")
+              .pipe(Effect.orDie);
+            yield* fs.makeDirectory(cliBrainDirectory, { recursive: true }).pipe(Effect.orDie);
+            yield* fs
+              .writeFileString(`${cliSessionBase}.db`, "CLI session fixture")
+              .pipe(Effect.orDie);
+            yield* fs.writeFileString(cliAnnotation, "cli annotation").pipe(Effect.orDie);
+            yield* fs
+              .writeFileString(path.join(cliBrainDirectory, "output.txt"), "cli artifact")
               .pipe(Effect.orDie);
             return {
               sessionId: nativeSessionId,
@@ -254,6 +271,7 @@ const makeFixture = Effect.fn("makeAntigravityTextGenerationFixture")(function* 
 
   const textGeneration = yield* makeAntigravityTextGeneration({
     profileDirectory,
+    cliDataDirectory,
     makeRuntime,
     withProcess,
   });
@@ -267,9 +285,15 @@ const makeFixture = Effect.fn("makeAntigravityTextGenerationFixture")(function* 
     expect(yield* fs.exists(`${sessionBase}.db-wal`)).toBe(false);
     expect(yield* fs.exists(`${sessionBase}.meta`)).toBe(false);
     expect(yield* fs.exists(brainDirectory)).toBe(false);
+    expect(yield* fs.exists(`${cliSessionBase}.db`)).toBe(false);
+    expect(yield* fs.exists(cliAnnotation)).toBe(false);
+    expect(yield* fs.exists(cliBrainDirectory)).toBe(false);
     expect(yield* fs.readFileString(path.join(projectDirectory, "keep.txt"))).toBe("untouched");
     expect(yield* fs.readFileString(path.join(conversations, "user-session.db"))).toBe(
       "keep native history",
+    );
+    expect(yield* fs.readFileString(path.join(cliConversations, "user-session.db"))).toBe(
+      "keep cli history",
     );
   });
   return {

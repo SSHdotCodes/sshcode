@@ -392,6 +392,21 @@ export const OrchestrationV2LimitRecoveryUpdate = Schema.Struct({
 );
 export type OrchestrationV2LimitRecoveryUpdate = typeof OrchestrationV2LimitRecoveryUpdate.Type;
 
+/** How much of a pinned message's text its pin keeps for the list. */
+export const THREAD_PINNED_MESSAGE_PREVIEW_LENGTH = 240;
+/** A message the user pinned in a chat, listed under the chat's pinned messages. */
+export const ThreadPinnedMessage = Schema.Struct({
+  messageId: MessageId,
+  pinnedAt: Schema.DateTimeUtc,
+  /** The start of the message, so the list can name it before its history loads. */
+  preview: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(THREAD_PINNED_MESSAGE_PREVIEW_LENGTH)),
+  ),
+});
+export type ThreadPinnedMessage = typeof ThreadPinnedMessage.Type;
+/** How many messages one chat keeps pinned; pinning past it drops the oldest pin. */
+export const THREAD_PINNED_MESSAGES_LIMIT = 200;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   /** Creation receipt only; independent chats have no parent lineage. */
@@ -419,6 +434,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   /** Pull request discovered from the thread's current branch. */
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  /** Messages the user pinned, oldest pin first. */
+  pinnedMessages: Schema.optional(Schema.Array(ThreadPinnedMessage)),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
   lineage: OrchestrationV2AppThreadLineage,
@@ -627,8 +644,10 @@ export const OrchestrationV2Run = Schema.Struct({
   activeAttemptId: Schema.NullOr(RunAttemptId),
   status: OrchestrationV2RunStatus,
   queuePosition: Schema.optional(Schema.NullOr(PositiveInt)),
-  /** Restart recovery holds the queue until the user explicitly resumes it. */
+  /** The queue is paused until the user explicitly resumes it or sends a new message. */
   queueHeld: Schema.optional(Schema.Boolean),
+  /** The user asked to interrupt the active turn and deliver this queued run first. */
+  sendNext: Schema.optionalKey(Schema.Literal(true)),
   /** A user follow-up waiting to steer this run when its provider turn starts. */
   steerWhenLiveRunId: Schema.optional(RunId),
   requestedAt: Schema.DateTimeUtc,
@@ -1052,7 +1071,12 @@ export const OrchestrationV2PendingBackgroundTask = kindUnionWithFallback(
       /** A held queued message, actionable from the parent chat. */
       held: Schema.optional(Schema.Struct({ runId: RunId, since: IsoDateTime })),
     }),
-    Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("command") }),
+    Schema.Struct({
+      ...PendingBackgroundTaskFields,
+      kind: Schema.Literal("command"),
+      /** The provider resumes the agent when this command ends. */
+      wakesAgent: Schema.optional(Schema.Literal(true)),
+    }),
     Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("monitor") }),
     Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("background_task") }),
   ],
@@ -1134,6 +1158,11 @@ export const OrchestrationV2ProviderThread = Schema.Struct({
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestrationV2PendingBackgroundTask)).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  /**
+   * True while a provider keeps its prompt open across background tasks or
+   * subagents after its initial reply ended (e.g. `agy acp` 1.5.15+).
+   */
+  waitingOnBackgroundWork: Schema.optional(Schema.Literal(true)),
   contextUsage: Schema.optional(Schema.NullOr(ThreadTokenUsageSnapshot)).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1300,6 +1329,8 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
     "failed",
     "cancelled",
   ]),
+  /** This provider turn cannot accept native steering. */
+  steeringUnavailable: Schema.optionalKey(Schema.Literal(true)),
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
   tokenUsage: Schema.optional(OrchestrationV2ProviderTurnTokenUsage),
@@ -1794,6 +1825,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     exitCode: Schema.optional(Schema.Int),
     /** Set when the command is a monitor, so background work lists it as a monitor. */
     monitor: Schema.optional(Schema.Boolean),
+    wakesAgent: Schema.optional(Schema.Literal(true)),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -2255,6 +2287,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   /** Pull request discovered from the thread's current branch. */
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  /** Messages the user pinned, oldest pin first; omitted by servers without pins. */
+  pinnedMessages: Schema.optional(Schema.Array(ThreadPinnedMessage)),
   lineage: OrchestrationV2AppThreadLineage,
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
@@ -2482,8 +2516,15 @@ export const OrchestrationV2StoredEvent = Schema.Struct({
 });
 export type OrchestrationV2StoredEvent = typeof OrchestrationV2StoredEvent.Type;
 
+/** A pin as stored JSON: its time is an ISO string. */
+export const ThreadPinnedMessageJson = ThreadPinnedMessage.mapFields((fields) => ({
+  ...fields,
+  pinnedAt: Schema.DateTimeUtcFromString,
+}));
+
 export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((fields) => ({
   ...fields,
+  pinnedMessages: Schema.optional(Schema.Array(ThreadPinnedMessageJson)),
   createdAt: Schema.DateTimeUtcFromString,
   updatedAt: Schema.DateTimeUtcFromString,
   archivedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
@@ -2721,6 +2762,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     exitCode: Schema.optional(Schema.Int),
     /** Set when the command is a monitor, so background work lists it as a monitor. */
     monitor: Schema.optional(Schema.Boolean),
+    wakesAgent: Schema.optional(Schema.Literal(true)),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -2923,6 +2965,7 @@ export type OrchestrationV2LatestVisibleMessageSummaryJson =
 
 export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFields((fields) => ({
   ...fields,
+  pinnedMessages: Schema.optional(Schema.Array(ThreadPinnedMessageJson)),
   latestRunRequestedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   latestRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   latestRunCompletedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
@@ -3317,6 +3360,14 @@ export const OrchestrationV2Command = Schema.Union([
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Link (object) or unlink (null) a pull request (#8160); absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+    /** Pin or unpin one message in the chat's pinned messages. */
+    messagePin: Schema.optional(
+      Schema.Struct({
+        messageId: MessageId,
+        pinned: Schema.Boolean,
+        preview: ThreadPinnedMessage.fields.preview,
+      }),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),
@@ -3458,6 +3509,8 @@ export const OrchestrationV2Command = Schema.Union([
     holdQueue: Schema.optional(Schema.Boolean),
     /** Interrupt only this reply, preserving managed helpers, their wakes, and the queue. */
     keepHelpers: Schema.optional(Schema.Boolean),
+    /** Deliver this queued user message first after interrupting the reply. */
+    sendQueuedRunId: Schema.optionalKey(RunId),
   }),
   Schema.Struct({
     type: Schema.Literal("queued-message.promote-to-steer"),
@@ -3748,7 +3801,14 @@ type PreparedDelegatedTaskRequest = Omit<
 
 /** Everything the server's orchestrator accepts: client commands plus internal preparation. */
 export type OrchestrationV2ServerCommand =
-  | Exclude<OrchestrationV2Command, { readonly type: "delegated_task.request" }>
+  | Exclude<
+      OrchestrationV2Command,
+      { readonly type: "delegated_task.request" | "message.dispatch" }
+    >
+  | (typeof OrchestrationV2MessageDispatchCommand.Type & {
+      /** Server-owned redelivery after the adapter returned an unsupported steer. */
+      readonly declinedSteerTurnId?: ProviderTurnId;
+    })
   | PreparedDelegatedTaskRequest
   | OrchestrationV2InternalCommand;
 

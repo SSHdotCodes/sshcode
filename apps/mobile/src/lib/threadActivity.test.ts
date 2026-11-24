@@ -39,6 +39,7 @@ import {
   isPendingUserInputOptionSelected,
   buildPendingUserInputAnswers,
 } from "./threadActivity";
+import { createStableThreadFeedProjector } from "./threadFeedProjection";
 
 const threadId = ThreadId.make("thread-1");
 const sourceThreadId = ThreadId.make("thread-source");
@@ -1406,11 +1407,142 @@ describe("buildThreadFeed", () => {
       true,
     );
     expect(presented.find((entry) => entry.type === "work-toggle")).toMatchObject({
-      summary: "Running vp",
+      summary: "Running vp…",
       live: true,
       shimmer: true,
     });
     expect(presented.some((entry) => entry.type === "thinking")).toBe(false);
+  });
+
+  it("keeps the newest running tool in the live slot below later text", () => {
+    const startedAt = "2026-06-20T00:00:01.000Z";
+    const run = { runId, status: "running" as const, startedAt, completedAt: null };
+    const stabilize = createStableThreadFeedProjector<ThreadFeedEntry>();
+    const tool = (program: string, at: string, running: boolean) => ({
+      ...command(at),
+      id: TurnItemId.make(program),
+      input: program,
+      status: running ? ("running" as const) : ("completed" as const),
+      completedAt: running ? null : DateTime.makeUnsafe(at),
+      exitCode: running ? undefined : 0,
+    });
+    const present = (sshRunning: boolean, gitRunning: boolean) =>
+      stabilize(
+        deriveThreadFeedPresentation(
+          buildThreadFeed([
+            projected(userMessage(), 0),
+            projected(tool("git", "2026-06-20T00:00:03.000Z", gitRunning), 1),
+            projected(tool("ssh", "2026-06-20T00:00:02.000Z", sshRunning), 2),
+            projected(assistantMessage("2026-06-20T00:00:04.000Z"), 3),
+          ]),
+          run,
+          new Set(),
+          new Set(),
+          startedAt,
+        ),
+      );
+
+    const running = present(true, true);
+    expect(running.map((entry) => entry.type)).toEqual([
+      "message",
+      "work-toggle",
+      "message",
+      "thinking",
+    ]);
+    expect(running[1]).toMatchObject({ type: "work-toggle", shimmer: false });
+    expect(running.at(-1)).toMatchObject({
+      id: "live-activity-row",
+      label: "Running git…",
+      shimmer: true,
+    });
+    // The group's live header already names ssh, so the tail doesn't repeat it.
+    const sshOnly = present(true, false);
+    expect(sshOnly.map((entry) => entry.type)).toEqual(["message", "work-toggle", "message"]);
+    expect(sshOnly[1]).toMatchObject({ type: "work-toggle", summary: "Running ssh" });
+    expect(present(false, false).at(-1)).toEqual({
+      type: "thinking",
+      id: "live-activity-row",
+      createdAt: startedAt,
+      runId,
+      label: "Thinking…",
+    });
+  });
+
+  it("doesn't repeat a running tool at the tail when its own row already names it", () => {
+    const startedAt = "2026-06-20T00:00:01.000Z";
+    const run = { runId, status: "running" as const, startedAt, completedAt: null };
+    const ssh = {
+      ...command("2026-06-20T00:00:02.000Z"),
+      id: TurnItemId.make("ssh"),
+      input: "ssh",
+      status: "running" as const,
+      completedAt: null,
+      exitCode: undefined,
+    };
+    const presented = deriveThreadFeedPresentation(
+      buildThreadFeed([
+        projected(userMessage(), 0),
+        projected(ssh, 1),
+        projected(assistantMessage("2026-06-20T00:00:04.000Z"), 2),
+      ]),
+      run,
+      new Set(),
+      new Set(),
+      startedAt,
+    );
+    expect(presented.map((entry) => entry.type)).toEqual(["message", "work-toggle", "message"]);
+    expect(presented[1]).toMatchObject({ summary: "Running ssh" });
+
+    // A thought in the same group still leaves the header naming the one tool.
+    const withThought = deriveThreadFeedPresentation(
+      buildThreadFeed([
+        projected(userMessage(), 0),
+        projected(
+          {
+            ...base("thought", "2026-06-20T00:00:01.500Z", 1),
+            type: "reasoning" as const,
+            text: "Loading the model",
+            streaming: false,
+          },
+          1,
+        ),
+        projected(ssh, 2),
+        projected(assistantMessage("2026-06-20T00:00:04.000Z"), 3),
+      ]),
+      run,
+      new Set(),
+      new Set(),
+      startedAt,
+    );
+    expect(withThought.some((entry) => entry.type === "thinking")).toBe(false);
+
+    // A steer sent mid-turn sits below a group of several tools whose live header names
+    // the running one: the tail adds no second line for it.
+    const steered = deriveThreadFeedPresentation(
+      buildThreadFeed([
+        projected(userMessage(), 0),
+        projected(command("2026-06-20T00:00:01.500Z"), 1),
+        projected(ssh, 2),
+        projected(
+          {
+            ...userMessage("2026-06-20T00:00:03.000Z"),
+            id: TurnItemId.make("item-steer"),
+            messageId: MessageId.make("message-steer"),
+            inputIntent: "steer" as const,
+            text: "Also check the other one",
+          },
+          3,
+        ),
+      ]),
+      run,
+      new Set(),
+      new Set(),
+      startedAt,
+    );
+    expect(steered.some((entry) => entry.type === "thinking")).toBe(false);
+    expect(steered.find((entry) => entry.type === "work-toggle")).toMatchObject({
+      summary: "Running ssh",
+    });
   });
 
   it("keeps a runless tail folded while a normal thread waits for its sent run", () => {
@@ -1449,7 +1581,15 @@ describe("buildThreadFeed", () => {
         new Set(),
         startedAt,
       ),
-    ).toEqual([{ type: "thinking", id: "live-activity-row", createdAt: startedAt, runId }]);
+    ).toEqual([
+      {
+        type: "thinking",
+        id: "live-activity-row",
+        createdAt: startedAt,
+        runId,
+        label: "Thinking…",
+      },
+    ]);
   });
 
   it("uses a stable Thinking row while work has started without a projected item", () => {
@@ -1457,7 +1597,13 @@ describe("buildThreadFeed", () => {
     const presented = deriveThreadFeedPresentation([], null, new Set(), new Set(), startedAt);
 
     expect(presented).toEqual([
-      { type: "thinking", id: "live-activity-row", createdAt: startedAt, runId: null },
+      {
+        type: "thinking",
+        id: "live-activity-row",
+        createdAt: startedAt,
+        runId: null,
+        label: "Thinking…",
+      },
     ]);
     expect(deriveThreadFeedPresentation([], null, new Set(), new Set(), startedAt)[0]).toBe(
       presented[0],
@@ -3106,4 +3252,87 @@ it("keeps agent-opened images visible once when a completed turn folds", () => {
     new Set(),
   );
   expect(running.some((entry) => entry.type === "viewed-images")).toBe(false);
+});
+
+it("unwraps shell wrappers for a single completed command toggle and recognizes Antigravity computer MCP calls", () => {
+  const command: OrchestrationV2TurnItem = {
+    ...base("cmd-1", "2026-06-20T00:00:02.000Z", 1),
+    type: "command_execution",
+    title: "Ran command",
+    input: "/bin/zsh -lc 'git status'",
+    output: "clean",
+    exitCode: 0,
+  };
+  const computerCall: OrchestrationV2TurnItem = {
+    ...base("comp-1", "2026-06-20T00:00:02.000Z", 1),
+    type: "dynamic_tool",
+    toolName: "Run mcp_t3-code_computer_status",
+    title: "Run mcp_t3-code_computer_status",
+    input: { includeApps: true },
+    output: null,
+  };
+  const latest = {
+    runId,
+    status: "completed" as const,
+    startedAt: "2026-06-20T00:00:01.000Z",
+    completedAt: "2026-06-20T00:00:03.000Z",
+  };
+  const cmdFeed = deriveThreadFeedPresentation(
+    buildThreadFeed([
+      projected(userMessage(), 0),
+      projected(command, 1),
+      projected(assistantMessage(), 2),
+    ]),
+    latest,
+    new Set([runId]),
+  );
+  expect(cmdFeed.find((entry) => entry.type === "work-toggle")).toMatchObject({
+    summary: "git status",
+  });
+
+  const computerFeed = deriveThreadFeedPresentation(
+    buildThreadFeed([
+      projected(userMessage(), 0),
+      projected(computerCall, 1),
+      projected(assistantMessage(), 2),
+    ]),
+    latest,
+    new Set([runId]),
+  );
+  expect(computerFeed.find((entry) => entry.type === "work-toggle")).toMatchObject({
+    summary: "Checked computer access",
+    summaryToolIcon: "computer",
+  });
+});
+
+describe("commandless commands", () => {
+  it("labels a running command without command text by its status", () => {
+    const item: OrchestrationV2TurnItem = {
+      ...base("commandless", "2026-06-20T00:00:02.000Z", 1),
+      type: "command_execution",
+      title: "Ran command",
+      status: "running",
+      completedAt: null,
+      input: "",
+    };
+    const feed = buildThreadFeed([
+      projected(userMessage(), 0),
+      projected(item, 1),
+      projected(assistantMessage("2026-06-20T00:00:04.000Z"), 2),
+    ]);
+    const activity = feed.flatMap((entry) =>
+      entry.type === "activity-group" ? entry.activities : [],
+    )[0]!;
+    expect(workEntryRowLabel(activity.workEntry)).toBe("Running command");
+    const presented = deriveThreadFeedPresentation(
+      feed,
+      { runId, status: "running", startedAt: "2026-06-20T00:00:01.000Z", completedAt: null },
+      new Set(),
+      new Set(),
+      "2026-06-20T00:00:01.000Z",
+    );
+    expect(presented.find((entry) => entry.type === "work-toggle")).toMatchObject({
+      summary: "Running command",
+    });
+  });
 });

@@ -238,7 +238,20 @@ describe("atom command result helpers", () => {
 
     expect(isAtomCommandInterrupted(interrupted)).toBe(true);
     expect(isAtomCommandInterrupted(failed)).toBe(false);
-    expect(squashAtomCommandFailure(failed)).toBe("nope");
+    expect(squashAtomCommandFailure(failed)).toBeInstanceOf(Error);
+    expect((squashAtomCommandFailure(failed) as Error).message).toBe("nope");
+  });
+
+  it("wraps a string defect that came back over RPC so callers can show its text", () => {
+    const defect = Schema.decodeUnknownSync(Schema.Defect())(
+      "RPC contract is registered but unavailable in the control plane: projectClone.start",
+    );
+    const error = squashAtomCommandFailure({ cause: Cause.die(defect) });
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      "RPC contract is registered but unavailable in the control plane: projectClone.start",
+    );
   });
 
   it("settles raw promise boundaries as successes or defects", async () => {

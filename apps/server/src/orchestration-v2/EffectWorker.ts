@@ -386,6 +386,9 @@ export const layerExecutor: Layer.Layer<
                         dispatchMode: {
                           type: queued ? "queue_after_active" : "start_immediately",
                         },
+                        ...(error.steeringDeclined
+                          ? { declinedSteerTurnId: effect.request.providerTurnId }
+                          : {}),
                         createdBy: message.createdBy,
                         creationSource: message.creationSource,
                         ...(message.delegatedCompletion === undefined

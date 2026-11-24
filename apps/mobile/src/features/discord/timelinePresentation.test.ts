@@ -91,7 +91,7 @@ describe("mobile transcript boundaries", () => {
     expect(timelineDecorations(entries, stamp(25, 3), today).get("b")?.grouped).toBe(false);
     const withWork: ThreadFeedEntry[] = [
       entries[0]!,
-      { type: "thinking", id: "work", runId: null, createdAt: stamp(25, 1) },
+      { type: "thinking", id: "work", runId: null, createdAt: stamp(25, 1), label: "Thinking…" },
       entries[1]!,
     ];
     expect(timelineDecorations(withWork, null, today).get("b")?.grouped).toBe(false);

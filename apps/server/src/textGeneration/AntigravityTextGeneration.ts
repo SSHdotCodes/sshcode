@@ -12,7 +12,10 @@ import * as Stream from "effect/Stream";
 import { type AcpError, AcpRequestError } from "effect-acp/errors";
 
 import { applyAntigravityAcpModelSelection } from "../provider/acp/AntigravityAcpSupport.ts";
-import { removeAntigravitySessionFiles } from "../provider/acp/AntigravitySessionFiles.ts";
+import {
+  removeAntigravityCliSessionFiles,
+  removeAntigravitySessionFiles,
+} from "../provider/acp/AntigravitySessionFiles.ts";
 import {
   ANTIGRAVITY_SIGN_IN_REQUIRED_MESSAGE,
   isAntigravitySignInRequiredError,
@@ -54,6 +57,8 @@ type AntigravityTextRuntime = Pick<
 
 export interface AntigravityTextGenerationOptions {
   readonly profileDirectory: string;
+  /** The agy CLI stores sessions in `~/.gemini/antigravity-cli`, outside `profileDirectory`. */
+  readonly cliDataDirectory?: string;
   /** Model the provider default alias selects, when the account offers it. */
   readonly defaultModel?: Effect.Effect<string | undefined>;
   /** Uses the instance's personal Google login, with no injected MCP servers or client tools. */
@@ -154,11 +159,24 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
         const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-antigravity-text-" });
         let sessionId: string | undefined;
         yield* Effect.addFinalizer(() =>
-          removeAntigravitySessionFiles({
-            profileDirectory: options.profileDirectory,
-            sessionId,
-            cwd,
-          }).pipe(
+          Effect.all(
+            [
+              ...(options.cliDataDirectory === undefined
+                ? []
+                : [
+                    removeAntigravityCliSessionFiles({
+                      dataDirectory: options.cliDataDirectory,
+                      sessionId,
+                    }),
+                  ]),
+              removeAntigravitySessionFiles({
+                profileDirectory: options.profileDirectory,
+                sessionId,
+                cwd,
+              }),
+            ],
+            { discard: true },
+          ).pipe(
             Effect.provideService(FileSystem.FileSystem, fs),
             Effect.provideService(Path.Path, path),
           ),

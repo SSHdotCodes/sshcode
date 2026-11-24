@@ -76,6 +76,14 @@ export const antigravitySteersWithPrompt = (
   initializeResult: EffectAcpSchema.InitializeResponse,
 ): boolean => isAntigravityReleaseAtLeast(initializeResult.agentInfo?.version, [1, 5, 0]);
 
+/**
+ * `agy acp` 1.5.15+ keeps `session/prompt` open across non-daemon background commands,
+ * schedule timers, and subagents until that work finishes, then returns combined usage.
+ */
+export const antigravityKeepsPromptOpenForBackgroundWork = (
+  initializeResult: EffectAcpSchema.InitializeResponse,
+): boolean => isAntigravityReleaseAtLeast(initializeResult.agentInfo?.version, [1, 5, 15]);
+
 /** Normal launches reject browser login; only the auth flow supplies `onAuthorizationUrl`. */
 export const makeAntigravityAcpRuntime = Effect.fn("makeAntigravityAcpRuntime")(function* (
   input: AntigravityAcpRuntimeInput,
@@ -345,7 +353,7 @@ export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(functi
     // ProviderService has already put the file path in the text block. Keep a
     // folded clipboard paste lazy so the agent can search or sample it rather
     // than paying to embed the entire resource in context immediately.
-    const mimeType = attachment.mimeType.toLowerCase().split(";", 1)[0] ?? "";
+    const mimeType = attachment.mimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
     const image = attachment.type === "image" && IMAGE_MIME_TYPES.has(mimeType);
     const audio = attachment.type === "file" && AUDIO_MIME_TYPES.has(mimeType);
     const pdf = attachment.type === "file" && mimeType === "application/pdf";

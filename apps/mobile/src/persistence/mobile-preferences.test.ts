@@ -99,12 +99,12 @@ describe("thread header preferences", () => {
         const storage = preferencesStorage(JSON.stringify({ themeMode: "dark", baseFontSize: 18 }));
         const first = yield* storage;
         expect((yield* first.load).threadHeaderItems).toBeUndefined();
-        yield* first.savePatch({ threadHeaderItems: ["sideChat", "git", "files", "terminal"] });
+        yield* first.savePatch({ threadHeaderItems: ["sideChat", "files", "terminal"] });
         const relaunched = yield* storage;
         expect(yield* relaunched.load).toEqual({
           themeMode: "dark",
           baseFontSize: 18,
-          threadHeaderItems: ["sideChat", "git", "files", "terminal"],
+          threadHeaderItems: ["sideChat", "files", "terminal"],
         });
         yield* relaunched.savePatch({ threadHeaderItems: [] });
         const empty = yield* storage;

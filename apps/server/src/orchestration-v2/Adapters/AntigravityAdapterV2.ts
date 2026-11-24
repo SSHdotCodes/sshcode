@@ -19,24 +19,30 @@ import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import type { AntigravityAuth } from "../../provider/AntigravityAuth.ts";
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import {
+  antigravityKeepsPromptOpenForBackgroundWork,
   antigravityPermissionMode,
   antigravitySteersWithPrompt,
   applyAntigravityAcpModelSelection,
   buildAntigravityPrompt,
   type AntigravityAcpRuntimeInput,
 } from "../../provider/acp/AntigravityAcpSupport.ts";
+import { readAntigravityChildrenAtWork } from "../../provider/acp/AntigravityChildWork.ts";
 import { readAntigravityClientTextFile } from "../../provider/acp/AntigravityClientFiles.ts";
 import {
   antigravityApprovalOptions,
   antigravityCommandOutlivesPrompt,
+  antigravitySubagentInput,
   antigravitySubagentOutput,
   antigravityPromptStopFailure,
   classifyAntigravitySubagentToolCall,
   extractAntigravityUserInputQuestion,
+  isAntigravityOpenCommand,
   isAntigravityScheduleTool,
   makeAntigravityReadRepair,
   makeAntigravityStoppedTools,
+  makeAntigravityUpdateStepsPlans,
   makeAntigravityUserInputResponse,
+  normalizeAntigravityPromptUsage,
   normalizeAntigravityToolCall,
 } from "../../provider/acp/AntigravityProtocol.ts";
 import { isAntigravitySignInRequiredError } from "../../provider/antigravityAuthSupport.ts";
@@ -81,6 +87,7 @@ export interface AntigravityAdapterV2Options {
   readonly withProcess: AntigravityAuth["withProcess"];
   /** Model to select for the provider default alias, from the manifest. */
   readonly defaultModel: Effect.Effect<string | undefined>;
+  readonly childWorkDirectories?: ReadonlyArray<string>;
   /**
    * The ids of the usage windows that count a model, such as `3p-5h` and `3p-weekly` for
    * Claude and GPT. Google's quota notice names no window; a refusal names these so the
@@ -107,17 +114,19 @@ const extractAntigravitySubagentUpdate: NonNullable<AcpAdapterV2Flavor["extractS
   if (classifyAntigravitySubagentToolCall(toolCall) !== "subagent") {
     return undefined;
   }
+  const input = antigravitySubagentInput(toolCall);
   const status =
     toolCall.status === "failed" ? "failed" : toolCall.status === "pending" ? "pending" : "running";
   return {
     nativeTaskId: toolCall.toolCallId,
     prompt:
+      input.prompt ??
       antigravitySubagentOutput(toolCall) ??
       toolCall.detail ??
       toolCall.title ??
       "Antigravity subagent batch",
-    title: "Antigravity subagent batch",
-    model: null,
+    title: input.title ?? "Antigravity subagent batch",
+    model: input.model ?? null,
     status,
     childSessionId: null,
     result: status === "failed" ? (antigravitySubagentOutput(toolCall) ?? null) : null,
@@ -157,6 +166,7 @@ export function makeAntigravityAcpAdapterFlavor(
         .pipe(Effect.provideService(Scope.Scope, scope));
       // Repair keeps state across updates, so each runtime must have one session-update handler.
       const reads = makeAntigravityReadRepair();
+      const plans = makeAntigravityUpdateStepsPlans();
       // Served reads are reported from the read handler, so they take turns with agent updates.
       const updates = yield* Semaphore.make(1);
       let projectUpdate: Parameters<typeof runtime.handleSessionUpdate>[0] | undefined;
@@ -184,11 +194,18 @@ export function makeAntigravityAcpAdapterFlavor(
             ),
           ),
         prompt: (payload, promptOptions) =>
-          Effect.sync(reads.reset).pipe(Effect.andThen(runtime.prompt(payload, promptOptions))),
+          (promptOptions?.isSteer === true ? Effect.void : Effect.sync(reads.reset)).pipe(
+            Effect.andThen(runtime.prompt(payload, promptOptions)),
+          ),
         handleSessionUpdate: (handler) => {
           projectUpdate = handler;
           return runtime.handleSessionUpdate((notification) =>
-            updates.withPermit(handler(reads.repair(notification))),
+            updates.withPermit(
+              Effect.suspend(() => {
+                const update = plans(reads.repair(notification));
+                return update === undefined ? Effect.void : handler(update);
+              }),
+            ),
           );
         },
         start: () =>
@@ -233,6 +250,23 @@ export function makeAntigravityAcpAdapterFlavor(
     // without the replay and is what the official client does.
     preferResumeSession: true,
     subagentsIdleOnTurnCompletion: true,
+    ...(options.childWorkDirectories === undefined
+      ? {}
+      : {
+          subagentsOutlivingPrompt: (input) =>
+            Effect.gen(function* () {
+              for (const dataDirectory of options.childWorkDirectories ?? []) {
+                const atWork = yield* readAntigravityChildrenAtWork({
+                  ...input,
+                  dataDirectory,
+                  fileSystem: options.fileSystem,
+                  path: options.path,
+                });
+                if (atWork.length > 0) return atWork;
+              }
+              return [];
+            }),
+        }),
     // A finished background command or timer wakes the agent with no prompt open: it streams a
     // reply and asks for permissions, and no prompt response ever ends that reply.
     enablePostSettleContinuation: true,
@@ -240,6 +274,7 @@ export function makeAntigravityAcpAdapterFlavor(
     wakeOnDetachedRequest: true,
     replyEndsWithUsageUpdate: true,
     toolOutlivesPrompt: antigravityCommandOutlivesPrompt,
+    isBackgroundCommand: isAntigravityOpenCommand,
     // A pending `schedule` timer keeps the agent process without holding the run open.
     extractBackgroundTaskId: (toolCall) =>
       isAntigravityScheduleTool(toolCall) ? toolCall.toolCallId : undefined,
@@ -249,6 +284,8 @@ export function makeAntigravityAcpAdapterFlavor(
     preserveRuntimeOnSettledInterrupt: true,
     // `agy acp` reads a prompt sent mid-turn as a steer; cancel-and-restart killed its subagents.
     steersWithPrompt: antigravitySteersWithPrompt,
+    // `agy acp` 1.5.15+ keeps `session/prompt` open while non-daemon background tasks or subagents run.
+    promptHoldsBackgroundWork: antigravityKeepsPromptOpenForBackgroundWork,
     ...(options.onSessionEvent === undefined ? {} : { onSessionEvent: options.onSessionEvent }),
     applyModelSelection: ({ runtime, modelSelection }) =>
       Effect.gen(function* () {
@@ -305,6 +342,8 @@ export function makeAntigravityAcpAdapterFlavor(
     extractSubagentUpdate: extractAntigravitySubagentUpdate,
     supportsImagePrompts: true,
     compactViaAdvertisedCommand: true,
+    reportsPerTurnPromptUsage: true,
+    normalizePromptUsage: normalizeAntigravityPromptUsage,
     requiresSignIn: isAntigravitySignInRequiredError,
     // Antigravity can leave a prompt open without updates; long tools and approvals pause this.
     promptInactivityTimeout: "15 minutes",

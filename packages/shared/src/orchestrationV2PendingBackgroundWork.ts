@@ -13,6 +13,7 @@ import { isOrchestrationV2WorkActive } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
 import { latestExecutedRun } from "./orchestrationV2ThreadError.ts";
+import { truncate } from "./String.ts";
 import { resolveT3McpToolId } from "./t3McpToolPresentation.ts";
 import { threadPullRequestKeyOf } from "./threadPullRequests.ts";
 
@@ -68,14 +69,6 @@ export function turnItemUpdateCanEndBackgroundWork(
   return BACKGROUND_TURN_ITEM_TYPES.has(item.type) && !isOrchestrationV2WorkActive(item.status);
 }
 
-/**
- * Whether background work left behind by a completed root run holds back its
- * completion alert (desktop/web notification and the mobile push). Commands,
- * such as dev servers and other long-lived shells, do not: the agent is done
- * and may leave them running for hours. Subagents and monitors do, because
- * they wake the agent and it continues (#13625). Work the adapter cannot name,
- * including kinds this build does not know, holds as the conservative choice.
- */
 /** A background subagent outlives its run and still calls tools. */
 export function hasPendingBackgroundSubagent(
   tasks: ReadonlyArray<Pick<PendingBackgroundWorkTask, "kind">> | undefined,
@@ -83,23 +76,19 @@ export function hasPendingBackgroundSubagent(
   return tasks?.some((task) => task.kind === "subagent") ?? false;
 }
 
+type CompletionHoldingWork = Pick<PendingBackgroundWorkTask, "kind"> & {
+  readonly wakesAgent?: true | undefined;
+};
+
+/** Delays settlement and completion alerts while the provider is expected to resume. */
 export function backgroundWorkHoldsCompletion(
-  tasks: ReadonlyArray<Pick<PendingBackgroundWorkTask, "kind">>,
+  tasks: ReadonlyArray<CompletionHoldingWork>,
 ): boolean {
-  return tasks.some((task) => backgroundWorkKindHoldsCompletion(task.kind));
+  return tasks.some(backgroundWorkTaskHoldsCompletion);
 }
 
-export function backgroundWorkKindHoldsCompletion(
-  kind: PendingBackgroundWorkTask["kind"],
-): boolean {
-  switch (kind) {
-    case "command":
-      return false;
-    case "subagent":
-    case "monitor":
-    case "background_task":
-      return true;
-  }
+export function backgroundWorkTaskHoldsCompletion(task: CompletionHoldingWork): boolean {
+  return task.kind !== "command" || task.wakesAgent === true;
 }
 
 /**
@@ -161,7 +150,9 @@ type PendingBackgroundWorkPullRequest = Pick<
 type PendingBackgroundWorkProviderThread = Pick<
   OrchestrationV2ProviderThread,
   "id" | "pendingBackgroundTasks"
->;
+> & {
+  readonly waitingOnBackgroundWork?: true | undefined;
+};
 
 type PendingBackgroundWorkTurnItem = {
   readonly id: OrchestrationV2TurnItem["id"] | string;
@@ -176,6 +167,7 @@ type PendingBackgroundWorkTurnItem = {
   } | null;
   readonly input?: unknown;
   readonly monitor?: boolean | undefined;
+  readonly wakesAgent?: true | undefined;
   readonly prompt?: string | undefined;
   readonly childThreadId?: ThreadId | null;
   readonly subagentId?: string;
@@ -245,6 +237,11 @@ function isPersistentDynamicToolInput(input: unknown): boolean {
 }
 
 function descriptionFromTurnItem(item: PendingBackgroundWorkTurnItem): string | undefined {
+  // ACP's command cards can have a generic title such as "Ran command".
+  if (item.type === "command_execution" && item.wakesAgent && typeof item.input === "string") {
+    const label = truncate(item.input.trim().split("\n", 1)[0] ?? "", 60);
+    if (label.length > 0) return label;
+  }
   if (typeof item.title === "string" && item.title.trim().length > 0) {
     return item.title.trim();
   }
@@ -280,7 +277,13 @@ function pendingTaskFromTurnItem(
         ...(item.startedAt == null ? {} : { startedAt: DateTime.formatIso(item.startedAt) }),
       };
     case "command_execution":
-      return { ...named, kind: item.monitor === true ? "monitor" : "command" };
+      return item.monitor === true
+        ? { ...named, kind: "monitor" }
+        : {
+            ...named,
+            kind: "command",
+            ...(item.wakesAgent === true ? { wakesAgent: true } : {}),
+          };
     default:
       return { ...named, kind: "background_task" };
   }
@@ -336,6 +339,21 @@ export function pendingBackgroundTurnItems<Item extends PendingBackgroundWorkTur
  * Subagent rows only decide whether an app-owned child chat still runs: its
  * card is listed, or named from the row when no card is loaded, once per child.
  */
+function activeProviderThreadWaitingOnBackgroundWork(input: {
+  readonly providerThreads: ReadonlyArray<PendingBackgroundWorkProviderThread>;
+  readonly activeProviderThreadId?: string | null;
+}): boolean {
+  const providerThreads =
+    input.activeProviderThreadId === undefined || input.activeProviderThreadId === null
+      ? input.providerThreads
+      : input.providerThreads.filter((thread) => thread.id === input.activeProviderThreadId);
+  return providerThreads.some(
+    (thread) =>
+      thread.waitingOnBackgroundWork === true &&
+      backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? []),
+  );
+}
+
 export function derivePendingBackgroundWork(input: {
   readonly latestRun: PendingBackgroundWorkRun | null | undefined;
   readonly providerThreads: ReadonlyArray<PendingBackgroundWorkProviderThread>;
@@ -359,7 +377,23 @@ export function derivePendingBackgroundWork(input: {
     ) ??
     false;
   if (hasActiveRun) {
-    return [];
+    if (!activeProviderThreadWaitingOnBackgroundWork(input)) {
+      return [];
+    }
+    const activeRunIds = new Set(
+      (input.runs ?? [])
+        .filter(
+          (run) =>
+            run.status === "preparing" || run.status === "starting" || run.status === "running",
+        )
+        .map((run) => String(run.id)),
+    );
+    return collectPendingBackgroundWork(
+      input.runs === undefined
+        ? { ...input, turnItems: input.turnItems.filter(isAppOwnedChildItem) }
+        : input,
+      activeRunIds,
+    );
   }
   // A thread that never ran waits on nothing else, but a watch started on it still wakes it.
   if (input.latestRun == null) {

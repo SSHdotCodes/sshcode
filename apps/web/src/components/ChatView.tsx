@@ -9686,6 +9686,20 @@ export default function ChatView(props: ChatViewProps) {
     });
   };
   const onForkFromRunStable = useStableCallback(onForkFromRun);
+  const pinMessageCommand = useAtomCommand(threadEnvironment.pinMessage, "pin message");
+  const pinnedMessages = activeThreadShell?.pinnedMessages;
+  const pinnedMessageIds = useMemo(
+    () => new Set((pinnedMessages ?? []).map((pin) => pin.messageId)),
+    [pinnedMessages],
+  );
+  const onToggleMessagePin = (messageId: MessageId, pinned: boolean, text?: string) => {
+    if (!isServerThread || !activeThreadRef) return;
+    void pinMessageCommand({
+      environmentId: activeThreadRef.environmentId,
+      input: { threadId: activeThreadRef.threadId, messageId, pinned, ...(text ? { text } : {}) },
+    });
+  };
+  const onToggleMessagePinStable = useStableCallback(onToggleMessagePin);
   const onCompactContext = () => {
     if (compactDisabled) return;
     void sendStandaloneCommand("/compact", "Failed to compact context.");
@@ -13108,6 +13122,10 @@ export default function ChatView(props: ChatViewProps) {
                 onOpenThread={onOpenRelatedThreadStable}
                 parentThreadLink={paintOnlyDisplayedTimeline ? null : parentThreadLink}
                 onForkFromRun={paintOnlyDisplayedTimeline ? async () => {} : onForkFromRunStable}
+                pinnedMessageIds={pinnedMessageIds}
+                {...(paintOnlyDisplayedTimeline || !isServerThread
+                  ? {}
+                  : { onToggleMessagePin: onToggleMessagePinStable })}
                 onRollbackCheckpoint={onTimelineRollbackCheckpointStable}
                 supportsConversationRollback={
                   !paintOnlyDisplayedTimeline && supportsConversationRollback

@@ -11,7 +11,7 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as EffectAcpErrors from "effect-acp/errors";
 
-import { steerDevinTurn } from "./devinAcp.ts";
+import { steerDevinTurn, withDevinLightningSpeed } from "./devinAcp.ts";
 
 // Devin answers a mid-turn prompt only when the turn it joined ends (or fails it at once).
 const setup = (reply: "pending" | "refused" = "pending") =>
@@ -120,4 +120,41 @@ describe("steerDevinTurn", () => {
       assert.equal(cancels(), 0);
     }),
   );
+});
+
+describe("withDevinLightningSpeed", () => {
+  const speedModel = (slug: string) => ({
+    slug,
+    name: slug,
+    isCustom: false,
+    capabilities: {
+      optionDescriptors: [
+        {
+          id: "speed",
+          label: "Speed",
+          type: "select" as const,
+          options: [
+            { id: "standard", label: "Standard" },
+            { id: "fast", label: "Fast" },
+          ],
+          currentValue: "standard",
+        },
+      ],
+    },
+  });
+  const fastLabel = (model: ReturnType<typeof speedModel>) => {
+    const descriptor = model.capabilities?.optionDescriptors?.[0];
+    return descriptor?.type === "select"
+      ? descriptor.options.find((option) => option.id === "fast")?.label
+      : undefined;
+  };
+
+  it("names SWE models' fast speed Lightning and leaves other makers' Fast alone", () => {
+    const [swe, claude] = withDevinLightningSpeed([
+      speedModel("swe-2-1-medium"),
+      speedModel("claude-opus-5-5-medium"),
+    ]) as Array<ReturnType<typeof speedModel>>;
+    assert.strictEqual(fastLabel(swe!), "Lightning");
+    assert.strictEqual(fastLabel(claude!), "Fast");
+  });
 });

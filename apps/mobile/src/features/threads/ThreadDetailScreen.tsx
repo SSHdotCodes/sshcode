@@ -190,7 +190,7 @@ import { ComposerPopoverHost } from "./ComposerPopoverHost";
 import { ThreadFeed, type ThreadFeedHistoryControls } from "./ThreadFeed";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
 import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
-import { useThreadQueuedCount } from "./ThreadQueueControl";
+import { useThreadQueuedCount, useThreadQueueHeld } from "./ThreadQueueControl";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 import { useGlobalVoiceInput } from "../voice-input/VoiceInputProvider";
@@ -500,6 +500,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     supportsSyncMarker: props.serverConfig?.threadResumeCompletionMarker === true,
   });
   const queuedCount = useThreadQueuedCount(props.selectedThreadDetailRef);
+  const queueHeld = useThreadQueueHeld(props.selectedThreadDetailRef);
   const turnSubagents = useThreadTurnSubagents(props.selectedThreadDetailRef);
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
   // A provider-native subagent shows status instead of a composer.
@@ -1565,6 +1566,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   agents={discord ? null : agentsSegment}
                   onOpenAgents={openAgentsSheet}
                   queuedCount={queuedCount}
+                  queueHeld={queueHeld}
                   onOpenQueue={() => {
                     Keyboard.dismiss();
                     navigation.navigate("ThreadQueue", {

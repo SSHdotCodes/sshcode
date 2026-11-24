@@ -2401,6 +2401,13 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               // closes the provider stream cleanly; only an unexpected death
               // is surfaced as an event-stream failure.
               const state = threadState;
+              // Pi ending while nothing is in flight is an idle exit, not a failure.
+              const idle =
+                state !== null &&
+                state.activeTurn === null &&
+                pendingWake === null &&
+                pendingPrompts.size === 0 &&
+                rollbackBarrier === null;
               if (rollbackBarrier !== null)
                 yield* Deferred.fail(
                   rollbackBarrier,
@@ -2423,7 +2430,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               if (unsolicitedActivityDetected) {
                 yield* updateProviderSession("error", PI_UNSOLICITED_ACTIVITY_ERROR);
                 yield* Queue.end(events);
-              } else if (stopRequested) {
+              } else if (stopRequested || idle) {
                 yield* updateProviderSession("stopped", null);
                 yield* Queue.end(events);
               } else {
@@ -3356,7 +3363,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             );
             return {
               providerThread: state.providerThread,
-              providerTurns: [],
               messages,
               runtimeRequests: [],
             };
@@ -3755,7 +3761,7 @@ function piExtensionDisplayName(extensionPath: string | undefined): string {
 function piThreadSnapshot(
   providerThread: OrchestrationV2ProviderThread,
 ): ProviderAdapter.ProviderAdapterV2ThreadSnapshot {
-  return { providerThread, providerTurns: [], messages: [], runtimeRequests: [] };
+  return { providerThread, messages: [], runtimeRequests: [] };
 }
 
 function piQuestion(

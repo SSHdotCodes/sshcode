@@ -11,7 +11,6 @@ import {
   modelOptionRoute,
   orderMakerGroupsByUse,
   readModelRouteMemory,
-  routeOptions,
   routeRowOption,
   routeAccountDetails,
   saveModelRoute,

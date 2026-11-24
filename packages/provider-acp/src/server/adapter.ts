@@ -8883,13 +8883,17 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const steerWithPrompt = Effect.fn("AcpAdapterV2.steerWithPrompt")(function* (
           turnInput: ProviderAdapter.ProviderAdapterV2SteerInput,
         ) {
+          const handBack = new ProviderAdapter.ProviderAdapterSteerRunUnsupportedError({
+            driver,
+            providerThreadId: turnInput.providerThread.id,
+          });
           const text = providerMessageTextWithAttachmentPaths({
             text: turnInput.message.text,
             attachments: turnInput.message.attachments,
             resolveAttachmentPath: host.resolveAttachmentPath,
           });
           const prompt = yield* promptContentBlocks(text, turnInput.message.attachments);
-          const dispatched = yield* runtimeTransitionPermit.withPermit(
+          const { dispatched, dispatchError } = yield* runtimeTransitionPermit.withPermit(
             Effect.gen(function* () {
               const context = yield* Ref.get(activeTurn);
               if (
@@ -8898,20 +8902,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 context.interrupted ||
                 context.providerTurnId !== turnInput.providerTurnId
               ) {
-                return yield* new ProviderAdapter.ProviderAdapterProtocolError({
-                  driver,
-                  detail: `Provider turn ${turnInput.providerTurnId} is not active and cannot be steered.`,
-                });
+                return yield* handBack;
               }
               // A wake turn has no prompt of its own to steer; the message waits for its end.
               if (context.promptSequence === 0) {
-                return yield* new ProviderAdapter.ProviderAdapterSteerRunUnsupportedError({
-                  driver,
-                  providerThreadId: turnInput.providerThread.id,
-                });
+                return yield* handBack;
               }
               const generation = yield* Ref.get(runtimeCallbackGeneration);
               const dispatched = yield* Deferred.make<void>();
+              const dispatchError = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2Error>();
               const steered = yield* runRuntimeCallbackAtGeneration(
                 generation,
                 Effect.gen(function* () {
@@ -8941,23 +8940,55 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   const releasedForSteer = context.foregroundIdle;
                   yield* followPrompt(
                     context,
-                    () => runtime.prompt({ prompt }, { dispatched, released: releasedForSteer }),
+                    () =>
+                      runtime.prompt({ prompt }, { dispatched, released: releasedForSteer }).pipe(
+                        Effect.tapError((cause) =>
+                          Deferred.isDone(dispatched).pipe(
+                            Effect.flatMap((done) =>
+                              done
+                                ? Effect.void
+                                : Deferred.succeed(
+                                    dispatchError,
+                                    new ProviderAdapter.ProviderAdapterSteerRunError({
+                                      driver,
+                                      providerThreadId: turnInput.providerThread.id,
+                                      providerTurnId: turnInput.providerTurnId,
+                                      cause,
+                                    }),
+                                  ),
+                            ),
+                          ),
+                        ),
+                      ),
                     { generation, sessionId: context.nativeThreadId, promptParts: null },
-                  ).pipe(Effect.forkIn(sessionScope));
+                  ).pipe(
+                    // If the forked prompt ends or is interrupted before dispatching, wake steerWithPrompt.
+                    Effect.ensuring(
+                      Deferred.isDone(dispatched).pipe(
+                        Effect.flatMap((done) =>
+                          done ? Effect.void : Deferred.succeed(dispatchError, handBack),
+                        ),
+                      ),
+                    ),
+                    Effect.forkIn(sessionScope),
+                  );
                   yield* Deferred.succeed(released, undefined);
                   return true;
                 }),
               );
               if (!Option.contains(steered, true)) {
-                return yield* new ProviderAdapter.ProviderAdapterProtocolError({
-                  driver,
-                  detail: `Provider turn ${turnInput.providerTurnId} ended before it could be steered.`,
-                });
+                return yield* handBack;
               }
-              return dispatched;
+              return { dispatched, dispatchError };
             }),
           );
-          yield* Deferred.await(dispatched);
+          const failure = yield* Effect.raceFirst(
+            Deferred.await(dispatched).pipe(Effect.as(undefined)),
+            Deferred.await(dispatchError),
+          );
+          if (failure !== undefined) {
+            return yield* failure;
+          }
         });
 
         const startTurn = Effect.fn("AcpAdapterV2.startTurn.transition")(function* (

@@ -555,6 +555,9 @@ describe("model picker catalog", () => {
         model("claude-5-fable-medium", { name: "Claude Fable 5" }),
         model("claude-fable-5-2-medium", { name: "Claude Fable 5.2" }),
         model("swe-2-high", { name: "SWE-2" }),
+        model("swe-2-flash-medium", { name: "SWE-2 Flash" }),
+        model("swe-1-7-medium", { name: "SWE-1.7" }),
+        model("swe-1-6", { name: "SWE-1.6" }),
       ],
       { displayName: "Devin", iconUrl: officialAcpRegistryIconUrlForAgentId("devin") ?? undefined },
     );
@@ -578,10 +581,13 @@ describe("model picker catalog", () => {
     expect(routesOf("gemini-4-carbon-medium")).toEqual([
       "acpRegistry_devin:gemini-4-carbon-medium",
     ]);
+    expect(routesOf("swe-2-flash-medium")).toEqual(["acpRegistry_devin:swe-2-flash-medium"]);
     for (const old of [
       "gemini-3-7-flash-medium",
       "claude-opus-4-6-thinking-1m",
       "claude-5-fable-medium",
+      "swe-1-7-medium",
+      "swe-1-6",
     ])
       expect(routesOf(old)).toBeUndefined();
     expect(routesOf("claude-fable-5-2-medium")).toEqual([

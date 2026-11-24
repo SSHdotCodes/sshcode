@@ -4364,6 +4364,26 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("hands back a steer as unsupported when the turn is no longer active", () =>
+    Effect.gen(function* () {
+      const { runtime, thread } = yield* resumed([]);
+      const error = yield* runtime
+        .steerTurn({
+          threadId,
+          runId: RunId.make("run:opencode2-adapter"),
+          providerThread: thread,
+          providerTurnId: yield* providerTurnId,
+          message: {
+            ...turnInput(thread).message,
+            messageId: MessageId.make("message:opencode2-adapter:steer-inactive"),
+            text: "Try this next",
+          },
+        })
+        .pipe(Effect.flip);
+      assert.equal(error._tag, "ProviderAdapterSteerRunUnsupportedError");
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("drops the turns a rollback cut from the snapshot it returns", () =>
     Effect.gen(function* () {
       const kept = `msg_t3_turn_${SESSION}:attempt:opencode2-adapter`;

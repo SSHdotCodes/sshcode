@@ -1199,43 +1199,58 @@ const make = Effect.gen(function* () {
   // on every call. Its receipts can be collected when the credential is gone.
   const acceptedHeldByScope = new WeakMap<McpInvocationScope, Map<MessageId, ThreadId>>();
 
+  const isPermanentHeldParentError = (error: { readonly _tag: string }) =>
+    error._tag === "ThreadManagementThreadNotFoundError" ||
+    error._tag === "ThreadManagementThreadArchivedError" ||
+    error._tag === "ThreadManagementProviderInstanceDisabledError";
+
   const deliverHeld = (parentThreadId: ThreadId) =>
     Effect.gen(function* () {
       const held = heldByParent.get(parentThreadId) ?? [];
       const memberIds = new Set(held.map((message) => message.messageId));
       sendingHeldByParent.set(parentThreadId, memberIds);
-      const delivery = yield* combineHeldMessages(parentThreadId, held).pipe(
-        Effect.provideService(Crypto.Crypto, crypto),
-      );
-      if (delivery === null) return;
-      yield* Effect.suspend(() =>
-        threadManagement.sendToThread({
-          projectId: delivery.projectId,
-          commandId: delivery.commandId,
-          threadId: parentThreadId,
-          ...(delivery.senderThreadId === undefined
-            ? {}
-            : { senderThreadId: delivery.senderThreadId }),
-          messageId: delivery.messageId,
-          text: delivery.text,
-          attachments: [],
-          mode: "auto",
-          createdBy: "agent",
-          creationSource: "mcp",
-        }),
-      ).pipe(
-        Effect.tapError(() =>
-          Effect.logWarning("Retrying held subagent updates", { threadId: parentThreadId }),
-        ),
-        Effect.retry(Schedule.spaced("5 seconds")),
-      );
-      // New updates can arrive during dispatch; acknowledge only this accepted batch.
-      for (const message of held) message.recordAcceptance?.();
-      const remaining = (heldByParent.get(parentThreadId) ?? []).filter(
-        (message) => !memberIds.has(message.messageId),
-      );
-      if (remaining.length === 0) heldByParent.delete(parentThreadId);
-      else heldByParent.set(parentThreadId, remaining);
+      const clearBatch = () => {
+        const remaining = (heldByParent.get(parentThreadId) ?? []).filter(
+          (message) => !memberIds.has(message.messageId),
+        );
+        if (remaining.length === 0) heldByParent.delete(parentThreadId);
+        else heldByParent.set(parentThreadId, remaining);
+      };
+      yield* Effect.gen(function* () {
+        const delivery = yield* combineHeldMessages(parentThreadId, held).pipe(
+          Effect.provideService(Crypto.Crypto, crypto),
+        );
+        if (delivery === null) return;
+        yield* Effect.suspend(() =>
+          threadManagement.sendToThread({
+            projectId: delivery.projectId,
+            commandId: delivery.commandId,
+            threadId: parentThreadId,
+            ...(delivery.senderThreadId === undefined
+              ? {}
+              : { senderThreadId: delivery.senderThreadId }),
+            messageId: delivery.messageId,
+            text: delivery.text,
+            attachments: [],
+            mode: "auto",
+            createdBy: "agent",
+            creationSource: "mcp",
+          }),
+        ).pipe(
+          Effect.tapError((error) =>
+            isPermanentHeldParentError(error)
+              ? Effect.void
+              : Effect.logWarning("Retrying held subagent updates", { threadId: parentThreadId }),
+          ),
+          Effect.retry({
+            schedule: Schedule.spaced("5 seconds"),
+            times: 11,
+            while: (error) => !isPermanentHeldParentError(error),
+          }),
+        );
+        // New updates can arrive during dispatch; acknowledge only this accepted batch.
+        for (const message of held) message.recordAcceptance?.();
+      }).pipe(Effect.ensuring(Effect.sync(clearBatch)));
     }).pipe(
       Effect.ensuring(Effect.sync(() => sendingHeldByParent.delete(parentThreadId))),
       Effect.catchCause((cause) =>
@@ -1856,24 +1871,43 @@ const make = Effect.gen(function* () {
       // cannot otherwise resolve.
       const rejectTarget = (code: OrchestratorMcpFailure["code"], message: string) =>
         accountFailure ?? failure(code, message);
+      const canBalanceSignedOut =
+        settings.balanceAccounts &&
+        input.target?.providerInstanceId === undefined &&
+        input.target?.userNamedAccount !== true &&
+        input.skipProjectEnablementFilter !== true &&
+        provider.auth.status === "unauthenticated" &&
+        provider.enabled &&
+        provider.installed &&
+        isProviderAvailable(provider) &&
+        orchestrationCapableInstanceIds.has(provider.instanceId) &&
+        provider.continuation?.groupKey !== undefined;
+      let deferredFailure: OrchestratorMcpFailure | undefined;
       const constraints = providerConstraints(
         provider,
         orchestrationCapableInstanceIds.has(provider.instanceId),
       );
       if (constraints.length > 0) {
-        return yield* rejectTarget(
+        const constraintFailure = rejectTarget(
           "provider_unavailable",
           `Provider ${instanceId} cannot run a child task: ${constraints.join(" ")}`,
         );
+        if (!canBalanceSignedOut) {
+          return yield* constraintFailure;
+        }
+        deferredFailure = constraintFailure;
       }
 
       const providerSelection = inheritedSelectionOn(provider);
       const requestedModel = requestedModelOn(provider);
       const model = modelOn(provider);
       if (model === undefined) {
-        return yield* rejectTarget(
-          "model_unavailable",
-          `Provider ${instanceId} has no model available for inheritance.`,
+        return yield* (
+          deferredFailure ??
+            rejectTarget(
+              "model_unavailable",
+              `Provider ${instanceId} has no model available for inheritance.`,
+            )
         );
       }
       const advertised = provider.models.find((candidate) => candidate.slug === model);
@@ -1884,7 +1918,12 @@ const make = Effect.gen(function* () {
         provider.models.length === 0 &&
         requestedModel !== undefined &&
         input.target?.userNamedModel === true;
-      if (!advertised && !explicitCustom && input.skipProjectEnablementFilter !== true) {
+      if (
+        !advertised &&
+        !explicitCustom &&
+        input.skipProjectEnablementFilter !== true &&
+        !(canBalanceSignedOut && provider.models.length === 0)
+      ) {
         // A model the installed CLI is too old for: retrying another slug will not help.
         const updateRequired = provider.updateRequiredModels?.find(
           (candidate) => candidate.slug === model,
@@ -2024,9 +2063,11 @@ const make = Effect.gen(function* () {
           provider = moved.provider;
           instanceId = moved.provider.instanceId;
           account = undefined;
+          deferredFailure = undefined;
           modelSelection = { ...modelSelection, instanceId };
         }
       }
+      if (deferredFailure) return yield* deferredFailure;
       if (accountFailure && account !== undefined) return yield* accountFailure;
       // An inherited selection can carry the option too, so the resolved one is what counts.
       const modelFailure = (yield* providerRegistry.getModelFailures).get(
@@ -3662,12 +3703,18 @@ const make = Effect.gen(function* () {
             status: current.status,
           } satisfies OrchestratorMcpTaskCancelResult;
         }
-        // A task waiting on its own delegates has work to stop below it. One with neither
-        // a running turn nor delegates (such as one awaiting a restart) keeps its delivery.
+        // A task waiting on its own delegates or a scheduled automatic provider retry has
+        // work to stop below it. One with none (such as one awaiting a restart) keeps its delivery.
         const child = yield* loadProjection(current.childThreadId);
+        const hasScheduledAutomaticRetry = child.runs.some(
+          (run) =>
+            (run.status === "failed" || run.status === "cancelled") &&
+            run.automaticProviderRetry?.status === "scheduled",
+        );
         if (
           current.workState !== "waiting_for_children" &&
-          ThreadManagementService.latestActiveRun(child) === undefined
+          ThreadManagementService.latestActiveRun(child) === undefined &&
+          !hasScheduledAutomaticRetry
         ) {
           return yield* failure(
             "task_not_cancellable",

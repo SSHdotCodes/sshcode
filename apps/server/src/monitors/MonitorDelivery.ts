@@ -188,7 +188,7 @@ export const layer = Layer.effectDiscard(
     const access = (threadId: Parameters<typeof engine.getThreadShell>[0]) =>
       engine.getThreadShell(threadId).pipe(
         Effect.map((thread): MonitorService.MonitorRecoveryAccess =>
-          thread === null
+          thread === null || thread.archivedAt != null || thread.deletedAt != null
             ? "gone"
             : thread.runtimeMode === "full-access" && thread.interactionMode === "default"
               ? "ok"

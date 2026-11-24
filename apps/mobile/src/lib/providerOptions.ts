@@ -9,6 +9,7 @@ import {
   getProviderOptionDescriptors,
   getProviderOptionCurrentValue,
   getProviderOptionCurrentLabel,
+  isReasoningSelectDescriptor,
 } from "@t3tools/shared/model";
 
 export function resolveProviderOptionDescriptors(input: {
@@ -70,9 +71,7 @@ export function modelTraits(input: {
     capabilities: input.capabilities,
     selections: input.selection?.options,
   });
-  const effort = ["reasoningEffort", "effort", "reasoning", "variant"]
-    .map((id) => descriptors.find((descriptor) => descriptor.id === id))
-    .find((descriptor) => descriptor?.type === "select");
+  const effort = descriptors.find(isReasoningSelectDescriptor);
   const speed = descriptors.map(fastModeControl).find((control) => control?.enabled);
   return {
     effort: effort

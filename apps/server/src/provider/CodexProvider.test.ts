@@ -16,6 +16,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import type * as CodexSchema from "effect-codex-app-server/schema";
 
 import {
   applyPreferredCodexDefaultModel,
@@ -204,11 +205,14 @@ const decodeRequest = Schema.decodeUnknownSync(
   ),
 );
 const account = {
-  account: { type: "chatgpt", email: "test@example.com", planType: "pro" },
+  account: { type: "chatgpt", email: "test@example.com", planType: "prolite" },
   requiresOpenaiAuth: false,
 } as const;
 
-const startProbe = Effect.fn("startProbe")(function* (hang: ReadonlyArray<string>) {
+const startProbe = Effect.fn("startProbe")(function* (
+  hang: ReadonlyArray<string>,
+  rateLimits: CodexSchema.V2GetAccountRateLimitsResponse = { rateLimits: { planType: "pro" } },
+) {
   const fs = yield* FileSystem.FileSystem;
   const homePath = yield* fs.makeTempDirectoryScoped();
   yield* fs.writeFileString(
@@ -273,9 +277,9 @@ const startProbe = Effect.fn("startProbe")(function* (hang: ReadonlyArray<string
                 } else if (method === "skills/list") {
                   yield* reply(id, { data: [] });
                 } else if (method === "account/rateLimits/read") {
-                  yield* reply(id, {
-                    rateLimits: { primary: null, secondary: null, credits: null, planType: "pro" },
-                  });
+                  yield* reply(id, rateLimits);
+                } else if (method === "config/read") {
+                  yield* reply(id, { config: {}, origins: {} });
                 }
               }),
             { discard: true },
@@ -300,7 +304,40 @@ const startProbe = Effect.fn("startProbe")(function* (hang: ReadonlyArray<string
   };
 });
 
-it.layer(NodeServices.layer)("Codex probe budget", (it) => {
+it.layer(NodeServices.layer)("Codex provider probe", (it) => {
+  it.effect.each([
+    {
+      name: "the rate-limit snapshot reports a newer plan",
+      rateLimits: { rateLimits: { planType: "pro" } },
+      expectedLabel: "ChatGPT Pro 20x Subscription",
+    },
+    {
+      name: "the main Codex bucket reports a newer plan",
+      rateLimits: {
+        rateLimits: { limitId: "codex-spark", planType: "prolite" },
+        rateLimitsByLimitId: { codex: { limitId: "codex", planType: "pro" } },
+      },
+      expectedLabel: "ChatGPT Pro 20x Subscription",
+    },
+    {
+      name: "the rate-limit plan is omitted",
+      rateLimits: { rateLimits: {} },
+      expectedLabel: "ChatGPT Pro 10x Subscription",
+    },
+    {
+      name: "the rate-limit plan is null",
+      rateLimits: { rateLimits: { planType: null } },
+      expectedLabel: "ChatGPT Pro 10x Subscription",
+    },
+  ])("reports $expectedLabel when $name", ({ rateLimits, expectedLabel }) =>
+    Effect.gen(function* () {
+      const probe = yield* startProbe([], rateLimits);
+      yield* probe.authenticate;
+      const provider = yield* Fiber.join(probe.fiber);
+      assert.strictEqual(provider.auth.label, expectedLabel);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("keeps the first complete catalog when its refresh never answers", () =>
     Effect.gen(function* () {
       const probe = yield* startProbe(["model/list/2"]);
@@ -353,6 +390,7 @@ it.layer(NodeServices.layer)("Codex probe budget", (it) => {
       );
       assert.deepStrictEqual(provider.skills, []);
       assert.strictEqual(provider.usageLimits?.unavailable?.reason, "probeFailed");
+      assert.strictEqual(provider.auth.label, "ChatGPT Pro 10x Subscription");
     }).pipe(Effect.scoped),
   );
 

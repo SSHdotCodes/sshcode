@@ -139,6 +139,7 @@ const makeHeldParentHarness = Effect.gen(function* () {
   const parentProjection = idleThreadProjection(parentShell);
   const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
   const failedSends = yield* Ref.make(0);
+  const sendError = yield* Ref.make<ThreadManagementService.ThreadManagementError | null>(null);
   const attempts = yield* Queue.unbounded<ThreadManagementService.ThreadManagementSendInput>();
   const accepted = yield* Queue.unbounded<ThreadManagementService.ThreadManagementSendInput>();
   const sent = yield* Ref.make<ReadonlyArray<ThreadManagementService.ThreadManagementSendInput>>(
@@ -164,6 +165,10 @@ const makeHeldParentHarness = Effect.gen(function* () {
             )
           : Effect.gen(function* () {
               yield* Queue.offer(attempts, input);
+              const permanentError = yield* Ref.get(sendError);
+              if (permanentError !== null) {
+                return yield* permanentError;
+              }
               if ((yield* Ref.get(failedSends)) > 0) {
                 yield* Ref.update(failedSends, (count) => count - 1);
                 return yield* new ThreadManagementService.ThreadManagementNoSteerableRunError({
@@ -207,6 +212,7 @@ const makeHeldParentHarness = Effect.gen(function* () {
     childScope,
     events,
     failedSends,
+    sendError,
     attempts,
     accepted,
     sent,
@@ -377,6 +383,43 @@ describe("OrchestratorMcpService", () => {
         assert.notEqual(later.messageId, failed.messageId);
       }).pipe(Effect.provide(layer));
     }),
+  );
+
+  it.effect.each(["archived", "deleted", "disabled"] as const)(
+    "stops retrying held subagent updates when the parent thread is %s",
+    (state) =>
+      Effect.gen(function* () {
+        const { parentThreadId, childScope, sendError, attempts, layer } =
+          yield* makeHeldParentHarness;
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          yield* service.sendToThread(childScope, {
+            threadId: parentThreadId,
+            message: "Progress note.",
+            clientRequestId: `held-permanent-${state}`,
+          });
+          yield* Ref.set(
+            sendError,
+            state === "archived"
+              ? new ThreadManagementService.ThreadManagementThreadArchivedError({
+                  threadId: parentThreadId,
+                })
+              : state === "deleted"
+                ? new ThreadManagementService.ThreadManagementThreadNotFoundError({
+                    projectId: ProjectId.make("project:mcp-held"),
+                    threadId: parentThreadId,
+                  })
+                : new ThreadManagementService.ThreadManagementProviderInstanceDisabledError({
+                    projectId: ProjectId.make("project:mcp-held"),
+                    instanceId: ProviderInstanceId.make("codex"),
+                  }),
+          );
+          yield* TestClock.adjust("2 minutes");
+          yield* Queue.take(attempts);
+          yield* TestClock.adjust("3 minutes");
+          assert.equal(yield* Queue.size(attempts), 0);
+        }).pipe(Effect.provide(layer));
+      }),
   );
 
   it.effect("sends a steer as a new turn when the chat's turn already ended", () =>
@@ -1367,6 +1410,102 @@ describe("OrchestratorMcpService", () => {
     }),
   );
 
+  it.effect.each(["failed", "cancelled"] as const)(
+    "cancels a delegated task waiting on an automatic provider retry (%s run)",
+    (runStatus) =>
+      Effect.gen(function* () {
+        const parentThreadId = ThreadId.make(`thread:mcp-cancel-retry-parent:${runStatus}`);
+        const childThreadId = ThreadId.make(`thread:mcp-cancel-retry-child:${runStatus}`);
+        const childRunId = RunId.make(`run:mcp-cancel-retry-child:${runStatus}`);
+        const taskId = NodeId.make(`node:mcp-cancel-retry-task:${runStatus}`);
+        const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const parentProjection = {
+          thread: { id: parentThreadId },
+          runs: [],
+          contextTransfers: [],
+          subagents: [
+            {
+              id: taskId,
+              threadId: parentThreadId,
+              origin: "app_owned",
+              childThreadId,
+              driver: "codex",
+              model: "gpt-5.6-terra",
+              status: "running",
+              result: null,
+              completionDelivery: { state: "pending" },
+            },
+          ],
+        } as unknown as OrchestrationV2ThreadProjection;
+        const childProjection = {
+          thread: { id: childThreadId },
+          runs: [
+            {
+              id: childRunId,
+              ordinal: 1,
+              status: runStatus,
+              automaticProviderRetry: {
+                attempt: 1,
+                status: "scheduled",
+                scheduledAt: "2099-01-01T00:00:00.000Z",
+              },
+            },
+          ],
+          contextTransfers: [],
+          messages: [],
+          subagents: [],
+          providerThreads: [],
+          runtimeRequests: [],
+        } as unknown as OrchestrationV2ThreadProjection;
+        const layerDependencies = Layer.mergeAll(
+          NodeServices.layer,
+          Layer.mock(ThreadManagementService.ThreadManagementService)({
+            getThreadRecords: (threadId) =>
+              Effect.succeed(threadId === parentThreadId ? parentProjection : childProjection),
+            getThreadShell: (threadId) => Effect.succeed(liveThreadShell(threadId)),
+            dispatch: (command) =>
+              Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+                Effect.as({} as never),
+              ),
+            stopDelegatedTasks: () => Effect.void,
+          }),
+          ServerSettings.layerTest(),
+          mockProviderRegistry({ getProviders: Effect.succeed([]) }),
+          Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+            list: () => Effect.succeed([]),
+          }),
+          Layer.mock(ProjectService.ProjectService)({}),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+        );
+        const scope: McpInvocationScope = {
+          environmentId: EnvironmentId.make("environment:mcp-cancel-retry"),
+          requestNamespace: "provider-session:mcp-cancel-retry",
+          thread: {
+            threadId: parentThreadId,
+            providerSessionId: "provider-session:mcp-cancel-retry",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+          },
+          client: undefined,
+          capabilities: new Set(["orchestration"]),
+          issuedAt: 1,
+        };
+
+        yield* Effect.gen(function* () {
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+          const result = yield* service.cancelTask(scope, {
+            taskId: taskReference(taskId),
+            clientRequestId: `cancel-retry-task-${runStatus}`,
+          });
+          assert.equal(result.status, "cancel_requested");
+          assert.deepEqual(
+            (yield* Ref.get(dispatched)).map((command) => (command as { type: string }).type),
+            ["thread.stop", "delegated_task.completion-delivery.dispose"],
+          );
+        }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
+      }),
+  );
+
   it.effect("refuses to cancel a task whose child now runs above the parent's modes", () =>
     Effect.gen(function* () {
       const parentThreadId = ThreadId.make("thread:mcp-cancel-dispose-failed-parent");
@@ -2355,6 +2494,51 @@ describe("OrchestratorMcpService provider resolution", () => {
               const error = yield* result.pipe(Effect.flip);
               assert.equal(error.code, "account_unavailable");
               assert.equal(error.message, signedOutFailure.message);
+              assert.lengthOf(commands, 0);
+            }
+          }).pipe(Effect.provide(layer));
+        }),
+    );
+
+    it.effect.each([
+      { name: "probe-only sign-out with cleared models", withFailure: false, available: true },
+      { name: "probe-only sign-out without sibling", withFailure: false, available: false },
+      { name: "confirmed sign-out with unauthenticated probe", withFailure: true, available: true },
+      { name: "confirmed sign-out without sibling", withFailure: true, available: false },
+    ])(
+      "moves an inherited subagent off an unauthenticated account to a sibling ($name)",
+      ({ withFailure, available }) =>
+        Effect.gen(function* () {
+          const { commands, selection, layer } = harness({
+            from: {
+              auth: { status: "unauthenticated" },
+              status: "error",
+              message: "Not authenticated.",
+              models: [],
+              ...(withFailure ? { recentFailure: signedOutFailure } : {}),
+            },
+            siblingEnabledForProject: available,
+          });
+          yield* Effect.gen(function* () {
+            const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+            const result = service.delegateTask(scope, {
+              task: "Review this diff.",
+              mode: "async",
+              clientRequestId: `inherited-unauth-${withFailure}-${available}`,
+            });
+            if (available) {
+              const started = yield* result;
+              assert.equal(started.providerInstanceId, peerId);
+              assert.equal(started.notice, "Started on Plus-2: Codex is signed out.");
+              const command = commands[0]!;
+              if (command.type === "delegated_task.request")
+                assert.deepEqual(command.modelSelection, { ...selection, instanceId: peerId });
+            } else {
+              const error = yield* result.pipe(Effect.flip);
+              assert.equal(
+                error.code,
+                withFailure ? "account_unavailable" : "provider_unavailable",
+              );
               assert.lengthOf(commands, 0);
             }
           }).pipe(Effect.provide(layer));

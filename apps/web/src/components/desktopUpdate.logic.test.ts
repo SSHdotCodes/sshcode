@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
+import type {
+  DesktopUpdateActionResult,
+  DesktopUpdateCheckResult,
+  DesktopUpdateState,
+} from "@t3tools/contracts";
 
 import {
   canCheckForUpdate,
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
+  getDesktopUpdateCheckError,
   getDesktopUpdateInstallConfirmationMessage,
   getDesktopUpdateReleaseHistoryUrl,
   getDesktopUpdateReleaseUrl,
@@ -365,5 +370,82 @@ describe("getDesktopUpdateButtonTooltip", () => {
     expect(getDesktopUpdateButtonTooltip({ ...baseState, status: "up-to-date" })).toBe(
       "Up to date",
     );
+  });
+
+  it("shows download retry wording when status stays 'available' after a download failure", () => {
+    const state: DesktopUpdateState = {
+      ...baseState,
+      status: "available",
+      availableVersion: "1.1.0",
+      message: "Not enough disk space to download the update.",
+      errorContext: "download",
+      canRetry: true,
+    };
+    expect(getDesktopUpdateButtonTooltip(state)).toBe("Download failed for 1.1.0. Click to retry.");
+  });
+
+  it("shows install retry wording when status stays 'downloaded' after an install failure", () => {
+    const state: DesktopUpdateState = {
+      ...baseState,
+      status: "downloaded",
+      availableVersion: "1.1.0",
+      downloadedVersion: "1.1.0",
+      message: "Move SSHCode to Applications to update.",
+      errorContext: "install",
+      canRetry: true,
+    };
+    expect(getDesktopUpdateButtonTooltip(state)).toBe("Install failed for 1.1.0. Click to retry.");
+  });
+});
+
+describe("getDesktopUpdateCheckError", () => {
+  it("returns the updater message when a manual check finishes in error", () => {
+    const result: DesktopUpdateCheckResult = {
+      checked: true,
+      state: {
+        ...baseState,
+        status: "error",
+        errorContext: "check",
+        message: "Update check failed: HTTP 500",
+        canRetry: true,
+      },
+    };
+    expect(getDesktopUpdateCheckError(result)).toBe("Update check failed: HTTP 500");
+  });
+
+  it("returns fallback copy when a check fails or updates are disabled without a message", () => {
+    expect(
+      getDesktopUpdateCheckError({
+        checked: true,
+        state: { ...baseState, status: "error", errorContext: "check", message: null },
+      }),
+    ).toBe("Update check failed.");
+    expect(
+      getDesktopUpdateCheckError({
+        checked: false,
+        state: { ...baseState, enabled: false, status: "disabled", message: null },
+      }),
+    ).toBe("Automatic updates are not available in this build.");
+    expect(
+      getDesktopUpdateCheckError({
+        checked: false,
+        state: { ...baseState, enabled: false, status: "disabled", message: "Feed disabled" },
+      }),
+    ).toBe("Feed disabled");
+  });
+
+  it("returns null when a manual check succeeds", () => {
+    expect(
+      getDesktopUpdateCheckError({
+        checked: true,
+        state: { ...baseState, status: "up-to-date" },
+      }),
+    ).toBeNull();
+    expect(
+      getDesktopUpdateCheckError({
+        checked: true,
+        state: { ...baseState, status: "available", availableVersion: "1.1.0" },
+      }),
+    ).toBeNull();
   });
 });

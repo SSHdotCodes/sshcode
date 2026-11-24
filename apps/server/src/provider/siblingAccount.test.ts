@@ -166,4 +166,17 @@ describe("preferSiblingAccount", () => {
     expect(pick(account("claudeAgent", [fable(100)]), roomy, false, false)).toBeNull();
     expect(pick(account("claudeAgent", [fable(30)]), roomy, true, false)).toBeNull();
   });
+
+  it("explains when moving off a signed-out account whose probe reports unauthenticated", () => {
+    expect(
+      pick(
+        account("claudeAgent", null, {
+          auth: { status: "unauthenticated" },
+          status: "error",
+          models: [],
+        }),
+        [account("claudeAgent_max2", [fable(4)])],
+      ),
+    ).toEqual(["claudeAgent_max2", "Started on Max-2: Claude is signed out."]);
+  });
 });

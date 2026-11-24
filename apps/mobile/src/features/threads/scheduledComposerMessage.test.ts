@@ -2,6 +2,7 @@ import { ComposerContextId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { ComposerDraft } from "../../state/use-composer-drafts";
 import {
+  flushComposerEditorInput,
   persistScheduledComposerMessage,
   scheduledComposerMessageReason,
 } from "./scheduledComposerMessage";
@@ -144,4 +145,43 @@ it("persists a ready text-only draft after target preparation", async () => {
   target.resolve();
   await expect(saving).resolves.toBe("saved");
   expect(c.persist).toHaveBeenCalledOnce();
+});
+
+describe("flushComposerEditorInput", () => {
+  it("awaits pending native editor input before submit and ignores concurrent re-entry", async () => {
+    const ready = deferred();
+    let draftText = "hello wor";
+    const editor = {
+      flushPendingInput: vi.fn(async () => {
+        await ready.promise;
+        draftText = "hello world";
+      }),
+    };
+    const inFlightRef = { current: false };
+
+    const first = flushComposerEditorInput(editor, inFlightRef);
+    const second = flushComposerEditorInput(editor, inFlightRef);
+
+    expect(await second).toBe(false);
+    expect(editor.flushPendingInput).toHaveBeenCalledOnce();
+
+    ready.resolve();
+    expect(await first).toBe(true);
+    expect(draftText).toBe("hello world");
+    expect(inFlightRef.current).toBe(false);
+  });
+
+  it("resets the in-flight guard even if flushing rejects", async () => {
+    const editor = {
+      flushPendingInput: vi.fn(async () => {
+        throw new Error("native bridge unavailable");
+      }),
+    };
+    const inFlightRef = { current: false };
+
+    await expect(flushComposerEditorInput(editor, inFlightRef)).rejects.toThrow(
+      "native bridge unavailable",
+    );
+    expect(inFlightRef.current).toBe(false);
+  });
 });

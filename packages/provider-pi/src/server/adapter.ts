@@ -3079,9 +3079,13 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           ),
         steerTurn: (steerInput: ProviderAdapter.ProviderAdapterV2SteerInput) =>
           Effect.gen(function* () {
+            const handBack = new ProviderAdapter.ProviderAdapterSteerRunUnsupportedError({
+              driver: PI_PROVIDER,
+              providerThreadId: steerInput.providerThread.id,
+            });
             const turn = threadState?.activeTurn ?? null;
             if (turn === null || turn.providerTurn.id !== steerInput.providerTurnId) {
-              return yield* protocolError(`Pi turn ${steerInput.providerTurnId} is not active`);
+              return yield* handBack;
             }
             const compactCommand = parsePiCompactCommand(steerInput.message.text);
             const payload =
@@ -3096,7 +3100,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             const reply = yield* sessionEventPermit.withPermits(1)(
               Effect.gen(function* () {
                 if (threadState?.activeTurn !== turn) {
-                  return yield* protocolError(`Pi turn ${steerInput.providerTurnId} is not active`);
+                  return yield* handBack;
                 }
                 if (compactCommand !== null) {
                   turn.manualCompactInFlight = true;

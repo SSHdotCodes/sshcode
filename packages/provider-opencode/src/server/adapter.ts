@@ -3483,9 +3483,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 turn.providerTurnId !== steerInput.providerTurnId ||
                 turn.interrupted
               ) {
-                return yield* protocolError(
-                  `OpenCode turn ${steerInput.providerTurnId} is not active`,
-                );
+                return yield* new ProviderAdapter.ProviderAdapterSteerRunUnsupportedError({
+                  driver: OPENCODE_PROVIDER,
+                  providerThreadId: steerInput.providerThread.id,
+                });
               }
               const parsedModel = OpenCodeRuntime.parseOpenCodeModelSlug(turn.modelSelection.model);
               if (parsedModel === null) {
@@ -3564,14 +3565,15 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               );
               yield* acceptAdmission;
             }).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapter.ProviderAdapterSteerRunError({
-                    driver: OPENCODE_PROVIDER,
-                    providerThreadId: steerInput.providerThread.id,
-                    providerTurnId: steerInput.providerTurnId,
-                    cause,
-                  }),
+              Effect.mapError((cause) =>
+                cause._tag === "ProviderAdapterSteerRunUnsupportedError"
+                  ? cause
+                  : new ProviderAdapter.ProviderAdapterSteerRunError({
+                      driver: OPENCODE_PROVIDER,
+                      providerThreadId: steerInput.providerThread.id,
+                      providerTurnId: steerInput.providerTurnId,
+                      cause,
+                    }),
               ),
             ),
           interruptTurn: (interruptInput) =>

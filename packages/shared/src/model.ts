@@ -16,11 +16,13 @@ const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
 
 const REASONING_SELECT_IDS: ReadonlySet<string> = new Set([
   "reasoningEffort",
+  "reasoning_effort",
   "reasoning",
   "effort",
   "variant",
   "thinking",
   "thinking_level",
+  "thought_level",
 ]);
 
 export function isReasoningOptionId(id: string): boolean {
@@ -592,9 +594,12 @@ interface ModelVersionLine {
 const MODEL_ID_SEPARATOR = /([-_/:,@ ])/;
 const LETTER_PREFIXED_VERSION = /^([a-z]+)(\d+(?:\.\d+)*)$/;
 const NUMBER = /^\d+(?:\.\d+)*$/;
-/** How a release runs, not a different product: `grok-4.20-multi-agent` is a Grok 4.20. */
+/**
+ * How a release runs, not a different product: `grok-4.20-multi-agent` is a Grok 4.20, and
+ * Devin's `swe-1-7-medium` is SWE-1.7 at medium effort. `max` stays: it names tiers too.
+ */
 const RELEASE_MODE =
-  /[-_:,](?:non-)?(?:reasoning|thinking)\b|[-_:,]multi-agent\b|[-_:,](?:preview|beta|exp|experimental|latest)\b/g;
+  /[-_:,](?:non-)?(?:reasoning|thinking)\b|[-_:,]multi-agent\b|[-_:,](?:preview|beta|exp|experimental|latest)\b|[-_:,](?:minimal|low|medium|high|xhigh)$/g;
 
 /**
  * Release numbers read as decimals after the first: 4.20 is 4.2, older than

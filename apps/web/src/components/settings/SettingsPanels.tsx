@@ -60,10 +60,13 @@ import { IS_NIGHTLY_BUILD, NightlyMobileBetaRow } from "../NightlyMobileBeta";
 import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import {
   canCheckForUpdate,
+  getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
+  getDesktopUpdateCheckError,
   getDesktopUpdateInstallConfirmationMessage,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
+  shouldToastDesktopUpdateActionResult,
 } from "../../components/desktopUpdate.logic";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
@@ -330,25 +333,42 @@ function AboutVersionSection() {
 
   const handleButtonClick = useCallback(async () => {
     const bridge = window.desktopBridge;
-    if (!bridge) return;
+    if (!bridge || isUpdateActionPending) return;
 
     const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
 
     if (action === "download") {
-      void bridge.downloadUpdate().catch((error: unknown) => {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not download update",
-            description: error instanceof Error ? error.message : "Download failed.",
-          }),
-        );
-      });
+      setIsUpdateActionPending(true);
+      void bridge
+        .downloadUpdate()
+        .then((result) => {
+          const actionError = shouldToastDesktopUpdateActionResult(result)
+            ? getDesktopUpdateActionError(result)
+            : null;
+          if (actionError) {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Could not download update",
+                description: actionError,
+              }),
+            );
+          }
+        })
+        .catch((error: unknown) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not download update",
+              description: error instanceof Error ? error.message : "Download failed.",
+            }),
+          );
+        })
+        .finally(() => setIsUpdateActionPending(false));
       return;
     }
 
     if (action === "install") {
-      if (isUpdateActionPending) return;
       setIsUpdateActionPending(true);
       let confirmed = false;
       try {
@@ -374,6 +394,20 @@ function AboutVersionSection() {
       }
       void bridge
         .installUpdate()
+        .then((result) => {
+          const actionError = shouldToastDesktopUpdateActionResult(result)
+            ? getDesktopUpdateActionError(result)
+            : null;
+          if (actionError) {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Could not install update",
+                description: actionError,
+              }),
+            );
+          }
+        })
         .catch((error: unknown) => {
           toastManager.add(
             stackedThreadToast({
@@ -388,16 +422,17 @@ function AboutVersionSection() {
     }
 
     if (typeof bridge.checkForUpdate !== "function") return;
+    setIsUpdateActionPending(true);
     void bridge
       .checkForUpdate()
       .then((result) => {
-        if (!result.checked) {
+        const checkError = getDesktopUpdateCheckError(result);
+        if (checkError) {
           toastManager.add(
             stackedThreadToast({
               type: "error",
               title: "Could not check for updates",
-              description:
-                result.state.message ?? "Automatic updates are not available in this build.",
+              description: checkError,
             }),
           );
         }
@@ -410,7 +445,8 @@ function AboutVersionSection() {
             description: error instanceof Error ? error.message : "Update check failed.",
           }),
         );
-      });
+      })
+      .finally(() => setIsUpdateActionPending(false));
   }, [isUpdateActionPending, updateState]);
 
   const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
@@ -429,9 +465,11 @@ function AboutVersionSection() {
   const buttonLabel =
     actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? "Check for Updates";
   const description =
-    action === "download" || action === "install"
-      ? "Update available."
-      : "Current version of the application.";
+    action === "install"
+      ? "Update downloaded and ready to install."
+      : action === "download"
+        ? "Update available."
+        : "Current version of the application.";
 
   return (
     <>

@@ -2240,7 +2240,10 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
               !validateThread(args.providerThread) ||
               turn.compact
             )
-              return yield* protocolError("This Muse turn cannot be steered");
+              return yield* new ProviderAdapter.ProviderAdapterSteerRunUnsupportedError({
+                driver: MUSE_PROVIDER,
+                providerThreadId: args.providerThread.id,
+              });
             const parts = yield* prompt(args.message);
             const result = yield* request("turn/steer", {
               expectedTurnId: turn.nativeId,
@@ -2250,14 +2253,15 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
               return yield* protocolError("Muse steering targeted a different turn");
           }).pipe(
             commands.withPermits(1),
-            Effect.mapError(
-              (cause) =>
-                new ProviderAdapter.ProviderAdapterSteerRunError({
-                  driver: MUSE_PROVIDER,
-                  providerThreadId: args.providerThread.id,
-                  providerTurnId: args.providerTurnId,
-                  cause,
-                }),
+            Effect.mapError((cause) =>
+              cause._tag === "ProviderAdapterSteerRunUnsupportedError"
+                ? cause
+                : new ProviderAdapter.ProviderAdapterSteerRunError({
+                    driver: MUSE_PROVIDER,
+                    providerThreadId: args.providerThread.id,
+                    providerTurnId: args.providerTurnId,
+                    cause,
+                  }),
             ),
           ),
         interruptTurn: (args) =>

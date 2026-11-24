@@ -385,12 +385,17 @@ export const layer: Layer.Layer<
                     input.threadId,
                     input,
                   );
+                  const turnStatus = current.providerTurn?.status;
+                  const turnEndedIncomplete =
+                    turnStatus !== undefined &&
+                    turnStatus !== "running" &&
+                    turnStatus !== "completed";
                   return yield* new ProviderTurnControlError({
                     threadId: input.threadId,
                     operation: "steer",
                     providerTurnId: input.providerTurnId,
-                    turnCompleted: current.providerTurn?.status === "completed",
-                    queueFollowUp: isSteerUnsupported(cause),
+                    turnCompleted: turnStatus === "completed",
+                    queueFollowUp: isSteerUnsupported(cause) || turnEndedIncomplete,
                     cause,
                   });
                 }),

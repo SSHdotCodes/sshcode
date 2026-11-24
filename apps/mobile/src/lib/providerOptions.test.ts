@@ -168,4 +168,75 @@ describe("mobile provider options", () => {
       speed: null,
     });
   });
+
+  it.each([
+    {
+      name: "Antigravity / Devin thought_level",
+      id: "thought_level",
+      value: "high",
+      label: "High",
+    },
+    {
+      name: "Antigravity thinking_level",
+      id: "thinking_level",
+      value: "high",
+      label: "High",
+    },
+    {
+      name: "Pi / Kimi / Mistral thinking select",
+      id: "thinking",
+      value: "medium",
+      label: "Medium",
+    },
+    {
+      name: "Qwen reasoning_effort",
+      id: "reasoning_effort",
+      value: "high",
+      label: "High",
+    },
+    {
+      name: "custom reasoning role descriptor",
+      id: "custom_depth",
+      role: "reasoning" as const,
+      value: "deep",
+      label: "Deep",
+    },
+  ])("shows effort label for $name", ({ id, role, value, label }) => {
+    const capabilities: ModelCapabilities = {
+      optionDescriptors: [
+        {
+          id,
+          label: "Reasoning",
+          type: "select",
+          ...(role ? { role } : {}),
+          options: [{ id: value, label, isDefault: true }],
+          currentValue: value,
+        },
+      ],
+    };
+    const selection = {
+      instanceId: ProviderInstanceId.make("antigravity"),
+      model: "gemini-4-neon",
+      options: [{ id, value }],
+    };
+    expect(modelTraits({ capabilities, selection })).toEqual({
+      effort: label,
+      speed: null,
+    });
+  });
+
+  it("ignores boolean thinking toggles when extracting effort", () => {
+    const capabilities: ModelCapabilities = {
+      optionDescriptors: [{ id: "thinking", label: "Thinking", type: "boolean" }],
+    };
+    const selection = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude",
+      options: [{ id: "thinking", value: true }],
+    };
+    expect(modelTraits({ capabilities, selection })).toEqual({
+      effort: undefined,
+      speed: null,
+    });
+  });
 });

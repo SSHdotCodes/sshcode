@@ -1,5 +1,15 @@
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@t3tools/contracts";
+import { betterPlanTip } from "@t3tools/shared/planTip";
 import { describe, expect, it } from "vite-plus/test";
 import { nextPlanTipDisplay, planTipKey } from "@t3tools/client-runtime/plan-tip";
+
+import { resolveProvidersEnabledForProject } from "../../lib/modelOptions";
 
 describe("phone plan tip visibility", () => {
   const pair = { fromInstanceId: "claudeAgent_work", toInstanceId: "claudeAgent" };
@@ -52,5 +62,61 @@ describe("phone plan tip visibility", () => {
     expect(nextPlanTipDisplay(otherEnvironment, null, false, seen, now)?.key).toBe(
       otherEnvironment,
     );
+  });
+
+  it("excludes accounts disabled for the selected project when building plan tip providers", () => {
+    const projectId = ProjectId.make("project-a");
+    const makeAccount = (instanceId: string, usedPercent: number): ServerProvider => ({
+      instanceId: ProviderInstanceId.make(instanceId),
+      driver: ProviderDriverKind.make("claudeAgent"),
+      displayName: instanceId,
+      continuation: { groupKey: "claude:home:/synthetic/.claude" },
+      enabled: true,
+      installed: true,
+      version: null,
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-11-16T12:00:00.000Z",
+      models: [{ slug: "claude-opus-5-5", name: "Opus 5.5", isCustom: false, capabilities: null }],
+      slashCommands: [],
+      skills: [],
+      usageLimits: {
+        checkedAt: "2026-11-16T12:00:00.000Z",
+        windows: [{ id: "seven_day", kind: "weekly", label: "Weekly", usedPercent }],
+      },
+    });
+    const config = {
+      providers: [makeAccount("claudeAgent", 90), makeAccount("claudeAgent_max2", 5)],
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          ...DEFAULT_SERVER_SETTINGS.providerInstances,
+          [ProviderInstanceId.make("claudeAgent_max2")]: {
+            id: ProviderInstanceId.make("claudeAgent_max2"),
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: true,
+          },
+        },
+        projectSettingsOverrides: {
+          [projectId]: {
+            providerInstances: {
+              [ProviderInstanceId.make("claudeAgent_max2")]: { enabled: false },
+            },
+          },
+        },
+      },
+    };
+    const filtered = resolveProvidersEnabledForProject(config, projectId);
+    expect(
+      betterPlanTip(filtered, { instanceId: "claudeAgent", model: "claude-opus-5-5" }, { now }),
+    ).toBeNull();
+    // Another project without the override still gets the tip.
+    expect(
+      betterPlanTip(
+        resolveProvidersEnabledForProject(config, ProjectId.make("project-b")),
+        { instanceId: "claudeAgent", model: "claude-opus-5-5" },
+        { now },
+      )?.toInstanceId,
+    ).toBe("claudeAgent_max2");
   });
 });

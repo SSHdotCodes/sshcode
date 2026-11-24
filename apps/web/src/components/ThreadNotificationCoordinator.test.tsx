@@ -2,8 +2,10 @@ import type { ClientSettings } from "@t3tools/contracts/settings";
 import {
   type DesktopNotification,
   type DesktopNotificationResponse,
+  EnvironmentId,
   type OrchestrationV2UserInputQuestion,
   RuntimeRequestId,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
@@ -180,6 +182,7 @@ vi.mock("./ui/toast", () => ({
   toastManager: { add: state.add, close: state.close },
 }));
 
+import { useSplitChatStore } from "../splitChatStore";
 import {
   ThreadNotificationCoordinator,
   threadNotificationTitle,
@@ -201,6 +204,7 @@ async function complete() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useSplitChatStore.setState({ split: null });
   Object.assign(state, {
     mode: "off",
     soundEvents: "needs-you",
@@ -855,5 +859,28 @@ describe("mac notification responses", () => {
       to: "/$environmentId/$threadId",
       params: { environmentId: "env-1", threadId: "thread-1" },
     });
+  });
+
+  it("suppresses in-app toasts for a chat already visible in the second split pane", async () => {
+    const env = EnvironmentId.make("env-1");
+    useSplitChatStore.setState({
+      split: {
+        panes: [
+          { environmentId: env, threadId: ThreadId.make("other-thread") },
+          { environmentId: env, threadId: ThreadId.make("thread-1") },
+        ],
+        orientation: "horizontal",
+        ratio: 0.5,
+      },
+    });
+    await render();
+    await complete();
+    expect(state.add).not.toHaveBeenCalled();
+
+    // Moving to a third chat hides the remembered split, so alerts resume.
+    state.active = { environmentId: "env-1", threadId: "third-thread" };
+    state.completedAt = "2026-09-13T10:01:00.000Z";
+    await render();
+    expect(state.add).toHaveBeenCalledOnce();
   });
 });

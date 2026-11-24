@@ -1900,8 +1900,8 @@ describe("OpenCodeAdapterV2", () => {
       yield* Effect.promise(() => abortCalled.promise);
       yield* Fiber.join(interrupt);
       assert.isTrue(Exit.isFailure(yield* Fiber.join(pendingSteer)));
-      const promptWhileStopping = yield* Effect.exit(
-        runtime.steerTurn({
+      const promptWhileStopping = yield* runtime
+        .steerTurn({
           threadId,
           runId,
           providerThread,
@@ -1913,9 +1913,9 @@ describe("OpenCodeAdapterV2", () => {
             createdBy: "user",
             creationSource: "web",
           },
-        }),
-      );
-      assert.isTrue(Exit.isFailure(promptWhileStopping));
+        })
+        .pipe(Effect.flip);
+      assert.equal(promptWhileStopping._tag, "ProviderAdapterSteerRunUnsupportedError");
       assert.equal(promptCalls, 3);
       yield* Effect.promise(() =>
         nativeEvents.push({

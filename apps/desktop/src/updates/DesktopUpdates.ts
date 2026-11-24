@@ -868,7 +868,8 @@ export const make = Effect.gen(function* () {
       Effect.flatMap(
         Effect.fn("desktop.updates.applyUpdateAvailable")(function* (info) {
           const state = yield* Ref.get(updateStateRef);
-          if (resolveDefaultDesktopUpdateChannel(info.version) !== state.channel) {
+          const versionChannel = resolveDefaultDesktopUpdateChannel(info.version);
+          if (!electronUpdater.singleChannel && versionChannel !== state.channel) {
             yield* logUpdaterInfo("ignoring update that does not match selected channel", {
               version: info.version,
               channel: state.channel,
@@ -883,7 +884,7 @@ export const make = Effect.gen(function* () {
           const { releaseNotes, omittedReleaseCount } = normalizeDesktopUpdateReleaseNotes(
             info.releaseNotes,
             info.version,
-            state.channel,
+            electronUpdater.singleChannel ? versionChannel : state.channel,
           );
           yield* setState(
             reduceDesktopUpdateStateOnUpdateAvailable(

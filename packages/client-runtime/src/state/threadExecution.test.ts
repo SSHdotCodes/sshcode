@@ -496,6 +496,40 @@ describe("formatModelSelectionEffort", () => {
     ).toBe("Extra High");
   });
 
+  it.each(["thought_level", "reasoning_effort", "thinking"] as const)(
+    "names %s reasoning descriptors from the model catalog",
+    (optionId) => {
+      const models = catalog({ currentValue: "medium" }).map((model) => ({
+        ...model,
+        capabilities: {
+          optionDescriptors: model.capabilities.optionDescriptors.map((descriptor) => ({
+            ...descriptor,
+            id: optionId,
+          })),
+        },
+      }));
+      expect(
+        formatModelSelectionEffort(selection([{ id: optionId, value: "xhigh" }]), models),
+      ).toBe("Extra High");
+    },
+  );
+
+  it("names provider-defined reasoning descriptors marked by role", () => {
+    const models = catalog({ currentValue: "medium" }).map((model) => ({
+      ...model,
+      capabilities: {
+        optionDescriptors: model.capabilities.optionDescriptors.map((descriptor) => ({
+          ...descriptor,
+          id: "custom_depth",
+          role: "reasoning" as const,
+        })),
+      },
+    }));
+    expect(
+      formatModelSelectionEffort(selection([{ id: "custom_depth", value: "xhigh" }]), models),
+    ).toBe("Extra High");
+  });
+
   it("shows the model's default effort when the user never picked one", () => {
     expect(formatModelSelectionEffort(selection(), catalog({}))).toBe("High");
   });

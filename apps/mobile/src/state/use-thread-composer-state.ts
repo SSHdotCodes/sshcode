@@ -796,11 +796,16 @@ export function useThreadComposerState() {
       }
 
       const threadKey = activeComposerDraftKey(selectedThreadShell);
+      const existingQueuedCount =
+        getQueuedRunEdit(scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id))
+          ?.existingAttachments.length ?? 0;
+      const maxAttachments = Math.max(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - existingQueuedCount);
       const insertion = captureComposerDraftInsertion(threadKey);
       const capabilities = selectedEnvironmentRuntime?.serverConfig?.environment.capabilities;
       const result = await pickComposerMedia({
         source,
-        existingCount: countComposerDraftAttachmentsAfterSelection(threadKey, insertion),
+        existingCount:
+          existingQueuedCount + countComposerDraftAttachmentsAfterSelection(threadKey, insertion),
         maxVideoBytes:
           capabilities?.attachmentUploads === true
             ? capabilities.fileAttachments?.maxUploadBytes
@@ -809,6 +814,7 @@ export function useThreadComposerState() {
       const rejectedCount = appendComposerDraftAttachments(threadKey, result.attachments, {
         appendReference: true,
         insertion,
+        maxAttachments,
       });
       const problems = [
         ...(result.error ? [result.error] : []),
@@ -836,15 +842,21 @@ export function useThreadComposerState() {
     }
 
     const threadKey = activeComposerDraftKey(selectedThreadShell);
+    const existingQueuedCount =
+      getQueuedRunEdit(scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id))
+        ?.existingAttachments.length ?? 0;
+    const maxAttachments = Math.max(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - existingQueuedCount);
     const insertion = captureComposerDraftInsertion(threadKey);
     // pickComposerFiles clamps the advertised limit to the contract maximum.
     const result = await pickComposerFiles({
-      existingCount: countComposerDraftAttachmentsAfterSelection(threadKey, insertion),
+      existingCount:
+        existingQueuedCount + countComposerDraftAttachmentsAfterSelection(threadKey, insertion),
       maxBytes,
     });
     const rejectedCount = appendComposerDraftAttachments(threadKey, result.files, {
       appendReference: true,
       insertion,
+      maxAttachments,
     });
     // The picker error and the live-cap rejection can both happen in one
     // pick; report both in a single alert.
@@ -865,13 +877,19 @@ export function useThreadComposerState() {
     }
 
     const threadKey = activeComposerDraftKey(selectedThreadShell);
+    const existingQueuedCount =
+      getQueuedRunEdit(scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id))
+        ?.existingAttachments.length ?? 0;
+    const maxAttachments = Math.max(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - existingQueuedCount);
     const insertion = captureComposerDraftInsertion(threadKey);
     const result = await pasteComposerClipboard({
-      existingCount: countComposerDraftAttachmentsAfterSelection(threadKey, insertion),
+      existingCount:
+        existingQueuedCount + countComposerDraftAttachmentsAfterSelection(threadKey, insertion),
     });
     const rejectedPasteCount = appendComposerDraftAttachments(threadKey, result.images, {
       appendReference: true,
       insertion,
+      maxAttachments,
     });
     if (result.text) {
       const currentDraft = getComposerDraftSnapshot(threadKey);
@@ -898,7 +916,7 @@ export function useThreadComposerState() {
         }) === "attachment";
       const canAttach =
         maxBytes !== null &&
-        countComposerDraftAttachmentsAfterSelection(threadKey, insertion) <
+        existingQueuedCount + countComposerDraftAttachmentsAfterSelection(threadKey, insertion) <
           PROVIDER_SEND_TURN_MAX_ATTACHMENTS &&
         new TextEncoder().encode(result.text).byteLength <= maxBytes;
       if (shouldFold && canAttach && maxBytes !== null) {
@@ -917,6 +935,7 @@ export function useThreadComposerState() {
             appendComposerDraftAttachments(threadKey, [attachment], {
               appendReference: true,
               insertion,
+              maxAttachments,
             }) > 0
           ) {
             await removePersistedComposerAttachmentFile(attachment.fileUri);
@@ -962,11 +981,31 @@ export function useThreadComposerState() {
       }
 
       const threadKey = activeComposerDraftKey(selectedThreadShell);
+      const existingQueuedCount =
+        getQueuedRunEdit(scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id))
+          ?.existingAttachments.length ?? 0;
+      const maxAttachments = Math.max(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - existingQueuedCount);
       const insertion = captureComposerDraftInsertion(threadKey);
+      const existingCount =
+        existingQueuedCount + countComposerDraftAttachmentsAfterSelection(threadKey, insertion);
       try {
-        const images = await convertPastedImagesToAttachments({ uris });
-        if (images.length > 0) {
-          appendComposerDraftAttachments(threadKey, images, { appendReference: true, insertion });
+        const images = await convertPastedImagesToAttachments({ uris, existingCount });
+        const droppedBeforeAppend = Math.max(
+          0,
+          uris.length - Math.max(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - existingCount),
+        );
+        const rejectedCount =
+          images.length > 0
+            ? appendComposerDraftAttachments(threadKey, images, {
+                appendReference: true,
+                insertion,
+                maxAttachments,
+              })
+            : 0;
+        if (rejectedCount > 0 || droppedBeforeAppend > 0) {
+          setPendingConnectionError(
+            `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`,
+          );
         }
       } catch (error) {
         console.error("[native paste] error converting images", {
@@ -991,6 +1030,10 @@ export function useThreadComposerState() {
       if (advertisedMax === undefined) return;
 
       const threadKey = activeComposerDraftKey(selectedThreadShell);
+      const existingQueuedCount =
+        getQueuedRunEdit(scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id))
+          ?.existingAttachments.length ?? 0;
+      const maxAttachments = Math.max(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - existingQueuedCount);
       const insertion = { text: paste.value, ...paste.selection };
       const currentAttachments = getComposerDraftSnapshot(threadKey).attachments;
       try {
@@ -1008,6 +1051,7 @@ export function useThreadComposerState() {
         const rejectedCount = appendComposerDraftAttachments(threadKey, [attachment], {
           appendReference: true,
           insertion,
+          maxAttachments,
         });
         if (rejectedCount > 0) {
           await removePersistedComposerAttachmentFile(attachment.fileUri);

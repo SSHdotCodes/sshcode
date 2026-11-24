@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - builds fake app bundles on disk for the updater, which uses Node APIs.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -7,6 +8,7 @@ import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import {
+  INSTALL_SCRIPT,
   compareReleaseVersions,
   createReleaseDmgUpdater,
   installTarget,
@@ -20,6 +22,10 @@ describe("compareReleaseVersions", () => {
     expect(compareReleaseVersions("0.1.10", "0.1.9")).toBe(1);
     expect(compareReleaseVersions("v1.0.0", "1.0.0")).toBe(0);
     expect(compareReleaseVersions("1.0.0-beta.1", "1.0.0")).toBe(-1);
+    expect(compareReleaseVersions("1.0.0-beta.10", "1.0.0-beta.2")).toBe(1);
+    expect(
+      compareReleaseVersions("0.0.46-nightly.20261015.1000", "0.0.46-nightly.20261015.999"),
+    ).toBe(1);
     expect(compareReleaseVersions("0.0.46-nightly.20261015.3559", "0.1.0")).toBe(-1);
     expect(compareReleaseVersions("latest", "0.1.0")).toBeNull();
   });
@@ -222,5 +228,323 @@ describe("createReleaseDmgUpdater", () => {
   it("says so when the build has no release feed", async () => {
     const { updater } = await setup({ feed: false });
     await expect(updater.checkForUpdates()).rejects.toThrow("no release feed");
+  });
+
+  it("cleans up partial downloads and surfaces plain errors on truncated or interrupted streams", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "release-updater-partial-"));
+    roots.push(root);
+    const app = NodePath.join(root, "Applications", "SSHCode.app");
+    await NodeFSP.mkdir(NodePath.join(app, "Contents", "MacOS"), { recursive: true });
+    const appUpdateYml = NodePath.join(root, "app-update.yml");
+    await NodeFSP.writeFile(appUpdateYml, "owner: SSHdotCodes\nrepo: sshcode\nprovider: github\n");
+    const checksum = "a".repeat(64);
+    let mode: "truncated" | "aborted" = "truncated";
+    const updater = createReleaseDmgUpdater({
+      fetch: (async (url: string) => {
+        if (url.endsWith("/releases/latest")) {
+          return Response.json(
+            release("0.1.1", ["SSHCode-0.1.1-arm64.dmg", "SSHCode-0.1.1-arm64.dmg.sha256"]),
+          );
+        }
+        if (url.endsWith(".sha256")) return new Response(`${checksum}  SSHCode-0.1.1-arm64.dmg\n`);
+        if (mode === "truncated") {
+          return new Response(new TextEncoder().encode("short"), {
+            headers: { "content-length": "500" },
+          });
+        }
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("partial"));
+            controller.error(new Error("ECONNRESET"));
+          },
+        });
+        return new Response(stream, { headers: { "content-length": "500" } });
+      }) as unknown as typeof globalThis.fetch,
+      run: async () => "",
+      spawnDetached: () => {},
+      quit: () => {},
+      currentVersion: () => "0.1.0",
+      arch: "arm64",
+      execPath: NodePath.join(app, "Contents", "MacOS", "SSHCode"),
+      pid: 4242,
+      appUpdateYmlPath: appUpdateYml,
+      updatesDir: () => NodePath.join(root, "updates"),
+    });
+
+    await updater.checkForUpdates();
+    await expect(updater.downloadUpdate()).rejects.toThrow("ended before it finished");
+    await expect(NodeFSP.stat(NodePath.join(root, "updates", "0.1.1"))).rejects.toThrow();
+
+    mode = "aborted";
+    await expect(updater.downloadUpdate()).rejects.toThrow("interrupted before it finished");
+    await expect(NodeFSP.stat(NodePath.join(root, "updates", "0.1.1"))).rejects.toThrow();
+  });
+
+  it("reports disk full cleanly and removes staged files when unpacking runs out of space", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "release-updater-enospc-"));
+    roots.push(root);
+    const app = NodePath.join(root, "Applications", "SSHCode.app");
+    await NodeFSP.mkdir(NodePath.join(app, "Contents", "MacOS"), { recursive: true });
+    const appUpdateYml = NodePath.join(root, "app-update.yml");
+    await NodeFSP.writeFile(appUpdateYml, "owner: SSHdotCodes\nrepo: sshcode\nprovider: github\n");
+    const dmgBytes = new TextEncoder().encode("disk image bytes");
+    const checksum = NodeCrypto.createHash("sha256").update(dmgBytes).digest("hex");
+    const updater = createReleaseDmgUpdater({
+      fetch: (async (url: string) => {
+        if (url.endsWith("/releases/latest")) {
+          return Response.json(
+            release("0.1.1", ["SSHCode-0.1.1-arm64.dmg", "SSHCode-0.1.1-arm64.dmg.sha256"]),
+          );
+        }
+        if (url.endsWith(".sha256")) return new Response(`${checksum}  SSHCode-0.1.1-arm64.dmg\n`);
+        return new Response(dmgBytes, { headers: { "content-length": String(dmgBytes.length) } });
+      }) as unknown as typeof globalThis.fetch,
+      run: async (command, args) => {
+        if (command === "hdiutil" && args[0] === "attach") {
+          const mount = args[args.length - 1]!;
+          await NodeFSP.mkdir(NodePath.join(mount, "SSHCode.app", "Contents"), { recursive: true });
+          return "";
+        }
+        if (command === "ditto") {
+          await NodeFSP.mkdir(args[1]!, { recursive: true });
+          throw new Error("ditto: No space left on device");
+        }
+        return "";
+      },
+      spawnDetached: () => {},
+      quit: () => {},
+      currentVersion: () => "0.1.0",
+      arch: "arm64",
+      execPath: NodePath.join(app, "Contents", "MacOS", "SSHCode"),
+      pid: 4242,
+      appUpdateYmlPath: appUpdateYml,
+      updatesDir: () => NodePath.join(root, "updates"),
+    });
+
+    await updater.checkForUpdates();
+    await expect(updater.downloadUpdate()).rejects.toThrow("Not enough free disk space");
+    await expect(NodeFSP.stat(NodePath.join(root, "updates", "0.1.1"))).rejects.toThrow();
+  });
+
+  it("distinguishes GitHub HTTP errors from missing checksums and wraps network check failures", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "release-updater-http-"));
+    roots.push(root);
+    const app = NodePath.join(root, "Applications", "SSHCode.app");
+    await NodeFSP.mkdir(NodePath.join(app, "Contents", "MacOS"), { recursive: true });
+    const appUpdateYml = NodePath.join(root, "app-update.yml");
+    await NodeFSP.writeFile(appUpdateYml, "owner: SSHdotCodes\nrepo: sshcode\nprovider: github\n");
+    let offline = true;
+    const updater = createReleaseDmgUpdater({
+      fetch: (async (url: string) => {
+        if (offline) throw new TypeError("fetch failed");
+        if (url.endsWith("/releases/latest")) {
+          return Response.json(
+            release("0.1.1", ["SSHCode-0.1.1-arm64.dmg", "SSHCode-0.1.1-arm64.dmg.sha256"]),
+          );
+        }
+        return new Response("service unavailable", { status: 503 });
+      }) as unknown as typeof globalThis.fetch,
+      run: async () => "",
+      spawnDetached: () => {},
+      quit: () => {},
+      currentVersion: () => "0.1.0",
+      arch: "arm64",
+      execPath: NodePath.join(app, "Contents", "MacOS", "SSHCode"),
+      pid: 4242,
+      appUpdateYmlPath: appUpdateYml,
+      updatesDir: () => NodePath.join(root, "updates"),
+    });
+
+    await expect(updater.checkForUpdates()).rejects.toThrow("Couldn't reach GitHub");
+    offline = false;
+    await updater.checkForUpdates();
+    await expect(updater.downloadUpdate()).rejects.toThrow(
+      "GitHub answered 503 for the update checksum",
+    );
+  });
+
+  it("install script restores the original app cleanly when moving the staged app leaves a partial target", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "release-updater-script-"));
+    roots.push(root);
+    const app = NodePath.join(root, "SSHCode.app");
+    const staged = NodePath.join(root, "staged", "SSHCode.app");
+    const backup = NodePath.join(root, "previous.app");
+    const bin = NodePath.join(root, "bin");
+    await NodeFSP.mkdir(NodePath.join(app, "Contents"), { recursive: true });
+    await NodeFSP.writeFile(NodePath.join(app, "Contents", "marker"), "old-app");
+    await NodeFSP.mkdir(NodePath.join(staged, "Contents"), { recursive: true });
+    await NodeFSP.writeFile(NodePath.join(staged, "Contents", "marker"), "new-app");
+    await NodeFSP.mkdir(bin, { recursive: true });
+
+    const script = NodePath.join(root, "install.sh");
+    await NodeFSP.writeFile(script, INSTALL_SCRIPT, { mode: 0o755 });
+    // Simulate cross-device mv failing halfway while leaving a partial target directory behind.
+    const fakeMv = NodePath.join(bin, "mv");
+    await NodeFSP.writeFile(
+      fakeMv,
+      `#!/bin/sh
+if [ "$1" = "${staged}" ] && [ "$2" = "${app}" ]; then
+  mkdir -p "${app}/Contents"
+  echo "partial" > "${app}/Contents/partial"
+  exit 1
+fi
+exec /bin/mv "$@"
+`,
+      { mode: 0o755 },
+    );
+    const openedLog = NodePath.join(root, "opened.log");
+    await NodeFSP.writeFile(
+      NodePath.join(bin, "open"),
+      `#!/bin/sh\necho "$@" >> "${openedLog}"\n`,
+      { mode: 0o755 },
+    );
+
+    NodeChildProcess.execFileSync("/bin/sh", [script, "999999", app, staged, backup], {
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+    });
+
+    await expect(NodeFSP.readFile(NodePath.join(app, "Contents", "marker"), "utf8")).resolves.toBe(
+      "old-app",
+    );
+    await expect(NodeFSP.stat(NodePath.join(app, "previous.app"))).rejects.toThrow();
+    await expect(NodeFSP.readFile(openedLog, "utf8")).resolves.toContain(app);
+  });
+
+  it("refuses a concurrent second download without clobbering the active one", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "release-updater-dup-"));
+    roots.push(root);
+    const app = NodePath.join(root, "Applications", "SSHCode.app");
+    await NodeFSP.mkdir(NodePath.join(app, "Contents", "MacOS"), { recursive: true });
+    const appUpdateYml = NodePath.join(root, "app-update.yml");
+    await NodeFSP.writeFile(appUpdateYml, "owner: SSHdotCodes\nrepo: sshcode\nprovider: github\n");
+    const dmgBytes = new TextEncoder().encode("disk image bytes");
+    const checksum = NodeCrypto.createHash("sha256").update(dmgBytes).digest("hex");
+    const started = Promise.withResolvers<void>();
+    const releaseDownload = Promise.withResolvers<void>();
+
+    const updater = createReleaseDmgUpdater({
+      fetch: (async (url: string) => {
+        if (url.endsWith("/releases/latest")) {
+          return Response.json(
+            release("0.1.1", ["SSHCode-0.1.1-arm64.dmg", "SSHCode-0.1.1-arm64.dmg.sha256"]),
+          );
+        }
+        if (url.endsWith(".sha256")) return new Response(`${checksum}  SSHCode-0.1.1-arm64.dmg\n`);
+        started.resolve();
+        await releaseDownload.promise;
+        return new Response(dmgBytes, { headers: { "content-length": String(dmgBytes.length) } });
+      }) as unknown as typeof globalThis.fetch,
+      run: async (command, args) => {
+        if (command === "hdiutil" && args[0] === "attach") {
+          const mount = args[args.length - 1]!;
+          await NodeFSP.mkdir(NodePath.join(mount, "SSHCode.app", "Contents"), { recursive: true });
+        }
+        if (command === "ditto") await NodeFSP.cp(args[0]!, args[1]!, { recursive: true });
+        if (command === "plutil") {
+          const [, key, , plistPath] = args;
+          if (key === "CFBundleShortVersionString")
+            return plistPath!.startsWith(app) ? "0.1.0" : "0.1.1";
+          return "com.example.sshcode";
+        }
+        return "";
+      },
+      spawnDetached: () => {},
+      quit: () => {},
+      currentVersion: () => "0.1.0",
+      arch: "arm64",
+      execPath: NodePath.join(app, "Contents", "MacOS", "SSHCode"),
+      pid: 4242,
+      appUpdateYmlPath: appUpdateYml,
+      updatesDir: () => NodePath.join(root, "updates"),
+    });
+
+    await updater.checkForUpdates();
+    const first = updater.downloadUpdate();
+    await started.promise;
+    await expect(updater.downloadUpdate()).rejects.toThrow("already in progress");
+    releaseDownload.resolve();
+    await first;
+    await expect(
+      NodeFSP.stat(NodePath.join(root, "updates", "0.1.1", "SSHCode.app")),
+    ).resolves.toBeTruthy();
+  });
+
+  it("clears a stale staged update when a newer release arrives and checks staged/writable before quitting", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "release-updater-stale-"));
+    roots.push(root);
+    const app = NodePath.join(root, "Applications", "SSHCode.app");
+    await NodeFSP.mkdir(NodePath.join(app, "Contents", "MacOS"), { recursive: true });
+    const appUpdateYml = NodePath.join(root, "app-update.yml");
+    await NodeFSP.writeFile(appUpdateYml, "owner: SSHdotCodes\nrepo: sshcode\nprovider: github\n");
+    const dmgBytes = new TextEncoder().encode("disk image bytes");
+    const checksum = NodeCrypto.createHash("sha256").update(dmgBytes).digest("hex");
+    let latest = "0.1.1";
+    let quits = 0;
+
+    const updater = createReleaseDmgUpdater({
+      fetch: (async (url: string) => {
+        if (url.endsWith("/releases/latest")) {
+          return Response.json(
+            release(latest, [`SSHCode-${latest}-arm64.dmg`, `SSHCode-${latest}-arm64.dmg.sha256`]),
+          );
+        }
+        if (url.endsWith(".sha256"))
+          return new Response(`${checksum}  SSHCode-${latest}-arm64.dmg\n`);
+        return new Response(dmgBytes, { headers: { "content-length": String(dmgBytes.length) } });
+      }) as unknown as typeof globalThis.fetch,
+      run: async (command, args) => {
+        if (command === "hdiutil" && args[0] === "attach") {
+          const mount = args[args.length - 1]!;
+          await NodeFSP.mkdir(NodePath.join(mount, "SSHCode.app", "Contents"), { recursive: true });
+        }
+        if (command === "ditto") await NodeFSP.cp(args[0]!, args[1]!, { recursive: true });
+        if (command === "plutil") {
+          const [, key, , plistPath] = args;
+          if (key === "CFBundleShortVersionString")
+            return plistPath!.startsWith(app) ? "0.1.0" : latest;
+          return "com.example.sshcode";
+        }
+        return "";
+      },
+      spawnDetached: () => {},
+      quit: () => {
+        quits += 1;
+      },
+      currentVersion: () => "0.1.0",
+      arch: "arm64",
+      execPath: NodePath.join(app, "Contents", "MacOS", "SSHCode"),
+      pid: 4242,
+      appUpdateYmlPath: appUpdateYml,
+      updatesDir: () => NodePath.join(root, "updates"),
+    });
+
+    await updater.checkForUpdates();
+    await updater.downloadUpdate();
+    const staged1 = NodePath.join(root, "updates", "0.1.1", "SSHCode.app");
+    await expect(NodeFSP.stat(staged1)).resolves.toBeTruthy();
+
+    // Newer release supersedes the staged 0.1.1 bundle.
+    latest = "0.1.2";
+    await updater.checkForUpdates();
+    expect(() => updater.quitAndInstall()).toThrow("No downloaded update");
+    expect(quits).toBe(0);
+
+    // Download 0.1.2, then remove its staged folder externally before quitAndInstall.
+    await updater.downloadUpdate();
+    await expect(NodeFSP.stat(NodePath.join(root, "updates", "0.1.1"))).rejects.toThrow();
+    const staged2 = NodePath.join(root, "updates", "0.1.2", "SSHCode.app");
+    await NodeFSP.rm(staged2, { recursive: true, force: true });
+    expect(() => updater.quitAndInstall()).toThrow("no longer on disk");
+    expect(quits).toBe(0);
+
+    // Re-download 0.1.2, then make the app read-only before quitAndInstall.
+    await updater.downloadUpdate();
+    await NodeFSP.chmod(app, 0o555);
+    try {
+      expect(() => updater.quitAndInstall()).toThrow("can't replace itself");
+      expect(quits).toBe(0);
+    } finally {
+      await NodeFSP.chmod(app, 0o755);
+    }
   });
 });

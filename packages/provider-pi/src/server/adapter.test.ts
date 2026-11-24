@@ -3265,6 +3265,34 @@ describe("PiAdapterV2", () => {
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("hands back a steer as unsupported when the turn is no longer active", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const error = yield* runtime
+        .steerTurn({
+          threadId: THREAD_ID,
+          runId: RunId.make("run:thread-pi-test:ended"),
+          providerThread,
+          providerTurnId: "provider-turn:ended" as never,
+          message: {
+            messageId: "message:thread-pi-test:ended" as never,
+            text: "Try this next",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+          },
+        })
+        .pipe(Effect.flip);
+      assert.equal(error._tag, "ProviderAdapterSteerRunUnsupportedError");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("steers /compact as RPC compact instead of a prompt", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;

@@ -11,6 +11,7 @@ import type {
 import {
   getModelSelectionStringOptionValue,
   getProviderOptionCurrentValue,
+  isReasoningSelectDescriptor,
 } from "@t3tools/shared/model";
 
 import { REASONING_EFFORT_OPTION_IDS } from "./state/threadExecution.ts";
@@ -134,19 +135,12 @@ function resolveEffort(
 ): { readonly value: string; readonly label: string } | undefined {
   const model = models?.find((candidate) => candidate.slug === selection.model);
   if (model === undefined) {
-    // Pi states its effort as `thinking`; the catalog would otherwise mark it a reasoning control.
-    const value = [...REASONING_EFFORT_OPTION_IDS, "thinking"]
-      .map((id) => getModelSelectionStringOptionValue(selection, id))
-      .find((candidate) => candidate !== undefined);
+    const value = REASONING_EFFORT_OPTION_IDS.map((id) =>
+      getModelSelectionStringOptionValue(selection, id),
+    ).find((candidate) => candidate !== undefined);
     return value === undefined ? undefined : { value, label: value };
   }
-  const descriptor = model.capabilities?.optionDescriptors?.find(
-    (candidate): candidate is Extract<typeof candidate, { type: "select" }> =>
-      candidate.type === "select" &&
-      (candidate.role === "reasoning" ||
-        (REASONING_EFFORT_OPTION_IDS as ReadonlyArray<string>).includes(candidate.id) ||
-        candidate.id === "thinking"),
-  );
+  const descriptor = model.capabilities?.optionDescriptors?.find(isReasoningSelectDescriptor);
   if (descriptor === undefined) return undefined;
   const value =
     getModelSelectionStringOptionValue(selection, descriptor.id) ??

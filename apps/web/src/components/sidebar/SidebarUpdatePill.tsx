@@ -13,6 +13,7 @@ import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
+  getDesktopUpdateCheckError,
   getDesktopUpdateDownloadedVersion,
   getDesktopUpdateInstallConfirmationMessage,
   isDesktopUpdateButtonDisabled,
@@ -328,13 +329,13 @@ function SidebarUpdateControl() {
     void bridge
       .checkForUpdate()
       .then((result) => {
-        if (result.checked) return;
+        const checkError = getDesktopUpdateCheckError(result);
+        if (!checkError) return;
         toastManager.add(
           stackedThreadToast({
             type: "error",
             title: "Could not check for updates",
-            description:
-              result.state.message ?? "Automatic updates are not available in this build.",
+            description: checkError,
           }),
         );
       })

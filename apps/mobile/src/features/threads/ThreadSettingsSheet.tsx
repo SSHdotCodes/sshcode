@@ -1139,8 +1139,11 @@ function makerCatalogItems(
         );
         const shown = new Set<string>();
         return model.routes.flatMap((listed): Row[] => {
+          const hasFavorite = listed.sources.some((source) =>
+            session.favoriteKeys.has(source.option.key),
+          );
+          if (favoritesOnly && !hasFavorite) return [];
           const starred = routeRowOption(model, listed);
-          if (favoritesOnly && !session.favoriteKeys.has(starred.key)) return [];
           // A provider's accounts are one row, on the account the chat would use: accounts
           // are picked by name under Runs in only.
           const route = account(listed, runnable.length > 0 ? runnable : model.routes) ?? listed;
@@ -1154,7 +1157,11 @@ function makerCatalogItems(
           if (!matches) return [];
           shown.add(route.key);
           // The star stays the one the user set, whichever account the row shows.
-          return [route === listed ? { option } : { option, routes: [option, starred] }];
+          const routes = [
+            ...route.sources.map((source) => source.option),
+            ...(route === listed ? [] : listed.sources.map((source) => source.option)),
+          ];
+          return [{ option, routes }];
         });
       }
       const route = makerModelRoute(model, session.displayedOption, session.routeMemory, account);

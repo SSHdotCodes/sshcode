@@ -117,12 +117,15 @@ function reasoningEffortLabel(reasoningEffort: string): string {
   return REASONING_EFFORT_LABELS[reasoningEffort] ?? reasoningEffort;
 }
 
-function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["account"]) {
+function codexAccountAuthLabel(
+  account: CodexSchema.V2GetAccountResponse["account"],
+  rateLimitPlanType: string | null | undefined,
+) {
   if (!account) return undefined;
   if (account.type === "apiKey") return "OpenAI API Key";
   if (account.type === "amazonBedrock") return "Amazon Bedrock";
   if (account.type !== "chatgpt") return undefined;
-  return codexPlanLabel(account.planType);
+  return codexPlanLabel(rateLimitPlanType ?? account.planType);
 }
 
 /** Shared with usage-limit sources, which report the same `planType` slugs. */
@@ -733,12 +736,14 @@ function accountProbeStatus({ account, rateLimits }: CodexAppServerProviderSnaps
   readonly auth: ServerProvider["auth"];
   readonly message?: string;
 } {
-  const authLabel = codexAccountAuthLabel(account.account);
+  const usage = rateLimits && "snapshot" in rateLimits ? rateLimits : undefined;
+  // The usage read reports the current plan while the sign-in token can lag.
+  const rateLimitPlanType = usage?.rateLimitsByLimitId?.codex?.planType ?? usage?.snapshot.planType;
+  const authLabel = codexAccountAuthLabel(account.account, rateLimitPlanType);
   const authEmail = codexAccountEmail(account.account);
   // One email can hold several workspaces, each with its own quota; the usage
   // read names the one this login draws on.
-  const workspaceId =
-    rateLimits && "accountId" in rateLimits ? rateLimits.accountId?.trim() : undefined;
+  const workspaceId = usage?.accountId?.trim();
   const auth = {
     status: account.account ? ("authenticated" as const) : ("unknown" as const),
     ...(account.account?.type ? { type: account.account?.type } : {}),

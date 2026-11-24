@@ -6,10 +6,10 @@ import { pendingSubagentRequestsByThread } from "@t3tools/client-runtime/state/t
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import {
+  EnvironmentId,
   isHelperThreadId,
-  type EnvironmentId,
   type OrchestrationV2ThreadShell,
-  type ThreadId,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import {
@@ -25,6 +25,7 @@ import {
   useThreadNativeNotification,
   type ThreadNotificationHandle,
 } from "../hooks/useThreadNativeNotification";
+import { splitPaneIndex, useSplitChatStore } from "../splitChatStore";
 import { useEnvironmentIds } from "../state/environments";
 import { environmentShell } from "../state/shell";
 import {
@@ -168,6 +169,15 @@ function EnvironmentNotifications({
       return;
     }
     const next = new Map<ThreadId, NotificationState>();
+    const activeRef =
+      activeEnvironmentId && activeThreadId
+        ? {
+            environmentId: EnvironmentId.make(activeEnvironmentId),
+            threadId: ThreadId.make(activeThreadId),
+          }
+        : null;
+    const split = useSplitChatStore.getState().split;
+    const visibleSplit = splitPaneIndex(split, activeRef) !== -1 ? split : null;
     // Subagents are skipped below, so their requests notify through the thread above them.
     const subagentRequests = pendingSubagentRequestsByThread(threads);
     for (const rawThread of threads) {
@@ -212,11 +222,15 @@ function EnvironmentNotifications({
       if (notificationSoundPlays({ notificationMode: mode, notificationSoundEvents }, kind)) {
         void playNotificationSound(kind, () => notificationSoundPlays(getClientSettings(), kind));
       }
+      const isVisibleOnScreen =
+        (activeEnvironmentId === environmentId && activeThreadId === thread.id) ||
+        (visibleSplit !== null &&
+          splitPaneIndex(visibleSplit, { environmentId, threadId: thread.id }) !== -1);
       if (
         inAppNotificationsEnabled &&
         document.visibilityState === "visible" &&
         document.hasFocus() &&
-        (activeEnvironmentId !== environmentId || activeThreadId !== thread.id)
+        !isVisibleOnScreen
       ) {
         const toastId = toastManager.add({
           type: kind === "completion" ? "success" : status === "failed" ? "error" : "warning",

@@ -1,5 +1,24 @@
 import type { ComposerDraft } from "../../state/use-composer-drafts";
 
+/**
+ * Flush pending native editor input (trailing autocorrect/typing) before reading
+ * the draft snapshot for send or schedule. Returns false when a flush is already
+ * in flight so rapid double-taps cannot dispatch twice.
+ */
+export async function flushComposerEditorInput(
+  editor: { readonly flushPendingInput: () => Promise<void> } | null | undefined,
+  inFlightRef: { current: boolean },
+): Promise<boolean> {
+  if (inFlightRef.current) return false;
+  inFlightRef.current = true;
+  try {
+    await editor?.flushPendingInput();
+    return true;
+  } finally {
+    inFlightRef.current = false;
+  }
+}
+
 type ScheduledComposerDraft = Pick<ComposerDraft, "text" | "attachments" | "context">;
 
 type PendingComposerWork = {

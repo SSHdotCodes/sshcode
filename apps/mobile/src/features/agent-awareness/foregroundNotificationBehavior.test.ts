@@ -19,6 +19,20 @@ describe("threadDeepLinkOnScreen", () => {
     );
   });
 
+  it("normalizes unencoded colons and strips query/hash from React Navigation paths", () => {
+    // React Navigation's getPathFromState emits raw colons (e.g. thread:delegated-task:abc),
+    // while notification payloads percent-encode segments via encodeURIComponent.
+    expect(threadDeepLinkOnScreen("/threads/env:1/thread:delegated-task:abc")).toBe(
+      "/threads/env%3A1/thread%3Adelegated-task%3Aabc",
+    );
+    expect(threadDeepLinkOnScreen("/threads/env%3A1/thread%3Adelegated-task%3Aabc/files/src")).toBe(
+      "/threads/env%3A1/thread%3Adelegated-task%3Aabc",
+    );
+    expect(threadDeepLinkOnScreen("/threads/env-1/thread:1?focus=1#bottom")).toBe(
+      "/threads/env-1/thread%3A1",
+    );
+  });
+
   it("returns null outside a thread", () => {
     expect(threadDeepLinkOnScreen("/")).toBeNull();
     expect(threadDeepLinkOnScreen("/settings")).toBeNull();
@@ -33,6 +47,21 @@ describe("foregroundNotificationBehavior", () => {
     const behavior = foregroundNotificationBehavior(
       notificationWithData({ environmentId: "env-1", threadId: "thread-1" }),
       "/threads/env-1/thread-1",
+      isLive,
+    );
+    expect(behavior.shouldShowBanner).toBe(false);
+    expect(behavior.shouldShowList).toBe(false);
+    expect(behavior.shouldPlaySound).toBe(false);
+  });
+
+  it("suppresses a notification for a colon-containing thread id on screen", () => {
+    const onScreen = threadDeepLinkOnScreen("/threads/env:1/thread:delegated-task:abc");
+    const behavior = foregroundNotificationBehavior(
+      notificationWithData({
+        environmentId: "env:1",
+        threadId: "thread:delegated-task:abc",
+      }),
+      onScreen,
       isLive,
     );
     expect(behavior.shouldShowBanner).toBe(false);

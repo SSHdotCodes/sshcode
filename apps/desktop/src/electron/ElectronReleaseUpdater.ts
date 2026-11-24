@@ -29,6 +29,7 @@ const reason = (cause: unknown) =>
 export const makeWith = (updater: ReturnType<typeof createReleaseDmgUpdater>) => {
   let allowDowngrade = false;
   return ElectronUpdater.of({
+    singleChannel: true,
     setFeedURL: () => Effect.void,
     setAutoDownload: () => Effect.void,
     setAutoInstallOnAppQuit: () => Effect.void,
@@ -76,7 +77,9 @@ export const makeWith = (updater: ReturnType<typeof createReleaseDmgUpdater>) =>
 export const layer = Layer.effect(
   ElectronUpdater,
   Effect.gen(function* () {
-    const arch = yield* HostProcess.Architecture;
+    const processArch = yield* HostProcess.Architecture;
+    // Switch Intel builds running under Rosetta on Apple Silicon to the native arm64 package.
+    const arch = Electron.app.runningUnderARM64Translation === true ? "arm64" : processArch;
     const execPath = Electron.app.getPath("exe");
     // app.asar sits in Contents/Resources, beside electron-builder's app-update.yml.
     const resources = Electron.app.getAppPath().replace(/\/[^/]+$/, "");

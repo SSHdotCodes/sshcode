@@ -24,6 +24,9 @@ describe("modelGeneration", () => {
     ],
     ["mistral", "mistral-small-2603 Mistral Small 4", undefined, "mistral-mistral-small-4"],
     ["inkling", "inkling", undefined, "inkling-model-1"],
+    ["swe", "swe-2-high SWE-2", undefined, "swe-model-2"],
+    ["swe", "swe-1-7-medium SWE-1.7", undefined, "swe-model-1-7"],
+    ["swe", "swe-1.6-fast SWE-1.6 Fast", undefined, "swe-model-1.6"],
     ["codex", "gpt-6.1-sol", undefined, null],
   ] as const)("%s: %s", (maker, text, line, expected) => {
     expect(modelGeneration(maker, text, line)).toBe(expected);

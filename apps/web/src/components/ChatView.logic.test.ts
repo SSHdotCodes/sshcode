@@ -95,6 +95,7 @@ import {
   shouldShowBranchMismatchBanner,
   shouldShowPlanFollowUpPrompt,
   shouldWriteThreadErrorToCurrentServerThread,
+  completeQueuedEditSave,
   waitForRevertedMessage,
   prepareRevertedMessageAttachments,
 } from "./ChatView.logic";
@@ -2755,5 +2756,59 @@ describe("held timeline capacity", () => {
     expect(peekRememberedThreadTimeline("a")).toBeNull();
     expect(peekRememberedThreadTimeline("b")).toHaveLength(10_000);
     expect(peekRememberedThreadTimeline("c")).toHaveLength(20_000);
+  });
+});
+
+describe("completeQueuedEditSave", () => {
+  it("clears promptRef, cursor, edit mode, and focuses when still on the same chat", () => {
+    const clearDraft = vi.fn();
+    const removeRecovered = vi.fn();
+    const clearPromptRef = vi.fn();
+    const resetCursor = vi.fn();
+    const clearEditing = vi.fn();
+    const focusComposer = vi.fn();
+
+    completeQueuedEditSave({
+      routeIsCurrent: true,
+      clearDraft,
+      removeRecovered,
+      clearPromptRef,
+      resetCursor,
+      clearEditing,
+      focusComposer,
+    });
+
+    expect(clearDraft).toHaveBeenCalledOnce();
+    expect(removeRecovered).toHaveBeenCalledOnce();
+    expect(clearPromptRef).toHaveBeenCalledOnce();
+    expect(resetCursor).toHaveBeenCalledOnce();
+    expect(clearEditing).toHaveBeenCalledOnce();
+    expect(focusComposer).toHaveBeenCalledOnce();
+  });
+
+  it("clears the saved draft without wiping the active chat's promptRef or cursor after switching chats", () => {
+    const clearDraft = vi.fn();
+    const removeRecovered = vi.fn();
+    const clearPromptRef = vi.fn();
+    const resetCursor = vi.fn();
+    const clearEditing = vi.fn();
+    const focusComposer = vi.fn();
+
+    completeQueuedEditSave({
+      routeIsCurrent: false,
+      clearDraft,
+      removeRecovered,
+      clearPromptRef,
+      resetCursor,
+      clearEditing,
+      focusComposer,
+    });
+
+    expect(clearDraft).toHaveBeenCalledOnce();
+    expect(removeRecovered).toHaveBeenCalledOnce();
+    expect(clearPromptRef).not.toHaveBeenCalled();
+    expect(resetCursor).not.toHaveBeenCalled();
+    expect(clearEditing).not.toHaveBeenCalled();
+    expect(focusComposer).not.toHaveBeenCalled();
   });
 });

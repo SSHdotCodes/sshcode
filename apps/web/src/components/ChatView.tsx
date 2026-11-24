@@ -54,7 +54,7 @@ import {
   resolveWorktreeSetupProgress,
 } from "./ChatView.logic";
 import * as DateTime from "effect/DateTime";
-import { restorePlanFollowUpComposer } from "./ChatView.logic";
+import { completeQueuedEditSave, restorePlanFollowUpComposer } from "./ChatView.logic";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { harnessMascotIdentity, harnessThemeDriver } from "@t3tools/shared/harnessThemes";
 import {
@@ -10286,12 +10286,21 @@ export default function ChatView(props: ChatViewProps) {
         }
         setThreadError(editingQueuedRun.threadId, null);
         releaseDraftAttachments(newEditAttachments);
-        promptRef.current = "";
-        clearComposerDraftContent(editingQueuedRun.draftId);
-        useRecoveredQueuedEdits.getState().remove(editingQueuedRun.draftId);
-        composerRef.current?.resetCursorState();
-        setEditingQueuedRun(null);
-        scheduleComposerFocus();
+        completeQueuedEditSave({
+          routeIsCurrent: currentRouteThreadKeyRef.current === routeThreadKey,
+          clearDraft: () => clearComposerDraftContent(editingQueuedRun.draftId),
+          removeRecovered: () =>
+            useRecoveredQueuedEdits.getState().remove(editingQueuedRun.draftId),
+          clearPromptRef: () => {
+            promptRef.current = "";
+          },
+          resetCursor: () => composerRef.current?.resetCursorState(),
+          clearEditing: () =>
+            setEditingQueuedRun((current) =>
+              current?.draftId === editingQueuedRun.draftId ? null : current,
+            ),
+          focusComposer: scheduleComposerFocus,
+        });
       } catch (error) {
         setThreadError(
           editingQueuedRun.threadId,

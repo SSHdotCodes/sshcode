@@ -45,3 +45,18 @@ export function sideChatErrorMessage(error: unknown): string {
     ? `Couldn't reach the side chat: ${message}`
     : "Couldn't reach the side chat. Check the connection and try again.";
 }
+
+/**
+ * Clear the composer after dispatching a side-chat command only if the draft
+ * still holds the flushed text that was submitted (not a stale pre-flush prop
+ * and not newer edits typed while enqueueing).
+ */
+export function clearDraftIfSubmittedTextMatches(input: {
+  readonly currentText: string;
+  readonly submittedText: string;
+  readonly clear: () => void;
+}): void {
+  if (input.currentText === input.submittedText) {
+    input.clear();
+  }
+}

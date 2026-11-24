@@ -79,11 +79,19 @@ function normalizeThreadDeepLink(value: string): string | null {
  * inspector. Null when the route is not inside a thread.
  */
 export function threadDeepLinkOnScreen(pathname: string): string | null {
-  const match = /^\/threads\/([^/]+)\/([^/]+)(?:\/|$)/.exec(pathname);
+  const path = pathname.split(/[?#]/, 1)[0] ?? "";
+  const match = /^\/threads\/([^/]+)\/([^/]+)(?:\/|$)/.exec(path);
   if (!match?.[1] || !match[2]) {
     return null;
   }
-  return `/threads/${match[1]}/${match[2]}`;
+  try {
+    return encodeThreadDeepLink({
+      environmentId: decodeURIComponent(match[1]),
+      threadId: decodeURIComponent(match[2]),
+    });
+  } catch {
+    return null;
+  }
 }
 
 export function extractAgentNotificationDeepLink(response: unknown): string | null {

@@ -2,8 +2,9 @@ import { useModelMentionCatalog } from "./use-model-mention-catalog";
 import { useChatBackdropEnabled, useNewChatDashboardEnabled } from "./useNewChatDashboard";
 import { markCloudSettle } from "./NewChatBackdrop";
 import { NewChatBackdrop, NewChatDashboard } from "./NewChatDashboard";
-import { buildModelOptions } from "../../lib/modelOptions";
+import { buildModelOptions, resolveProvidersEnabledForProject } from "../../lib/modelOptions";
 import {
+  flushComposerEditorInput,
   persistScheduledComposerMessage,
   scheduledComposerMessageReason,
 } from "./scheduledComposerMessage";
@@ -402,6 +403,14 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
       ),
     [selectedEnvironmentServerConfig?.settings, flow.selectedProject?.id],
   );
+  const planTipProviders = useMemo(
+    () =>
+      resolveProvidersEnabledForProject(
+        selectedEnvironmentServerConfig,
+        flow.selectedProject?.id ?? null,
+      ),
+    [selectedEnvironmentServerConfig, flow.selectedProject?.id],
+  );
   const environmentConnected =
     selectedProject !== null &&
     connectedEnvironments.find(
@@ -518,6 +527,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
     });
   const queuesInsteadOfStarting = !environmentConnected || attachmentsUploading;
   const promptInputRef = useRef<ComposerEditorHandle>(null);
+  const flushingInputRef = useRef(false);
   const loadedBranchesProjectKeyRef = useRef<string | null>(null);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [previewVideo, setPreviewVideo] = useState<VideoPreviewSource | null>(null);
@@ -1642,6 +1652,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
   async function scheduleMessage(runAt: string, commandId: CommandId): Promise<void> {
     const unavailable = scheduledMessageUnavailableReason(selectedEnvironmentServerConfig);
     if (unavailable) throw new Error(unavailable);
+    await promptInputRef.current?.flushPendingInput();
     const project = flow.selectedProject;
     const draftKey = flow.draftKey;
     if (
@@ -1770,6 +1781,8 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
     ) {
       return;
     }
+    if (!(await flushComposerEditorInput(promptInputRef.current, flushingInputRef))) return;
+    if (pendingPastedTextAttachmentCountRef.current > 0) return;
     const draft = getComposerDraftSnapshot(draftKey);
     if (appAtomRegistry.get(composerContextImportsAtom)[draftKey]) return;
     const workspaceMode = draft.workspaceSelection?.mode ?? flow.workspaceMode;
@@ -2340,7 +2353,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
       {flow.selectedModel && selectedEnvironmentServerConfig?.settings.balanceAccounts ? (
         <PlanTip
           chatKey={flow.draftKey ?? "new-chat"}
-          providers={selectedEnvironmentServerConfig.providers}
+          providers={planTipProviders}
           selection={flow.selectedModel}
           blocked={settingsSheetPresentation.isActive}
           onSelect={(instanceId, model) => {
@@ -2457,8 +2470,12 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
                       selectedEnvironmentServerConfig,
                     )}
                     onScheduleMessage={() => {
-                      promptInputRef.current?.blur();
-                      setScheduleOpen(true);
+                      void Promise.resolve(promptInputRef.current?.flushPendingInput()).finally(
+                        () => {
+                          promptInputRef.current?.blur();
+                          setScheduleOpen(true);
+                        },
+                      );
                     }}
                     disabled={isComposerInteractionLocked}
                     supportsFiles={Boolean(

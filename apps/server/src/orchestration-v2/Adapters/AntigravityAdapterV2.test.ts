@@ -7,6 +7,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ProviderSessionId,
+  ProviderTurnId,
   RunAttemptId,
   RunId,
   ThreadId,
@@ -968,7 +969,11 @@ const openSessionWithRunningCommand = Effect.fn("openSessionWithRunningCommand")
     title: "node fetch_throughput.mjs",
   },
   /** agy 1.5 answers a steered prompt once the next one arrives, which runs to `releaseSteer`. */
-  steering?: { readonly agentVersion: string; readonly holdsFirstPrompt: boolean },
+  steering?: {
+    readonly agentVersion: string;
+    readonly holdsFirstPrompt: boolean;
+    readonly failSteerBeforeDispatch?: boolean;
+  },
 ) {
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const path = yield* Path.Path;
@@ -1047,6 +1052,12 @@ const openSessionWithRunningCommand = Effect.fn("openSessionWithRunningCommand")
           prompt: (payload, promptOptions) =>
             Effect.gen(function* () {
               prompts.push({ prompt: payload.prompt, released: promptOptions?.released });
+              if (prompts.length > 1 && steering?.failSteerBeforeDispatch === true) {
+                return yield* new EffectAcpErrors.AcpTransportError({
+                  detail: "ACP process exited before prompt dispatch",
+                  cause: "exit",
+                });
+              }
               if (promptOptions?.dispatched !== undefined) {
                 yield* Deferred.succeed(promptOptions.dispatched, undefined);
               }
@@ -1328,6 +1339,73 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
       assert.include(JSON.stringify(run), "I'll have the footnotes checked too.");
       assert.include(JSON.stringify(run), "The fetch finished.");
       assert.lengthOf(opened.offers, 0, "nothing ran after the run");
+    }).pipe(Effect.provide(layerSession)),
+  );
+
+  it.effect("hands a prompt-steer back as unsupported when the turn already ended", () =>
+    Effect.gen(function* () {
+      const opened = yield* openSessionWithRunningCommand({}, undefined, {
+        agentVersion: "1.5.13",
+        holdsFirstPrompt: false,
+      });
+      const { session, providerThread } = opened;
+      const error = yield* session
+        .steerTurn({
+          threadId: ThreadId.make("thread-antigravity-wake"),
+          runId: RunId.make("run-antigravity-wake-1"),
+          providerThread,
+          providerTurnId: ProviderTurnId.make("provider-turn:ended"),
+          message: {
+            messageId: MessageId.make("message-antigravity-steer-ended"),
+            text: "Try this next",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+          },
+        })
+        .pipe(Effect.flip);
+      assert.equal(error._tag, "ProviderAdapterSteerRunUnsupportedError");
+    }).pipe(Effect.provide(layerSession)),
+  );
+
+  it.effect("fails a prompt-steer promptly when prompt dispatch fails", () =>
+    Effect.gen(function* () {
+      const opened = yield* openSessionWithRunningCommand({}, undefined, {
+        agentVersion: "1.5.13",
+        holdsFirstPrompt: true,
+        failSteerBeforeDispatch: true,
+      });
+      const { session, providerThread, command, startTurn, until } = opened;
+      yield* startTurn(1, false);
+      const started = yield* until(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.nativeItemRef?.nativeId === command.toolCallId,
+      );
+      const providerTurnId = started.flatMap((event) =>
+        event.type === "provider_turn.updated" ? [event.providerTurn.id] : [],
+      )[0]!;
+      const steerFiber = yield* session
+        .steerTurn({
+          threadId: ThreadId.make("thread-antigravity-wake"),
+          runId: RunId.make("run-antigravity-wake-1"),
+          providerThread,
+          providerTurnId,
+          message: {
+            messageId: MessageId.make("message-antigravity-steer-fail"),
+            text: "Change approach",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+          },
+        })
+        .pipe(Effect.exit, Effect.forkScoped);
+      yield* Effect.repeat(Effect.yieldNow, { times: 40 });
+      const settled = steerFiber.pollUnsafe();
+      assert.isDefined(settled, "steerTurn must not hang when prompt dispatch fails");
+      if (settled !== undefined) {
+        assert.isTrue(Exit.isSuccess(settled) && Exit.isFailure(settled.value));
+      }
     }).pipe(Effect.provide(layerSession)),
   );
 

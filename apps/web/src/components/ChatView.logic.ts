@@ -1602,3 +1602,26 @@ export function threadErrorIsServerRuntime(input: {
     (input.localServerError === null || input.localServerError === input.runtimeError)
   );
 }
+
+/**
+ * Finish a queued message edit after its async upload and RPC succeed. The saved
+ * edit draft is always cleared, while promptRef, cursor, edit state, and focus
+ * belong to the chat on screen and must not touch another chat after a switch.
+ */
+export function completeQueuedEditSave(input: {
+  readonly routeIsCurrent: boolean;
+  readonly clearDraft: () => void;
+  readonly removeRecovered: () => void;
+  readonly clearPromptRef: () => void;
+  readonly resetCursor: () => void;
+  readonly clearEditing: () => void;
+  readonly focusComposer: () => void;
+}): void {
+  input.clearDraft();
+  input.removeRecovered();
+  if (!input.routeIsCurrent) return;
+  input.clearPromptRef();
+  input.resetCursor();
+  input.clearEditing();
+  input.focusComposer();
+}

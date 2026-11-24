@@ -374,3 +374,95 @@ it.effect("keeps retrying adoption after startup with a bounded delay", () =>
     );
   }).pipe(Effect.scoped),
 );
+
+it.effect("treats archived and deleted threads as gone during monitor restart recovery", () =>
+  Effect.gen(function* () {
+    const activeId = ThreadId.make("active");
+    const archivedId = ThreadId.make("archived");
+    const deletedId = ThreadId.make("deleted");
+    const restrictedId = ThreadId.make("restricted");
+    const missingId = ThreadId.make("missing");
+    const shells = new Map<ThreadId, OrchestrationV2ThreadShell>([
+      [
+        activeId,
+        {
+          id: activeId,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          archivedAt: null,
+          deletedAt: null,
+        } as unknown as OrchestrationV2ThreadShell,
+      ],
+      [
+        archivedId,
+        {
+          id: archivedId,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          archivedAt: "2026-11-23T00:00:00.000Z",
+          deletedAt: null,
+        } as unknown as OrchestrationV2ThreadShell,
+      ],
+      [
+        deletedId,
+        {
+          id: deletedId,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          archivedAt: null,
+          deletedAt: "2026-11-23T00:00:00.000Z",
+        } as unknown as OrchestrationV2ThreadShell,
+      ],
+      [
+        restrictedId,
+        {
+          id: restrictedId,
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          archivedAt: null,
+          deletedAt: null,
+        } as unknown as OrchestrationV2ThreadShell,
+      ],
+    ]);
+    const results = yield* Queue.unbounded<Record<string, MonitorService.MonitorRecoveryAccess>>();
+    yield* Effect.gen(function* () {
+      const observed = yield* Queue.take(results);
+      expect(observed).toEqual({
+        active: "ok",
+        archived: "gone",
+        deleted: "gone",
+        restricted: "denied",
+        missing: "gone",
+      });
+    }).pipe(
+      Effect.provide(
+        MonitorDelivery.layer.pipe(
+          Layer.provide(
+            Layer.mock(MonitorService.MonitorService)({
+              events: Stream.never,
+              hasOpenWork: () => false,
+              ownsCwd: () => false,
+              canDeliver: () => true,
+              recover: (access) =>
+                Effect.gen(function* () {
+                  const snapshot = {
+                    active: yield* access(activeId),
+                    archived: yield* access(archivedId),
+                    deleted: yield* access(deletedId),
+                    restricted: yield* access(restrictedId),
+                    missing: yield* access(missingId),
+                  };
+                  yield* Queue.offer(results, snapshot);
+                }),
+            }),
+          ),
+          Layer.provide(
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              getThreadShell: (threadId) => Effect.succeed(shells.get(threadId) ?? null),
+            }),
+          ),
+        ),
+      ),
+    );
+  }).pipe(Effect.scoped),
+);

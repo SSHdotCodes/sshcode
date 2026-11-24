@@ -212,6 +212,24 @@ describe("model switch change", () => {
     ).toEqual({ modelChanged: false, effort: { from: "low", to: "high" } });
     expect(
       resolveModelSwitchChange(
+        {
+          from: selection("gemini", { thought_level: "low" }),
+          to: selection("gemini", { thought_level: "high" }),
+        },
+        [],
+      ),
+    ).toEqual({ modelChanged: false, effort: { from: "low", to: "high" } });
+    expect(
+      resolveModelSwitchChange(
+        {
+          from: selection("deepseek", { reasoning_effort: "low" }),
+          to: selection("deepseek", { reasoning_effort: "high" }),
+        },
+        [],
+      ),
+    ).toEqual({ modelChanged: false, effort: { from: "low", to: "high" } });
+    expect(
+      resolveModelSwitchChange(
         { from: selection("gpt"), to: selection("gpt", { reasoningEffort: "high" }) },
         [],
       ),

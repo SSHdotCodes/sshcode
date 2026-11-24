@@ -3616,7 +3616,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             .filter((key) => key !== questionAttachmentTarget)
         : [];
     const draft = getComposerDraft(attachmentDraftTarget);
+    const existingQueuedAttachmentCount =
+      questionAttachmentTarget === null ? (editingQueuedAttachments?.length ?? 0) : 0;
     return (
+      existingQueuedAttachmentCount +
       (draft?.images.length ?? 0) +
       (draft?.files.length ?? 0) +
       countPreparingComposerImages(attachmentTargetKey) +

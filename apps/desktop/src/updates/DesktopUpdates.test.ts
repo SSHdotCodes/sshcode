@@ -13,11 +13,13 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as ElectronReleaseUpdater from "../electron/ElectronReleaseUpdater.ts";
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
+import { createReleaseDmgUpdater } from "./ReleaseDmgUpdater.ts";
 import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
 
 describe("DesktopUpdates", () => {
@@ -1015,6 +1017,48 @@ describe("DesktopUpdates", () => {
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
+
+  it.effect(
+    "offers published Mac releases from ElectronReleaseUpdater even when settings select nightly",
+    () => {
+      let emitAvailable: (() => void) | null = null;
+      const fakeReleaseUpdater: ReturnType<typeof createReleaseDmgUpdater> = {
+        checkForUpdates: async () => {
+          emitAvailable?.();
+        },
+        downloadUpdate: async () => {},
+        quitAndInstall: () => {},
+        on: (event, listener) => {
+          if (event === "update-available") {
+            emitAvailable = () =>
+              listener({
+                version: "1.2.4",
+                releaseNotes: "- fix: published release",
+              });
+          }
+          return () => true;
+        },
+      };
+      const harness = makeHarness({
+        updaterLayer: Layer.succeed(
+          ElectronUpdater.ElectronUpdater,
+          ElectronReleaseUpdater.makeWith(fakeReleaseUpdater),
+        ),
+      });
+
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          yield* updates.configure;
+
+          const state = yield* updates.setChannel("nightly");
+          assert.equal(state.channel, "nightly");
+          assert.equal(state.status, "available");
+          assert.equal(state.availableVersion, "1.2.4");
+        }),
+      ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+    },
+  );
 });
 
 describe("describeUpdateErrorCause", () => {

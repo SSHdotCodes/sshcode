@@ -59,6 +59,13 @@ it("names only explicitly saved effort, including provider-defined reasoning ids
         currentValue: "fast",
         options: [{ id: "fast", label: "Fast" }],
       },
+      {
+        id: "custom_depth",
+        label: "Depth",
+        type: "select",
+        role: "reasoning",
+        options: [{ id: "deep", label: "Deep" }],
+      },
     ],
   };
   expect(getExplicitModelEffortLabel(selection, caps)).toBeUndefined();
@@ -68,6 +75,24 @@ it("names only explicitly saved effort, including provider-defined reasoning ids
       caps,
     ),
   ).toBe("Fast");
+  expect(
+    getExplicitModelEffortLabel(
+      { ...selection, options: [{ id: "custom_depth", value: "deep" }] },
+      caps,
+    ),
+  ).toBe("Deep");
+  expect(
+    getExplicitModelEffortLabel({
+      ...selection,
+      options: [{ id: "thought_level", value: "high" }],
+    }),
+  ).toBe("high");
+  expect(
+    getExplicitModelEffortLabel({
+      ...selection,
+      options: [{ id: "reasoning_effort", value: "high" }],
+    }),
+  ).toBe("high");
   expect(
     getExplicitModelEffortLabel({ ...selection, options: [{ id: "effort", value: "max" }] }),
   ).toBe("max");
@@ -500,6 +525,23 @@ describe("supersededModelVersions", () => {
       "grok-4.20-multi-agent": "grok-4.7",
       "grok-4.20-multi-agent-0309": "grok-4.7",
       "grok-4.3": "grok-4.7",
+    });
+  });
+
+  it("reads a trailing effort as a mode of the release", () => {
+    const superseded = supersededModelVersions([
+      "swe-2-high",
+      "swe-2-flash-medium",
+      "swe-1-7-medium",
+      "swe-1-6",
+      "gemini-3.8-flash-high",
+      "gemini-3.8-flash-low",
+      "qwen3-max",
+      "qwen3.5",
+    ]);
+    expect(Object.fromEntries(superseded)).toEqual({
+      "swe-1-7-medium": "swe-2-high",
+      "swe-1-6": "swe-2-high",
     });
   });
 

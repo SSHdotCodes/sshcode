@@ -33,6 +33,10 @@ export const MODEL_GENERATION_RULES: Readonly<Record<string, ModelGenerationRule
     unnumbered: "1",
   },
   glm: { pattern: /\bglm[- ]?(?<generation>\d+(?:[.-]\d{1,2}(?![\dbk]))?)/i },
+  // Cognition's SWE models in Devin: SWE-2 retires SWE-1.7 and SWE-1.6 in every tier
+  // (`swe-1-7-medium` is SWE-1.7 at medium effort). Fusion is filed here too and reads
+  // as its SWE sidekick's release.
+  swe: { pattern: /\bswe[- ]?(?<generation>\d+(?:[.-]\d{1,2}(?![\dbk]))?)/i },
   kimi: { pattern: /(?:\bkimi[- ]?(?:k)?|\bmoonshot[- ]?v?|\bk)(?<generation>\d+)/i },
   // `mistral-small-24b` is a size and `mistral-small-2603` a date; the name then says "Mistral Small 4".
   mistral: {

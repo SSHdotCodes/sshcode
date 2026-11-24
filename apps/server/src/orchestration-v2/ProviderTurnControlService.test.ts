@@ -496,3 +496,93 @@ it.effect.each([false, true])(
       assert.equal(error.queueFollowUp, unsupported);
     }),
 );
+
+it.effect.each(["failed", "interrupted", "cancelled"] as const)(
+  "queues a follow-up when a steer fails while its turn ends as %s",
+  (status) =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:ended-mid-steer");
+      const providerSessionId = ProviderSessionId.make("session:ended-mid-steer");
+      const providerThreadId = ProviderThreadId.make("provider-thread:ended-mid-steer");
+      const providerTurnId = ProviderTurnId.make("turn:ended-mid-steer");
+      const attemptId = RunAttemptId.make("attempt:ended-mid-steer");
+      const providerThread = {
+        id: providerThreadId,
+        providerSessionId,
+      } as OrchestrationV2ProviderThread;
+      const projection = makeProjection({
+        now,
+        threadId,
+        providerThread,
+        providerTurnId,
+        attemptId,
+      });
+      const runId = RunId.make("run:ended-mid-steer");
+      const messageId = MessageId.make("message:ended-mid-steer");
+      let sent = false;
+      const layer = ProviderTurnControlService.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({
+              getProviderControlContext: () =>
+                Effect.sync(() => ({
+                  providerThread,
+                  providerTurn: {
+                    ...projection.providerTurns[0]!,
+                    ...(sent ? { status, completedAt: now } : {}),
+                  },
+                  message: {
+                    id: messageId,
+                    threadId,
+                    runId,
+                    text: "follow up",
+                    attachments: [],
+                    role: "user" as const,
+                    createdBy: "user" as const,
+                    creationSource: "web" as const,
+                    streaming: false,
+                    nodeId: null,
+                    createdAt: now,
+                    updatedAt: now,
+                  },
+                  run: { id: runId } as OrchestrationV2ThreadProjection["runs"][number],
+                  attempt: undefined,
+                })),
+            }),
+            Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+              get: () =>
+                Effect.succeed(
+                  Option.some({
+                    steerTurn: () =>
+                      Effect.sync(() => {
+                        sent = true;
+                      }).pipe(
+                        Effect.andThen(
+                          Effect.fail(
+                            new ProviderAdapter.ProviderAdapterSteerRunError({
+                              driver,
+                              providerThreadId,
+                              providerTurnId,
+                              cause: new Error("turn ended during steer"),
+                            }),
+                          ),
+                        ),
+                      ),
+                  } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime),
+                ),
+            }),
+          ),
+        ),
+      );
+      const error = yield* Effect.gen(function* () {
+        const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+        return yield* control
+          .steer({ threadId, providerSessionId, providerThreadId, providerTurnId, messageId })
+          .pipe(Effect.flip);
+      }).pipe(Effect.provide(layer));
+      assert.isTrue(sent);
+      assert.isFalse(error.turnCompleted);
+      assert.isTrue(error.queueFollowUp);
+    }),
+);

@@ -4211,9 +4211,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             turn.providerTurn.id !== steerInput.providerTurnId ||
             turn.interrupted
           ) {
-            return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+            return yield* new ProviderAdapter.ProviderAdapterSteerRunUnsupportedError({
               driver: OPENCODE_PROVIDER,
-              detail: `OpenCode turn ${steerInput.providerTurnId} is not active`,
+              providerThreadId: steerInput.providerThread.id,
             });
           }
           const inboxID = steerPromptId(sessionId, steerInput.message.messageId);

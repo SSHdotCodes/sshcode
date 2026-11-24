@@ -3,9 +3,11 @@ import { useChatBackdropEnabled } from "./useNewChatDashboard";
 import { isWorkflowThread } from "../workflows/workflowVisibility";
 import { useWorkflowComposer } from "../workflows/useWorkflowComposer";
 import {
+  flushComposerEditorInput,
   persistScheduledComposerMessage,
   scheduledComposerMessageReason,
 } from "./scheduledComposerMessage";
+import { clearDraftIfSubmittedTextMatches } from "./sideChatPresentation";
 import { scheduledMessageUnavailableReason } from "@t3tools/client-runtime/scheduled-message";
 import { ScheduleMessageSheet } from "./ScheduleMessageSheet";
 import { serverEnvironment } from "../../state/server";
@@ -30,7 +32,6 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   parseSideChatCommand,
-  resolveProjectProviderInstanceEnabled,
   sideChatKindForDriver,
   type ChatAttachment,
   type EnvironmentId,
@@ -113,6 +114,7 @@ import {
   buildModelOptions,
   groupByProvider,
   isModelSelectionUnavailable,
+  resolveProvidersEnabledForProject,
   useModelListSelection,
 } from "../../lib/modelOptions";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -518,17 +520,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const sendLabel = sendPresentation.label;
   const currentModelSelection = props.selectedThread.modelSelection;
   const planTipProviders = useMemo(
-    () =>
-      props.serverConfig?.providers.map((provider) => ({
-        ...provider,
-        enabled: props.serverConfig?.settings
-          ? resolveProjectProviderInstanceEnabled(
-              props.serverConfig.settings,
-              props.selectedThread.projectId,
-              provider.instanceId,
-            )
-          : provider.enabled,
-      })) ?? [],
+    () => resolveProvidersEnabledForProject(props.serverConfig, props.selectedThread.projectId),
     [props.serverConfig, props.selectedThread.projectId],
   );
   // A chat that already ran is only offered its other account when this one is nearly out:
@@ -752,6 +744,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const scheduleMessage = async (runAt: string, commandId: CommandId) => {
     const unavailable = scheduledMessageUnavailableReason(props.serverConfig);
     if (unavailable) throw new Error(unavailable);
+    await inputRef.current?.flushPendingInput();
     const readPendingWork = () => ({
       pastedTextAttachments: pendingPastedTextAttachmentCountRef.current,
       importingContext: appAtomRegistry.get(composerContextImportsAtom)[composerDraftKey] === true,
@@ -825,13 +818,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         pendingPastedTextAttachmentCountRef.current > 0
       )
         return;
-      if (flushingInputRef.current) return;
-      flushingInputRef.current = true;
-      try {
-        await inputRef.current?.flushPendingInput();
-      } finally {
-        flushingInputRef.current = false;
-      }
+      if (!(await flushComposerEditorInput(inputRef.current, flushingInputRef))) return;
       if (pendingPastedTextAttachmentCountRef.current > 0) return;
       const answer = pendingAnswerRef.current;
       if (answer) {
@@ -845,7 +832,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       if (
         usageLimitsOffered &&
         isUsageLimitsCommand(outgoingDraft.text) &&
-        props.draftAttachments.length === 0
+        outgoingDraft.attachments.length === 0
       ) {
         if (openUsageLimits()) onChangeDraftMessage("");
         return;
@@ -872,8 +859,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             threadId: String(props.selectedThread.id),
             kind: sideChat.kind,
           });
-          if (getComposerDraftSnapshot(threadKey).text === props.draftMessage)
-            onChangeDraftMessage("");
+          clearDraftIfSubmittedTextMatches({
+            currentText: getComposerDraftSnapshot(threadKey).text,
+            submittedText: outgoingDraft.text,
+            clear: () => onChangeDraftMessage(""),
+          });
         } catch (error) {
           Alert.alert(
             "Could not save the side question",
@@ -1204,7 +1194,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             {!isExpanded ? (
               <ComposerAttachmentButton
                 disabled={isSubmissionLocked}
-                onScheduleMessage={() => setScheduleOpen(true)}
+                onScheduleMessage={() => {
+                  void Promise.resolve(inputRef.current?.flushPendingInput()).finally(() =>
+                    setScheduleOpen(true),
+                  );
+                }}
                 scheduleUnavailableReason={scheduledMessageUnavailableReason(props.serverConfig)}
                 supportsFiles={Boolean(
                   props.serverConfig?.environment.capabilities.fileAttachments,
@@ -1477,7 +1471,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   <View className="min-w-0 flex-1 flex-row items-center justify-between">
                     <ComposerAttachmentButton
                       disabled={isSubmissionLocked}
-                      onScheduleMessage={() => setScheduleOpen(true)}
+                      onScheduleMessage={() => {
+                        void Promise.resolve(inputRef.current?.flushPendingInput()).finally(() =>
+                          setScheduleOpen(true),
+                        );
+                      }}
                       scheduleUnavailableReason={scheduledMessageUnavailableReason(
                         props.serverConfig,
                       )}

@@ -41,7 +41,20 @@ export function compareReleaseVersions(left: string, right: string): number | nu
   if (a.pre === b.pre) return 0;
   if (a.pre === null) return 1;
   if (b.pre === null) return -1;
-  return a.pre < b.pre ? -1 : 1;
+  const aParts = a.pre.split(".");
+  const bParts = b.pre.split(".");
+  const length = Math.min(aParts.length, bParts.length);
+  for (let index = 0; index < length; index++) {
+    const leftPart = aParts[index]!;
+    const rightPart = bParts[index]!;
+    if (leftPart === rightPart) continue;
+    const leftNumeric = /^\d+$/.test(leftPart);
+    const rightNumeric = /^\d+$/.test(rightPart);
+    if (leftNumeric && rightNumeric) return Math.sign(Number(leftPart) - Number(rightPart));
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+    return leftPart < rightPart ? -1 : 1;
+  }
+  return Math.sign(aParts.length - bParts.length);
 }
 
 /** The feed app-update.yml names: only GitHub releases are read. */
@@ -121,16 +134,19 @@ while kill -0 "$pid" 2>/dev/null; do
   [ "$i" -gt 600 ] && exit 1
   sleep 0.1
 done
-rm -rf "$backup"
-if mv "$app" "$backup"; then
-  if mv "$staged" "$app"; then
-    rm -rf "$backup"
-  else
-    mv "$backup" "$app"
+if [ -d "$staged" ]; then
+  rm -rf "$backup"
+  if mv "$app" "$backup"; then
+    if mv "$staged" "$app"; then
+      rm -rf "$backup"
+    else
+      rm -rf "$app"
+      mv "$backup" "$app"
+    fi
   fi
 fi
 xattr -dr com.apple.quarantine "$app" 2>/dev/null
-open "$app"
+open "$app" || { sleep 1; open -n "$app"; }
 `;
 
 export interface ReleaseDmgUpdaterDeps {
@@ -162,6 +178,24 @@ export class ReleaseUpdateError extends Error {
 
 const USER_AGENT = "SSHCode-Updater";
 
+function isNoSpaceError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const code = (error as { readonly code?: unknown }).code;
+  if (code === "ENOSPC") return true;
+  const message = (error as { readonly message?: unknown }).message;
+  return typeof message === "string" && /no space left on device|\bENOSPC\b/i.test(message);
+}
+
+function toReleaseUpdateError(fallback: string, cause: unknown): ReleaseUpdateError {
+  if (cause instanceof ReleaseUpdateError) return cause;
+  if (isNoSpaceError(cause)) {
+    return new ReleaseUpdateError("Not enough free disk space to download and unpack the update.", {
+      cause,
+    });
+  }
+  return new ReleaseUpdateError(fallback, { cause });
+}
+
 export function createReleaseDmgUpdater(deps: ReleaseDmgUpdaterDeps) {
   const listeners = new Map<string, Set<(...args: Array<unknown>) => void>>();
   const emit = (event: ReleaseDmgEvent, ...args: Array<unknown>) => {
@@ -169,6 +203,7 @@ export function createReleaseDmgUpdater(deps: ReleaseDmgUpdaterDeps) {
   };
   let available: ReleaseCandidate | null = null;
   let downloaded: { readonly version: string; readonly staged: string } | null = null;
+  let downloading = false;
 
   const feed = async () => {
     const raw = await NodeFSP.readFile(deps.appUpdateYmlPath, "utf8").catch(() => null);
@@ -180,10 +215,13 @@ export function createReleaseDmgUpdater(deps: ReleaseDmgUpdaterDeps) {
   const checkForUpdates = async () => {
     emit("checking-for-update");
     const { owner, repo } = await feed();
-    const response = await deps.fetch(
-      `https://api.github.com/repos/${owner}/${repo}/releases/latest`,
-      { headers: { Accept: "application/vnd.github+json", "User-Agent": USER_AGENT } },
-    );
+    const response = await deps
+      .fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`, {
+        headers: { Accept: "application/vnd.github+json", "User-Agent": USER_AGENT },
+      })
+      .catch((cause) => {
+        throw new ReleaseUpdateError("Couldn't reach GitHub to check for updates.", { cause });
+      });
     if (response.status === 404) {
       available = null;
       emit("update-not-available", { version: deps.currentVersion() });
@@ -192,7 +230,10 @@ export function createReleaseDmgUpdater(deps: ReleaseDmgUpdaterDeps) {
     if (!response.ok) {
       throw new ReleaseUpdateError(`GitHub answered ${response.status} when checking for updates.`);
     }
-    const candidate = releaseCandidate(await response.json(), deps.arch);
+    const payload = await response.json().catch((cause) => {
+      throw new ReleaseUpdateError("GitHub returned an unreadable update response.", { cause });
+    });
+    const candidate = releaseCandidate(payload, deps.arch);
     const newer =
       candidate !== null &&
       (compareReleaseVersions(candidate.version, deps.currentVersion()) ?? 0) > 0;
@@ -202,6 +243,13 @@ export function createReleaseDmgUpdater(deps: ReleaseDmgUpdaterDeps) {
       return;
     }
     available = candidate;
+    if (downloaded !== null && downloaded.version !== candidate.version) {
+      const stale = downloaded;
+      downloaded = null;
+      await NodeFSP.rm(NodePath.dirname(stale.staged), { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
     emit("update-available", {
       version: candidate.version,
       releaseNotes: candidate.notes ?? undefined,
@@ -210,20 +258,45 @@ export function createReleaseDmgUpdater(deps: ReleaseDmgUpdaterDeps) {
   };
 
   const download = async (url: string, file: string, size: number | null) => {
-    const response = await deps.fetch(url, { headers: { "User-Agent": USER_AGENT } });
+    const response = await deps
+      .fetch(url, { headers: { "User-Agent": USER_AGENT } })
+      .catch((cause) => {
+        throw new ReleaseUpdateError("Couldn't reach GitHub to download the update.", { cause });
+      });
     if (!response.ok || !response.body) {
       throw new ReleaseUpdateError(`GitHub answered ${response.status} for the update download.`);
     }
-    const total = Number(response.headers.get("content-length")) || size || 0;
+    const headerLength = Number(response.headers.get("content-length"));
+    const expectedLength = Number.isFinite(headerLength) && headerLength > 0 ? headerLength : null;
+    const total = expectedLength ?? size ?? 0;
     const hash = NodeCrypto.createHash("sha256");
-    const out = NodeFS.createWriteStream(file);
+    const handle = await NodeFSP.open(file, "w").catch((cause) => {
+      throw toReleaseUpdateError("Couldn't create the update download file.", cause);
+    });
     let transferred = 0;
     try {
-      for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+      const reader = (response.body as unknown as AsyncIterable<Uint8Array>)[
+        Symbol.asyncIterator
+      ]();
+      while (true) {
+        const next = await reader.next().catch((cause) => {
+          throw new ReleaseUpdateError("The update download was interrupted before it finished.", {
+            cause,
+          });
+        });
+        if (next.done) break;
+        const chunk = next.value;
         hash.update(chunk);
         transferred += chunk.byteLength;
-        if (!out.write(chunk))
-          await new Promise<void>((resolve) => out.once("drain", () => resolve()));
+        let offset = 0;
+        while (offset < chunk.byteLength) {
+          const { bytesWritten } = await handle
+            .write(chunk, offset, chunk.byteLength - offset)
+            .catch((cause) => {
+              throw toReleaseUpdateError("Couldn't write the downloaded update to disk.", cause);
+            });
+          offset += bytesWritten;
+        }
         if (total > 0) {
           emit("download-progress", {
             percent: Math.min(100, (transferred / total) * 100),
@@ -233,9 +306,10 @@ export function createReleaseDmgUpdater(deps: ReleaseDmgUpdaterDeps) {
         }
       }
     } finally {
-      await new Promise<void>((resolve, reject) =>
-        out.end((error?: Error | null) => (error ? reject(error) : resolve())),
-      );
+      await handle.close().catch(() => undefined);
+    }
+    if (expectedLength !== null && transferred !== expectedLength) {
+      throw new ReleaseUpdateError("The update download ended before it finished.");
     }
     return hash.digest("hex");
   };
@@ -246,6 +320,7 @@ export function createReleaseDmgUpdater(deps: ReleaseDmgUpdaterDeps) {
       .then((value) => value.trim());
 
   const downloadUpdate = async () => {
+    if (downloading) throw new ReleaseUpdateError("An update download is already in progress.");
     const release = available;
     if (!release) throw new ReleaseUpdateError("Check for updates before downloading.");
     const target = installTarget(deps.execPath);
@@ -260,75 +335,137 @@ export function createReleaseDmgUpdater(deps: ReleaseDmgUpdaterDeps) {
       );
     }
 
-    const dir = NodePath.join(deps.updatesDir(), release.version);
-    await NodeFSP.rm(deps.updatesDir(), { recursive: true, force: true });
-    await NodeFSP.mkdir(dir, { recursive: true });
-    const dmg = NodePath.join(dir, "update.dmg");
-
-    const shaResponse = await deps.fetch(release.sha256Url, {
-      headers: { "User-Agent": USER_AGENT },
-    });
-    const expected = shaResponse.ok
-      ? ((await shaResponse.text()).trim().split(/\s+/)[0] ?? "").toLowerCase()
-      : "";
-    if (!/^[0-9a-f]{64}$/.test(expected)) {
-      throw new ReleaseUpdateError("The release has no usable SHA-256 checksum.");
-    }
-    const actual = await download(release.dmgUrl, dmg, release.dmgSize);
-    if (actual !== expected) {
-      throw new ReleaseUpdateError("The downloaded update didn't match its published checksum.");
-    }
-
-    const mount = NodePath.join(dir, "mount");
-    const staged = NodePath.join(dir, NodePath.basename(target.app));
-    await NodeFSP.mkdir(mount, { recursive: true });
-    await deps.run("hdiutil", [
-      "attach",
-      dmg,
-      "-nobrowse",
-      "-readonly",
-      "-noautoopen",
-      "-mountpoint",
-      mount,
-    ]);
+    downloading = true;
     try {
-      const bundle = (await NodeFSP.readdir(mount)).find((name) => name.endsWith(".app"));
-      if (!bundle) throw new ReleaseUpdateError("The update's disk image holds no app.");
-      await deps.run("ditto", [NodePath.join(mount, bundle), staged]);
+      const shaResponse = await deps
+        .fetch(release.sha256Url, { headers: { "User-Agent": USER_AGENT } })
+        .catch((cause) => {
+          throw new ReleaseUpdateError("Couldn't reach GitHub for the update checksum.", { cause });
+        });
+      if (!shaResponse.ok) {
+        throw new ReleaseUpdateError(
+          `GitHub answered ${shaResponse.status} for the update checksum.`,
+        );
+      }
+      const expected = ((await shaResponse.text()).trim().split(/\s+/)[0] ?? "").toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(expected)) {
+        throw new ReleaseUpdateError("The release has no usable SHA-256 checksum.");
+      }
+
+      const updatesRoot = deps.updatesDir();
+      const dir = NodePath.join(updatesRoot, release.version);
+      await NodeFSP.rm(dir, { recursive: true, force: true });
+      await NodeFSP.mkdir(dir, { recursive: true }).catch((cause) => {
+        throw toReleaseUpdateError("Couldn't prepare the update folder.", cause);
+      });
+      const dmg = NodePath.join(dir, "update.dmg");
+
+      try {
+        const actual = await download(release.dmgUrl, dmg, release.dmgSize);
+        if (actual !== expected) {
+          throw new ReleaseUpdateError(
+            "The downloaded update didn't match its published checksum.",
+          );
+        }
+
+        const mount = NodePath.join(dir, "mount");
+        const staged = NodePath.join(dir, NodePath.basename(target.app));
+        await NodeFSP.mkdir(mount, { recursive: true });
+        await deps
+          .run("hdiutil", [
+            "attach",
+            dmg,
+            "-nobrowse",
+            "-readonly",
+            "-noautoopen",
+            "-mountpoint",
+            mount,
+          ])
+          .catch((cause) => {
+            throw toReleaseUpdateError("Couldn't open the downloaded disk image.", cause);
+          });
+        try {
+          const bundle = (await NodeFSP.readdir(mount)).find((name) => name.endsWith(".app"));
+          if (!bundle) throw new ReleaseUpdateError("The update's disk image holds no app.");
+          await deps.run("ditto", [NodePath.join(mount, bundle), staged]).catch((cause) => {
+            throw toReleaseUpdateError("Couldn't unpack the downloaded app.", cause);
+          });
+        } finally {
+          await deps
+            .run("hdiutil", ["detach", mount, "-quiet"])
+            .catch(() =>
+              deps.run("hdiutil", ["detach", mount, "-quiet", "-force"]).catch(() => ""),
+            );
+          await NodeFSP.rm(mount, { recursive: true, force: true }).catch(() => undefined);
+        }
+        await deps.run("codesign", ["--verify", "--deep", "--strict", staged]).catch(() => {
+          throw new ReleaseUpdateError("The downloaded app failed its code signature check.");
+        });
+        const [id, currentId, version] = await Promise.all([
+          plistValue(staged, "CFBundleIdentifier"),
+          plistValue(target.app, "CFBundleIdentifier"),
+          plistValue(staged, "CFBundleShortVersionString"),
+        ]).catch((cause) => {
+          throw toReleaseUpdateError("Couldn't verify the downloaded app's version.", cause);
+        });
+        if (id !== currentId || version !== release.version) {
+          throw new ReleaseUpdateError("The downloaded app isn't the expected SSHCode version.");
+        }
+        await NodeFSP.rm(dmg, { force: true });
+        // Drop any older staged versions once the new one is verified on disk.
+        const entries = await NodeFSP.readdir(updatesRoot).catch(() => []);
+        await Promise.all(
+          entries
+            .filter((entry) => entry !== release.version)
+            .map((entry) =>
+              NodeFSP.rm(NodePath.join(updatesRoot, entry), { recursive: true, force: true }).catch(
+                () => undefined,
+              ),
+            ),
+        );
+        downloaded = { version: release.version, staged };
+        emit("update-downloaded", {
+          version: release.version,
+          releaseNotes: release.notes ?? undefined,
+          releaseDate: release.publishedAt ?? undefined,
+        });
+      } catch (error) {
+        await NodeFSP.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+        throw toReleaseUpdateError("Couldn't download and unpack the update.", error);
+      }
     } finally {
-      await deps
-        .run("hdiutil", ["detach", mount, "-quiet"])
-        .catch(() => deps.run("hdiutil", ["detach", mount, "-quiet", "-force"]).catch(() => ""));
-      await NodeFSP.rm(mount, { recursive: true, force: true }).catch(() => undefined);
+      downloading = false;
     }
-    await deps.run("codesign", ["--verify", "--deep", "--strict", staged]).catch(() => {
-      throw new ReleaseUpdateError("The downloaded app failed its code signature check.");
-    });
-    const [id, currentId, version] = await Promise.all([
-      plistValue(staged, "CFBundleIdentifier"),
-      plistValue(target.app, "CFBundleIdentifier"),
-      plistValue(staged, "CFBundleShortVersionString"),
-    ]);
-    if (id !== currentId || version !== release.version) {
-      throw new ReleaseUpdateError("The downloaded app isn't the expected SSHCode version.");
-    }
-    await NodeFSP.rm(dmg, { force: true });
-    downloaded = { version: release.version, staged };
-    emit("update-downloaded", {
-      version: release.version,
-      releaseNotes: release.notes ?? undefined,
-      releaseDate: release.publishedAt ?? undefined,
-    });
   };
 
   const quitAndInstall = () => {
     const ready = downloaded;
     if (!ready) throw new ReleaseUpdateError("No downloaded update to install.");
+    if (!NodeFS.existsSync(ready.staged)) {
+      downloaded = null;
+      throw new ReleaseUpdateError(
+        "The downloaded update is no longer on disk. Download it again.",
+      );
+    }
     const target = installTarget(deps.execPath);
     if ("blocked" in target) throw new ReleaseUpdateError(target.blocked);
-    const script = NodePath.join(deps.updatesDir(), "install.sh");
-    NodeFS.writeFileSync(script, INSTALL_SCRIPT, { mode: 0o755 });
-    const backup = NodePath.join(deps.updatesDir(), "previous.app");
+    try {
+      NodeFS.accessSync(NodePath.dirname(target.app), NodeFS.constants.W_OK);
+      NodeFS.accessSync(target.app, NodeFS.constants.W_OK);
+    } catch {
+      throw new ReleaseUpdateError(
+        `SSHCode can't replace itself in ${NodePath.dirname(target.app)}. Download the new version from GitHub instead.`,
+      );
+    }
+    const updatesRoot = deps.updatesDir();
+    const script = NodePath.join(updatesRoot, "install.sh");
+    try {
+      NodeFS.mkdirSync(updatesRoot, { recursive: true });
+      NodeFS.writeFileSync(script, INSTALL_SCRIPT, { mode: 0o755 });
+    } catch (cause) {
+      throw toReleaseUpdateError("Couldn't prepare the update installer.", cause);
+    }
+    const backup = NodePath.join(updatesRoot, "previous.app");
     deps.spawnDetached("/bin/sh", [script, String(deps.pid), target.app, ready.staged, backup]);
     deps.quit();
   };

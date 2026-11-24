@@ -74,7 +74,7 @@ export function providerDisplayLabel(provider: {
  * from there, not from a snapshot another project may be keeping alive.
  */
 function isProviderEnabledForProject(
-  config: T3ServerConfig | null | undefined,
+  config: Pick<T3ServerConfig, "settings"> | null | undefined,
   provider:
     | { readonly instanceId: ModelSelection["instanceId"]; readonly enabled: boolean }
     | undefined,
@@ -86,6 +86,20 @@ function isProviderEnabledForProject(
   return config?.settings
     ? resolveProjectProviderInstanceEnabled(config.settings, projectId, provider.instanceId)
     : provider.enabled;
+}
+
+/** Resolve each provider's effective `enabled` flag for `projectId`, matching server enforcement. */
+export function resolveProvidersEnabledForProject(
+  config: Pick<T3ServerConfig, "providers" | "settings"> | null | undefined,
+  projectId: ProjectId | null,
+): ReadonlyArray<T3ServerConfig["providers"][number]> {
+  if (!config) {
+    return [];
+  }
+  return config.providers.map((provider) => ({
+    ...provider,
+    enabled: isProviderEnabledForProject(config, provider, projectId),
+  }));
 }
 
 /**

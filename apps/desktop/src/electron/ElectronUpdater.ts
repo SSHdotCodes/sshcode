@@ -92,6 +92,8 @@ export class ElectronUpdater extends Context.Service<
       eventName: string,
       listener: (...args: Args) => void,
     ) => Effect.Effect<void, never, Scope.Scope>;
+    /** True when the updater follows a single release feed instead of stable/nightly channels. */
+    readonly singleChannel?: boolean;
   }
 >()("@t3tools/desktop/electron/ElectronUpdater") {}
 

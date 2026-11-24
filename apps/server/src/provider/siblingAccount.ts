@@ -64,7 +64,10 @@ export function preferSiblingAccount(input: {
     )?.displayName ?? id;
   const reason = unseenLimit
     ? `${nameOf(current.instanceId)} reached its usage limit`
-    : accountPickReason(pick, nameOf);
+    : (accountPickReason(pick, nameOf) ??
+      (current.auth.status === "unauthenticated"
+        ? `${nameOf(current.instanceId)} is signed out`
+        : null));
   return {
     provider,
     notice: `Started on ${nameOf(instanceId)}${reason === null ? "" : `: ${reason}`}.`,

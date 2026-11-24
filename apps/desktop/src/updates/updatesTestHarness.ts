@@ -41,6 +41,7 @@ export interface UpdatesHarnessOptions {
   readonly packageType?: string | undefined;
   /** Contents of the install record a previous run left behind. */
   readonly installRecord?: string | undefined;
+  readonly updaterLayer?: Layer.Layer<ElectronUpdater.ElectronUpdater>;
 }
 
 export function makeHarness(options: UpdatesHarnessOptions = {}) {
@@ -258,7 +259,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
         flushMainWindowBounds: options.flushMainWindowBounds ?? Effect.void,
       }),
     ),
-    Layer.provideMerge(layerUpdater),
+    Layer.provideMerge(options.updaterLayer ?? layerUpdater),
     Layer.provideMerge(layerWindow),
     Layer.provideMerge(layerBackend),
     Layer.provideMerge(DesktopState.layer),

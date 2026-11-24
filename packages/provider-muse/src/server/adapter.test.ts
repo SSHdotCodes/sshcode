@@ -1278,8 +1278,8 @@ describe("MuseAdapterV2", () => {
         providerThread: harness.providerThread,
         providerTurnId: ProviderTurnId.make("unrelated-turn"),
         message: input.message,
-      }).pipe(Effect.exit);
-      assert.strictEqual(invalid._tag, "Failure");
+      }).pipe(Effect.flip);
+      assert.strictEqual(invalid._tag, "ProviderAdapterSteerRunUnsupportedError");
       assert.isFalse(fake.calls.some((call) => call.method === "turn/steer"));
       yield* harness.runtime.steerTurn!({
         threadId: THREAD_ID,

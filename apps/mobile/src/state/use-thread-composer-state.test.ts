@@ -4,6 +4,7 @@ import {
   EnvironmentId,
   MessageId,
   NodeId,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   RunId,
   ProviderInstanceId,
   TurnItemId,
@@ -198,8 +199,10 @@ vi.mock("./use-composer-drafts", async () => {
     updateComposerDraftSettings: state.updateSettings,
     ensureComposerDraftsLoaded: () => {},
     scheduleUnusedComposerAttachmentCleanup: () => {},
-    appendComposerDraftAttachments: vi.fn(),
+    appendComposerDraftAttachments: vi.fn(() => 0),
     appendComposerDraftText: vi.fn(),
+    captureComposerDraftInsertion: () => ({ text: state.draft.text, start: 0, end: 0 }),
+    countComposerDraftAttachmentsAfterSelection: () => state.draft.attachments.length,
     mergeComposerDraftContent: vi.fn(),
     removeComposerDraftAttachment: vi.fn(),
     useComposerDraft: () => state.draft,
@@ -226,6 +229,9 @@ vi.mock("../lib/modelOptions", async (importOriginal) => ({
 vi.mock("./use-remote-environment-registry", () => ({ setPendingConnectionError: vi.fn() }));
 
 import { useThreadComposerState } from "./use-thread-composer-state";
+import { appendComposerDraftAttachments } from "./use-composer-drafts";
+import { convertPastedImagesToAttachments, pickComposerMedia } from "../lib/composerImages";
+import { setPendingConnectionError } from "./use-remote-environment-registry";
 import { appAtomRegistry } from "./atom-registry";
 import {
   acknowledgedThreadMessagesAtom,
@@ -837,4 +843,109 @@ it("saves Build mode with a pick whose provider cannot use Plan mode", () => {
     state.thread.interactionMode = previousMode;
     state.showInteractionModeToggle = true;
   }
+});
+
+describe("queued edit attachment cap and native paste feedback", () => {
+  it("counts existing queued attachments against the attachment cap when picking media", async () => {
+    state.edit = {
+      runId,
+      messageId: MessageId.make("queued-message"),
+      originalText: "Original message",
+      existingAttachments: Array.from({ length: 8 }, (_, index) => ({
+        type: "image" as const,
+        id: `existing-${index}`,
+        name: `existing-${index}.png`,
+        mimeType: "image/png",
+        sizeBytes: 100,
+      })),
+    };
+    state.draft.attachments = [
+      {
+        id: "new-1",
+        type: "image",
+        name: "new-1.png",
+        mimeType: "image/png",
+        sizeBytes: 100,
+        fileUri: "file:///new-1.png",
+        previewUri: "file:///new-1.png",
+      },
+    ];
+    vi.mocked(pickComposerMedia).mockResolvedValueOnce({ attachments: [], error: null });
+    vi.mocked(appendComposerDraftAttachments).mockClear();
+
+    await useThreadComposerState().onPickDraftMedia("library");
+
+    expect(pickComposerMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingCount: 9,
+      }),
+    );
+    expect(appendComposerDraftAttachments).toHaveBeenCalledWith(
+      expect.any(String),
+      [],
+      expect.objectContaining({
+        maxAttachments: PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 8,
+      }),
+    );
+  });
+
+  it("enforces the remaining cap and surfaces an error when native pasted images are rejected", async () => {
+    state.edit = {
+      runId,
+      messageId: MessageId.make("queued-message"),
+      originalText: "Original message",
+      existingAttachments: Array.from(
+        { length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 1 },
+        (_, index) => ({
+          type: "image" as const,
+          id: `existing-${index}`,
+          name: `existing-${index}.png`,
+          mimeType: "image/png",
+          sizeBytes: 100,
+        }),
+      ),
+    };
+    const pasted = [
+      {
+        id: "paste-1",
+        type: "image" as const,
+        name: "paste-1.png",
+        mimeType: "image/png",
+        sizeBytes: 100,
+        fileUri: "file:///paste-1.png",
+        previewUri: "file:///paste-1.png",
+      },
+      {
+        id: "paste-2",
+        type: "image" as const,
+        name: "paste-2.png",
+        mimeType: "image/png",
+        sizeBytes: 100,
+        fileUri: "file:///paste-2.png",
+        previewUri: "file:///paste-2.png",
+      },
+    ];
+    vi.mocked(convertPastedImagesToAttachments).mockResolvedValueOnce(pasted);
+    vi.mocked(appendComposerDraftAttachments).mockReturnValueOnce(1);
+    vi.mocked(setPendingConnectionError).mockClear();
+
+    await useThreadComposerState().onNativePasteImages(["file:///a.png", "file:///b.png"]);
+
+    expect(convertPastedImagesToAttachments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        uris: ["file:///a.png", "file:///b.png"],
+        existingCount: PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 1,
+      }),
+    );
+    expect(appendComposerDraftAttachments).toHaveBeenCalledWith(
+      expect.any(String),
+      pasted,
+      expect.objectContaining({
+        maxAttachments: 1,
+      }),
+    );
+    expect(setPendingConnectionError).toHaveBeenCalledWith(
+      expect.stringContaining(`up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS}`),
+    );
+  });
 });

@@ -76,7 +76,7 @@ export function orderMakerGroupsByUse(
 }
 
 export const routeOptions = (model: ModelOptionMakerModel) =>
-  model.routes.map((route) => route.source.option);
+  model.routes.flatMap((route) => route.sources.map((source) => source.option));
 
 /** A route's row: the model's shared name, then where it runs. */
 export function routeRowOption(
@@ -120,7 +120,11 @@ export function makerModelRoute(
   account?: ReturnType<typeof accountRouteStep<ModelOptionRoute>>,
 ): ModelRoute<ModelOptionRoute> | null {
   return (
-    (displayed ? model.routes.find((route) => route.source.option.key === displayed.key) : null) ??
+    (displayed
+      ? model.routes.find((route) =>
+          route.sources.some((source) => source.option.key === displayed.key),
+        )
+      : null) ??
     defaultModelRoute(model, {
       lastUsed: memory[model.key],
       isAvailable: (route) => !route.source.option.isUnavailable && !route.source.option.isHidden,

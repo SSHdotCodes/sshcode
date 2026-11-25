@@ -122,8 +122,10 @@ describe("running tool status line", () => {
       expandedWorkGroupIds: new Set(),
     }).find((row) => row.id === "live-activity-row");
 
-  it("doesn't repeat a running tool its own row already names above a card", () => {
-    expect(statusLine([search("ssh", true), card])).toBeUndefined();
+  it("keeps a plain live row below a card without repeating the tool its own row names", () => {
+    const row = statusLine([search("ssh", true), card]);
+    expect(row).toMatchObject({ kind: "thinking" });
+    expect(row).not.toHaveProperty("runningToolLabel");
   });
 });
 

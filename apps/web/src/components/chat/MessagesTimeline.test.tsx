@@ -731,12 +731,12 @@ describe("MessagesTimeline", () => {
       );
 
       await act(() => render(true, false));
-      // The group row already says "Running ssh": no second line at the bottom.
+      // The group row already says "Running ssh". Below newer text the bottom keeps a plain
+      // live line, so a turn still at work never looks finished, without naming ssh twice.
       expect(host.querySelector('[data-timeline-row-id="work-live:git"]')?.textContent).toContain(
         "Running ssh",
       );
-      expect(liveSlot()).toBeNull();
-      expect(host.textContent).not.toContain("Thinking…");
+      expect(liveSlot()?.textContent).toBe("Thinking…");
 
       await act(() => render(false, false));
       expect(liveSlot()?.textContent).toBe("Thinking…");

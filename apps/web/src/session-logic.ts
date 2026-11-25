@@ -1169,7 +1169,12 @@ export function derivePhase(runtime: ThreadRuntimeSummary | null): SessionPhase 
     runtime.status === "queued"
   )
     return "connecting";
-  if (runtime.status === "running" || runtime.status === "waiting") return "running";
+  if (
+    runtime.status === "running" ||
+    runtime.status === "waiting" ||
+    (runtime.status === "idle" && threadRuntimeHasInterruptibleRun(runtime))
+  )
+    return "running";
   return "ready";
 }
 

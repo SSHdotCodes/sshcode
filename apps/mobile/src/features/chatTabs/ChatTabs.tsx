@@ -119,8 +119,8 @@ export function HomeChatTabs(props: {
             }
             onPress={() => props.onSelect(chip.key)}
             className={cn(
-              "h-8 flex-row items-center gap-1.5 rounded-full px-3.5 active:opacity-70",
-              selected ? "bg-subtle-strong" : "bg-subtle",
+              "h-8 flex-row items-center gap-1.5 rounded-full border px-3.5 active:opacity-70",
+              selected ? "border-border bg-grouped-card" : "border-transparent bg-subtle",
             )}
           >
             <Text

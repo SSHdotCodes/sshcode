@@ -71,7 +71,9 @@ import {
   composerAttachmentsStillUploading,
   composerAttachmentUploadsAtom,
 } from "../../state/composer-attachment-uploads";
+import * as Haptics from "expo-haptics";
 import Animated, {
+  Easing,
   FadeIn,
   FadeOut,
   type LayoutAnimationFunction,
@@ -260,7 +262,8 @@ export interface ThreadComposerProps {
 // KeyboardStickyView (frame-synced to the IME), and a time-based morph
 // running alongside that translate reads as jitter. Snapping the layout and
 // letting the keyboard-synced slide be the only motion looks native there.
-export const COMPOSER_TRANSITION_DURATION_MS = 220;
+export const COMPOSER_TRANSITION_DURATION_MS = 200;
+const COMPOSER_MORPH_EASING = Easing.out(Easing.cubic);
 // Side panes already animate the dock's width. Nested horizontal layout
 // transitions would leave the surface trailing its toolbar's new position.
 // Keep the vertical pill/card morph while horizontal layout follows the dock.
@@ -268,6 +271,7 @@ const composerHeightTransition: LayoutAnimationFunction = (values) => {
   "worklet";
   const timing = {
     duration: COMPOSER_TRANSITION_DURATION_MS,
+    easing: COMPOSER_MORPH_EASING,
     reduceMotion: ReduceMotion.System,
   };
   return {
@@ -290,8 +294,9 @@ export const COMPOSER_LAYOUT_TRANSITION =
 
 const COMPOSER_ATTACHMENT_ENTERING =
   Platform.OS === "android"
-    ? FadeIn.duration(160)
-    : FadeIn.delay(COMPOSER_TRANSITION_DURATION_MS).duration(160).reduceMotion(ReduceMotion.System);
+    ? FadeIn.duration(150).reduceMotion(ReduceMotion.System)
+    : FadeIn.delay(100).duration(150).reduceMotion(ReduceMotion.System);
+const COMPOSER_ATTACHMENT_EXITING = FadeOut.duration(120).reduceMotion(ReduceMotion.System);
 
 const AnimatedGlassSurface = Animated.createAnimatedComponent(GlassSurface);
 
@@ -372,6 +377,7 @@ export function ComposerSurface(props: {
     animatedBorderRadius.value = shouldAnimate
       ? withTiming(targetBorderRadius, {
           duration: COMPOSER_TRANSITION_DURATION_MS,
+          easing: COMPOSER_MORPH_EASING,
           reduceMotion: ReduceMotion.System,
         })
       : targetBorderRadius;
@@ -1049,12 +1055,19 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
   // The door to the Agents view, which also holds New subagent and the Subagents switch.
   const onOpenAgents = () => {
+    void Promise.resolve(Haptics.selectionAsync()).catch(() => undefined);
     Keyboard.dismiss();
     navigation.navigate("ThreadAgents", {
       environmentId: props.environmentId,
       threadId: props.selectedThread.id,
     });
   };
+  const handleStopThread = useCallback(() => {
+    void Promise.resolve(Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)).catch(
+      () => undefined,
+    );
+    props.onStopThread();
+  }, [props.onStopThread]);
   return (
     <Animated.View
       className="px-[12px]"
@@ -1233,7 +1246,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               <Animated.View
                 className="px-[14px] pb-2.5"
                 entering={COMPOSER_ATTACHMENT_ENTERING}
-                exiting={FadeOut.duration(120)}
+                exiting={COMPOSER_ATTACHMENT_EXITING}
               >
                 <ComposerQueuedEditAttachments
                   environmentId={props.environmentId}
@@ -1247,7 +1260,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               <Animated.View
                 className="px-[14px] pb-2.5"
                 entering={COMPOSER_ATTACHMENT_ENTERING}
-                exiting={FadeOut.duration(120)}
+                exiting={COMPOSER_ATTACHMENT_EXITING}
               >
                 <ComposerAttachmentStrip
                   environmentId={props.environmentId}
@@ -1434,7 +1447,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     icon="stop.fill"
                     variant="danger"
                     disabled={!props.canOperateThread}
-                    onPress={props.onStopThread}
+                    onPress={handleStopThread}
                   />
                 ) : (
                   <SendActionButton
@@ -1546,7 +1559,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                       icon="stop.fill"
                       variant="danger"
                       disabled={!props.canOperateThread}
-                      onPress={props.onStopThread}
+                      onPress={handleStopThread}
                     />
                   ) : voicePresentation.showsSend ? (
                     <SendActionButton

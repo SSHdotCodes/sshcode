@@ -990,7 +990,11 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         ...(authMetadata ? authMetadata : {}),
       },
       ...(versionUpgradeMessage ? { message: versionUpgradeMessage } : {}),
-      usageLimits: resetCredits ? { ...usageLimits, resetCredits } : usageLimits,
+      // An API key or Bedrock has no plan limits to read (an instance pointed at local models
+      // runs on a key): leave limits out rather than report a probe that can never succeed.
+      ...(authMetadata?.type === "apiKey" || authMetadata?.type === "bedrock"
+        ? {}
+        : { usageLimits: resetCredits ? { ...usageLimits, resetCredits } : usageLimits }),
     },
   });
 });

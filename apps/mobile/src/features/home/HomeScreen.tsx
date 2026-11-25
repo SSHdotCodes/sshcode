@@ -79,7 +79,7 @@ import { usePendingThreadOrder } from "../../state/thread-order";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { threadListEnvironmentsAtom } from "../../state/presentation";
 import { AppText as Text } from "../../components/AppText";
-import { preloadPhoneThread } from "../../state/threads";
+import { preloadPendingPhoneThread, preloadPhoneThread } from "../../state/threads";
 import { SessionBoxTile } from "../sessionBoxes/SessionBoxTile";
 import { harnessMascotAgentId } from "@t3tools/shared/harnessMascots";
 import {
@@ -447,15 +447,61 @@ function HomeScreenContent(allProps: HomeScreenProps) {
     return () => timers.forEach(clearTimeout);
   }, [checkInsightsInView]);
   const listVisibleMarked = useRef(false);
+  const [visibleRequest, setVisibleRequest] = useState<Pick<
+    EnvironmentThreadShell,
+    "id" | "environmentId"
+  > | null>(null);
   const markListVisible = useCallback<NonNullable<OnViewableItemsChanged<HomeListItem>>>(
     ({ viewableItems }) => {
-      if (listVisibleMarked.current) return;
-      if (!viewableItems.some(({ item }) => item.type === "v2-thread" || item.type === "box-row"))
-        return;
-      listVisibleMarked.current = true;
-      markLoad("home.list.visible");
+      if (
+        !listVisibleMarked.current &&
+        viewableItems.some(({ item }) => item.type === "v2-thread" || item.type === "box-row")
+      ) {
+        listVisibleMarked.current = true;
+        markLoad("home.list.visible");
+      }
+      if (Platform.OS !== "ios" || Platform.isPad) return;
+      let pending: EnvironmentThreadShell | null = null;
+      for (const { item } of viewableItems) {
+        if (item.type === "v2-thread" && item.item.thread.hasPendingUserInput) {
+          pending = item.item.thread;
+        } else if (item.type === "box-row") {
+          pending = item.entries.find(({ thread }) => thread.hasPendingUserInput)?.thread ?? null;
+        }
+        if (pending) break;
+      }
+      setVisibleRequest((current) =>
+        current?.environmentId === pending?.environmentId && current?.id === pending?.id
+          ? current
+          : pending,
+      );
     },
     [],
+  );
+  const pendingEnvironment = visibleRequest?.environmentId;
+  const pendingThread = visibleRequest?.id;
+  const connected = pendingEnvironment && connectionPhases.get(pendingEnvironment) === "connected";
+  const preloadedOnVisit = useRef(false);
+  useFocusEffect(
+    useCallback(() => {
+      preloadedOnVisit.current = false;
+    }, []),
+  );
+  useFocusEffect(
+    useCallback(() => {
+      if (!connected || !pendingEnvironment || !pendingThread) return;
+      if (preloadedOnVisit.current) return;
+      let stop: (() => void) | undefined;
+      // Let a quick scroll or an immediate chat selection win the link.
+      const timer = setTimeout(() => {
+        stop = preloadPendingPhoneThread(pendingEnvironment, pendingThread);
+        if (stop) preloadedOnVisit.current = true;
+      }, 400);
+      return () => {
+        clearTimeout(timer);
+        stop?.();
+      };
+    }, [connected, pendingEnvironment, pendingThread]),
   );
   const searchMode = workspace?.state.tabs.threads.searchMode;
   const restoredOffset = workspace?.state.tabs.threads.scrollOffset;

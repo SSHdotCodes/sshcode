@@ -8,9 +8,9 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 
 const SELECTED_INDICATOR_CLASS =
-  "pointer-events-none absolute right-0 z-10 h-5 w-0.75 rounded-l-full bg-primary transition-[top] duration-200 ease-out";
+  "pointer-events-none absolute right-0 z-10 h-5 w-0.75 rounded-l-full bg-primary transition-[top] duration-180 ease-drawer motion-reduce:transition-none";
 const RAIL_BUTTON_CLASS =
-  "relative isolate flex w-full cursor-pointer aspect-square items-center justify-center rounded-md transition-colors hover:bg-foreground/10 focus-visible:bg-foreground/10 focus-visible:outline-none";
+  "relative isolate flex w-full cursor-pointer aspect-square items-center justify-center rounded-md transition-[background-color,color,scale] duration-100 ease-out motion-reduce:transition-none hover:bg-foreground/10 aria-pressed:bg-foreground/[0.07] active:scale-[0.92] motion-reduce:active:scale-100 focus-visible:bg-foreground/10 focus-visible:outline-none";
 
 /** A rail entry: favorites or one model maker (`maker:<id>`). */
 export type ModelPickerRailSelection = "favorites" | `maker:${string}`;

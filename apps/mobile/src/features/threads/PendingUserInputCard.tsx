@@ -1,11 +1,17 @@
 import { useUiMode } from "../discord/useUiMode";
 import { useAnnounceRequest } from "./use-announce-request";
-import { HarnessMascot } from "../../components/HarnessMascot";
+import {
+  HarnessMascot,
+  HarnessMascotAgentId,
+  HarnessMascotDriver,
+  useHarnessMascotReady,
+} from "../../components/HarnessMascot";
 import { RequestActionButton } from "./RequestActionButton";
 import { QuestionAttachments } from "./QuestionAttachments";
 import type { RuntimeRequestId } from "@t3tools/contracts";
 import type { ThreadUserInputQuestion } from "@t3tools/client-runtime/state/thread-requests";
-import { useCallback, useRef, useState } from "react";
+import { harnessMascotForDriver } from "@t3tools/shared/harnessMascots";
+import { use, useCallback, useRef, useState } from "react";
 import {
   Platform,
   Pressable,
@@ -127,6 +133,10 @@ function QuestionText(props: { readonly markdown: string }) {
 export function PendingUserInputCard(props: PendingUserInputCardProps) {
   const [uiMode] = useUiMode();
   const discord = uiMode === "discord";
+  const mascotDriver = use(HarnessMascotDriver);
+  const mascotAgentId = use(HarnessMascotAgentId);
+  const mascot = harnessMascotForDriver(mascotDriver, mascotAgentId);
+  const mascotReady = useHarnessMascotReady(mascot?.id ?? null);
   const { height: keyboardHeight } = useReanimatedKeyboardAnimation();
   const [footerHeight, setFooterHeight] = useState(0);
   const [headerHeight, setHeaderHeight] = useState(0);
@@ -259,7 +269,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
         onPress={props.onToggleCollapsed}
         className="min-h-[44px] flex-1 flex-row items-center gap-2 active:opacity-70"
       >
-        <HarnessMascot state="waiting" size={24} visible={props.collapsed} />
+        {mascotReady ? <HarnessMascot state="waiting" size={24} visible={props.collapsed} /> : null}
         <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
           {asks ? "Question" : "User input needed"}
         </Text>
@@ -315,11 +325,13 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
           onPress={props.onToggleCollapsed}
           className="min-h-[44px] flex-1 flex-row items-center gap-2"
         >
-          <HarnessMascot state="waiting" size={24} visible={!props.collapsed} />
+          {mascotReady ? (
+            <HarnessMascot state="waiting" size={24} visible={!props.collapsed} />
+          ) : null}
           <Text className="min-w-0 flex-1 font-t3-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
             {eyebrow}
           </Text>
-          <View className="h-8 w-8 items-center justify-center rounded-full bg-subtle-strong">
+          <View className="h-8 w-8 items-center justify-center rounded-full border border-input-border bg-grouped-card">
             <SymbolView
               name="chevron.down"
               size={13}

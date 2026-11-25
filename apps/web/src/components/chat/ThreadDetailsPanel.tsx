@@ -140,7 +140,9 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 />
               ) : null}
 
-              {props.activeProjectScripts ? (
+              {/* Scripts show once a project has some; adding one lives in project settings. */}
+              {props.activeProjectScripts &&
+              (props.activeProjectScripts.length > 0 || fileScripts.length > 0) ? (
                 <ProjectScriptsControl
                   environmentId={props.environmentId}
                   displayMode="panel"
@@ -156,7 +158,8 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             </div>
           </ThreadDetailsSection>
 
-          {props.gitCwd ? (
+          {/* A folder without Git shows no Git section; "Initialize Git" is not a panel action. */}
+          {props.gitCwd && props.isGitRepo ? (
             <ThreadDetailsSection
               headingId="thread-details-version-control-heading"
               title="Version Control"
@@ -164,9 +167,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               separated={density === "full"}
             >
               <div className="flex flex-col">
-                {props.isGitRepo ? (
-                  <BranchToolbar layout="panel" panelSection="branch" {...branchToolbarProps} />
-                ) : null}
+                <BranchToolbar layout="panel" panelSection="branch" {...branchToolbarProps} />
                 {props.activeProjectName ? (
                   <GitActionsControl
                     displayMode="panel"

@@ -1,9 +1,27 @@
+import { Fragment } from "react";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { ExternalLinkIcon } from "lucide-react";
 
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { PullRequestGlyph } from "./pullRequestIcons";
+
+function renderInlineCodeText(text: string) {
+  const parts = text.split(/(`[^`]+`)/g);
+  return parts.map((part, index) => {
+    if (part.length > 2 && part.startsWith("`") && part.endsWith("`")) {
+      return (
+        <code
+          key={`${index}-${part}`}
+          className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground"
+        >
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    return <Fragment key={index}>{part}</Fragment>;
+  });
+}
 
 export function PullRequestsUnavailableState({
   title = "Could not load pull requests",
@@ -27,7 +45,7 @@ export function PullRequestsUnavailableState({
         <EmptyTitle>{title}</EmptyTitle>
         {/* The caller names the fix — update the environment, install gh, sign in — so this
             shows its message rather than trying to infer one from the failure text. */}
-        <EmptyDescription>{error}</EmptyDescription>
+        <EmptyDescription>{renderInlineCodeText(error)}</EmptyDescription>
       </EmptyHeader>
       {onRetry || gitHubUrl ? (
         <div className="flex flex-wrap justify-center gap-2">

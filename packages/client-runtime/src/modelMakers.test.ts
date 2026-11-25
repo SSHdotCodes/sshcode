@@ -205,6 +205,14 @@ describe("groupModelsByMaker", () => {
     ).toEqual(["Nova 2"]);
   });
 
+  it("names Antigravity's orchestrators by the model that runs them", () => {
+    const names = groupModelsByMaker([
+      source("antigravity", "gemini-pro-orchestrator-neon", "Orchestrator (Neon)"),
+      source("antigravity", "gemini-pro-orchestrator", "Orchestrator (Carbon)"),
+    ]).flatMap((group) => group.models.map((entry) => entry.name));
+    expect(names.toSorted()).toEqual(["Carbon Orchestrator", "Neon Orchestrator"]);
+  });
+
   it("files a model by its maker, not the harness serving it", () => {
     expect(labels(model("recursive", "Flint"))).toEqual([
       "Kimi Code · OpenRouter",

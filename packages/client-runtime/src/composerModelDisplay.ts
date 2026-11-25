@@ -15,7 +15,7 @@ const LEVELS = [
   ["ultra", "Ultra", 3],
   ["ultracode", "Ultra", 4],
 ] as const;
-const ACCENTS: Partial<Record<string, string>> = { ultracode: "#E07A50" };
+const ACCENTS: Partial<Record<string, string>> = { ultracode: "#EA8C55" };
 
 /** Picked by typing it into the prompt; the picker no longer offers it. */
 const HIDDEN_CHOICES = new Set(["ultrathink"]);

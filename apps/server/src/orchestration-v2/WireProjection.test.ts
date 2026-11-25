@@ -3,6 +3,7 @@ import {
   ContextHandoffId,
   ProviderThreadId,
   NodeId,
+  PlanId,
   EventId,
   ProjectId,
   ProviderDriverKind,
@@ -68,6 +69,25 @@ const base = {
 };
 
 describe("orchestration V2 wire projection", () => {
+  it("shows a historical Antigravity checklist as a snapshot with unfinished steps", () => {
+    const item = {
+      ...base,
+      type: "todo_list" as const,
+      title: null,
+      status: "running" as const,
+      completedAt: null,
+      nativeItemRef: {
+        driver: ProviderDriverKind.make("antigravity"),
+        nativeId: "turn:plan:default",
+        strength: "weak" as const,
+      },
+      planId: PlanId.make("plan:acp"),
+      steps: [{ id: "acp-step-1", text: "Check the rollout", status: "running" as const }],
+    };
+    const snapshot = { ...item, status: "completed", completedAt: item.updatedAt };
+    expect(projectTurnItemForWire(item)).toEqual(snapshot);
+    expect(projectTurnItemForDetail(item)).toEqual(snapshot);
+  });
   it("keeps copied handoff transcripts out of activity items and live events", () => {
     const item = {
       ...base,

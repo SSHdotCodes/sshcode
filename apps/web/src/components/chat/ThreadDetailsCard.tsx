@@ -184,9 +184,8 @@ export function ThreadDetailsCard({
             // the bar closes: a floating preview below moves up at once and would
             // otherwise overlap the card mid-slide.
             className={cn(
-              "absolute z-20",
-              topInset > 0 &&
-                "transition-[top] duration-150 ease-out motion-reduce:transition-none",
+              "absolute z-20 transition-[opacity,translate,scale] duration-150 ease-drawer starting:opacity-0 starting:translate-x-1.5 starting:scale-98 motion-reduce:transition-none motion-reduce:starting:opacity-100 motion-reduce:starting:translate-x-0 motion-reduce:starting:scale-100",
+              topInset > 0 && "transition-[top,opacity,translate,scale]",
             )}
             style={{
               // Anchored to the right edge like the find bar, so both follow a resizing

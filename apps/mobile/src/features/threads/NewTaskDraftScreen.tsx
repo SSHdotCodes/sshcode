@@ -101,6 +101,7 @@ import { AppText as Text } from "../../components/AppText";
 import { harnessMascotIdentity, harnessThemeDriver } from "@t3tools/shared/harnessThemes";
 import { hasProviderUsageLimits, isUsageLimitsCommand } from "@t3tools/shared/usageLimits";
 import { COMPOSER_LAYOUT_TRANSITION, ComposerSurface } from "./ThreadComposer";
+import { playThreadFeedback } from "./useThreadFeedback";
 import { ProviderCreditNotice } from "./ComposerUsageLimits";
 import { ComposerCommandPopover } from "./ComposerCommandPopover";
 import { useComposerCommandMenu } from "./use-composer-command-menu";
@@ -311,7 +312,10 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
   const insets = useSafeAreaInsets();
   const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
   const { height: windowHeight } = useWindowDimensions();
-  const dashboardHeight = Math.min(340, Math.max(200, windowHeight * 0.4));
+  // Room for the dashboard's cards; it reports the height it really takes.
+  const dashboardRoom = Math.min(440, Math.max(200, windowHeight * 0.46));
+  const [dashboardShownHeight, setDashboardShownHeight] = useState<number | null>(null);
+  const dashboardHeight = dashboardShownHeight ?? Math.min(340, dashboardRoom);
   const controlsBottomPadding = Math.max(insets.bottom, 10);
   const [newChatDashboardEnabled] = useNewChatDashboardEnabled();
   const [autoModelEnabled] = useAutoModelEnabled();
@@ -1901,6 +1905,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
     } finally {
       flow.setSubmitting(false);
     }
+    playThreadFeedback("sent");
     if (!editingPendingTask) {
       // The first message's outcome, recorded like web does once the chat is under way.
       // A chat queued offline is not recorded. Never carries the prompt.
@@ -2634,8 +2639,9 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
           // The Usage card names the account: this chat stays on it.
           if (option) flow.setSelectedModelKey(option.key, selected?.options, true);
         }}
-        maxHeight={dashboardHeight}
+        maxHeight={dashboardRoom}
         bottomInset={controlsBottomPadding}
+        onHeight={setDashboardShownHeight}
       />
     ) : null;
 

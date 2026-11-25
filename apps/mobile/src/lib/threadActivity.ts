@@ -78,6 +78,7 @@ import {
   htmlRenderFromToolItem,
   mcpAppFromToolItem,
 } from "@t3tools/shared/toolOutput";
+import { delegatedTaskHandle } from "@t3tools/shared/delegatedTaskHandle";
 import * as DateTime from "effect/DateTime";
 
 export type PendingApproval = ThreadPendingApproval;
@@ -1022,6 +1023,8 @@ function groupAdjacentActivities(rawEntries: ReadonlyArray<RawThreadFeedEntry>):
     if (item.type !== "subagent" || item.origin !== "app_owned" || item.runId === null) continue;
     const children = childrenByRun.get(item.runId) ?? new Set<string>();
     children.add(item.subagentId);
+    // delegate_task answers with the short handle of the subagent's id.
+    children.add(delegatedTaskHandle(item.subagentId));
     if (item.childThreadId !== null) children.add(item.childThreadId);
     childrenByRun.set(item.runId, children);
   }

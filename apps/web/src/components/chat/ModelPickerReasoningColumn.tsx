@@ -19,7 +19,7 @@ type SelectDescriptor = Extract<ProviderOptionDescriptor, { type: "select" }>;
 export const ModelPickerStackedColumnContext = createContext(false);
 
 const ROW =
-  "flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 rounded-sm px-2 text-left text-sm text-foreground outline-none hover:bg-foreground/[0.09] focus-visible:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-64";
+  "flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 rounded-sm px-2 text-left text-sm text-foreground outline-none transition-[background-color,color,scale] duration-100 ease-out motion-reduce:transition-none hover:bg-foreground/[0.09] active:scale-[0.985] motion-reduce:active:scale-100 focus-visible:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-64 disabled:active:scale-100";
 
 export function LevelRow(props: {
   label: string;
@@ -114,7 +114,7 @@ const EMBERS = [
 
 /** The theme colour, or Ultracode's own warm accent. */
 function effortTone(level: { readonly accent?: string | undefined }) {
-  return level.accent ?? "var(--primary)";
+  return level.accent ?? "var(--effort-accent)";
 }
 
 /**
@@ -141,7 +141,7 @@ function EffortSlider(props: {
   const percent = last > 0 && activeIndex >= 0 ? (100 * activeIndex) / last : 0;
   const fx = active?.fx ?? 0;
   const glow = EFFORT_GLOW[fx] ?? EFFORT_GLOW[0];
-  const tone = active ? effortTone(active) : "var(--primary)";
+  const tone = active ? effortTone(active) : "var(--effort-accent)";
   return (
     <div className={cn("shrink-0 px-1 pt-1 pb-1.5", props.disabled && "opacity-64")}>
       {currentLabel ? (

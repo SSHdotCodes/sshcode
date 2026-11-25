@@ -392,7 +392,17 @@ function useStreamingHaptics(threadId: ThreadId, feed: ReadonlyArray<ThreadFeedE
 const USER_INPUT_TOGGLE_TIMING = {
   duration: USER_INPUT_TOGGLE_DURATION_MS,
   easing: Easing.out(Easing.cubic),
+  reduceMotion: ReduceMotion.System,
 };
+const DETAIL_CARD_EASING = Easing.out(Easing.cubic);
+const DETAIL_CARD_ENTER_QUICK = FadeInDown.duration(180)
+  .easing(DETAIL_CARD_EASING)
+  .reduceMotion(ReduceMotion.System);
+const DETAIL_CARD_EXIT_QUICK = FadeOut.duration(120).reduceMotion(ReduceMotion.System);
+const DETAIL_CARD_ENTER = FadeInDown.duration(200)
+  .easing(DETAIL_CARD_EASING)
+  .reduceMotion(ReduceMotion.System);
+const DETAIL_CARD_EXIT = FadeOut.duration(130).reduceMotion(ReduceMotion.System);
 
 export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: ThreadDetailScreenProps) {
   const usesNativeWorkspaceColumns = useNativeWorkspaceColumnsSupported();
@@ -954,6 +964,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     if (activeUserInputRequestId === null) {
       return;
     }
+    void Promise.resolve(Haptics.selectionAsync()).catch(() => undefined);
     if (userInputCollapsed) {
       // Expanding: card and feed glide start NOW, on the UI thread.
       userInputCardProgress.value = withTiming(1, USER_INPUT_TOGGLE_TIMING);
@@ -1580,8 +1591,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   {props.queuedRunEdit !== null ? (
                     <Animated.View
                       className="shrink-0"
-                      entering={FadeInDown.duration(180)}
-                      exiting={FadeOut.duration(120)}
+                      entering={DETAIL_CARD_ENTER_QUICK}
+                      exiting={DETAIL_CARD_EXIT_QUICK}
                     >
                       <ComposerQueuedEditBanner
                         saving={props.isSavingQueuedEdit}
@@ -1613,8 +1624,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   {composerError !== null ? (
                     <Animated.View
                       className="shrink-0"
-                      entering={FadeInDown.duration(180)}
-                      exiting={FadeOut.duration(120)}
+                      entering={DETAIL_CARD_ENTER_QUICK}
+                      exiting={DETAIL_CARD_EXIT_QUICK}
                     >
                       <ComposerErrorNotice
                         message={composerError}
@@ -1625,8 +1636,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   {usageLimitsReport && activeUserInputRequestId === null ? (
                     <Animated.View
                       className="shrink-0 px-4 pb-3"
-                      entering={FadeInDown.duration(220)}
-                      exiting={FadeOut.duration(140)}
+                      entering={DETAIL_CARD_ENTER}
+                      exiting={DETAIL_CARD_EXIT}
                     >
                       <ComposerUsageLimits
                         report={usageLimitsReport}
@@ -1642,8 +1653,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     <Animated.View
                       className="shrink-0 px-4"
                       style={{ paddingBottom: composerBottomInset }}
-                      entering={FadeInDown.duration(220)}
-                      exiting={FadeOut.duration(140)}
+                      entering={DETAIL_CARD_ENTER}
+                      exiting={DETAIL_CARD_EXIT}
                     >
                       <ThreadCreationFailedCard
                         reason={props.creationState.reason}
@@ -1655,8 +1666,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   (props.activePendingUserInput && !parentAnswersQuestion) ? (
                     <Animated.View
                       className="shrink-0 gap-3 px-4 pb-3"
-                      entering={FadeInDown.duration(220)}
-                      exiting={FadeOut.duration(140)}
+                      entering={DETAIL_CARD_ENTER}
+                      exiting={DETAIL_CARD_EXIT}
                     >
                       {props.activePendingApproval ? (
                         <PendingApprovalCard

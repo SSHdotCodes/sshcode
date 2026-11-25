@@ -74,8 +74,7 @@ import { NewSubagentControl } from "./NewSubagentControl";
 import { ThreadRelationshipIcon, threadRelationshipStatusLabel } from "./ThreadRelationshipIcon";
 import { ThreadLineageWorkflowRow } from "./ThreadLineageWorkflowRow";
 
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
-import { Switch } from "../ui/switch";
+import { Menu, MenuCheckboxItem, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import { requestConfirmDialog } from "../../confirmDialog";
@@ -127,7 +126,7 @@ export function ThreadLineageRowList(props: {
         <button
           type="button"
           onClick={props.onShowMore}
-          className={`flex h-8 w-full cursor-pointer items-center rounded-lg ${THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS} text-sm font-medium text-muted-foreground/70 hover:bg-black/[0.055] hover:text-foreground/80 dark:hover:bg-white/[0.075]`}
+          className={`flex h-8 w-full cursor-pointer items-center rounded-lg ${THREAD_DETAILS_PANEL_ROW_CONTENT_CLASS} text-sm font-medium text-muted-foreground/70 transition-[background-color,color,scale] duration-100 ease-out motion-reduce:transition-none hover:bg-black/[0.055] hover:text-foreground/80 active:scale-[0.99] motion-reduce:active:scale-100 dark:hover:bg-white/[0.075]`}
         >
           <PlusIcon aria-hidden className="size-4 shrink-0" />
           Show {Math.min(props.hiddenCount, THREAD_LINEAGE_PAGE_COUNT)} more
@@ -169,12 +168,20 @@ function ThreadLineageGroup(props: {
         </CollapsibleSectionHeader>
       ) : null}
       {expanded ? (
-        <ThreadLineageRowList
-          hiddenCount={hiddenCount}
-          onShowMore={() => setVisibleCount((count) => count + THREAD_LINEAGE_PAGE_COUNT)}
+        <div
+          className={
+            props.label
+              ? "transition-[opacity,translate] duration-140 ease-drawer starting:opacity-0 starting:-translate-y-1 motion-reduce:transition-none motion-reduce:starting:opacity-100 motion-reduce:starting:translate-y-0"
+              : undefined
+          }
         >
-          {props.children(visibleRows)}
-        </ThreadLineageRowList>
+          <ThreadLineageRowList
+            hiddenCount={hiddenCount}
+            onShowMore={() => setVisibleCount((count) => count + THREAD_LINEAGE_PAGE_COUNT)}
+          >
+            {props.children(visibleRows)}
+          </ThreadLineageRowList>
+        </div>
       ) : null}
     </div>
   );
@@ -377,7 +384,7 @@ export function ThreadRelationshipsPanel(props: {
       />
     ) : null;
 
-  // The chat's subagents switch lives here, small: it is rarely touched.
+  // The chat's subagents switch is rarely touched: it lives in the section's menu.
   const currentShell = threadShells.find(
     (thread) => thread.environmentId === props.environmentId && thread.id === props.threadId,
   );
@@ -387,21 +394,19 @@ export function ThreadRelationshipsPanel(props: {
       environmentId: props.environmentId,
       input: { action: "subagents", threadId: props.threadId, enabled },
     });
-  const subagentsSwitch =
-    canOperateChat && currentShell !== undefined ? (
-      <label className="ms-auto flex shrink-0 cursor-pointer items-center gap-2 pe-1 text-xs text-muted-foreground/70">
-        Subagents
-        <Switch
-          size="sm"
-          checked={subagentsEnabled}
-          onCheckedChange={(checked) =>
-            subagentsToggleNeedsConfirm(checked)
-              ? setSubagentsOffConfirmOpen(true)
-              : setSubagents(checked)
-          }
-        />
-      </label>
-    ) : null;
+  const canToggleSubagents = canOperateChat && currentShell !== undefined;
+  const subagentsSwitch = canToggleSubagents ? (
+    <MenuCheckboxItem
+      checked={subagentsEnabled}
+      onCheckedChange={(checked) =>
+        subagentsToggleNeedsConfirm(checked)
+          ? setSubagentsOffConfirmOpen(true)
+          : setSubagents(checked)
+      }
+    >
+      Subagents
+    </MenuCheckboxItem>
+  ) : null;
 
   if (
     relationshipRows.length === 0 &&
@@ -510,7 +515,7 @@ export function ThreadRelationshipsPanel(props: {
       title={runningCount > 0 ? `Lineage · ${runningCount} running` : "Lineage"}
       data-thread-relationships-panel
       actions={
-        canDetach ? (
+        canDetach || subagentsSwitch !== null ? (
           <Menu>
             <MenuTrigger
               render={
@@ -518,7 +523,7 @@ export function ThreadRelationshipsPanel(props: {
                   size="icon-xs"
                   variant="ghost"
                   part="icon"
-                  aria-label="More chat actions"
+                  aria-label="Lineage options"
                   disabled={busyAction !== null}
                 />
               }
@@ -526,10 +531,13 @@ export function ThreadRelationshipsPanel(props: {
               <MoreHorizontalIcon className="size-3.5" />
             </MenuTrigger>
             <MenuPopup align="end" className="min-w-60 max-w-(--available-width)">
-              <MenuItem onClick={() => void detach()}>
-                <UnplugIcon className="size-3.5" />
-                Disconnect agent
-              </MenuItem>
+              {subagentsSwitch}
+              {canDetach ? (
+                <MenuItem onClick={() => void detach()}>
+                  <UnplugIcon className="size-3.5" />
+                  Disconnect agent
+                </MenuItem>
+              ) : null}
             </MenuPopup>
           </Menu>
         ) : null
@@ -816,10 +824,14 @@ export function ThreadRelationshipsPanel(props: {
           }
         </ThreadLineageGroup>
       ))}
-      {/* One quiet last line: start a subagent yourself, and the chat's switch. */}
+      {/* One quiet last line: start a subagent yourself; says so when the chat's switch is off. */}
       <div className="flex items-center gap-2">
         {newSubagent === null ? null : <div className="min-w-0 flex-1">{newSubagent}</div>}
-        {subagentsSwitch}
+        {canToggleSubagents && !subagentsEnabled ? (
+          <span className="ms-auto shrink-0 pe-1 text-xs text-muted-foreground/70">
+            Subagents off
+          </span>
+        ) : null}
       </div>
       {subagentsOffConfirmOpen ? (
         <SubagentsOffDialog

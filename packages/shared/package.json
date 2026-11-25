@@ -235,6 +235,10 @@
       "types": "./src/dpop.ts",
       "import": "./src/dpop.ts"
     },
+    "./delegatedTaskHandle": {
+      "types": "./src/delegatedTaskHandle.ts",
+      "import": "./src/delegatedTaskHandle.ts"
+    },
     "./desktopBootstrapToken": {
       "types": "./src/desktopBootstrapToken.ts",
       "import": "./src/desktopBootstrapToken.ts"

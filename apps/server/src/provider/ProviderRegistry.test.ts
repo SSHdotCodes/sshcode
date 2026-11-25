@@ -4567,6 +4567,8 @@ it.layer(
         assert.strictEqual(status.auth.status, "authenticated");
         assert.strictEqual(status.auth.type, "apiKey");
         assert.strictEqual(status.auth.label, "Claude API Key");
+        // A key has no plan limits, so Usage never lists it as "Could not read limits".
+        assert.strictEqual(status.usageLimits, undefined);
       }).pipe(
         Effect.provide(
           layerMockSpawner((args) => {

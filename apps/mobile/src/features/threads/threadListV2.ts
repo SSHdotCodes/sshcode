@@ -23,6 +23,7 @@ import {
 } from "@t3tools/client-runtime/connection";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
+import { presentBackgroundWaitInThreadRow } from "@t3tools/client-runtime/state/thread-execution";
 import { longRunningFactsForShell, pinnedWaitingLine } from "@t3tools/shared/chatControls";
 import {
   type EnvironmentThreadSearchMatch,
@@ -214,6 +215,16 @@ function longRunningRowFacts(thread: EnvironmentThreadShell, nowMs: number) {
     workingStartedAt: resolveThreadWorkingStartedAt(thread),
     nowMs,
   });
+}
+
+function threadRowWaitingLine(thread: EnvironmentThreadShell, nowMs: number): string | null {
+  const facts = longRunningRowFacts(thread, nowMs);
+  if (facts.needsYou || facts.working) return null;
+  return (
+    (thread.runtime?.status === "idle"
+      ? presentBackgroundWaitInThreadRow(thread.pendingBackgroundTasks)
+      : null) ?? pinnedWaitingLine(facts)
+  );
 }
 
 /** Most recently active first. The shell's activity instant leads the row's updated time. */
@@ -845,10 +856,7 @@ export function buildThreadListV2Items(input: {
     const items = [...ranked, ...[...flags.keys()].filter((thread) => !found.has(thread))].map(
       (thread) => {
         const item = flags.get(thread)!;
-        const line =
-          item.settled || item.snoozed
-            ? null
-            : pinnedWaitingLine(longRunningRowFacts(thread, nowMs));
+        const line = item.settled || item.snoozed ? null : threadRowWaitingLine(thread, nowMs);
         return line === null ? item : { ...item, longRunningStatus: line };
       },
     );
@@ -880,7 +888,7 @@ export function buildThreadListV2Items(input: {
 
   // Pinned and main-list rows say what they have out (monitors, subagents, a next run).
   const waiting = (thread: EnvironmentThreadShell) => {
-    const line = pinnedWaitingLine(longRunningRowFacts(thread, nowMs));
+    const line = threadRowWaitingLine(thread, nowMs);
     return line === null ? {} : { longRunningStatus: line };
   };
   const items: ThreadListV2Item[] = [];

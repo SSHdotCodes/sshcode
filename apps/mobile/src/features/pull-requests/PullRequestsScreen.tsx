@@ -40,6 +40,21 @@ import { useDebouncedValue } from "../../state/queries";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { useAndroidWorkspaceSelection } from "../workspace/useAndroidWorkspaceSelection";
 
+function renderInlineCode(text: string) {
+  if (!text.includes("`")) return text;
+  const segments = text.split(/(`[^`]+`)/g);
+  return segments.map((segment, index) => {
+    if (segment.startsWith("`") && segment.endsWith("`") && segment.length > 2) {
+      return (
+        <Text key={`${index}-${segment}`} className="font-mono text-foreground">
+          {segment.slice(1, -1)}
+        </Text>
+      );
+    }
+    return segment;
+  });
+}
+
 function PullRequestScrollView(props: ScrollViewProps) {
   const insets = useSafeAreaInsets();
   return (
@@ -305,12 +320,14 @@ export function PullRequestsScreen(
             {/* With nothing listed, the empty state already says what failed. */}
             {result.data?.errors.length && entries.length > 0 ? (
               <Text className="px-4 py-3 text-sm text-foreground-muted">
-                {result.data.errors
-                  .map(
-                    (error) =>
-                      `${error.projectTitle || environments.find((environment) => environment.environmentId === error.environmentId)?.environmentLabel || "Environment"}: ${error.message}`,
-                  )
-                  .join("\n")}
+                {renderInlineCode(
+                  result.data.errors
+                    .map(
+                      (error) =>
+                        `${error.projectTitle || environments.find((environment) => environment.environmentId === error.environmentId)?.environmentLabel || "Environment"}: ${error.message}`,
+                    )
+                    .join("\n"),
+                )}
               </Text>
             ) : null}
           </>
@@ -357,12 +374,13 @@ export function PullRequestsScreen(
                         : "Connect an environment"
                 }
                 detail={
-                  result.error ??
-                  (targets.length && connectedTargets.length === 0
-                    ? "Reconnect to load pull requests that aren't saved on this device."
-                    : targets.length
-                      ? "Pull requests you open, review or are asked to review on GitHub show here."
-                      : "Add an environment in Settings to browse its pull requests.")
+                  result.error
+                    ? renderInlineCode(result.error)
+                    : targets.length && connectedTargets.length === 0
+                      ? "Reconnect to load pull requests that aren't saved on this device."
+                      : targets.length
+                        ? "Pull requests you open, review or are asked to review on GitHub show here."
+                        : "Add an environment in Settings to browse its pull requests."
                 }
                 variant="plain"
               />

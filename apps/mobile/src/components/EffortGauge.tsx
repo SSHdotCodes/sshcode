@@ -13,7 +13,8 @@ const SCALE = 1.15;
 export function EffortGauge(props: { readonly effort: EffortDisplay }) {
   const { effort } = props;
   const gauge = effortGauge(effort);
-  const primary = StyleSheet.flatten(useResolveClassNames("bg-primary"))?.backgroundColor;
+  // The text-weight accent: a thin line in the solid action colour reads too red in warm looks.
+  const primary = StyleSheet.flatten(useResolveClassNames("text-primary-text"))?.color;
   const muted = StyleSheet.flatten(useResolveClassNames("bg-foreground-muted"))?.backgroundColor;
   const tone = effort.accent ?? (typeof primary === "string" ? primary : "#346BF1");
   const glow = effort.fx >= 3;

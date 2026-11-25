@@ -92,7 +92,7 @@ export function SharedKeysSettings({
     >
       {entries.length === 0 && !adding ? (
         <SettingsRow
-          title="No shared keys."
+          title="No shared keys"
           description="Add an API key once, then pick it in any provider's variables instead of pasting it again."
         />
       ) : null}

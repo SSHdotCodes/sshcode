@@ -300,6 +300,11 @@ function summarizeDynamicValue(value: unknown): unknown {
 export function projectTurnItemForWire(item: OrchestrationV2TurnItem): OrchestrationV2TurnItem {
   if (item.type === "subagent") item = projectSubagentActivity(item);
   switch (item.type) {
+    case "todo_list":
+      // Older Antigravity checklists used the step's progress as the snapshot's status.
+      return item.nativeItemRef?.driver === "antigravity" && item.status === "running"
+        ? { ...item, status: "completed", completedAt: item.updatedAt }
+        : item;
     case "handoff": {
       const { summary: _summary, ...projected } = item;
       return projected;
@@ -442,6 +447,7 @@ export function projectTurnItemForDetail(item: OrchestrationV2TurnItem): Orchest
       };
     case "handoff":
     case "file_change":
+    case "todo_list":
       return projectTurnItemForWire(item);
     default:
       return item;

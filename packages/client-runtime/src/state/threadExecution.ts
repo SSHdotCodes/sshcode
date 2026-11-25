@@ -349,6 +349,7 @@ export function deriveThreadRuntime(
   return {
     status: usageLimitedRun ? "failed" : parkAtIdle ? "idle" : (activityRun?.status ?? "idle"),
     activeRunId,
+    ...(parkAtIdle && activeRunId !== null ? { waitingOnBackgroundWork: true as const } : {}),
     activityStartedAt:
       parkAtIdle || liveActivityRun === null
         ? null
@@ -406,7 +407,7 @@ export function threadRuntimeHasInterruptibleRun(
   );
 }
 
-type BackgroundWorkKind = OrchestrationV2PendingBackgroundTask["kind"];
+type BackgroundWorkKind = OrchestrationV2PendingBackgroundTask["kind"] | "timer";
 
 // `order` groups work the way a reader thinks about it: agents first, loose tasks last.
 const BACKGROUND_WORK_KINDS: Record<
@@ -414,9 +415,10 @@ const BACKGROUND_WORK_KINDS: Record<
   { readonly order: number; readonly singular: string; readonly plural: string }
 > = {
   subagent: { order: 0, singular: "subagent", plural: "subagents" },
-  command: { order: 1, singular: "command", plural: "commands" },
-  monitor: { order: 2, singular: "monitor", plural: "monitors" },
-  background_task: { order: 3, singular: "background task", plural: "background tasks" },
+  timer: { order: 1, singular: "timer", plural: "timers" },
+  command: { order: 2, singular: "command", plural: "commands" },
+  monitor: { order: 3, singular: "monitor", plural: "monitors" },
+  background_task: { order: 4, singular: "background task", plural: "background tasks" },
 };
 
 export interface PendingBackgroundWorkItem {
@@ -426,6 +428,7 @@ export interface PendingBackgroundWorkItem {
   readonly label: string;
   /** A subagent's own thread, when it has one. */
   readonly childThreadId: ThreadId | undefined;
+  readonly wakeTime?: string;
   readonly held?: { readonly runId: RunId; readonly since: string };
 }
 
@@ -468,7 +471,7 @@ export function formatPendingBackgroundWorkItem(item: PendingBackgroundWorkItem)
  */
 export function presentPendingBackgroundWork(
   tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
-  options?: { readonly leadWorking?: boolean },
+  options?: { readonly leadWorking?: boolean; readonly timeZone?: string },
 ): PendingBackgroundWorkPresentation | null {
   const leadWorking = options?.leadWorking === true;
   if (tasks.length === 0) return null;
@@ -477,6 +480,17 @@ export function presentPendingBackgroundWork(
   const waiting = backgroundWorkHoldsCompletion(runningTasks);
   const items = tasks
     .map((task): PendingBackgroundWorkItem => {
+      const wakeAt = task.kind === "background_task" ? task.wakeAt : undefined;
+      const wakeAtMs = wakeAt === undefined ? NaN : Date.parse(wakeAt);
+      const wakeTime = Number.isFinite(wakeAtMs)
+        ? new Intl.DateTimeFormat(undefined, {
+            hour: "numeric",
+            minute: "2-digit",
+            hour12: true,
+            timeZone: options?.timeZone,
+          }).format(wakeAtMs)
+        : undefined;
+      const kind = wakeTime === undefined ? task.kind : "timer";
       const description = task.description?.trim();
       const label =
         task.kind === "subagent" && description !== undefined
@@ -484,11 +498,14 @@ export function presentPendingBackgroundWork(
           : description;
       return {
         taskId: task.taskId,
-        kind: task.kind,
+        kind,
         label:
-          label === undefined || label.length === 0
-            ? BACKGROUND_WORK_KINDS[task.kind].singular
-            : label,
+          wakeTime !== undefined
+            ? `Timer · ${wakeTime}`
+            : label === undefined || label.length === 0
+              ? BACKGROUND_WORK_KINDS[task.kind].singular
+              : label,
+        ...(wakeTime === undefined ? {} : { wakeTime }),
         childThreadId: task.kind === "subagent" ? task.childThreadId : undefined,
         ...(task.kind === "subagent" && task.held !== undefined ? { held: task.held } : {}),
       };
@@ -502,6 +519,10 @@ export function presentPendingBackgroundWork(
   if (items.length === 1 && only !== undefined) {
     if (only.held !== undefined)
       return { title: formatPendingBackgroundWorkItem(only), items, waiting, running };
+    if (only.wakeTime !== undefined) {
+      const title = leadWorking ? "1 timer running" : "Waiting on a timer";
+      return { title: `${title} · ${only.wakeTime}`, items, waiting, running };
+    }
     const task = tasks[0];
     if (task?.kind === "command" && task.wakesAgent === true) {
       const title = leadWorking
@@ -547,6 +568,21 @@ export function presentPendingBackgroundWork(
       : `${waiting ? "Waiting on" : "Running"} ${joinWithAnd(groups)}${held}`
     : `Held: ${heldCount} messages`;
   return { title, items, waiting, running };
+}
+
+/** Timer and wake-command labels also fit the thread row's compact status. */
+export function presentBackgroundWaitInThreadRow(
+  tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
+): string | null {
+  if (
+    !tasks.some(
+      (task) =>
+        (task.kind === "background_task" && task.wakeAt !== undefined) ||
+        (task.kind === "command" && task.wakesAgent === true),
+    )
+  )
+    return null;
+  return presentPendingBackgroundWork(tasks)?.title ?? null;
 }
 
 export interface ProviderGoalPresentation {

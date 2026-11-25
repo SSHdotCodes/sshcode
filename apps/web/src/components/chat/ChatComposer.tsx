@@ -1403,12 +1403,14 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
               <ComposerSelectControl
                 data-composer-shortcut="composer.mode"
                 size={size}
-                aria-label="Runtime mode"
+                iconOnly
+                aria-label={`Runtime mode: ${runtimeModeOption.label}`}
               />
             }
           >
+            {/* The lock says which mode; its name and meaning are in the tooltip and menu. */}
             <ComposerControlIcon icon={RuntimeModeIcon} size={size} />
-            <SelectValue data-composer-control-label>{runtimeModeOption.label}</SelectValue>
+            <SelectValue className="sr-only">{runtimeModeOption.label}</SelectValue>
           </TooltipTrigger>
           <SelectPopup alignItemWithTrigger={false} {...composerFloatingLayerProps}>
             {props.runtimeModeOptions.map((option) => {
@@ -1436,7 +1438,10 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
             })}
           </SelectPopup>
         </Select>
-        <TooltipPopup side="top">{runtimeModeOption.description}</TooltipPopup>
+        <TooltipPopup side="top">
+          <span className="font-medium">{runtimeModeOption.label}</span>
+          <span className="text-muted-foreground"> · {runtimeModeOption.description}</span>
+        </TooltipPopup>
       </Tooltip>
 
       {interactionModeToggle}
@@ -8476,7 +8481,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 className={cn(
                   "flex min-w-0 flex-nowrap items-center justify-between gap-2 overflow-visible px-3 pb-3 sm:px-4 sm:pb-4",
                   pendingUserInputs.length > 0 && "pt-2",
-                  isComposerFooterCompact ? "gap-1.5" : "gap-2 sm:gap-0",
+                  isComposerFooterCompact ? "gap-1.5" : "gap-2 sm:gap-1",
                   showMobilePendingAnswerActions && "hidden sm:flex",
                   isComposerResting &&
                     "pointer-events-none absolute inset-x-px z-10 h-12 gap-0 py-0 sm:gap-0 sm:py-0",

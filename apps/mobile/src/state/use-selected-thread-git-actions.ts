@@ -32,7 +32,7 @@ import { showGitActionResult } from "./use-vcs-action-state";
 import { useThreadSelection } from "./use-thread-selection";
 import { useSelectedThreadWorktree } from "./use-selected-thread-worktree";
 
-export function useSelectedThreadGitActions() {
+export function useSelectedThreadGitActions({ observeRepository = true } = {}) {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -61,7 +61,9 @@ export function useSelectedThreadGitActions() {
     { reportFailure: false },
   );
 
-  const selectedThreadGitRootCwd = selectedThreadProject?.workspaceRoot ?? null;
+  const selectedThreadGitRootCwd = observeRepository
+    ? (selectedThreadProject?.workspaceRoot ?? null)
+    : null;
   const branchTarget = useMemo(
     () => ({
       environmentId: selectedThread?.environmentId ?? null,
@@ -155,6 +157,7 @@ export function useSelectedThreadGitActions() {
   });
   useEffect(() => {
     if (
+      !observeRepository ||
       selectedEnvironmentId === null ||
       selectedThreadId === null ||
       !hasSelectedThreadProject ||
@@ -165,6 +168,7 @@ export function useSelectedThreadGitActions() {
     }
     refreshOnSelection();
   }, [
+    observeRepository,
     selectedEnvironmentId,
     selectedThreadId,
     hasSelectedThreadProject,

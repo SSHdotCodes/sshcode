@@ -1078,7 +1078,12 @@ export const OrchestrationV2PendingBackgroundTask = kindUnionWithFallback(
       wakesAgent: Schema.optional(Schema.Literal(true)),
     }),
     Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("monitor") }),
-    Schema.Struct({ ...PendingBackgroundTaskFields, kind: Schema.Literal("background_task") }),
+    Schema.Struct({
+      ...PendingBackgroundTaskFields,
+      kind: Schema.Literal("background_task"),
+      /** The scheduled wake of a one-shot timer, rendered in the client's time zone. */
+      wakeAt: Schema.optional(IsoDateTime),
+    }),
   ],
   (kind) => Schema.Struct({ ...PendingBackgroundTaskFields, kind }),
   ({ taskId, description }) => ({

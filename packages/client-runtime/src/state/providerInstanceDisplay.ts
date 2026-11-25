@@ -130,6 +130,10 @@ export function shouldShowInstanceBadge(
 ): boolean {
   if (entry.accentColor) return true;
   if (entry.instanceId === defaultInstanceIdForDriver(entry.driverKind)) return false;
+  // Antigravity's extra instances are the user's other Google plans running the same models:
+  // which plan a chat uses lives in its model options, not on the logo (a "G" on Gemini said
+  // nothing).
+  if (entry.driverKind === "antigravity") return false;
   // A non-ACP instance with its own icon (Qwen on Claude Code) already reads apart.
   if (entry.driverKind !== "acpRegistry" && entry.acpRegistryIconUrl) return false;
   let sharedProviderCount = 0;

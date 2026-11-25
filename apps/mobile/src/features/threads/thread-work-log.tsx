@@ -122,9 +122,12 @@ const SHIMMER_SWEEP_MS = 1_350;
 const SHIMMER_PAUSE_MS = 1_450;
 const SHIMMER_ICON_AND_GAP_WIDTH = 30;
 export const THREAD_DISCLOSURE_TRANSITION_MS = 180;
-const WORK_LOG_LAYOUT_TRANSITION = LinearTransition.duration(THREAD_DISCLOSURE_TRANSITION_MS);
-const WORK_LOG_DETAIL_ENTER_TRANSITION = FadeIn.duration(140);
-const WORK_LOG_DETAIL_EXIT_TRANSITION = FadeOut.duration(120);
+const WORK_LOG_LAYOUT_TRANSITION = LinearTransition.duration(
+  THREAD_DISCLOSURE_TRANSITION_MS,
+).reduceMotion(ReduceMotion.System);
+const WORK_LOG_DETAIL_ENTER_TRANSITION = FadeIn.duration(140).reduceMotion(ReduceMotion.System);
+const WORK_LOG_DETAIL_EXIT_TRANSITION = FadeOut.duration(120).reduceMotion(ReduceMotion.System);
+const WORK_LOG_ROW_ENTER_TRANSITION = FadeIn.duration(180).reduceMotion(ReduceMotion.System);
 type WorkContentIcon =
   | AppSymbolName
   | "browser"
@@ -1124,7 +1127,7 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
     <Animated.View
       layout={WORK_LOG_LAYOUT_TRANSITION}
       className="overflow-hidden"
-      {...(isFreshRow(row.createdAt) ? { entering: FadeIn.duration(200) } : {})}
+      {...(isFreshRow(row.createdAt) ? { entering: WORK_LOG_ROW_ENTER_TRANSITION } : {})}
     >
       <WorkLogPressable
         accessibilityRole={
@@ -1141,6 +1144,7 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
         accessibilityState={canExpand ? { expanded } : undefined}
         onPress={() => {
           if (notifiedSubagentThreadId !== undefined) {
+            void Promise.resolve(Haptics.selectionAsync()).catch(() => undefined);
             // Push, not navigate: navigate reuses this Thread route, so back
             // would skip the parent thread and land on Home (matches #15068).
             navigation.dispatch(

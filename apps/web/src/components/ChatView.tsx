@@ -3790,6 +3790,7 @@ export default function ChatView(props: ChatViewProps) {
     conversationProviderStatus !== null &&
     conversationProviderStatus.supportsConversationRollback !== false;
   const phase = derivePhase(activeRuntime);
+  const waitingOnActiveRun = activeRuntime?.waitingOnBackgroundWork === true;
   const pendingRequests =
     useAtomValue(
       routeThreadDetailRef === null
@@ -4198,7 +4199,7 @@ export default function ChatView(props: ChatViewProps) {
   // A rewind is not agent work: the composer shows "Rewinding conversation"
   // instead of the timeline growing a Thinking row.
   const isWorking = deriveTimelineWorking({
-    phase,
+    phase: waitingOnActiveRun ? "ready" : phase,
     isSendBusy,
     isCompacting,
     runlessWorkStartedAt,
@@ -8263,11 +8264,12 @@ export default function ChatView(props: ChatViewProps) {
   const [stoppingMonitorId, setStoppingMonitorId] = useState<string | null>(null);
   const activeBackgroundTasks = useMemo(() => {
     if (!activeThread) return [];
-    const shellTasks = new Map(
-      activeThreadShell?.pendingBackgroundTasks.map((task) => [task.taskId, task]),
-    );
+    const tasks = new Map(pendingBackgroundTasks.map((task) => [task.taskId, task]));
+    for (const task of activeThreadShell?.pendingBackgroundTasks ?? []) {
+      tasks.set(task.taskId, task);
+    }
     return [
-      ...pendingBackgroundTasks.map((task) => shellTasks.get(task.taskId) ?? task),
+      ...tasks.values(),
       ...(threadMonitors ?? []).map((monitor) => ({
         taskId: `${APP_MONITOR_TASK_PREFIX}${monitor.monitorId}`,
         kind: "monitor" as const,
@@ -8331,7 +8333,7 @@ export default function ChatView(props: ChatViewProps) {
         (threadMonitors ?? []).map((monitor) => monitor.monitorId),
       );
     }
-    if (pendingBackgroundTasks.length === 0) {
+    if (!activeBackgroundTasks.some((task) => !task.taskId.startsWith(APP_MONITOR_TASK_PREFIX))) {
       setStoppingBackgroundWorkKey((current) => (current === requestKey ? null : current));
       return;
     }
@@ -8518,7 +8520,7 @@ export default function ChatView(props: ChatViewProps) {
     }
     const bannerStops = resolveBackgroundWorkBannerStops({
       items: presentation.items,
-      isWorking,
+      isWorking: isWorking || canInterruptRunningThread,
     });
     const onlyHeld =
       presentation.items.length === 1 && presentation.items[0]?.held !== undefined
@@ -8656,6 +8658,7 @@ export default function ChatView(props: ChatViewProps) {
     activeBackgroundTasks,
     activeThread,
     environmentId,
+    canInterruptRunningThread,
     canOperateThread,
     canStopThreadMonitors,
     handleStopBackgroundWorkStable,
@@ -13268,7 +13271,7 @@ export default function ChatView(props: ChatViewProps) {
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
               {showScrollToBottom && !isThreadFindActive && (
                 <div
-                  className="chat-scroll-to-bottom pointer-events-none absolute z-30 flex justify-center py-1.5"
+                  className="chat-scroll-to-bottom pointer-events-none absolute z-30 flex justify-center py-1.5 transition-[opacity,translate,scale] duration-150 ease-drawer starting:opacity-0 starting:translate-y-1.5 starting:scale-95 motion-reduce:transition-none motion-reduce:starting:opacity-100 motion-reduce:starting:translate-y-0 motion-reduce:starting:scale-100"
                   style={{ bottom: scrollToEndClearance + 4 }}
                 >
                   <Button

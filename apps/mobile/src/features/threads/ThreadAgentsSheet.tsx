@@ -17,6 +17,7 @@ import { Atom } from "effect/reactivity";
 import * as Haptics from "expo-haptics";
 import { useState } from "react";
 import { Platform, Pressable, ScrollView, View } from "react-native";
+import Animated, { Easing, FadeIn, FadeOut, ReduceMotion } from "react-native-reanimated";
 import { Screen, ScreenStack, ScreenStackHeaderConfig } from "react-native-screens";
 
 import { AndroidSheetHeader } from "../../components/AndroidScreenHeader";
@@ -43,6 +44,10 @@ import { useRemoteEnvironmentRuntime } from "../../state/use-remote-environment-
 import { connectionWorkLabel, connectionWorkStatus } from "@t3tools/client-runtime/connection";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
+const AGENTS_VIEW_ENTER = FadeIn.duration(160)
+  .easing(Easing.out(Easing.cubic))
+  .reduceMotion(ReduceMotion.System);
+const AGENTS_VIEW_EXIT = FadeOut.duration(100).reduceMotion(ReduceMotion.System);
 
 type AgentsTarget = { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
 
@@ -85,13 +90,30 @@ function AgentsSheetContent({ target }: { readonly target: AgentsTarget }) {
   const hasMonitors = useThreadMonitors(target.environmentId, target.threadId).length > 0;
   // Starting a subagent takes the sheet over, so the list and the form never crowd each other.
   const [composing, setComposing] = useState(false);
+  const [viewTransitioned, setViewTransitioned] = useState(false);
+  const openNewSubagent = () => {
+    void Promise.resolve(Haptics.selectionAsync()).catch(() => undefined);
+    setViewTransitioned(true);
+    setComposing(true);
+  };
+  const closeNewSubagent = () => {
+    setViewTransitioned(true);
+    setComposing(false);
+  };
   const title = composing ? "New subagent" : discord ? "Members" : "Agents";
   const body = composing ? (
-    <NewSubagentForm
-      environmentId={target.environmentId}
-      threadId={target.threadId}
-      onClose={() => setComposing(false)}
-    />
+    <Animated.View
+      key="compose"
+      entering={AGENTS_VIEW_ENTER}
+      exiting={AGENTS_VIEW_EXIT}
+      className="flex-1"
+    >
+      <NewSubagentForm
+        environmentId={target.environmentId}
+        threadId={target.threadId}
+        onClose={closeNewSubagent}
+      />
+    </Animated.View>
   ) : null;
 
   const openChildThread = (childThreadId: ThreadId, environmentId = target.environmentId) => {
@@ -204,14 +226,19 @@ function AgentsSheetContent({ target }: { readonly target: AgentsTarget }) {
             {/* The form's buttons ride above the keyboard. */}
             <KeyboardAvoidingView automaticOffset behavior="padding" className="flex-1">
               {body ?? (
-                <>
+                <Animated.View
+                  key="list"
+                  entering={viewTransitioned ? AGENTS_VIEW_ENTER : undefined}
+                  exiting={AGENTS_VIEW_EXIT}
+                  className="flex-1"
+                >
                   {content}
                   <AgentsFooter
                     environmentId={target.environmentId}
                     threadId={target.threadId}
-                    onNewSubagent={() => setComposing(true)}
+                    onNewSubagent={openNewSubagent}
                   />
-                </>
+                </Animated.View>
               )}
             </KeyboardAvoidingView>
             <ScreenStackHeaderConfig
@@ -236,19 +263,24 @@ function AgentsSheetContent({ target }: { readonly target: AgentsTarget }) {
       <NativeStackScreenOptions options={{ sheetCornerRadius: 28 }} />
       <AndroidSheetHeader
         title={title}
-        onBack={() => (composing ? setComposing(false) : navigation.goBack())}
+        onBack={() => (composing ? closeNewSubagent() : navigation.goBack())}
       />
       <MaterialScreenContent insetHorizontal={layout.usesSplitView}>
         <KeyboardAvoidingView automaticOffset behavior="padding" className="flex-1">
           {body ?? (
-            <>
+            <Animated.View
+              key="list"
+              entering={viewTransitioned ? AGENTS_VIEW_ENTER : undefined}
+              exiting={AGENTS_VIEW_EXIT}
+              className="flex-1"
+            >
               {content}
               <AgentsFooter
                 environmentId={target.environmentId}
                 threadId={target.threadId}
-                onNewSubagent={() => setComposing(true)}
+                onNewSubagent={openNewSubagent}
               />
-            </>
+            </Animated.View>
           )}
         </KeyboardAvoidingView>
       </MaterialScreenContent>

@@ -4,6 +4,7 @@ import { RequestActionButton } from "./RequestActionButton";
 import { presentApprovalCard } from "./approvalCard";
 import { useAnnounceRequest } from "./use-announce-request";
 import type { ProviderApprovalDecision, RuntimeRequestId } from "@t3tools/contracts";
+import * as Haptics from "expo-haptics";
 import { ScrollView, View } from "react-native";
 import { useState } from "react";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
@@ -53,6 +54,9 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
   const disabled = !canRespond || responding || !props.canOperateThread;
   const respond = (decision: ProviderApprovalDecision) => {
     if (disabled) return;
+    void Promise.resolve(Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)).catch(
+      () => undefined,
+    );
     void props.onRespond(props.approval.requestId, decision);
   };
   const allow = presentation.allow;

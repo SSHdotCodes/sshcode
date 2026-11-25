@@ -85,7 +85,7 @@ const formatPendingPrimaryActionLabel = (input: {
 // The composer's labeled primary actions (Submit, Refine, Implement) share the send button's
 // message-action pill, so they are composer-owned buttons rather than restyled Buttons.
 const messageActionPillClassName =
-  "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-full bg-message-action font-medium text-base text-message-action-foreground shadow-xs shadow-message-action/24 outline-none hover:bg-message-action-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-64 disabled:shadow-none sm:text-sm";
+  "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-full bg-message-action font-medium text-base text-message-action-foreground shadow-xs shadow-message-action/24 outline-none transition-[background-color,box-shadow,scale] duration-120 ease-out motion-reduce:transition-none hover:bg-message-action-hover active:scale-[0.97] active:shadow-none motion-reduce:active:scale-100 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-64 disabled:shadow-none sm:text-sm";
 
 // Long enough for a slow host to settle an interrupt; after it, Stop can be retried.
 const STOP_PENDING_MAX_MS = 10_000;
@@ -182,7 +182,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         type="button"
         className={cn(
           // Neutral, like the native apps: stopping is routine, not an alarm.
-          "flex shrink-0 cursor-pointer items-center justify-center rounded-full bg-foreground text-background shadow-xs inset-shadow-control-highlight transition-colors duration-150 hover:bg-foreground/85 active:inset-shadow-control-pressed active:shadow-none disabled:cursor-default disabled:opacity-50 [&_svg]:pointer-events-none",
+          "flex shrink-0 cursor-pointer items-center justify-center rounded-full bg-foreground text-background shadow-xs inset-shadow-control-highlight transition-[background-color,box-shadow,scale] duration-120 ease-out motion-reduce:transition-none hover:bg-foreground/85 active:scale-[0.94] active:inset-shadow-control-pressed active:shadow-none motion-reduce:active:scale-100 disabled:cursor-default disabled:opacity-50 disabled:active:scale-100 [&_svg]:pointer-events-none",
           insidePendingAction ? "size-8 sm:size-7" : "size-8 sm:h-8 sm:w-8",
         )}
         {...pointerFocusProps}
@@ -372,7 +372,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     <button
       type={showResume ? "button" : "submit"}
       className={cn(
-        "relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-control-highlight hover:scale-105 active:inset-shadow-control-pressed active:shadow-none disabled:pointer-events-none disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8 [&_svg]:pointer-events-none",
+        "relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full shadow-xs transition-[background-color,box-shadow,scale,filter] duration-120 ease-out motion-reduce:transition-none enabled:cursor-pointer enabled:inset-shadow-control-highlight hover:scale-105 active:scale-[0.94] active:inset-shadow-control-pressed active:shadow-none motion-reduce:hover:scale-100 motion-reduce:active:scale-100 disabled:pointer-events-none disabled:shadow-none disabled:hover:scale-100 disabled:active:scale-100 sm:h-8 sm:w-8 [&_svg]:pointer-events-none",
         stageBackdropVariant
           ? "bg-transparent text-white enabled:shadow-black/24 enabled:hover:brightness-110 disabled:opacity-64"
           : // With nothing to send it reads as a quiet grey circle rather than a faded accent.

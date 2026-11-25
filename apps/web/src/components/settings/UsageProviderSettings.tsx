@@ -92,7 +92,7 @@ export function UsageProviderSettings({
           />
         ) : null}
         {entries.length === 0 ? (
-          <SettingsRow title="No hubs configured." />
+          <SettingsRow title="No hubs configured" />
         ) : (
           entries.map(([id, source]) => {
             const label = source.label?.trim() || source.url;

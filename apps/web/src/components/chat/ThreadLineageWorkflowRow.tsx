@@ -189,14 +189,14 @@ export function ThreadLineageWorkflowRow({
           <ChevronDownIcon
             aria-hidden
             className={cn(
-              "size-3.5 text-muted-foreground transition-transform",
+              "size-3.5 text-muted-foreground transition-transform duration-150 ease-out motion-reduce:transition-none",
               expanded && "rotate-180",
             )}
           />
         </ThreadDetailsControl>
       </div>
       {expanded ? (
-        <ul className="m-0 list-none p-0 ps-6.5">
+        <ul className="m-0 list-none p-0 ps-6.5 transition-[opacity,translate] duration-140 ease-drawer starting:opacity-0 starting:-translate-y-1 motion-reduce:transition-none motion-reduce:starting:opacity-100 motion-reduce:starting:translate-y-0">
           {phases.map((phase) => {
             const open = phaseOpen.get(phase.index) ?? phase.state === "running";
             const status = phaseStatusLabel(phase);
@@ -226,7 +226,7 @@ export function ThreadLineageWorkflowRow({
                   {phase.title}
                 </CollapsibleSectionHeader>
                 {open ? (
-                  <ul className="m-0 list-none p-0">
+                  <ul className="m-0 list-none p-0 transition-[opacity,translate] duration-140 ease-drawer starting:opacity-0 starting:-translate-y-1 motion-reduce:transition-none motion-reduce:starting:opacity-100 motion-reduce:starting:translate-y-0">
                     {phase.members.map((member) => (
                       <WorkflowMemberRow
                         key={member.id}

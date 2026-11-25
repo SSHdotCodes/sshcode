@@ -1212,7 +1212,7 @@ export function EnvironmentProviderSettings({
               chainVerticalScroll
               className="@min-[48rem]/providers:min-h-0 @min-[48rem]/providers:flex-1"
             >
-              <div className="divide-y divide-border/50">
+              <div className="divide-y divide-border/50 pb-2">
                 {rows.map((row) => renderProviderInstance(row, "list"))}
                 {!readOnly ? (
                   <button

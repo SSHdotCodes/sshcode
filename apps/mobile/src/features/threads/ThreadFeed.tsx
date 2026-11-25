@@ -158,7 +158,13 @@ import { isPdfFile } from "../../lib/filePreview";
 import { flattenThemeColor, userBubbleLinkColor } from "../../lib/mobileTheme";
 import { PresentationSource } from "../../components/NativePresentation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reanimated";
+import Animated, {
+  Easing,
+  FadeIn,
+  FadeInUp,
+  ReduceMotion,
+  type SharedValue,
+} from "react-native-reanimated";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { useFontFamily } from "../../lib/useFontFamily";
@@ -322,9 +328,16 @@ const TURN_FOLD_HEIGHT = 42; // min-h-11 (38.5) + mb-1 (3.5), with the mobile 14
 const USER_BUBBLE_HORIZONTAL_PADDING = 3.5 * 3.5;
 const ASSISTANT_ROW_HORIZONTAL_PADDING = 3.5;
 // Let neighboring rows move out of the new rows' space before showing their text.
-const THREAD_FEED_DISCLOSURE_ENTER_TRANSITION = FadeIn.delay(
-  THREAD_DISCLOSURE_TRANSITION_MS,
-).duration(140);
+const THREAD_FEED_DISCLOSURE_ENTER_TRANSITION = FadeIn.delay(THREAD_DISCLOSURE_TRANSITION_MS)
+  .duration(140)
+  .reduceMotion(ReduceMotion.System);
+const THREAD_FEED_MESSAGE_EASING = Easing.out(Easing.cubic);
+const THREAD_FEED_USER_ENTER = FadeInUp.duration(180)
+  .easing(THREAD_FEED_MESSAGE_EASING)
+  .reduceMotion(ReduceMotion.System);
+const THREAD_FEED_ASSISTANT_ENTER = FadeIn.duration(180)
+  .easing(THREAD_FEED_MESSAGE_EASING)
+  .reduceMotion(ReduceMotion.System);
 
 // Entering animations must only play for rows born just now — LegendList
 // remounts rows when they scroll back into view, and replaying an entrance for
@@ -1741,7 +1754,7 @@ function renderFeedEntry(
               ? { marginBottom: props.harnessView.density === "comfortable" ? 22 : 14 }
               : undefined
           }
-          {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
+          {...(enterAnimated ? { entering: THREAD_FEED_USER_ENTER } : {})}
         >
           {presentation.attribution === "automation" ? (
             <Text className="mb-1 pr-1 font-t3-medium text-2xs text-foreground-muted opacity-60">
@@ -2022,7 +2035,7 @@ function renderFeedEntry(
               : "mb-1 px-1",
           hasWideBlock && "w-full",
         )}
-        {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
+        {...(enterAnimated ? { entering: THREAD_FEED_ASSISTANT_ENTER } : {})}
       >
         {renderedText.trim().length > 0 ? (
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
@@ -3986,8 +3999,11 @@ function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
           accessibilityRole="button"
           accessibilityLabel="Load earlier activity"
           disabled={props.loading}
-          onPress={props.onLoadEarlier}
-          className="min-h-9 flex-row items-center justify-center gap-2 rounded-full border border-border/60 bg-card/80 px-4 py-2 disabled:opacity-50"
+          onPress={() => {
+            void Promise.resolve(Haptics.selectionAsync()).catch(() => undefined);
+            props.onLoadEarlier();
+          }}
+          className="min-h-9 flex-row items-center justify-center gap-2 rounded-full border border-border/60 bg-card/80 px-4 py-2 active:opacity-70 disabled:opacity-50"
         >
           {props.loading ? (
             <AppActivityIndicator size="small" color={accentColor} />

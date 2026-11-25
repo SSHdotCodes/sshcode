@@ -1,10 +1,13 @@
 import { StatusBar, View } from "react-native";
+import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppActivityIndicator } from "./AppActivityIndicator";
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 
 import { AppText as Text } from "./AppText";
 import { BrandMark } from "./BrandMark";
+
+const LOADING_CONTENT_ENTER = FadeIn.delay(150).duration(180).reduceMotion(ReduceMotion.System);
 
 export function LoadingScreen(props: {
   readonly message: string;
@@ -22,7 +25,10 @@ export function LoadingScreen(props: {
       style={{ paddingTop: props.embedded ? 0 : insets.top }}
     >
       <StatusBar barStyle={colorScheme === "dark" ? "light-content" : "dark-content"} />
-      <View className="flex-1 items-center justify-center gap-5 px-6">
+      <Animated.View
+        entering={LOADING_CONTENT_ENTER}
+        className="flex-1 items-center justify-center gap-5 px-6"
+      >
         <BrandMark compact />
         {messagePlacement === "above-spinner" ? (
           <Text className="font-t3-bold text-lg text-foreground">{props.message}</Text>
@@ -31,7 +37,7 @@ export function LoadingScreen(props: {
         {messagePlacement === "below-spinner" ? (
           <Text className="font-t3-bold text-lg text-foreground">{props.message}</Text>
         ) : null}
-      </View>
+      </Animated.View>
     </View>
   );
 }

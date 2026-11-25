@@ -99,12 +99,12 @@ export function ModelRowContent(
           props.option.isUnavailable ? (
             <View className="mt-1 flex-row flex-wrap items-center gap-1.5">
               {props.option.isDefault ? (
-                <View className="rounded-md bg-subtle-strong px-1.5 py-0.5">
+                <View className="rounded-md border border-input-border bg-card px-1.5 py-0.5">
                   <Text className="text-3xs font-t3-bold text-foreground-muted">Default</Text>
                 </View>
               ) : null}
               {props.option.isLegacy ? (
-                <View className="rounded-md bg-subtle px-1.5 py-0.5">
+                <View className="rounded-md border border-border bg-subtle px-1.5 py-0.5">
                   <Text className="text-3xs font-t3-bold text-foreground-muted">Legacy</Text>
                 </View>
               ) : null}

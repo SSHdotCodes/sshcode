@@ -171,7 +171,7 @@ export function SubagentCard(props: {
       {props.threadId !== null ? (
         <ChevronRightIcon
           aria-hidden
-          className="size-3.5 shrink-0 text-muted-foreground/60 transition-colors group-hover/subagent:text-foreground"
+          className="size-3.5 shrink-0 text-muted-foreground/60 transition-[color,transform] duration-150 ease-out motion-reduce:transition-none group-hover/subagent:translate-x-0.5 group-hover/subagent:text-foreground motion-reduce:group-hover/subagent:translate-x-0"
         />
       ) : null}
     </>
@@ -196,7 +196,7 @@ export function SubagentCard(props: {
         onClick={() => props.onOpenThread(props.threadId!)}
         className={cn(
           className,
-          "cursor-pointer transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
+          "cursor-pointer transition-[background-color,scale] duration-120 ease-out motion-reduce:transition-none hover:bg-accent/25 active:scale-[0.99] active:bg-accent/40 motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
         )}
       >
         {content}

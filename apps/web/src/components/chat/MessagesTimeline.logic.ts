@@ -81,6 +81,7 @@ import {
   formatReadToolLabel,
   formatSearchToolLabel,
 } from "@t3tools/shared/toolActivity";
+import { delegatedTaskHandle } from "@t3tools/shared/delegatedTaskHandle";
 import { isWindowsAbsolutePath } from "@t3tools/shared/path";
 import type { HandoffTimelineRun } from "@t3tools/client-runtime/handoff";
 
@@ -1469,6 +1470,8 @@ function withoutSubagentDelegationRows(entries: ReadonlyArray<TimelineEntry>) {
     if (item.origin !== "app_owned" || item.runId === null) continue;
     const children = childrenByRun.get(item.runId) ?? new Set<string>();
     children.add(item.subagentId);
+    // delegate_task answers with the short handle of the subagent's id.
+    children.add(delegatedTaskHandle(item.subagentId));
     if (item.childThreadId !== null) children.add(item.childThreadId);
     childrenByRun.set(item.runId, children);
   }
@@ -1751,12 +1754,12 @@ export function deriveMessagesTimelineRows(input: {
       createdAt: input.activeTurnStartedAt ?? null,
     });
   };
-  let hasActivityRow = false;
+  let hasTailActivityRow = false;
   let hasActiveCompaction = false;
   const appendActiveWorkRows = () => {
     if (activeWorkRow === null) return;
     nextRows.push(activeWorkRow);
-    hasActivityRow ||= activeWorkRow.active;
+    hasTailActivityRow ||= activeWorkRow.active;
     if (!activeWorkRow.expanded) return;
     nextRows.push(
       expandedWorkGroupRow(
@@ -1948,7 +1951,7 @@ export function deriveMessagesTimelineRows(input: {
             // A thought shown live reads above the status line as it streams.
             ...(latestActiveToolEntry.liveThought ? { thought: latestActiveToolEntry } : {}),
           });
-          hasActivityRow = true;
+          hasTailActivityRow ||= cursor === timelineEntries.length;
           if (expanded) {
             nextRows.push(
               expandedWorkGroupRow(groupId, timelineEntry.createdAt, visibleGroupedEntries),
@@ -2203,7 +2206,8 @@ export function deriveMessagesTimelineRows(input: {
   }
   const showsActivityTail = input.isWorking && !setupOwnsWorkingSlot && !hasActiveCompaction;
   if (showsActivityTail && runningTool !== undefined && !carriesRunningTool) {
-    // A running tool already on screen as its own row needs no second line at the bottom.
+    // A tool higher in the transcript can keep running after newer output.
+    // In that case the tail still needs a live row.
     const runningToolShown =
       toolsNamedInRows.has(runningTool.entry.id) ||
       nextRows.some(
@@ -2212,17 +2216,21 @@ export function deriveMessagesTimelineRows(input: {
           (row.kind === "work" &&
             row.groupedEntries.some((entry) => entry.id === runningTool.entry.id)),
       );
-    if (!runningToolShown) {
+    if (!runningToolShown || !hasTailActivityRow) {
       nextRows.push({
         kind: "thinking",
         id: LIVE_ACTIVITY_ROW_ID,
         createdAt: input.activeTurnStartedAt ?? null,
-        runningToolLabel: runningToolStatusLabel(
-          liveWorkEntryLabel(runningTool.entry, undefined, true),
-        ),
+        ...(runningToolShown
+          ? {}
+          : {
+              runningToolLabel: runningToolStatusLabel(
+                liveWorkEntryLabel(runningTool.entry, undefined, true),
+              ),
+            }),
       });
     }
-  } else if (showsActivityTail && (!hasActivityRow || latestToolFailed)) {
+  } else if (showsActivityTail && (!hasTailActivityRow || latestToolFailed)) {
     // A failed latest tool hands the row back to thinking, but its group
     // stays reachable through the same disclosure the live row offers.
     const failedGroupAnchor = latestToolFailed ? activeWorkAnchor : undefined;

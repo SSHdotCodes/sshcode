@@ -11,6 +11,7 @@ import type {
 import { isOrchestrationV2WorkActive } from "@t3tools/contracts";
 
 import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 
 import { latestExecutedRun } from "./orchestrationV2ThreadError.ts";
 import { truncate } from "./String.ts";
@@ -237,13 +238,13 @@ function isPersistentDynamicToolInput(input: unknown): boolean {
 }
 
 function descriptionFromTurnItem(item: PendingBackgroundWorkTurnItem): string | undefined {
+  if (typeof item.title === "string" && item.title.trim().length > 0) {
+    return item.title.trim();
+  }
   // ACP's command cards can have a generic title such as "Ran command".
   if (item.type === "command_execution" && item.wakesAgent && typeof item.input === "string") {
     const label = truncate(item.input.trim().split("\n", 1)[0] ?? "", 60);
     if (label.length > 0) return label;
-  }
-  if (typeof item.title === "string" && item.title.trim().length > 0) {
-    return item.title.trim();
   }
   if (item.type === "command_execution" && typeof item.input === "string") {
     const command = item.input.trim();
@@ -260,6 +261,14 @@ function descriptionFromTurnItem(item: PendingBackgroundWorkTurnItem): string | 
     return prompt.length > 0 ? prompt : undefined;
   }
   return undefined;
+}
+
+export function backgroundTimerWakeAt(startedAt: DateTime.Utc, input: unknown): string | undefined {
+  const seconds =
+    input !== null && typeof input === "object" ? Reflect.get(input, "DurationSeconds") : undefined;
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) return undefined;
+  const wake = DateTime.make(DateTime.toEpochMillis(startedAt) + seconds * 1_000);
+  return Option.map(wake, DateTime.formatIso).pipe(Option.getOrUndefined);
 }
 
 function pendingTaskFromTurnItem(
@@ -284,8 +293,13 @@ function pendingTaskFromTurnItem(
             kind: "command",
             ...(item.wakesAgent === true ? { wakesAgent: true } : {}),
           };
-    default:
-      return { ...named, kind: "background_task" };
+    default: {
+      const wakeAt =
+        item.title === "Set timer" && item.startedAt != null
+          ? backgroundTimerWakeAt(item.startedAt, item.input)
+          : undefined;
+      return { ...named, kind: "background_task", ...(wakeAt === undefined ? {} : { wakeAt }) };
+    }
   }
 }
 

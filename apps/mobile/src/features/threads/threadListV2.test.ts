@@ -2310,6 +2310,38 @@ describe("multi-day chats", () => {
       longRunningStatus: "2 subagents running",
     });
   });
+
+  it("shows a native timer and its background commands on the waiting row", () => {
+    const runId = RunId.make("antigravity-run-51");
+    const thread = presentThreadShell(
+      environmentId,
+      makeRawThreadShell({
+        id: ThreadId.make("timer-thread"),
+        title: "Rollouts",
+        status: "running",
+        latestRunId: runId,
+        activeRunId: runId,
+        activityRunStatus: "running",
+        pendingBackgroundTasks: [
+          {
+            taskId: "timer",
+            kind: "background_task",
+            description: "Set timer",
+            wakeAt: "2026-11-25T06:00:52.935Z",
+          },
+          {
+            taskId: "rollouts",
+            kind: "command",
+            description: "Run teacher rollouts on Modal",
+            wakesAgent: true,
+          },
+        ],
+      }),
+    );
+    const options = { searchQuery: "", now: NOW };
+    const waiting = buildThreadListV2Items({ ...options, threads: [thread] });
+    expect(waiting.items[0]?.longRunningStatus).toBe("Waiting on 1 timer and 1 command");
+  });
 });
 
 describe("connection-aware thread status", () => {

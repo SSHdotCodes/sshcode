@@ -2398,6 +2398,51 @@ describe("deriveMessagesTimelineRows", () => {
     });
   });
 
+  it("keeps a live tail when background commands precede a complete answer", () => {
+    const runId = RunId.make("antigravity-run-51");
+    const startedAt = "2026-11-25T04:09:32.133Z";
+    const commandAt = "2026-11-25T04:59:32.747Z";
+    const answerAt = "2026-11-25T05:29:55.891Z";
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "rollouts",
+          kind: "work",
+          createdAt: commandAt,
+          entry: {
+            id: "rollouts",
+            runId,
+            createdAt: commandAt,
+            label: "Run teacher rollouts on Modal",
+            tone: "tool",
+            itemType: "command_execution",
+            toolLifecycleStatus: "inProgress",
+          },
+        },
+        {
+          kind: "message",
+          id: "answer",
+          createdAt: answerAt,
+          message: {
+            id: MessageId.make("answer"),
+            role: "assistant",
+            runId,
+            text: "The rollouts are underway.",
+            streaming: false,
+            createdAt: answerAt,
+            updatedAt: answerAt,
+          },
+        },
+      ],
+      latestRun: { runId, status: "running", startedAt, completedAt: null },
+      isWorking: true,
+      activeTurnStartedAt: startedAt,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+    expect(rows.at(-1)).toMatchObject({ kind: "thinking", createdAt: startedAt });
+  });
+
   it("folds each run of a provider-native subagent thread like a normal turn", () => {
     // A Claude subagent's child thread, as projected: no runs, one runless
     // root turn, and a user prompt for the launch and for a SendMessage resume.

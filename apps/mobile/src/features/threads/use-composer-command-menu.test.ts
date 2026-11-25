@@ -6,7 +6,7 @@ import {
   ProviderInstanceId,
   type ServerProvider,
 } from "@t3tools/contracts";
-import { act, createElement } from "react";
+import { act, createElement, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 const refreshProviders = vi.hoisted(() => vi.fn());
@@ -266,10 +266,18 @@ describe("workspace command discovery retry", () => {
     ],
   } satisfies ServerProvider;
 
-  function Probe({ cwd, status = provider }: { cwd: string; status?: ServerProvider }) {
-    useComposerCommandMenu({
+  function Probe({
+    cwd,
+    status = provider,
+    draft = "/project",
+  }: {
+    cwd: string;
+    status?: ServerProvider;
+    draft?: string;
+  }) {
+    const { onSelectionChange } = useComposerCommandMenu({
       sharedSkills: null,
-      draftMessage: "/project",
+      draftMessage: draft,
       ownerKey: null,
       environmentId,
       projectCwd: cwd,
@@ -278,6 +286,9 @@ describe("workspace command discovery retry", () => {
       hasCompactableConversation: false,
       onChangeDraftMessage: () => {},
     });
+    useEffect(() => {
+      onSelectionChange({ start: draft.length, end: draft.length });
+    }, [draft, onSelectionChange]);
     return null;
   }
 
@@ -306,6 +317,17 @@ describe("workspace command discovery retry", () => {
     });
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("waits for a command before discovering workspace completions", async () => {
+    await act(async () => {
+      root.render(createElement(Probe, { cwd: "/project-a", draft: "" }));
+    });
+    expect(refreshProviders).toHaveBeenCalledTimes(0);
+    await act(async () => {
+      root.render(createElement(Probe, { cwd: "/project-a", draft: "/project" }));
+    });
+    expect(refreshProviders).toHaveBeenCalledTimes(1);
   });
 
   it("retries partial commands after the cooldown without editing the draft", async () => {

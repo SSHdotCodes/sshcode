@@ -1,3 +1,4 @@
+import * as Haptics from "expo-haptics";
 import type { ComponentProps, ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -12,6 +13,14 @@ import {
   type StyleProp,
   type ViewStyle,
 } from "react-native";
+import Animated, {
+  Easing,
+  ReduceMotion,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
 
 import { cn } from "../lib/cn";
 import { AppText as Text } from "./AppText";
@@ -21,6 +30,17 @@ import { useAndroidControlSizing, useComposerControlLayout } from "./useAndroidC
 const COMPOSER_TOOLBAR_GAP = 8;
 const COMPOSER_TOOLBAR_FADE_WIDTH = 18;
 const COMPOSER_TOOLBAR_SCROLL_EPSILON = 4;
+const ACTION_PRESS_IN_TIMING = {
+  duration: 65,
+  easing: Easing.out(Easing.quad),
+  reduceMotion: ReduceMotion.System,
+};
+const ACTION_PRESS_OUT_SPRING = {
+  damping: 16,
+  stiffness: 420,
+  mass: 0.7,
+  reduceMotion: ReduceMotion.System,
+};
 
 /**
  * Quiet inline composer control used inside cards and their context rows.
@@ -45,6 +65,12 @@ export function ComposerInlineControl(props: {
 }) {
   const { scale, smallIconSize } = useAndroidControlSizing();
   const textLayout = useComposerControlLayout();
+  const handlePress = props.onPress
+    ? () => {
+        void Promise.resolve(Haptics.selectionAsync()).catch(() => undefined);
+        props.onPress?.();
+      }
+    : undefined;
   return (
     <Pressable
       accessibilityLabel={props.accessibilityLabel ?? props.label}
@@ -55,7 +81,7 @@ export function ComposerInlineControl(props: {
       }
       className="min-h-11 flex-row items-center gap-2 rounded-xl px-2 py-2 active:bg-subtle"
       disabled={props.disabled || props.static}
-      onPress={props.onPress}
+      onPress={handlePress}
       style={{
         minHeight: textLayout.minHeight,
         maxWidth: props.maxWidth ?? 190,
@@ -246,19 +272,33 @@ export function ComposerActionButton(props: {
 }) {
   const { scale, smallIconSize } = useAndroidControlSizing();
   const circleSize = Math.round(30 * scale);
+  const pressScale = useSharedValue(1);
+  const circleAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: pressScale.value }],
+  }));
+  const handlePressIn = () => {
+    if (!props.disabled) {
+      pressScale.set(withTiming(0.9, ACTION_PRESS_IN_TIMING));
+    }
+  };
+  const handlePressOut = () => {
+    pressScale.set(withSpring(1, ACTION_PRESS_OUT_SPRING));
+  };
   return (
     <Pressable
       accessibilityLabel={props.accessibilityLabel}
       accessibilityRole="button"
       accessibilityState={{ disabled: props.disabled }}
-      className="size-[44px] shrink-0 items-center justify-center active:opacity-70"
+      className="size-[44px] shrink-0 items-center justify-center active:opacity-80"
       disabled={props.disabled}
       onPress={props.onPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
       onLongPress={props.onLongPress}
       onTouchStart={props.onTouchStart}
     >
-      <View
-        style={{ width: circleSize, height: circleSize }}
+      <Animated.View
+        style={[{ width: circleSize, height: circleSize }, circleAnimatedStyle]}
         className={cn(
           "items-center justify-center rounded-full",
           props.variant === "danger"
@@ -281,7 +321,7 @@ export function ComposerActionButton(props: {
           }
           type="monochrome"
         />
-      </View>
+      </Animated.View>
     </Pressable>
   );
 }

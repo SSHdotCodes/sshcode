@@ -1,5 +1,13 @@
 import { type ComponentProps, type ReactNode, useRef } from "react";
 import { Platform, Pressable, View } from "react-native";
+import Animated, {
+  Easing,
+  ReduceMotion,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from "react-native-reanimated";
 import { cn } from "../lib/cn";
 import { SymbolView } from "./AppSymbol";
 import { AppText as Text } from "./AppText";
@@ -8,6 +16,24 @@ import { MaterialButton } from "./MaterialButton";
 import { useAndroidControlSizing } from "./useAndroidControlSizing";
 
 export { ControlPillMenu } from "./ControlPillMenu";
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+const PILL_PRESS_IN_TIMING = {
+  duration: 70,
+  easing: Easing.out(Easing.quad),
+  reduceMotion: ReduceMotion.System,
+};
+const PILL_PRESS_OUT_SPRING = {
+  damping: 18,
+  stiffness: 380,
+  mass: 0.7,
+  reduceMotion: ReduceMotion.System,
+};
+const PILL_PRESS_OUT_OPACITY = {
+  duration: 140,
+  easing: Easing.out(Easing.quad),
+  reduceMotion: ReduceMotion.System,
+};
 
 export function ControlPill(props: {
   readonly icon?: ComponentProps<typeof SymbolView>["name"];
@@ -23,17 +49,34 @@ export function ControlPill(props: {
   const variant = props.variant ?? "circle";
   const { smallIconSize } = useAndroidControlSizing();
   const activatedOnPressInRef = useRef(false);
+  const pressScale = useSharedValue(1);
+  const pressOpacity = useSharedValue(1);
+
+  const pressStyle = useAnimatedStyle(() => ({
+    opacity: pressOpacity.value,
+    transform: [{ scale: pressScale.value }],
+  }));
 
   const handlePressIn = () => {
-    activatedOnPressInRef.current = true;
-    props.onPress?.();
+    if (!props.disabled) {
+      pressScale.set(withTiming(0.93, PILL_PRESS_IN_TIMING));
+      pressOpacity.set(withTiming(0.82, PILL_PRESS_IN_TIMING));
+    }
+    if (props.activateOnPressIn) {
+      activatedOnPressInRef.current = true;
+      props.onPress?.();
+    }
   };
   const handlePressOut = () => {
-    // Pressability invokes onPressOut immediately before onPress on release.
-    // Defer the reset so onPress can identify the same physical gesture.
-    setTimeout(() => {
-      activatedOnPressInRef.current = false;
-    }, 0);
+    pressScale.set(withSpring(1, PILL_PRESS_OUT_SPRING));
+    pressOpacity.set(withTiming(1, PILL_PRESS_OUT_OPACITY));
+    if (props.activateOnPressIn) {
+      // Pressability invokes onPressOut immediately before onPress on release.
+      // Defer the reset so onPress can identify the same physical gesture.
+      setTimeout(() => {
+        activatedOnPressInRef.current = false;
+      }, 0);
+    }
   };
   const handlePress = () => {
     if (activatedOnPressInRef.current) {
@@ -121,15 +164,15 @@ export function ControlPill(props: {
   }
 
   return (
-    <Pressable
+    <AnimatedPressable
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityRole="button"
       onPress={props.activateOnPressIn ? handlePress : props.onPress}
-      onPressIn={props.activateOnPressIn ? handlePressIn : undefined}
-      onPressOut={props.activateOnPressIn ? handlePressOut : undefined}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
       disabled={props.disabled}
       className={containerClassName}
-      style={{ minHeight: 44, minWidth: 44 }}
+      style={[{ minHeight: 44, minWidth: 44 }, pressStyle]}
     >
       {props.iconNode ? (
         <View className="h-4 w-4 items-center justify-center">{props.iconNode}</View>
@@ -142,6 +185,6 @@ export function ControlPill(props: {
         />
       ) : null}
       {props.label ? <Text className={labelClassName}>{props.label}</Text> : null}
-    </Pressable>
+    </AnimatedPressable>
   );
 }

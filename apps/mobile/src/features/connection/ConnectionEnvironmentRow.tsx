@@ -126,7 +126,7 @@ export function ConnectionEnvironmentRow(props: {
               selectable={props.expanded}
             >
               {statusLabel}
-              {statusTraceId ? (
+              {props.expanded && statusTraceId ? (
                 <ConnectionTraceId
                   traceId={statusTraceId}
                   tone={hasConnectionFailure ? "danger" : "muted"}

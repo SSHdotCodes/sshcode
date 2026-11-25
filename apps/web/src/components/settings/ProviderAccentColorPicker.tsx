@@ -79,7 +79,7 @@ function ProviderCustomColorPicker(props: {
           <Button
             type="button"
             size="icon-sm"
-            variant="ghost-muted"
+            variant={normalized ? "ghost-muted" : "outline"}
             style={normalized ? { backgroundColor: normalized } : undefined}
             aria-label={`${normalized ? "Change" : "Add"} accent color for ${props.displayName}`}
           >

@@ -58,6 +58,8 @@ export interface ThreadRunSummary {
 export interface ThreadRuntimeSummary {
   readonly status: OrchestrationV2RunStatus | "idle";
   readonly activeRunId: RunId | null;
+  /** The idle presentation belongs to a provider turn that can still be steered or stopped. */
+  readonly waitingOnBackgroundWork?: true;
   readonly activityStartedAt?: string | null | undefined;
   readonly providerInstanceId: ProviderInstanceId;
   readonly providerName: string | null;
@@ -70,13 +72,17 @@ export interface ThreadRuntimeSummary {
 }
 
 export function threadRuntimeIsActive(runtime: ThreadRuntimeSummary | null | undefined): boolean {
-  return runtime !== null && runtime !== undefined && threadRunStatusIsActive(runtime.status);
+  return (
+    runtime != null &&
+    (threadRunStatusIsActive(runtime.status) || runtime.waitingOnBackgroundWork === true)
+  );
 }
 
 /** Archiving may discard queued work, but it must not detach a provider that
  * is preparing, starting, or running a turn. */
 export function threadRuntimeCanArchive(runtime: ThreadRuntimeSummary | null | undefined): boolean {
   if (runtime?.status === "queued") return runtime.activeRunId === null;
+  if (runtime?.waitingOnBackgroundWork === true) return false;
   return (
     runtime?.status !== "preparing" &&
     runtime?.status !== "starting" &&
@@ -196,8 +202,8 @@ function terminalRunStatus(status: OrchestrationV2RunStatus): boolean {
 // run's completion, so #4415 waiting-presentation Waiting (session.idle) can
 // consume CTM runtime. Only work that wakes the agent holds it: commands it
 // left running, such as a dev server, present the run's own status (#14872).
-// The server suppresses the roster while an interruptible activity run exists,
-// so a remaining roster is stronger than checkpoint-oriented waiting.
+// The server includes a live turn's roster only when the provider reports
+// waiting. Keep that turn interactive while it uses the idle presentation.
 // latestRun keeps the latest run's status for history presentation.
 // A failed latest run outranks the roster, so the failure stays visible.
 function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary | null {
@@ -209,9 +215,12 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
     return null;
   }
   const status = parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);
+  const waitingOnBackgroundWork =
+    parkAtIdle && thread.activeRunId !== null && thread.activityRunStatus === "running";
   return {
     status,
     activeRunId: thread.activeRunId,
+    ...(waitingOnBackgroundWork ? { waitingOnBackgroundWork: true as const } : {}),
     activityStartedAt: parkAtIdle
       ? null
       : thread.activityRunStartedAt === undefined

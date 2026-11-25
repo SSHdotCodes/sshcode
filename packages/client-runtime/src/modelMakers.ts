@@ -511,6 +511,10 @@ function readableName(source: ModelRouteSource): { readonly text: string; readon
     );
     return { text: `Fusion (${pair.trim()})`, score: 0 };
   }
+  // Antigravity names an orchestrator by the model that runs it: "Orchestrator (Neon)" reads
+  // "Neon Orchestrator", where dropping the brackets left three identical "Orchestrator" rows.
+  const orchestrator = /^orchestrator\s*\(([^)]+)\)$/i.exec(full);
+  if (orchestrator) return { text: `${orchestrator[1]!.trim()} Orchestrator`, score: 0 };
   const bare =
     full
       .replace(/\s+[—–]\s+.*$/, "")

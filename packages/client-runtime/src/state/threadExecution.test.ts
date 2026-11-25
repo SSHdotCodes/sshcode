@@ -363,6 +363,22 @@ describe("thread execution presentation", () => {
       activeRunId: running.id,
       activityStartedAt: null,
     });
+    expect(threadRuntimeHasInterruptibleRun(runtime)).toBe(true);
+    expect(threadRuntimeCanArchive(runtime)).toBe(false);
+    const resumed = deriveThreadRuntime({
+      ...projection,
+      providerThreads: projection.providerThreads.map(
+        ({ waitingOnBackgroundWork: _wait, ...thread }) => ({
+          ...thread,
+          pendingBackgroundTasks: [],
+        }),
+      ),
+    });
+    expect(resumed).toMatchObject({
+      status: "running",
+      activeRunId: running.id,
+      activityStartedAt: DateTime.formatIso(running.startedAt ?? running.requestedAt),
+    });
   });
 });
 
@@ -633,6 +649,34 @@ describe("threadRuntimeCanArchive", () => {
 });
 
 describe("presentPendingBackgroundWork", () => {
+  it("shows the timer's local wake time and counts it separately from commands", () => {
+    const timer = {
+      taskId: "timer",
+      kind: "background_task",
+      description: "Set timer",
+      wakeAt: "2026-11-25T06:00:52.935Z",
+    } as const;
+    const commands = ["Run Modal rollouts", "Start judge relay", "Run the gate"].map(
+      (description) => ({
+        taskId: description,
+        description,
+        kind: "command" as const,
+        wakesAgent: true as const,
+      }),
+    );
+    const options = { timeZone: "America/New_York" };
+    expect(presentPendingBackgroundWork([timer], options)).toMatchObject({
+      title: "Waiting on a timer · 1:00 AM",
+      waiting: true,
+    });
+    expect(presentPendingBackgroundWork([timer, ...commands], options)).toMatchObject({
+      title: "Waiting on 1 timer and 3 commands",
+      items: [
+        { kind: "timer", label: "Timer · 1:00 AM" },
+        ...commands.map(({ description }) => ({ label: description })),
+      ],
+    });
+  });
   it.each(["Subagent:", "Subagent:   "])(
     "falls back to the subagent noun when %s has no display name",
     (description) => {

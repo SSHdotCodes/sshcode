@@ -62,12 +62,12 @@ let rerender: () => void = () => {};
 
 // Stands in for a Git sheet: every settled refresh causes a rerender, as the
 // refs invalidation does on device.
-function Consumer() {
+function Consumer({ observeRepository = true } = {}) {
   const [, bump] = useReducer((count: number) => count + 1, 0);
   useEffect(() => {
     rerender = bump;
   });
-  useSelectedThreadGitActions();
+  useSelectedThreadGitActions({ observeRepository });
   return null;
 }
 
@@ -98,6 +98,19 @@ afterEach(() => {
 });
 
 describe("useSelectedThreadGitActions", () => {
+  it("starts reading the repository when its Git sheet opens", async () => {
+    root = createRoot(document.createElement("div"));
+    act(() => root!.render(<Consumer observeRepository={false} />));
+    await flush();
+    expect(harness.refreshStatusCalls).toHaveLength(0);
+
+    act(() => root!.render(<Consumer />));
+    await flush();
+    expect(harness.refreshStatusCalls).toEqual([
+      { environmentId: "environment-1", input: { cwd: "/repo" } },
+    ]);
+  });
+
   it("refreshes once on mount and does not loop when refreshes rerender the consumer", async () => {
     root = createRoot(document.createElement("div"));
     act(() => root!.render(<Consumer />));

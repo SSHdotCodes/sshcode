@@ -169,7 +169,7 @@ export const ModelListRow = memo(function ModelListRow(props: {
               >
                 <StarIcon
                   className={cn(
-                    "size-3.5 sm:size-3",
+                    "size-3.5 transition-[color,transform] duration-150 ease-out motion-reduce:transition-none sm:size-3",
                     props.isFavorite && "fill-current text-warning",
                   )}
                 />

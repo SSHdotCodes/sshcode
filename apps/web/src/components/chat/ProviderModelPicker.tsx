@@ -444,7 +444,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
  */
 function EffortGaugeIcon(props: { readonly effort: EffortDisplay }) {
   const gauge = effortGauge(props.effort);
-  const tone = props.effort.accent ?? "var(--primary)";
+  const tone = props.effort.accent ?? "var(--effort-accent)";
   return (
     <svg
       viewBox={`0 0 ${gauge.width} ${gauge.height}`}

@@ -87,6 +87,20 @@ vi.mock("./NewSubagentForm", () => ({
   NewSubagentForm: () => <textarea aria-label="Task" />,
 }));
 vi.mock("react-native-keyboard-controller", () => ({ KeyboardAvoidingView: "div" }));
+vi.mock("react-native-reanimated", () => {
+  const transition = {
+    duration: () => transition,
+    easing: () => transition,
+    reduceMotion: () => transition,
+  };
+  return {
+    default: { View: ({ children }: { children: ReactNode }) => <div>{children}</div> },
+    Easing: { cubic: (t: number) => t, out: (fn: (t: number) => number) => fn },
+    FadeIn: transition,
+    FadeOut: transition,
+    ReduceMotion: { System: "system" },
+  };
+});
 vi.mock("./SubagentStopButton", () => ({ SubagentStopButton: () => null }));
 vi.mock("../../components/AppText", () => ({ AppText: "span" }));
 vi.mock("../../lib/useUniwindTheme", () => ({ useUniwindTheme: () => ({}) }));

@@ -338,7 +338,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                 ))}
               </SidebarMenu>
             ) : (
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-3 pb-4">
                 {navGroups.map((group) => (
                   <div key={group.label} role="group" aria-label={group.label}>
                     <SidebarGroupLabel aria-hidden>{group.label}</SidebarGroupLabel>
@@ -372,6 +372,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
           </div>
         </SidebarGroup>
       </SidebarContent>
+      <div className="mx-2 h-px shrink-0 bg-sidebar-border/60" aria-hidden />
       <SidebarFooter>
         <Suspense fallback={null}>
           <T3ConnectSidebarSignIn />

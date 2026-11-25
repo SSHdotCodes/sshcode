@@ -99,7 +99,7 @@ function OverviewSwitchRow() {
       icon={{ ios: "binoculars", android: "visibility" }}
       iconTint={SETTINGS_TINT.red}
       label="Overview"
-      subtitle="Prototype: ask what your chats are up to"
+      subtitle="Prototype: ask what your chats are up to."
       value={enabled}
       onValueChange={setEnabled}
     />

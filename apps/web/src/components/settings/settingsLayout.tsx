@@ -320,6 +320,7 @@ export function SettingsRow({
   resetAction,
   onResetOverride,
   control,
+  compactControl = false,
   serverScoped = false,
   settingKeys = EMPTY_SETTING_KEYS,
   mixed: mixedOverride,
@@ -334,6 +335,8 @@ export function SettingsRow({
   /** Replaces the default override clear for rows with side effects beyond the settings key. */
   onResetOverride?: () => void;
   control?: ReactNode;
+  /** Keeps compact controls (such as switches) right-aligned in narrower panes like Providers. */
+  compactControl?: boolean;
   serverScoped?: boolean;
   settingKeys?: readonly (keyof ServerSettings)[];
   mixed?: boolean;
@@ -519,7 +522,14 @@ export function SettingsRow({
         className,
       )}
     >
-      <div className="flex flex-col gap-3 @min-[32rem]/settings-row:grid @min-[32rem]/settings-row:grid-cols-[minmax(0,1fr)_minmax(10rem,auto)] @min-[32rem]/settings-row:items-center @min-[32rem]/settings-row:gap-8">
+      <div
+        className={cn(
+          "flex flex-col gap-3",
+          compactControl
+            ? "@min-[20rem]/settings-row:grid @min-[20rem]/settings-row:grid-cols-[minmax(0,1fr)_auto] @min-[20rem]/settings-row:items-center @min-[20rem]/settings-row:gap-6"
+            : "@min-[32rem]/settings-row:grid @min-[32rem]/settings-row:grid-cols-[minmax(0,1fr)_minmax(10rem,auto)] @min-[32rem]/settings-row:items-center @min-[32rem]/settings-row:gap-8",
+        )}
+      >
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-h-5 items-center gap-1.5">
             <h3 className="text-sm font-medium text-foreground">{title}</h3>
@@ -540,7 +550,14 @@ export function SettingsRow({
           ) : null}
         </div>
         {renderedControl ? (
-          <div className="flex w-full min-w-0 shrink-0 items-center gap-2 @min-[32rem]/settings-row:w-auto @min-[32rem]/settings-row:justify-end">
+          <div
+            className={cn(
+              "flex w-full min-w-0 shrink-0 items-center gap-2",
+              compactControl
+                ? "@min-[20rem]/settings-row:w-auto @min-[20rem]/settings-row:justify-end"
+                : "@min-[32rem]/settings-row:w-auto @min-[32rem]/settings-row:justify-end",
+            )}
+          >
             {renderedControl}
           </div>
         ) : null}

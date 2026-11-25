@@ -5,7 +5,7 @@ import { AppText as Text } from "./AppText";
 
 export function EmptyState(props: {
   readonly title: string;
-  readonly detail: string;
+  readonly detail: ReactNode;
   readonly actionLabel?: string;
   readonly onAction?: () => void;
   readonly action?: ReactNode;

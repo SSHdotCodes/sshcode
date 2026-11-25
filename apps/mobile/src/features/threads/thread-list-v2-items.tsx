@@ -967,9 +967,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       {thread.source.comparison ? (
         <Text
           className="text-xs text-foreground-muted"
-          accessibilityLabel={`${thread.source.comparison.threadIds.length} models`}
+          accessibilityLabel={`${thread.source.comparison.threadIds.length} ${thread.source.comparison.threadIds.length === 1 ? "model" : "models"}`}
         >
-          {thread.source.comparison.threadIds.length} models
+          {thread.source.comparison.threadIds.length}{" "}
+          {thread.source.comparison.threadIds.length === 1 ? "model" : "models"}
         </Text>
       ) : null}
       {status === "working" ? (
@@ -1021,9 +1022,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             {thread.source.comparison ? (
               <Text
                 className="text-xs text-foreground-muted"
-                accessibilityLabel={`${thread.source.comparison.threadIds.length} models`}
+                accessibilityLabel={`${thread.source.comparison.threadIds.length} ${thread.source.comparison.threadIds.length === 1 ? "model" : "models"}`}
               >
-                {thread.source.comparison.threadIds.length} models
+                {thread.source.comparison.threadIds.length}{" "}
+                {thread.source.comparison.threadIds.length === 1 ? "model" : "models"}
               </Text>
             ) : null}
             {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}

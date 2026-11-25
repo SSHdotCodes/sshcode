@@ -2183,7 +2183,7 @@ code {
 @media (prefers-reduced-motion: no-preference) {
   .chat-markdown[data-streaming] > *,
   .chat-markdown[data-streaming] .chat-markdown-shiki {
-    transition: opacity 600ms ease-out;
+    transition: opacity 220ms ease-out;
 
     @starting-style {
       opacity: 0;
@@ -3649,6 +3649,12 @@ html[data-ui-mode="discord"] [data-dc-members-dialog] {
       text-overflow: ellipsis;
     }
   }
+}
+
+/* Effort draws in the theme's text-weight accent: it is tuned to read as a thin line on either
+   background, where the solid action colour (a brick red in the Claude look) reads too red. */
+:root {
+  --effort-accent: var(--update-foreground);
 }
 
 /* The model picker's effort slider: the thumb glides with a small overshoot and the fill follows.

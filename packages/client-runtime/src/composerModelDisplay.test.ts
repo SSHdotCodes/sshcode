@@ -117,7 +117,7 @@ describe("effort levels", () => {
       filledBars: 7,
       barCount: 7,
       fx: 4,
-      accent: "#E07A50",
+      accent: "#EA8C55",
     });
     expect(effortGauge(ultracode).fill).toBe(effortGauge(ultracode).track);
     expect(effortDisplay([], undefined)).toBeNull();

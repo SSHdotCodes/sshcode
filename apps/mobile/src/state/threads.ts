@@ -1,3 +1,4 @@
+import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
 import { ThreadMediaHistory } from "@t3tools/client-runtime/state/threads";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -14,7 +15,7 @@ import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useEffect } from "react";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
@@ -68,6 +69,44 @@ export function preloadPhoneThread(environmentId: EnvironmentId, threadId: Threa
     return;
   const release = appAtomRegistry.mount(environmentThreads.stateAtom(environmentId, threadId));
   setTimeout(release, 1_000);
+}
+
+/** Warm one pending card with the same bounded subscription the thread screen will take over. */
+export function preloadPendingPhoneThread(environmentId: EnvironmentId, threadId: ThreadId) {
+  if (AppState.currentState !== "active" || !hasHydratedEnvironmentShell(environmentId)) return;
+  const atom = environmentThreads.stateAtom(environmentId, threadId);
+  let stopped = false;
+  const release = appAtomRegistry.subscribe(atom, stopWhenReady, { immediate: true });
+  const background = AppState.addEventListener("change", (state) => {
+    if (state !== "active") stop();
+  });
+  // A silent socket must not keep an unused transcript loading indefinitely.
+  const timeout = setTimeout(stop, 10_000);
+  function stop() {
+    if (stopped) return;
+    stopped = true;
+    clearTimeout(timeout);
+    background.remove();
+    release();
+  }
+  function stopWhenReady(result: Atom.Type<typeof atom>) {
+    // A retained live cursor can predate the question shown in the shell.
+    const hasCard =
+      AsyncResult.isSuccess(result) &&
+      result.value.status === "live" &&
+      Option.isSome(result.value.data) &&
+      derivePendingThreadRequests(result.value.data.value).userInputs.length > 0;
+    if (
+      hasCard ||
+      AsyncResult.isFailure(result) ||
+      (AsyncResult.isSuccess(result) &&
+        (result.value.status === "deleted" || Option.isSome(result.value.error)))
+    ) {
+      // A retained result can arrive inside subscribe, before its cleanup is assigned.
+      queueMicrotask(stop);
+    }
+  }
+  return stop;
 }
 
 /** Keeps the subagent tree under `rootThreadId` in the thread list while the caller shows it. */

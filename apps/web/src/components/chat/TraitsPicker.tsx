@@ -19,7 +19,7 @@ import {
   normalizeModelSlug,
 } from "@t3tools/shared/model";
 import { memo, useCallback } from "react";
-import { BrainIcon } from "lucide-react";
+import { BrainIcon, SlidersHorizontalIcon, ZapIcon } from "lucide-react";
 import {
   Menu,
   MenuGroup,
@@ -577,6 +577,8 @@ export interface TraitsTriggerDisplay {
   /** Visible text on either side of the bolt; `beforeSpeed` is the whole label without one. */
   beforeSpeed: string;
   afterSpeed: string;
+  /** Nothing differs from the defaults ("Normal" speed alone): the trigger shows only its icon. */
+  quiet?: true;
 }
 
 function textTraitsTriggerDisplay(label: string): TraitsTriggerDisplay {
@@ -638,7 +640,8 @@ export function buildTraitsTriggerDisplay(input: {
         ? "Ultrathink"
         : descriptor.type === "boolean"
           ? descriptor.currentValue === true
-            ? `${descriptor.label} On`
+            ? // A toggle that is on shows its name: "Contributor mode" reads "Contributor".
+              descriptor.label.replace(/\s+mode$/iu, "")
             : null
           : getProviderOptionCurrentLabel(
               descriptor,
@@ -665,7 +668,7 @@ export function buildTraitsTriggerDisplay(input: {
   if (labels.length === 0 && fastModeFallbackLabel !== null) {
     return speedIcon
       ? { label: fastModeFallbackLabel, speedIcon, beforeSpeed: "", afterSpeed: "" }
-      : textTraitsTriggerDisplay(fastModeFallbackLabel);
+      : { ...textTraitsTriggerDisplay(fastModeFallbackLabel), quiet: true };
   }
   if (!speedLabel || !speedIcon) return textTraitsTriggerDisplay(labels.join(" · "));
   if (reasoningLabelIndex >= 0) {
@@ -762,6 +765,17 @@ export const TraitsPicker = memo(function TraitsPicker({
   const triggerDescriptors = omitReasoning
     ? descriptors.filter((descriptor) => !isReasoningSelectDescriptor(descriptor))
     : descriptors;
+  // The icon says what the menu holds: effort is a brain, speed alone a bolt, anything else
+  // (context, toggles) the sliders. Effort usually lives in the model picker now.
+  const isSpeedDescriptor = (descriptor: ProviderOptionDescriptor) =>
+    (descriptor.id === "fastMode" && descriptor.type === "boolean") ||
+    acpSpeedChoices(descriptor) !== null ||
+    (provider === "codex" && descriptor.id === "serviceTier");
+  const TriggerIcon = triggerDescriptors.some(isReasoningSelectDescriptor)
+    ? BrainIcon
+    : triggerDescriptors.length > 0 && triggerDescriptors.every(isSpeedDescriptor)
+      ? ZapIcon
+      : SlidersHorizontalIcon;
   const triggerDisplay = buildTraitsTriggerDisplay({
     provider,
     descriptors: triggerDescriptors,
@@ -786,6 +800,8 @@ export const TraitsPicker = memo(function TraitsPicker({
     triggerDisplay.label || traitsEmptyTriggerLabel(triggerDescriptors)
   );
   const isCodexStyle = provider === "codex";
+  // Default speed alone ("Normal") or no label at all: the icon and tooltip say enough.
+  const quiet = triggerDisplay.quiet === true || triggerDisplay.label.length === 0;
 
   return (
     <Menu
@@ -807,9 +823,11 @@ export const TraitsPicker = memo(function TraitsPicker({
                   }
                   size={size}
                   className={cn(
-                    isCodexStyle
-                      ? "min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap sm:max-w-48"
-                      : "shrink-0 whitespace-nowrap",
+                    quiet
+                      ? "aspect-square shrink-0 px-0"
+                      : isCodexStyle
+                        ? "min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap sm:max-w-48"
+                        : "shrink-0 whitespace-nowrap",
                     triggerClassName,
                   )}
                 />
@@ -817,7 +835,9 @@ export const TraitsPicker = memo(function TraitsPicker({
             />
           }
         >
-          {isCodexStyle ? (
+          {quiet ? (
+            <ComposerControlIcon icon={TriggerIcon} size={size} />
+          ) : isCodexStyle ? (
             // The label truncates itself; clipping the wrapper too would cut off
             // the chevron, whose negative end margin overhangs the wrapper edge.
             <span
@@ -826,7 +846,7 @@ export const TraitsPicker = memo(function TraitsPicker({
                 size === "xs" ? "gap-1" : "gap-1.5",
               )}
             >
-              <ComposerControlIcon icon={BrainIcon} size={size} />
+              <ComposerControlIcon icon={TriggerIcon} size={size} />
               <span data-composer-control-label className="min-w-0 truncate">
                 {visibleTriggerLabel}
               </span>
@@ -834,7 +854,7 @@ export const TraitsPicker = memo(function TraitsPicker({
             </span>
           ) : (
             <>
-              <ComposerControlIcon icon={BrainIcon} size={size} />
+              <ComposerControlIcon icon={TriggerIcon} size={size} />
               <span data-composer-control-label>{visibleTriggerLabel}</span>
               <ComposerControlChevron size={size} />
             </>

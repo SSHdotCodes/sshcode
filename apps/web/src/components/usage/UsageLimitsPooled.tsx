@@ -32,6 +32,7 @@ import {
   AlertTriangleIcon,
   CloudIcon,
   ExternalLinkIcon,
+  GaugeIcon,
   TicketIcon,
   TimerResetIcon,
 } from "lucide-react";
@@ -43,6 +44,7 @@ import { cn } from "../../lib/utils";
 import { formatClockTime, formatUpcomingTimestamp } from "../../timestampFormat";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { providerClients } from "../settings/providerDriverMeta";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { RedactedSensitiveText } from "../settings/RedactedSensitiveText";
 import { Button } from "../ui/button";
 import { OpenAI } from "../Icons";
@@ -820,9 +822,17 @@ export function UsageLimitsPooled({
   return (
     <div className="flex flex-col gap-8">
       {pools.length === 0 && notices.length === 0 && !cursorPrompt && externalLinks.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No provider on the selected environments reports subscription limits.
-        </p>
+        <Empty>
+          <EmptyMedia variant="icon">
+            <GaugeIcon aria-hidden />
+          </EmptyMedia>
+          <EmptyHeader>
+            <EmptyTitle>No subscription limits</EmptyTitle>
+            <EmptyDescription>
+              No provider on the selected environments reports subscription limits.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : null}
       {pools.map((pool, index) => (
         <Fragment key={pool.key}>

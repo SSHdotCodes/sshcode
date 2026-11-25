@@ -13,7 +13,7 @@ vi.mock("expo-haptics", () => ({
 vi.mock("../../components/AppText", () => ({
   AppText: (props: { children: ReactNode }) => <span>{props.children}</span>,
 }));
-vi.mock("uniwind", () => ({ useResolveClassNames: () => ({ backgroundColor: "#346bf1" }) }));
+vi.mock("uniwind", () => ({ useResolveClassNames: () => ({ color: "#4b7cf3" }) }));
 vi.mock("react-native", () => ({
   StyleSheet: { flatten: (style: unknown) => style },
   View: (props: {

@@ -104,6 +104,13 @@ describe("V2 session presentation", () => {
     // keeps offering Stop, unchanged from before.
     expect(derivePhase(runtimeWithStatus("waiting"))).toBe("running");
     expect(deriveCanInterruptRunningThread(true, runtimeWithStatus("waiting"))).toBe(true);
+    const backgroundWait = {
+      ...runtimeWithStatus("idle", runId),
+      waitingOnBackgroundWork: true as const,
+    };
+    expect(derivePhase(backgroundWait)).toBe("running");
+    expect(deriveCanInterruptRunningThread(true, backgroundWait)).toBe(true);
+    expect(deriveCanInterruptRunningThread(true, runtimeWithStatus("idle"))).toBe(false);
 
     // No runtime at all: nothing to interrupt.
     expect(deriveCanInterruptRunningThread(true, null)).toBe(false);

@@ -471,6 +471,13 @@ export function useComposerCommandMenu({
         : [],
     [projectCwd, selectedProviderStatus, sharedSkills],
   );
+  const trigger = useMemo(() => {
+    if (!enabled || selection.start !== selection.end) {
+      return null;
+    }
+    return detectComposerTrigger(draftMessage, selection.end);
+  }, [draftMessage, enabled, selection]);
+  const needsWorkspaceCommands = trigger?.kind === "slash-command" || trigger?.kind === "skill";
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
@@ -496,6 +503,7 @@ export function useComposerCommandMenu({
     ) ?? false;
   useEffect(() => {
     if (
+      !needsWorkspaceCommands ||
       !workspaceSlashCommandsPending ||
       !workspaceRefreshRetry ||
       workspaceRefreshRetry.key !== workspaceRefreshScopeKey
@@ -508,7 +516,12 @@ export function useComposerCommandMenu({
       Math.max(0, workspaceRefreshRetry.notBefore - Date.now()),
     );
     return () => clearTimeout(timeout);
-  }, [workspaceRefreshRetry, workspaceRefreshScopeKey, workspaceSlashCommandsPending]);
+  }, [
+    needsWorkspaceCommands,
+    workspaceRefreshRetry,
+    workspaceRefreshScopeKey,
+    workspaceSlashCommandsPending,
+  ]);
   const hadWorkspaceSnapshotRef = useRef(false);
   useEffect(() => {
     if (hadWorkspaceSnapshotRef.current && !hasWorkspaceSnapshot) {
@@ -518,7 +531,8 @@ export function useComposerCommandMenu({
     hadWorkspaceSnapshotRef.current = hasWorkspaceSnapshot;
   }, [hasWorkspaceSnapshot]);
   useEffect(() => {
-    if (!environmentId || !projectCwd || !selectedProviderInstanceId) return;
+    if (!needsWorkspaceCommands || !environmentId || !projectCwd || !selectedProviderInstanceId)
+      return;
     const key = `${environmentId}:${selectedProviderInstanceId}:${projectCwd}`;
     const now = Date.now();
     const lastRequest = workspaceRefreshKeyRef.current;
@@ -560,6 +574,7 @@ export function useComposerCommandMenu({
   }, [
     draftMessage,
     environmentId,
+    needsWorkspaceCommands,
     projectCwd,
     refreshProviders,
     selectedProviderInstanceId,
@@ -567,12 +582,6 @@ export function useComposerCommandMenu({
     workspaceRefreshRetry,
   ]);
 
-  const trigger = useMemo(() => {
-    if (!enabled || selection.start !== selection.end) {
-      return null;
-    }
-    return detectComposerTrigger(draftMessage, selection.end);
-  }, [draftMessage, enabled, selection]);
   // Workflows load only while an `@` query is typed, so idle composers stay off the stream.
   const workflowQuery = onPickWorkflow && trigger?.kind === "path" ? trigger.query.trim() : "";
   const mentionWorkflows =

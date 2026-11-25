@@ -28,7 +28,7 @@ export type ModelPickerRunsInRoute = {
 };
 
 const ROW =
-  "flex min-h-7 w-full shrink-0 cursor-pointer flex-col justify-center rounded-sm px-2 py-1 text-left text-xs text-foreground outline-none hover:bg-foreground/[0.09] focus-visible:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-50";
+  "flex min-h-7 w-full shrink-0 cursor-pointer flex-col justify-center rounded-sm px-2 py-1 text-left text-xs text-foreground outline-none transition-[background-color,color,scale] duration-100 ease-out motion-reduce:transition-none hover:bg-foreground/[0.09] active:scale-[0.985] motion-reduce:active:scale-100 focus-visible:bg-foreground/[0.09] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100";
 
 function routeIsBlocked(route: ModelPickerRunsInRoute, canOpenSetup: boolean) {
   return route.disabledReason !== null && !(route.canOpenSetup && canOpenSetup);

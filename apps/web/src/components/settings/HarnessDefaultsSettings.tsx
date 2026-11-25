@@ -99,11 +99,7 @@ function EnvironmentHarnessDefaults({
         if (next !== null) change(next === CONFIG ? null : next);
       }}
     >
-      <SelectTrigger
-        size="sm"
-        aria-label={title}
-        className="min-w-0 w-full @min-[32rem]/settings-row:w-72"
-      >
+      <SelectTrigger size="sm" aria-label={title}>
         <SelectValue>
           {choices.find((choice) => choice.id === value)?.label ?? configLabel}
         </SelectValue>

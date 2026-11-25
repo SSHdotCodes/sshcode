@@ -1381,6 +1381,12 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
           ["Second", "running"],
         ],
       );
+      const checklist = events.findLast(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "todo_list",
+      );
+      assert.isTrue(
+        checklist?.type === "turn_item.updated" && checklist.turnItem.status === "completed",
+      );
       assert.isFalse(
         events.some(
           (event) =>
@@ -1862,7 +1868,11 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
         "a pending timer must keep the agent process",
       );
 
-      yield* send({ sessionUpdate: "tool_call_update", ...command, status: "completed" });
+      yield* send({
+        sessionUpdate: "tool_call_update",
+        toolCallId: command.toolCallId,
+        status: "completed",
+      });
       assert.lengthOf(offers, 1, "the timer must wake the thread");
       yield* offers[0]!.dispatchIfCurrent!(Effect.void);
       yield* startTurn(2, true);
@@ -1886,6 +1896,18 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
             event.turnItem.runId === RunId.make("run-antigravity-wake-2"),
         ),
         "the reply belongs to the continuation run",
+      );
+      const doneTimer = continued.find(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.nativeItemRef?.nativeId === command.toolCallId,
+      );
+      assert.isTrue(
+        doneTimer?.type === "turn_item.updated" && doneTimer.turnItem.status === "completed",
+      );
+      assert.equal(
+        doneTimer?.type === "turn_item.updated" && doneTimer.turnItem.runId,
+        RunId.make("run-antigravity-wake-1"),
       );
       assert.isFalse(yield* session.hasPendingBackgroundWork!);
       assert.lengthOf(offers, 1, "one timer is one run");
@@ -1927,6 +1949,40 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
       );
       assert.isFalse(yield* opened.session.hasPendingBackgroundWork!);
       assert.lengthOf(opened.offers, 0, "a dead timer wakes nothing");
+    }).pipe(Effect.provide(layerSession)),
+  );
+
+  it.effect("stops a native timer that outlived an older prompt", () =>
+    Effect.gen(function* () {
+      const opened = yield* openSessionWithRunningCommand(
+        { DurationSeconds: 1800, Prompt: "Check progress" },
+        { kind: "other", title: "Run schedule" },
+        { agentVersion: "1.5.13", holdsFirstPrompt: false },
+      );
+      yield* opened.startTurn(1, false);
+      const initial = yield* opened.throughTerminal;
+      const turn = initial.find((event) => event.type === "provider_turn.updated");
+      if (turn === undefined) return assert.fail("Expected a native provider turn");
+      yield* opened.session.interruptTurn({
+        providerThread: opened.providerThread,
+        providerTurnId: turn.providerTurn.id,
+        requestRuntimeRestart: true,
+      });
+      const stopped = yield* opened.until(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.nativeItemRef?.nativeId === opened.command.toolCallId &&
+          event.turnItem.status === "interrupted",
+      );
+      assert.include(stopped.at(-1), { sessionScoped: true });
+      assert.equal(opened.cancels(), 1);
+      assert.isFalse(yield* opened.session.hasPendingBackgroundWork!);
+      yield* opened.send({
+        sessionUpdate: "tool_call_update",
+        toolCallId: opened.command.toolCallId,
+        status: "completed",
+      });
+      assert.lengthOf(opened.offers, 0);
     }).pipe(Effect.provide(layerSession)),
   );
 
@@ -3980,6 +4036,106 @@ describe("AntigravityAdapterV2 per-turn usage and read-repair across steer", () 
 });
 
 describe("AntigravityAdapterV2 agy >= 1.5.15 open-prompt background waiting", () => {
+  it.effect("keeps the timer wait through native tool updates and a steer", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-11-25T05:30:52.935Z"));
+      const opened = yield* openSessionWithRunningCommand(
+        { DurationSeconds: 1800, Prompt: "Check progress" },
+        { kind: "other", title: "Run schedule" },
+        { agentVersion: "1.5.16", holdsFirstPrompt: true },
+      );
+      const { session, providerThread, command: timer, usage, send, startTurn, until } = opened;
+      const command = {
+        toolCallId: "call_rollouts",
+        title: "Run command",
+        kind: "execute",
+        rawInput: {
+          CommandLine: "run-rollouts",
+          WaitMsBeforeAsync: 500,
+          IsDaemon: false,
+          toolSummary: "Run teacher rollouts on Modal",
+        },
+      } as const;
+      const waitRoster = (count: number) =>
+        until(
+          (event) =>
+            event.type === "provider_thread.updated" &&
+            event.providerThread.waitingOnBackgroundWork === true &&
+            event.providerThread.pendingBackgroundTasks?.length === count,
+        );
+      yield* startTurn(1, false);
+      const started = yield* waitRoster(1);
+      const waiting = started.at(-1);
+      assert.deepEqual(
+        waiting?.type === "provider_thread.updated" &&
+          waiting.providerThread.pendingBackgroundTasks,
+        [
+          {
+            taskId: timer.toolCallId,
+            kind: "background_task",
+            description: "Set timer",
+            wakeAt: "2026-11-25T06:00:52.935Z",
+          },
+        ],
+      );
+      yield* send({ sessionUpdate: "tool_call", ...command, status: "in_progress" });
+      yield* waitRoster(2);
+      yield* send(usage);
+      const providerTurnId = started.flatMap((event) =>
+        event.type === "provider_turn.updated" ? [event.providerTurn.id] : [],
+      )[0]!;
+      yield* session.steerTurn({
+        threadId: ThreadId.make("thread-antigravity-wake"),
+        runId: RunId.make("run-antigravity-wake-1"),
+        providerThread,
+        providerTurnId,
+        message: {
+          messageId: MessageId.make("steer-while-timer-waits"),
+          text: "Check the rollouts too",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+        },
+      });
+      assert.equal(opened.cancels(), 0);
+      yield* send({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "I will check the rollouts." },
+      });
+      // Native command updates after assistant text must not overwrite the reply's end signal.
+      yield* send({
+        sessionUpdate: "tool_call_update",
+        toolCallId: command.toolCallId,
+        status: "in_progress",
+      });
+      yield* send(usage);
+      yield* waitRoster(2);
+      yield* send({
+        sessionUpdate: "tool_call_update",
+        toolCallId: command.toolCallId,
+        status: "failed",
+      });
+      const afterFailure = yield* waitRoster(1);
+      const timerOnly = afterFailure.at(-1);
+      assert.deepEqual(
+        timerOnly?.type === "provider_thread.updated" &&
+          timerOnly.providerThread.pendingBackgroundTasks?.map((task) => task.taskId),
+        [timer.toolCallId],
+      );
+      yield* send({
+        sessionUpdate: "tool_call_update",
+        toolCallId: timer.toolCallId,
+        status: "completed",
+      });
+      yield* opened.releaseSteer;
+      const terminal = yield* opened.throughTerminal;
+      const cleared = terminal.findLast((event) => event.type === "provider_thread.updated");
+      assert.deepEqual(cleared?.providerThread.pendingBackgroundTasks, []);
+      assert.equal(terminal.at(-1)?.type, "turn.terminal");
+      assert.equal(opened.cancels(), 0);
+    }).pipe(Effect.provide(layerSession), Effect.scoped),
+  );
+
   it.effect(
     "publishes waitingOnBackgroundWork while an open 1.5.16 prompt waits on background tasks/subagents, clears on wake, and finalizes immediately on prompt return",
     () =>
@@ -4154,10 +4310,11 @@ describe("AntigravityAdapterV2 agy >= 1.5.15 open-prompt background waiting", ()
             }
           });
 
-        // 1. After initial reply closes with usage_update, providerThread reports waitingOnBackgroundWork.
+        // Wait for both tasks so an update from midway through the launch cannot satisfy this check.
         const waitingThread = yield* waitFor((event) =>
           event.type === "provider_thread.updated" &&
-          event.providerThread.waitingOnBackgroundWork === true
+          event.providerThread.waitingOnBackgroundWork === true &&
+          event.providerThread.pendingBackgroundTasks?.length === 2
             ? event.providerThread
             : undefined,
         );

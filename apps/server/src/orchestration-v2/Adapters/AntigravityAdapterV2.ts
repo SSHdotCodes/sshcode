@@ -286,6 +286,7 @@ export function makeAntigravityAcpAdapterFlavor(
     steersWithPrompt: antigravitySteersWithPrompt,
     // `agy acp` 1.5.15+ keeps `session/prompt` open while non-daemon background tasks or subagents run.
     promptHoldsBackgroundWork: antigravityKeepsPromptOpenForBackgroundWork,
+    todoListUpdatesAreSnapshots: true,
     ...(options.onSessionEvent === undefined ? {} : { onSessionEvent: options.onSessionEvent }),
     applyModelSelection: ({ runtime, modelSelection }) =>
       Effect.gen(function* () {

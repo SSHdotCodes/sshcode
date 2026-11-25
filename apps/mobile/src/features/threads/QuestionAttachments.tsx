@@ -179,9 +179,9 @@ export function QuestionAttachments(props: {
       </ImageMarkupDraftKey>
       <VideoPreviewModal source={previewVideo} onRequestClose={() => setPreviewVideo(null)} />
       {/* The add button sits beside the field it attaches to, like the composer's. */}
-      <View className="flex-row items-end gap-1">
+      <View className="flex-row items-end gap-2">
         {canAttach ? (
-          <View className="mb-[5px]">
+          <View className="mb-1 rounded-full border border-input-border bg-input">
             <ComposerAttachmentButton
               disabled={props.disabled}
               supportsFiles={Boolean(capabilities?.fileAttachments)}

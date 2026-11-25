@@ -214,7 +214,8 @@ export function ThreadSettingsEffort(props: {
     value,
   ]);
 
-  const primary = StyleSheet.flatten(useResolveClassNames("bg-primary"))?.backgroundColor;
+  // The text-weight accent, as the composer's dial uses.
+  const primary = StyleSheet.flatten(useResolveClassNames("text-primary-text"))?.color;
   // The theme colour, or Ultracode's own warm accent.
   const tone = active?.accent ?? (typeof primary === "string" ? primary : "#346BF1");
   const glow = GLOW[fx] ?? GLOW[0];

@@ -38,6 +38,7 @@ import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullR
 import { useAtomValue } from "@effect/atom-react";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 import { longRunningFactsForShell, pinnedWaitingLine } from "@t3tools/shared/chatControls";
+import { presentBackgroundWaitInThreadRow } from "@t3tools/client-runtime/state/thread-execution";
 import * as ThreadUndo from "../hooks/threadUndo";
 import { showThreadUndoNotice } from "../hooks/showThreadUndoNotice";
 import * as Schema from "effect/Schema";
@@ -1302,7 +1303,7 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
         data-testid="sidebar-draft-row"
         data-sidebar-thread-row
         className={cn(
-          "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left text-sidebar-foreground outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left text-sidebar-foreground outline-none select-none transition-[background-color,color,scale] duration-100 ease-out motion-reduce:transition-none active:scale-[0.99] motion-reduce:active:scale-100 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
           props.isActive ? "bg-sidebar-row-active" : draftSurfaceClassName,
         )}
         onClick={handleActivate}
@@ -2055,14 +2056,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // a useful hierarchy nor a reliable hover cue. Status now lives in the row
   // content; surface is reserved for interaction (hover, multi-select, route).
   const rowSurfaceClassName = cn(
-    "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+    "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none transition-[background-color,color,scale] duration-100 ease-out motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     props.isActive
       ? "bg-sidebar-row-active text-sidebar-foreground"
       : isSelected || props.sweepAction !== null
         ? "bg-sidebar-row-selected text-sidebar-foreground"
         : hasUnsentDraft
           ? cn(draftSurfaceClassName, "text-sidebar-foreground")
-          : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
+          : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover active:bg-sidebar-row-active",
+    !props.sortable?.isDragging && "active:scale-[0.99] motion-reduce:active:scale-100",
     isFileDragOver && "ring-1 ring-inset ring-primary/70",
     isFileDragOver && !props.isActive && !isSelected && "bg-sidebar-row-hover",
     // The lifted row is an opaque card so the rows beneath it never show
@@ -2124,7 +2126,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // title both lines, so look-alike chats read apart instead of cutting off after a word.
   // What an idle chat has out ("1 subagent running", "Waiting on 2 monitors",
   // "Next run Tue 5:00 AM") crowded the status slot, so it gets the line under the title.
-  const waitingLine = props.waitingStatus ?? null;
+  const waitingLine =
+    (status === "waiting"
+      ? presentBackgroundWaitInThreadRow(thread.pendingBackgroundTasks)
+      : null) ??
+    props.waitingStatus ??
+    null;
   const wrapsTitle =
     waitingLine === null &&
     thread.source.comparison == null &&

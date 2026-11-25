@@ -473,7 +473,7 @@ function ThreadRouteContent(
   // lists belong to the Git sheets and Review header so opening/reconnecting a
   // thread does not fire server.discoverSourceControl or vcs.listRefs.
   const gitActionState = useVcsActionState(selectedThreadGitTarget);
-  const gitActions = useSelectedThreadGitActions();
+  const gitActions = useSelectedThreadGitActions({ observeRepository: false });
   const requests = useSelectedThreadRequests(composer.composerDraftKey);
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
   const loadEarlierHistory = useAtomCommand(threadEnvironment.loadEarlierHistory, {

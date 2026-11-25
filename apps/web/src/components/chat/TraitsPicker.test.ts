@@ -117,7 +117,7 @@ describe("buildTraitsTriggerDisplay", () => {
     };
     expect(display([contributor]).label).toBe("");
     expect(traitsEmptyTriggerLabel([contributor])).toBe("Contributor mode Off");
-    expect(display([{ ...contributor, currentValue: true }]).label).toBe("Contributor mode On");
+    expect(display([{ ...contributor, currentValue: true }]).label).toBe("Contributor");
     // Several switches have no single name to show.
     expect(
       traitsEmptyTriggerLabel([
@@ -188,7 +188,7 @@ describe("buildTraitsTriggerDisplay", () => {
         primarySelectDescriptorId: "reasoning",
         ultrathinkPromptControlled: false,
       }),
-    ).toMatchObject({ label: "High Fast · Thinking On" });
+    ).toMatchObject({ label: "High Fast · Thinking" });
   });
 
   it.each([true, false])("keeps boolean thinking %s independent of Fast", (currentValue) => {
@@ -198,7 +198,7 @@ describe("buildTraitsTriggerDisplay", () => {
       type: "boolean" as const,
       currentValue,
     };
-    const label = currentValue ? "Thinking On" : "";
+    const label = currentValue ? "Thinking" : "";
     expect(display([thinking, fastModeDescriptor(true)])).toMatchObject({
       label: currentValue ? `${label} · Fast` : "Fast",
     });
@@ -292,12 +292,12 @@ describe("buildTraitsTriggerDisplay", () => {
       type: "boolean",
       currentValue: true,
     };
-    expect(display([EFFORT, thinking])).toMatchObject({ label: "High · Thinking On" });
+    expect(display([EFFORT, thinking])).toMatchObject({ label: "High · Thinking" });
   });
 
   it("falls back to a text label when fast mode is the only trait", () => {
     expect(display([fastModeDescriptor(true)])).toMatchObject({ label: "Fast" });
-    expect(display([fastModeDescriptor(false)])).toMatchObject({ label: "Normal" });
+    expect(display([fastModeDescriptor(false)])).toMatchObject({ label: "Normal", quiet: true });
   });
 
   it("does not add Fast to a model without a speed option", () => {
@@ -376,6 +376,8 @@ describe("buildTraitsTriggerDisplay", () => {
         speedIcon: null,
         beforeSpeed: result.label,
         afterSpeed: "",
+        // Default speed alone ("Normal") leaves the trigger as just its icon.
+        ...(result.quiet ? { quiet: true } : {}),
       });
     }
   });

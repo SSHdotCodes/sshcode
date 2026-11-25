@@ -1,6 +1,7 @@
-import { HarnessMascot } from "../HarnessMascot";
+import { HarnessMascot, HarnessMascotAgentId, HarnessMascotDriver } from "../HarnessMascot";
+import { harnessMascotForDriver } from "@t3tools/shared/harnessMascots";
 import { type RuntimeRequestId, type ScopedThreadRef } from "@t3tools/contracts";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { type PendingUserInput } from "../../session-logic";
 import {
   derivePendingUserInputProgress,
@@ -89,6 +90,9 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   onDismiss: (requestId: RuntimeRequestId) => void;
   menuOpen: boolean;
 }) {
+  const mascotDriver = useContext(HarnessMascotDriver);
+  const mascotAgentId = useContext(HarnessMascotAgentId);
+  const hasMascot = harnessMascotForDriver(mascotDriver, mascotAgentId) !== null;
   // Message-mode requests remain answerable after their provider turn ends.
   const canRespond = prompt.responseCapability !== "not_resumable";
   const responseDisabled = disabled || isResponding || !canRespond;
@@ -234,9 +238,11 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
           data-pending-user-input-toggle={isCollapsed ? "collapsed" : "expanded"}
         >
           {/* In the icon column: as a bare child of the row's grid it landed on a line of its own. */}
-          <ComposerBanner.Icon className="[&>svg]:size-6">
-            <HarnessMascot state="waiting" size={24} />
-          </ComposerBanner.Icon>
+          {hasMascot ? (
+            <ComposerBanner.Icon className="[&>svg]:size-6">
+              <HarnessMascot state="waiting" size={24} />
+            </ComposerBanner.Icon>
+          ) : null}
           <ComposerBanner.Content>
             <span className="shrink-0 font-medium text-muted-foreground">
               {activeQuestion.header}

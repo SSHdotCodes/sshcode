@@ -1182,7 +1182,7 @@ export function ProviderInstanceCard({
       >
         <div
           className={cn(
-            "pointer-events-none relative flex min-w-0 flex-1 items-start gap-3 rounded-md text-left transition-opacity",
+            "pointer-events-none relative flex min-w-0 flex-1 items-center gap-3 rounded-md text-left transition-opacity",
             !enabled && !selected && "opacity-60 group-hover:opacity-100",
           )}
         >
@@ -1371,6 +1371,7 @@ export function ProviderInstanceCard({
           }
         />
         <SettingsRow
+          compactControl
           title="Trains on what it's sent"
           description="For a plan that uses your chats to improve its models and has no switch against it. Agents are told before they give it a subagent's work."
           control={

@@ -21,6 +21,8 @@ const providers = [
   provider("claudeAgent_qwen4", "claudeAgent", ["claude-opus-5-5"]),
   provider("claudeAgent", "claudeAgent", ["claude-opus-5-5", "claude-haiku-5-5"]),
   provider("codex", "codex", ["gpt-6.1-sol"]),
+  provider("opencode_alt", "opencode", ["anthropic/claude-opus-4-6"]),
+  provider("opencode", "opencode", ["anthropic/claude-opus-4-6", "openai/gpt-5.4"]),
 ];
 
 describe("workflow tool", () => {
@@ -32,6 +34,17 @@ describe("workflow tool", () => {
     expect(resolveWorkflowModel("claudeAgent_qwen4/claude-opus-5-5", providers)?.instanceId).toBe(
       "claudeAgent_qwen4",
     );
+    expect(resolveWorkflowModel("anthropic/claude-opus-4-6", providers)).toEqual({
+      instanceId: "opencode",
+      model: "anthropic/claude-opus-4-6",
+    });
+    expect(resolveWorkflowModel("opencode_alt/anthropic/claude-opus-4-6", providers)).toEqual({
+      instanceId: "opencode_alt",
+      model: "anthropic/claude-opus-4-6",
+    });
+    expect(
+      resolveWorkflowModel("unknown_instance/anthropic/claude-opus-4-6", providers),
+    ).toBeNull();
     expect(resolveWorkflowModel("gpt-0", providers)).toBeNull();
   });
 

@@ -677,13 +677,21 @@ export interface ViewedImageAsset {
   readonly srcFragment: string;
 }
 
+/** Escape URL syntax in a tool's literal file path before Markdown media resolution. */
+export function viewedImageMarkdownSource(path: string): string {
+  return isWorkspaceImagePreviewPath(path) && !/^file:/i.test(path)
+    ? path.replace(/[%#?]/g, encodeURIComponent)
+    : path;
+}
+
 export function resolveViewedImageAsset(
-  source: string,
+  path: string,
   input: {
     readonly threadId: ThreadId;
     readonly workspaceRoot?: string | null | undefined;
   },
 ): ViewedImageAsset | null {
+  const source = viewedImageMarkdownSource(path);
   // A relative path with no known workspace still names a media-file relative
   // to the thread's workspace, so classify against "." and drop the prefix.
   const imageSource = classifyMarkdownImageSource(source, input.workspaceRoot ?? ".");

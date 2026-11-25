@@ -7,17 +7,12 @@ import { RefreshIcon } from "~/components/ui/refresh-icon";
  * found leaves the branch unjoined — the gap is the whole picture, so it is drawn once and the
  * variants only decide whether the seam closes.
  *
- * An empty page and an unread one look the same, so the states that are showing a host's answer
- * offer to ask for it again. The two that are not — a search still in flight, and a workspace
- * with no project to read from — leave the button out, since pressing it could only repeat what
- * is already happening or ask nobody.
  */
-import { PlusIcon, SearchIcon } from "lucide-react";
+import { SearchIcon } from "lucide-react";
 
-import { openCommandPalette } from "../../commandPaletteBus";
 import { Button } from "../ui/button";
 import { PullRequestListGhost } from "./PullRequestGhosts";
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 
 /**
  * Drawn at the weight of the icons beside it rather than as an illustration with its own
@@ -70,7 +65,6 @@ export function PullRequestListEmptyState({
   query,
   filtered,
   searching,
-  hasProjects,
   canLoadMore,
   loadingMore,
   refreshing,
@@ -84,11 +78,6 @@ export function PullRequestListEmptyState({
   filtered: boolean;
   /** A search is in flight; the rows on screen are the previous answer. */
   searching: boolean;
-  /**
-   * Whether this environment holds a project at all. The list is assembled from the projects'
-   * remotes, so without one there is no host to ask and no filter or search that could help.
-   */
-  hasProjects: boolean;
   canLoadMore: boolean;
   loadingMore: boolean;
   /** A re-read of the hosts is already running, from here or from the header. */
@@ -97,27 +86,6 @@ export function PullRequestListEmptyState({
   onLoadMore: () => void;
   onRefresh: () => void;
 }) {
-  // Ahead of the search and the filters, because neither can produce a row until a project does.
-  if (!hasProjects) {
-    return (
-      <Empty>
-        <BranchMark joined={false} />
-        <EmptyHeader>
-          <EmptyTitle>No projects in this workspace</EmptyTitle>
-          <EmptyDescription>
-            Add a project, and the pull requests from its repository appear here.
-          </EmptyDescription>
-        </EmptyHeader>
-        <EmptyContent>
-          <Button size="sm" onClick={() => openCommandPalette({ open: "add-project" })}>
-            <PlusIcon className="size-3.5" />
-            Add project
-          </Button>
-        </EmptyContent>
-      </Empty>
-    );
-  }
-
   if (searching) {
     // The same ghost the first load wears, so a search on its way and a list on its way are
     // one state to the eye — with the question named where the group headers usually speak.
@@ -162,11 +130,13 @@ export function PullRequestListEmptyState({
     <Empty>
       <BranchMark joined={false} />
       <EmptyHeader>
-        <EmptyTitle>{filtered ? "Nothing under these filters" : "No pull requests"}</EmptyTitle>
+        <EmptyTitle>
+          {filtered ? "Nothing under these filters" : "No open pull requests"}
+        </EmptyTitle>
         <EmptyDescription>
           {filtered
             ? "Widen the state, involvement or project filter to see more."
-            : "Pull requests from every project in this workspace appear here."}
+            : "Pull requests you open, review or are asked to review on GitHub show here."}
         </EmptyDescription>
       </EmptyHeader>
       <div className="flex flex-wrap justify-center gap-2">

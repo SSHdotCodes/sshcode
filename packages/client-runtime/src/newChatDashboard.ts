@@ -1,5 +1,5 @@
 import { harnessIdentityTint } from "@t3tools/shared/harnessMascots";
-import type { EnvironmentId, ServerConfig } from "@t3tools/contracts";
+import type { EnvironmentId, ScheduledTask, ServerConfig } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { collectLimitAccounts } from "@t3tools/shared/usageLimits";
 import type { AccountSelection } from "@t3tools/shared/accountBalance";
@@ -26,6 +26,12 @@ const resetDate = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/New_York",
   month: "short",
   day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+});
+const scheduledTaskStartTime = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
   hour: "numeric",
   minute: "2-digit",
   hour12: true,
@@ -353,6 +359,51 @@ export type ChatBackdropMood = "idle" | (typeof BACKDROP_MOODS)[number];
  */
 export function chatBackdropMood(mascotState: string): ChatBackdropMood {
   return BACKDROP_MOODS.find((mood) => mood === mascotState) ?? "idle";
+}
+
+export type UpcomingScheduledTask = Pick<
+  ScheduledTask,
+  "id" | "title" | "enabled" | "schedule" | "nextRunAt" | "threadId"
+>;
+
+export interface UpcomingScheduledTaskEntry<
+  A extends UpcomingScheduledTask = UpcomingScheduledTask,
+> {
+  readonly task: A;
+  readonly runAt: string;
+  readonly startsLabel: string;
+}
+
+/** The upcoming one-time task's clock time in the user's product timezone. */
+export function formatScheduledTaskStart(runAt: string): string {
+  return scheduledTaskStartTime.format(Date.parse(runAt));
+}
+
+/**
+ * Enabled one-time tasks due in the next twelve hours, soonest first. `nextRunAt`
+ * is the scheduler's source of truth; a past or missing one is either overdue catch-up
+ * or already spent, not an upcoming start.
+ */
+export function selectUpcomingScheduledTasks<A extends UpcomingScheduledTask>(
+  tasks: ReadonlyArray<A>,
+  now: number,
+  limit = 3,
+): UpcomingScheduledTaskEntry<A>[] {
+  const horizon = now + 12 * 60 * 60 * 1000;
+  return tasks
+    .filter((task) => {
+      if (!task.enabled || task.schedule.type !== "once" || task.nextRunAt === null) return false;
+      const instant = Date.parse(task.nextRunAt);
+      return Number.isFinite(instant) && instant >= now && instant <= horizon;
+    })
+    .map((task) => ({ task, runAt: task.nextRunAt! }))
+    .sort(
+      (left, right) =>
+        Date.parse(left.runAt) - Date.parse(right.runAt) ||
+        left.task.id.localeCompare(right.task.id),
+    )
+    .slice(0, limit)
+    .map((entry) => ({ ...entry, startsLabel: formatScheduledTaskStart(entry.runAt) }));
 }
 
 export interface HappeningNowEntry {

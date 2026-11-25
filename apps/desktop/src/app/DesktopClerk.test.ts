@@ -10,6 +10,7 @@ import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { afterAll, beforeEach, vi } from "vite-plus/test";
@@ -47,12 +48,18 @@ import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopWebLinks from "./DesktopWebLinks.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopPreReadyFileSystem from "./DesktopPreReadyFileSystem.ts";
+import * as DesktopState from "./DesktopState.ts";
+import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 /** Clerk forwards web links; tests that are not about links ignore them. */
 const ignoreWebLinks = DesktopWebLinks.DesktopWebLinks.of({
   receive: () => Effect.void,
   setRendererReady: () => Effect.void,
 });
+
+const ignoreDesktopWindow = DesktopWindow.DesktopWindow.of({
+  activate: Effect.void,
+} as unknown as DesktopWindow.DesktopWindow["Service"]);
 
 const layerDesktopClerk = (
   isDevelopment = true,
@@ -158,6 +165,7 @@ describe("DesktopClerk", () => {
     } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]);
 
     const electronApp = {
+      whenReady: Effect.void,
       setPath: () => Effect.void,
       requestSingleInstanceLock: Effect.succeed(true),
       setAsDefaultProtocolClient: (protocol: string) =>
@@ -198,6 +206,8 @@ describe("DesktopClerk", () => {
         ElectronWindow.ElectronWindow,
         {} as ElectronWindow.ElectronWindow["Service"],
       ),
+      Effect.provideService(DesktopWindow.DesktopWindow, ignoreDesktopWindow),
+      Effect.provide(DesktopState.layer),
       Effect.provideService(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
     );
   });
@@ -308,6 +318,7 @@ describe("DesktopClerk", () => {
     const quit = vi.fn();
     const registeredEvents: string[] = [];
     const electronApp = {
+      whenReady: Effect.void,
       quit: Effect.sync(quit),
       on: (eventName: string) =>
         Effect.sync(() => {
@@ -327,6 +338,8 @@ describe("DesktopClerk", () => {
       Effect.provide(layerDesktopClerk()),
       Effect.provideService(ElectronApp.ElectronApp, electronApp),
       Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
+      Effect.provideService(DesktopWindow.DesktopWindow, ignoreDesktopWindow),
+      Effect.provide(DesktopState.layer),
       Effect.provideService(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
     );
   });
@@ -337,6 +350,7 @@ describe("DesktopClerk", () => {
     const quit = vi.fn();
     const registeredEvents: string[] = [];
     const electronApp = {
+      whenReady: Effect.void,
       quit: Effect.sync(quit),
       on: (eventName: string) =>
         Effect.sync(() => {
@@ -358,6 +372,8 @@ describe("DesktopClerk", () => {
         ElectronWindow.ElectronWindow,
         {} as ElectronWindow.ElectronWindow["Service"],
       ),
+      Effect.provideService(DesktopWindow.DesktopWindow, ignoreDesktopWindow),
+      Effect.provide(DesktopState.layer),
       Effect.provideService(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
     );
   });
@@ -368,6 +384,7 @@ describe("DesktopClerk", () => {
     const quit = vi.fn();
     const registeredEvents: string[] = [];
     const electronApp = {
+      whenReady: Effect.void,
       quit: Effect.sync(quit),
       on: (eventName: string) =>
         Effect.sync(() => {
@@ -387,6 +404,8 @@ describe("DesktopClerk", () => {
       Effect.provide(layerDesktopClerk()),
       Effect.provideService(ElectronApp.ElectronApp, electronApp),
       Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
+      Effect.provideService(DesktopWindow.DesktopWindow, ignoreDesktopWindow),
+      Effect.provide(DesktopState.layer),
       Effect.provideService(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
     );
   });
@@ -402,6 +421,7 @@ it.effect(
     const loadURL = vi.fn(async (_url: string) => undefined);
     const window = { loadURL };
     const electronApp = {
+      whenReady: Effect.void,
       on: (name: string, listener: (...args: unknown[]) => void) =>
         Effect.sync(() => {
           listeners.set(name, listener);
@@ -437,6 +457,8 @@ it.effect(
       Effect.provide(layerDesktopClerk()),
       Effect.provideService(ElectronApp.ElectronApp, electronApp),
       Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
+      Effect.provideService(DesktopWindow.DesktopWindow, ignoreDesktopWindow),
+      Effect.provide(DesktopState.layer),
       Effect.provideService(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
     );
   },
@@ -523,6 +545,8 @@ it.effect.each(["startup", "open-url"] as const)(
           ElectronWindow.ElectronWindow,
           {} as ElectronWindow.ElectronWindow["Service"],
         ),
+        Effect.provideService(DesktopWindow.DesktopWindow, ignoreDesktopWindow),
+        Effect.provide(DesktopState.layer),
         Effect.provideService(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
       );
     }).pipe(Effect.scoped),
@@ -574,10 +598,133 @@ it.effect("hands web and app links to the renderer and leaves other links alone"
         ElectronWindow.ElectronWindow,
         {} as ElectronWindow.ElectronWindow["Service"],
       ),
+      Effect.provideService(DesktopWindow.DesktopWindow, ignoreDesktopWindow),
+      Effect.provide(DesktopState.layer),
       Effect.provideService(
         DesktopWebLinks.DesktopWebLinks,
         DesktopWebLinks.DesktopWebLinks.of({
           receive: (url) => Effect.sync(() => void received.push(url)),
+          setRendererReady: () => Effect.void,
+        }),
+      ),
+    );
+  }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "reopens the main window for provider auth returns and plain second-instance launches when all windows are closed",
+  () => {
+    storageMock.mockReturnValue(storageAdapter);
+    createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const authRevealed = Promise.withResolvers<void>();
+    const loadURL = vi.fn(async (_url: string) => undefined);
+    const window = { loadURL } as unknown as Electron.BrowserWindow;
+    let currentWindow: Option.Option<Electron.BrowserWindow> = Option.none();
+    let activateCalls = 0;
+    let revealCalls = 0;
+
+    const electronApp = {
+      whenReady: Effect.void,
+      on: (name: string, listener: (...args: unknown[]) => void) =>
+        Effect.sync(() => {
+          listeners.set(name, listener);
+        }),
+    } as unknown as ElectronApp.ElectronApp["Service"];
+    const electronWindow = {
+      currentMainOrFirst: Effect.sync(() => currentWindow),
+      reveal: () =>
+        Effect.sync(() => {
+          revealCalls += 1;
+          authRevealed.resolve();
+        }),
+    } as unknown as ElectronWindow.ElectronWindow["Service"];
+    const desktopWindow = {
+      activate: Effect.sync(() => {
+        activateCalls += 1;
+        currentWindow = Option.some(window);
+      }),
+    } as unknown as DesktopWindow.DesktopWindow["Service"];
+
+    return Effect.gen(function* () {
+      const clerk = yield* DesktopClerk.DesktopClerk;
+      yield* clerk.configure;
+
+      listeners.get("open-url")!(
+        { preventDefault: vi.fn() },
+        "sshcode-dev://app/settings/providers?instanceId=work",
+      );
+      yield* Effect.yieldNow;
+      assert.strictEqual(activateCalls, 1);
+      yield* Effect.promise(() => authRevealed.promise);
+      assert.deepEqual(loadURL.mock.calls, [
+        ["t3code-dev://app/settings/providers?instanceId=work"],
+      ]);
+      assert.strictEqual(revealCalls, 1);
+
+      currentWindow = Option.none();
+      listeners.get("second-instance")!({}, ["t3"]);
+      yield* Effect.yieldNow;
+      assert.strictEqual(activateCalls, 2);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(layerDesktopClerk(true, [], "darwin")),
+      Effect.provideService(HostProcess.Arguments, ["t3"]),
+      Effect.provideService(ElectronApp.ElectronApp, electronApp),
+      Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
+      Effect.provideService(DesktopWindow.DesktopWindow, desktopWindow),
+      Effect.provide(DesktopState.layer),
+      Effect.provideService(DesktopWebLinks.DesktopWebLinks, ignoreWebLinks),
+    );
+  },
+);
+
+it.effect("defers window activation for links received before Electron is ready", () =>
+  Effect.gen(function* () {
+    storageMock.mockReturnValue(storageAdapter);
+    createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
+    const ready = yield* Deferred.make<void>();
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const electronApp = {
+      whenReady: Deferred.await(ready),
+      on: (name: string, listener: (...args: unknown[]) => void) =>
+        Effect.sync(() => {
+          listeners.set(name, listener);
+        }),
+    } as unknown as ElectronApp.ElectronApp["Service"];
+    const coldLink = promptLinkDeepLink("/new?prompt=cold");
+    const warmLink = promptLinkDeepLink("/new?prompt=warm");
+    const received: Array<{ url: string; activate: boolean | undefined }> = [];
+
+    yield* Effect.gen(function* () {
+      const clerk = yield* DesktopClerk.DesktopClerk;
+      yield* clerk.configure;
+      listeners.get("open-url")!({ preventDefault: vi.fn() }, coldLink);
+      yield* Effect.yieldNow;
+      yield* Deferred.succeed(ready, undefined);
+      yield* Effect.yieldNow;
+      listeners.get("open-url")!({ preventDefault: vi.fn() }, warmLink);
+      yield* Effect.yieldNow;
+
+      assert.deepStrictEqual(received, [
+        { url: coldLink, activate: false },
+        { url: warmLink, activate: true },
+      ]);
+    }).pipe(
+      Effect.provide(layerDesktopClerk(true, [], "darwin")),
+      Effect.provideService(HostProcess.Arguments, ["t3"]),
+      Effect.provideService(ElectronApp.ElectronApp, electronApp),
+      Effect.provideService(
+        ElectronWindow.ElectronWindow,
+        {} as ElectronWindow.ElectronWindow["Service"],
+      ),
+      Effect.provideService(DesktopWindow.DesktopWindow, ignoreDesktopWindow),
+      Effect.provide(DesktopState.layer),
+      Effect.provideService(
+        DesktopWebLinks.DesktopWebLinks,
+        DesktopWebLinks.DesktopWebLinks.of({
+          receive: (url, options?: { readonly activate?: boolean }) =>
+            Effect.sync(() => void received.push({ url, activate: options?.activate })),
           setRendererReady: () => Effect.void,
         }),
       ),

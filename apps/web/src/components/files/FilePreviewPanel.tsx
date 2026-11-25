@@ -38,7 +38,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { mediaFileReference } from "@t3tools/client-runtime/media-reference";
 import { FolderTree, Globe2, WrapTextIcon } from "lucide-react";
-import { Code2, Eye, Table2 } from "lucide";
+import { Check, Code2, Copy, Eye, Table2 } from "lucide";
 import * as Schema from "effect/Schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -51,6 +51,7 @@ import { MorphIcon } from "~/components/MorphIcon";
 import { useRemoteOpenState } from "~/remoteOpen";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { getLocalStorageItem, setLocalStorageItem, useLocalStorage } from "~/hooks/useLocalStorage";
 import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh";
 import { resolveDiffThemeName } from "~/lib/diffRendering";
@@ -102,6 +103,7 @@ import { resolveCenteredFileLineScrollTop } from "./fileLineReveal";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { projectFileCacheKey } from "./fileContentRevision";
 import {
+  copyableFilePreviewContents,
   filePreviewReadErrorMessage,
   isMarkdownPreviewFile,
   resolveFilePreviewPath,
@@ -1047,6 +1049,41 @@ function initialExplorerOpen(): boolean {
   }
 }
 
+function CopyFileContentsAction({
+  environmentId,
+  cwd,
+  path,
+  contents,
+}: {
+  environmentId: EnvironmentId;
+  cwd: string;
+  path: string;
+  contents: string;
+}) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard({
+    target: path,
+    onError: (error) =>
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not copy file",
+          description: error.message,
+        }),
+      ),
+  });
+  return (
+    <FileSurfaceAction
+      label={isCopied ? "Copied" : "Copy contents"}
+      onPress={() => {
+        const draft = getOptimisticProjectFileQueryData(environmentId, cwd, path);
+        copyToClipboard(draft?.contents ?? contents, undefined);
+      }}
+    >
+      <MorphIcon className="size-3.5" icon={isCopied ? Check : Copy} />
+    </FileSurfaceAction>
+  );
+}
+
 export default function FilePreviewPanel({
   environmentId,
   cwd,
@@ -1178,6 +1215,7 @@ export default function FilePreviewPanel({
     : tableDelimiter
       ? setRenderTablePreferred
       : setRenderBrowserFilePreferred;
+  const copyableContents = copyableFilePreviewContents(file.data, !isMedia && !isPdf);
   const canOpenInBrowser =
     canOperatePreview &&
     previewPath !== null &&
@@ -1332,6 +1370,15 @@ export default function FilePreviewPanel({
             >
               <WrapTextIcon className="size-3.5" />
             </FileSurfaceAction>
+          ) : null}
+          {previewPath !== null && copyableContents !== null ? (
+            <CopyFileContentsAction
+              key={JSON.stringify([environmentId, cwd, previewPath])}
+              environmentId={environmentId}
+              cwd={cwd}
+              path={previewPath}
+              contents={copyableContents}
+            />
           ) : null}
           {canOpenInBrowser ? (
             <FileSurfaceAction label="Open file in preview browser" onPress={handleOpenInBrowser}>

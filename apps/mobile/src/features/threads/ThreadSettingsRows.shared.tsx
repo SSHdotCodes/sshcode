@@ -52,7 +52,7 @@ export function ModelRowContent(
     <View
       style={props.minimumHeight === undefined ? undefined : { minHeight: props.minimumHeight }}
       className={cn(
-        "mx-4 min-h-11 flex-row items-center gap-2 bg-grouped-card px-4",
+        "mx-4 min-h-[44px] flex-row items-center gap-2 bg-grouped-card px-4",
         props.selectedClassName,
         props.isFirst && "rounded-t-2xl",
         props.isLast ? "rounded-b-2xl" : "border-b border-border-subtle",
@@ -65,7 +65,7 @@ export function ModelRowContent(
           checked: props.selected,
           disabled: props.option.isUnavailable === true || props.option.isHidden === true,
         }}
-        className="min-h-11 min-w-0 flex-1 flex-row items-center gap-2 py-2 active:opacity-70"
+        className="min-h-[44px] min-w-0 flex-1 flex-row items-center gap-2 py-2 active:opacity-70"
         disabled={props.option.isUnavailable || props.option.isHidden}
         onPress={props.onPress}
       >
@@ -124,7 +124,7 @@ export function ModelRowContent(
           accessibilityLabel={`${props.option.isHidden ? "Show" : "Hide"} model: ${props.option.providerLabel}, ${props.option.label}`}
           accessibilityRole="button"
           accessibilityState={{ disabled: props.hiddenUpdatePending === true }}
-          className="min-h-11 min-w-11 items-center justify-center"
+          className="min-h-[44px] min-w-[44px] items-center justify-center"
           disabled={props.hiddenUpdatePending}
           onPress={props.onToggleHidden}
         >
@@ -142,7 +142,7 @@ export function ModelRowContent(
         }, ${props.option.label}`}
         accessibilityRole="button"
         accessibilityState={{ disabled: !props.favoritesLoaded, selected: props.isFavorite }}
-        className="min-h-11 min-w-11 items-center justify-center"
+        className="min-h-[44px] min-w-[44px] items-center justify-center"
         disabled={!props.favoritesLoaded}
         onPress={props.onToggleFavorite}
       >

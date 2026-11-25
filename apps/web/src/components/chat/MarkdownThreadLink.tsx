@@ -7,6 +7,8 @@ import { MessageSquareTextIcon } from "lucide-react";
 
 import { useProject, useLinkedThreadShell } from "../../state/entities";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { ThreadChipPreview } from "../ThreadChipPreview";
+import { Tooltip, TooltipTrigger } from "../ui/tooltip";
 
 /**
  * A `t3-thread://` link in chat. It shows the thread's current title, so a rename
@@ -31,30 +33,35 @@ export function MarkdownThreadLink(props: {
   );
   const title = thread?.title.trim() || props.label;
   return (
-    <Link
-      onClick={(event) => {
-        if (openQuestThread({ environmentId: props.environmentId, threadId, title })) {
-          event.preventDefault();
-          event.stopPropagation();
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Link
+            onClick={(event) => {
+              if (openQuestThread({ environmentId: props.environmentId, threadId, title })) {
+                event.preventDefault();
+                event.stopPropagation();
+              }
+            }}
+            to="/$environmentId/$threadId"
+            params={{ environmentId: props.environmentId, threadId }}
+            data-markdown-copy={formatThreadLink(threadId, title)}
+          >
+            <span
+              className="ms-[0.25em] me-[0.2em] inline-flex size-[14px] [vertical-align:-0.125em]"
+              aria-hidden
+            >
+              {project === null ? (
+                <MessageSquareTextIcon className="block size-full shrink-0" />
+              ) : (
+                <ProjectFavicon project={project} className="size-full" />
+              )}
+            </span>
+            {title}
+          </Link>
         }
-      }}
-      to="/$environmentId/$threadId"
-      params={{ environmentId: props.environmentId, threadId }}
-      // Like an attached thread chip: archived threads are not in the index but still open.
-      title={thread === null ? "Chat no longer available" : project?.title}
-      data-markdown-copy={formatThreadLink(threadId, title)}
-    >
-      <span
-        className="ms-[0.25em] me-[0.2em] inline-flex size-[14px] [vertical-align:-0.125em]"
-        aria-hidden
-      >
-        {project === null ? (
-          <MessageSquareTextIcon className="block size-full shrink-0" />
-        ) : (
-          <ProjectFavicon project={project} className="size-full" />
-        )}
-      </span>
-      {title}
-    </Link>
+      />
+      <ThreadChipPreview shell={thread} title={title} />
+    </Tooltip>
   );
 }

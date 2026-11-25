@@ -158,7 +158,7 @@ describe("environment grouping", () => {
     const groups = build(true);
     const scratchKey = groups[0]!.projectKey;
     expect(groups).toHaveLength(1);
-    expect(groups[0]?.displayName).toBe("No project");
+    expect(groups[0]?.displayName).toBe("Default folder");
     expect(groups[0]?.memberProjects).toHaveLength(2);
     expect(groups[0]?.memberProjectRefs).toEqual(
       projects.map((project) => ({ environmentId: project.environmentId, projectId: project.id })),

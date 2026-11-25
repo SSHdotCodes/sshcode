@@ -181,7 +181,8 @@ function TerminalHeader(props: {
 
 const DEFAULT_TERMINAL_COLS = 80;
 const DEFAULT_TERMINAL_ROWS = 24;
-const TERMINAL_ACCESSORY_HEIGHT = 52;
+const TERMINAL_ACCESSORY_PADDING = 4;
+const TERMINAL_ACCESSORY_HEIGHT = 44 + TERMINAL_ACCESSORY_PADDING * 2 + 1;
 const SHOWCASE_ENABLED = process.env.EXPO_PUBLIC_SHOWCASE === "1";
 
 class TerminalClipboardReadError extends Schema.TaggedError<TerminalClipboardReadError>()(
@@ -1331,7 +1332,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                     KeyboardController.dismiss();
                     setCaptureRequest((value) => value + 1);
                   }}
-                  className="px-4 py-2"
+                  className="min-h-[44px] justify-center px-4 py-2"
                 >
                   <Text style={{ color: terminalTheme.foreground }}>Attach visible output</Text>
                 </Pressable>
@@ -1349,7 +1350,11 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                       minHeight: TERMINAL_ACCESSORY_HEIGHT,
                     }}
                   >
-                    <ComposerToolbarRow paddingBottom={4} paddingHorizontal={8} paddingTop={4}>
+                    <ComposerToolbarRow
+                      paddingBottom={TERMINAL_ACCESSORY_PADDING}
+                      paddingHorizontal={8}
+                      paddingTop={TERMINAL_ACCESSORY_PADDING}
+                    >
                       <ComposerToolbarScroller
                         contentPaddingRight={2}
                         fadeOpaque={terminalTheme.background}
@@ -1357,7 +1362,9 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                       >
                         {terminalToolbarActions.map((action) => {
                           const active =
-                            action.kind === "modifier" && pendingModifier === action.modifier;
+                            action.kind === "modifier"
+                              ? pendingModifier === action.modifier
+                              : undefined;
 
                           return (
                             <ComposerToolbarButton

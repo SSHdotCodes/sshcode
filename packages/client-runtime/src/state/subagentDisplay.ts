@@ -5,9 +5,11 @@ import type {
   OrchestrationV2ThreadShell,
   OrchestrationProjectShell,
   ServerProvider,
+  ServerProviderModel,
 } from "@t3tools/contracts";
 import { formatModelSlugName, resolveSelectableModel } from "@t3tools/shared/model";
 import { fileBasename } from "@t3tools/shared/path";
+import { composerModelName, effortChoiceLabel } from "../composerModelDisplay.ts";
 import { isTerminalSubagentStatus } from "./subagentRuntime.ts";
 
 export type SubagentSpeed = "fast" | "ultrafast";
@@ -102,9 +104,36 @@ export function formatSubagentDisplayTitle(title: string): string {
   return name.replace(/(^|\s)\S/gu, (letter) => letter.toUpperCase()) || displayTitle;
 }
 
+// A trailing effort word in a model's catalog name ("SWE-2.1 Medium").
+const TRAILING_EFFORT_WORD = /\s+(?:minimal|low|medium|high|x-?high|extra high|max|ultra)$/iu;
+
+/**
+ * A catalog name that ends in an effort the run overrides names the effort it runs at:
+ * Devin lists SWE-2.1 as "SWE-2.1 Medium" while a subagent asked for High thinking runs High.
+ */
+function nameWithChosenEffort(
+  name: string,
+  catalogModel: Pick<ServerProviderModel, "capabilities"> | undefined,
+  options: ReadonlyArray<{ readonly id: string; readonly value: unknown }> | undefined,
+): string {
+  if (!TRAILING_EFFORT_WORD.test(name) || options === undefined) return name;
+  for (const descriptor of catalogModel?.capabilities?.optionDescriptors ?? []) {
+    if (descriptor.type !== "select" || descriptor.role !== "reasoning") continue;
+    const chosen = options.find((option) => option.id === descriptor.id)?.value;
+    const choice = descriptor.options.find((option) => option.id === chosen);
+    if (choice !== undefined)
+      return name.replace(TRAILING_EFFORT_WORD, ` ${effortChoiceLabel(choice)}`);
+  }
+  return name;
+}
+
 /** Match desktop's model resolution and show only changes from the parent's workspace. */
 export function resolveSubagentMetadata(input: {
   readonly model: string | null;
+  /** The run's own option choices, so a name with a built-in effort shows the effort it uses. */
+  readonly modelOptions?:
+    | ReadonlyArray<{ readonly id: string; readonly value: unknown }>
+    | undefined;
   readonly provider?: Pick<ServerProvider, "driver" | "models"> | null | undefined;
   readonly parentThread?:
     | Pick<OrchestrationV2ThreadShell, "projectId" | "worktreePath">
@@ -126,7 +155,12 @@ export function resolveSubagentMetadata(input: {
     : model;
   const catalogModel = input.provider?.models.find((candidate) => candidate.slug === slug);
   const reportedLabel = catalogModel
-    ? catalogModel.shortName || catalogModel.name
+    ? nameWithChosenEffort(
+        // The row shows the provider's logo, so the name drops the maker as the composer does.
+        composerModelName(catalogModel),
+        catalogModel,
+        input.modelOptions,
+      )
     : model
       ? formatModelSlugName(model)
       : "Not reported";

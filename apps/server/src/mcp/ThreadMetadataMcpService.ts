@@ -6,6 +6,7 @@ import {
   type OrchestrationV2Command,
   type ThreadMetadataMcpAction,
   type ThreadMetadataMcpUpdateInput,
+  type ThreadMetadataMcpUpdateMetadataResult,
   type ThreadMetadataMcpUpdateResult,
   ThreadId,
 } from "@t3tools/contracts";
@@ -17,7 +18,7 @@ import * as Layer from "effect/Layer";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
-import { dispatchFailure } from "./threadAccess.ts";
+import { dispatchFailure, resolveTaskThreadReference } from "./threadAccess.ts";
 
 export class ThreadMetadataMcpService extends Context.Service<
   ThreadMetadataMcpService,
@@ -141,7 +142,7 @@ function resultFromThread(input: {
   readonly commandId: CommandId;
   readonly sequence: number;
   readonly thread: OrchestrationV2AppThread;
-}): ThreadMetadataMcpUpdateResult {
+}): ThreadMetadataMcpUpdateMetadataResult {
   return {
     threadId: input.thread.id,
     action: input.action,
@@ -176,13 +177,18 @@ const make = Effect.gen(function* () {
       );
     }
 
-    const threadId = input.threadId ?? scope.thread?.threadId;
-    if (threadId === undefined) {
+    const requestedThreadId = input.threadId ?? scope.thread?.threadId;
+    if (requestedThreadId === undefined) {
       return yield* failure(
         "target_required",
         "Pass threadId: this MCP client is not running inside a SSHCode thread.",
       );
     }
+    const threadId = yield* resolveTaskThreadReference(
+      threadManagement,
+      scope.thread?.threadId,
+      requestedThreadId,
+    );
     const shell = yield* threadManagement
       .getThreadShell(threadId)
       .pipe(
@@ -209,6 +215,25 @@ const make = Effect.gen(function* () {
       action: input.action,
       requestKey,
     });
+    if (input.action === "settle") {
+      const settled = yield* threadManagement
+        .settleThread({
+          threadId,
+          commandId: updateCommandId,
+          byOwnAgent: scope.thread?.threadId === threadId,
+        })
+        .pipe(Effect.mapError(dispatchFailure));
+      if ("settlesWhenTurnEnds" in settled) return settled;
+      const thread = (yield* threadManagement
+        .getProjectThreadRecords({ projectId: shell.projectId, threadId }, [])
+        .pipe(Effect.mapError(threadLookupFailure))).thread;
+      return resultFromThread({
+        action: input.action,
+        commandId: updateCommandId,
+        sequence: settled.sequence,
+        thread,
+      });
+    }
     const dispatched = yield* threadManagement
       .dispatch(
         updateCommand({
@@ -239,8 +264,8 @@ const make = Effect.gen(function* () {
         : input.action === "cancel_queued"
           ? target.thread
           : undefined;
-    // Settling a settled thread (or the reverse) changes nothing and emits no event.
-    if (thread === undefined && (input.action === "settle" || input.action === "unsettle")) {
+    // Unsettling an active thread changes nothing and emits no event.
+    if (thread === undefined && input.action === "unsettle") {
       thread = (yield* threadManagement
         .getProjectThreadRecords({ projectId: shell.projectId, threadId }, [])
         .pipe(Effect.mapError(threadLookupFailure))).thread;

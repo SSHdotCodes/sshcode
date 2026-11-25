@@ -199,7 +199,7 @@ describe("DesktopLocalEnvironmentAuth", () => {
       return { auth, requestCount };
     });
 
-  it.effect("retries a backend that is still starting", () =>
+  it.effect("retries a backend that is still starting with fast initial backoff", () =>
     Effect.gen(function* () {
       const { auth, requestCount } = yield* makeExchange(
         2,
@@ -207,7 +207,8 @@ describe("DesktopLocalEnvironmentAuth", () => {
       );
 
       const fiber = yield* auth.getBearerToken.pipe(Effect.forkChild);
-      yield* TestClock.adjust(Duration.seconds(1));
+      // 50ms + 100ms = 150ms instead of two flat 500ms sleeps.
+      yield* TestClock.adjust(Duration.millis(150));
 
       assert.strictEqual(yield* Fiber.join(fiber), "desktop-bearer-token");
       assert.strictEqual(yield* Ref.get(requestCount), 3);

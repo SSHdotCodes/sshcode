@@ -185,7 +185,10 @@ const percentLeft = (window: ServerProviderUsageWindow) => {
  * the reset time has passed the allowance is whole again, whatever the stale
  * figure says, and the next reset is one window further on.
  */
-function afterReset(window: ServerProviderUsageWindow, now: number): ServerProviderUsageWindow {
+export function afterReset(
+  window: ServerProviderUsageWindow,
+  now: number,
+): ServerProviderUsageWindow {
   const at = window.resetsAt === undefined ? Number.NaN : Date.parse(window.resetsAt);
   if (!Number.isFinite(at) || at > now) return window;
   const { resetsAt: _passed, limited: _stale, ...rest } = window;

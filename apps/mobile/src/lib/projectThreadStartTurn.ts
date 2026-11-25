@@ -94,5 +94,7 @@ export function deriveThreadTitleFromPrompt(value: string): string {
   }
 
   const compact = trimmed.replace(/\s+/g, " ");
-  return compact.length <= 72 ? compact : `${compact.slice(0, 69).trimEnd()}...`;
+  if (compact.length <= 72) return compact;
+  const prefix = compact.slice(0, 69).replace(/[\uD800-\uDBFF]$/u, "");
+  return `${prefix.trimEnd()}...`;
 }

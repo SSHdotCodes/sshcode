@@ -58,3 +58,14 @@ for (index, start) in layout.starts.enumerated() {
 }
 check(reconstructed == ascii)
 print("Passed \(cases) Unicode/width cases, color-update geometry, and ASCII coverage")
+
+let header = CGRect(x: 0, y: 120, width: 320, height: 54)
+let checkbox = CGRect(x: 288, y: 137, width: 20, height: 20)
+let viewedTarget = reviewDiffViewedHitRect(header: header, checkbox: checkbox)
+check(viewedTarget.contains(checkbox))
+check(viewedTarget.width >= 44)
+check(viewedTarget.contains(CGPoint(x: 275, y: 121)))
+check(viewedTarget.contains(CGPoint(x: 319, y: 173)))
+check(!viewedTarget.contains(CGPoint(x: 273, y: 147)), "The file title still toggles the file")
+check(!viewedTarget.contains(CGPoint(x: 319, y: 175)), "Adjacent rows must keep their taps")
+print("Passed Viewed checkbox hit area")

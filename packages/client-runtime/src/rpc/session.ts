@@ -194,6 +194,12 @@ function mapSessionRpcError(
   }
 }
 
+// If a 5s watchdog sleep wakes this long after it started, the OS suspended the
+// process (iOS backgrounding, macOS sleep). Give the resumed socket one grace
+// interval to drain buffered frames and answer the supervisor's resume probe,
+// and discard any Pong round-trip that spanned the suspension.
+const WATCHDOG_SUSPENSION_THRESHOLD_MS = 10_000;
+
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.fn("RpcSessionFactory.make")(function* (
   options: RpcSessionOptions = {},
@@ -238,6 +244,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     const progress = yield* RequestProgress;
     let receivedAt = openingAt;
     let rpcReceivedAt = openingAt;
+    let watchdogTickAt = openingAt;
     let pingSentAt: bigint | undefined;
     let pingRoundTrip: { readonly milliseconds: number; readonly measuredAt: bigint } | undefined;
     const timeoutMs = (minimumMs: number) => network.budget(connection.httpBaseUrl, minimumMs);
@@ -278,15 +285,19 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
                   value._tag === "Pong",
               )
             ) {
-              const sampleMs = Number(receivedAt - pingSentAt) / 1_000_000;
-              network.observe(connection.httpBaseUrl, sampleMs);
-              pingRoundTrip = {
-                milliseconds:
-                  pingRoundTrip === undefined
-                    ? sampleMs
-                    : 0.7 * pingRoundTrip.milliseconds + 0.3 * sampleMs,
-                measuredAt: receivedAt,
-              };
+              const suspendedSinceTick =
+                Number(receivedAt - watchdogTickAt) / 1_000_000 >= WATCHDOG_SUSPENSION_THRESHOLD_MS;
+              if (!suspendedSinceTick) {
+                const sampleMs = Number(receivedAt - pingSentAt) / 1_000_000;
+                network.observe(connection.httpBaseUrl, sampleMs);
+                pingRoundTrip = {
+                  milliseconds:
+                    pingRoundTrip === undefined
+                      ? sampleMs
+                      : 0.7 * pingRoundTrip.milliseconds + 0.3 * sampleMs,
+                  measuredAt: receivedAt,
+                };
+              }
               pingSentAt = undefined;
             }
             return responses;
@@ -314,6 +325,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       onConnect: Effect.gen(function* () {
         const openedAt = yield* Clock.monotonicTimeNanos;
         receivedAt = openedAt;
+        watchdogTickAt = openedAt;
         progress?.received();
         network.observe(connection.httpBaseUrl, Number(openedAt - openingAt) / 1_000_000);
         markLoad("socket.open");
@@ -371,10 +383,25 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     const protocolClient = yield* makeWsRpcProtocolClient.pipe(Effect.provide(protocolContext));
     yield* Effect.gen(function* () {
       yield* Deferred.await(connected);
+      let graceForReceivedAt: bigint | undefined;
       for (;;) {
+        const sleptAt = clock.monotonicTimeNanosUnsafe();
+        watchdogTickAt = sleptAt;
         yield* Effect.sleep("5 seconds");
+        const now = clock.monotonicTimeNanosUnsafe();
+        watchdogTickAt = now;
+        const suspended = Number(now - sleptAt) / 1_000_000 >= WATCHDOG_SUSPENSION_THRESHOLD_MS;
+        if (suspended) {
+          pingSentAt = undefined;
+        }
         const budget = timeoutMs(Duration.toMillis(Duration.fromInputUnsafe(timings.pingTimeout)));
-        if (Number(clock.monotonicTimeNanosUnsafe() - receivedAt) / 1_000_000 > budget) {
+        if (Number(now - receivedAt) / 1_000_000 > budget) {
+          // Background timer throttling can delay every tick. Grant grace
+          // once per receive timestamp, until the socket shows life again.
+          if (suspended && graceForReceivedAt !== receivedAt) {
+            graceForReceivedAt = receivedAt;
+            continue;
+          }
           yield* Ref.set(pingTimedOut, true);
           yield* Deferred.fail(
             disconnected,

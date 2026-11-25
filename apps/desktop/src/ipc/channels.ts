@@ -137,3 +137,4 @@ export const CLOSE_DESKTOP_MEDIA_PREVIEW_CHANNEL = "desktop:close-media-preview"
 export const SET_MENU_BAR_STATUS_CHANNEL = "desktop:set-menu-bar-status";
 export const MENU_BAR_OPEN_CHAT_CHANNEL = "desktop:menu-bar-open-chat";
 export const SET_KEEP_AWAKE_CHANNEL = "desktop:set-keep-awake";
+export const CONNECTION_WAKEUP_CHANNEL = "desktop:connection-wakeup";

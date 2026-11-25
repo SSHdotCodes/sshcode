@@ -290,8 +290,8 @@ export function SnapShotCoordinator() {
             toastManager.add(
               stackedThreadToast({
                 type: "error",
-                title: "Snapshot taken, but no project is available",
-                description: "Add a project, then capture the window again.",
+                title: "Snapshot taken, but there is no chat to receive it",
+                description: "Start a chat, then capture the window again.",
               }),
             );
             continue;

@@ -65,7 +65,7 @@ export const readAntigravityChildrenAtWork = Effect.fnUntraced(function* (input:
         );
         if (names.length > MAX_INBOX_FILES)
           return yield* new AntigravityChildWorkReadError({ reason: "too_many_inbox_files" });
-        return yield* Effect.forEach(names, (name) =>
+        const decoded = yield* Effect.forEach(names, (name) =>
           Effect.gen(function* () {
             const file = yield* managedPath([...directory, name]);
             const stat = yield* fs.stat(file);
@@ -80,8 +80,9 @@ export const readAntigravityChildrenAtWork = Effect.fnUntraced(function* (input:
               return yield* new AntigravityChildWorkReadError({ reason: "invalid_inbox_file" });
             }
             return yield* decodeMessage(new TextDecoder().decode(bytes.value));
-          }),
+          }).pipe(Effect.option),
         );
+        return decoded.flatMap((entry) => (Option.isSome(entry) ? [entry.value] : []));
       });
     const childIds = (yield* fs.readDirectory(yield* managedPath(records(sessionId, "subagents"))))
       .filter((name) => name.endsWith(".json"))
@@ -90,14 +91,16 @@ export const readAntigravityChildrenAtWork = Effect.fnUntraced(function* (input:
     if (childIds.length === 0 || childIds.length > MAX_CHILDREN) return [];
     const parentInbox = records(sessionId, "messages");
     const parentMessages = (yield* fs.exists(path.join(root, ...parentInbox)))
-      ? yield* readInbox(sessionId)
+      ? yield* readInbox(sessionId).pipe(Effect.orElseSucceed(() => []))
       : [];
     const reported = new Set(parentMessages.map((message) => message.sender));
     const candidates = new Set(nativeTaskIds);
     const atWork = new Set<string>();
     for (const childId of childIds) {
       if (reported.has(childId)) continue;
-      for (const message of yield* readInbox(childId)) {
+      // A freshly created or unreadable child inbox must not wipe out sibling children.
+      const childMessages = yield* readInbox(childId).pipe(Effect.orElseSucceed(() => []));
+      for (const message of childMessages) {
         const launch = message.sourceMetadata?.tool?.toolCall;
         if (
           message.sender === sessionId &&

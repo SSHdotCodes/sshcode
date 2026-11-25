@@ -269,7 +269,7 @@ export function createPullRequestRouter() {
     routedReads.set(registry, used);
     const refKey = encodeKey([
       origin.target.environmentId,
-      ref.projectId,
+      ref.projectId ?? null,
       ref.host?.toLowerCase() ?? null,
       ref.repository.toLowerCase(),
       String(ref.number),
@@ -347,7 +347,11 @@ export function createPullRequestRouter() {
     const identity = yield* reads.has(tag)
       ? shareMetadataRead(
           pendingRouting,
-          encodeKey([ref.projectId, ref.host?.toLowerCase() ?? null, ref.repository.toLowerCase()]),
+          encodeKey([
+            ref.projectId ?? null,
+            ref.host?.toLowerCase() ?? null,
+            ref.repository.toLowerCase(),
+          ]),
           identityProbe,
         )
       : identityProbe;
@@ -452,7 +456,9 @@ export function createPullRequestRouter() {
             () => visit(index + 1),
           ),
           Effect.map((result) =>
-            typeof result === "object" && result !== null && "projectId" in result
+            typeof result === "object" &&
+            result !== null &&
+            (tag === WS_METHODS.pullRequestsDetail || "projectId" in result)
               ? {
                   ...result,
                   projectId: ref.projectId,

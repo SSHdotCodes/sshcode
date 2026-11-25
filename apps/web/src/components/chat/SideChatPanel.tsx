@@ -108,8 +108,12 @@ export function useSideChat(threadRef: ScopedThreadRef) {
     readonly kind: SideChatKind;
     readonly prompt: string;
   }) => {
+    const previous = pendingRef.current;
     const next: SideChatSession = {
-      key: randomUUID(),
+      key:
+        previous?.error && previous.threadKey === threadKey && previous.question === input.prompt
+          ? previous.key
+          : randomUUID(),
       threadKey,
       environmentId: input.environmentId,
       threadRef: input.threadRef,
@@ -124,13 +128,25 @@ export function useSideChat(threadRef: ScopedThreadRef) {
     setOpenThread(threadKey);
     const result = await openSideChat({
       environmentId: input.environmentId,
-      input: { threadId: input.threadRef.threadId, prompt: input.prompt, messageId: next.key },
+      input: {
+        threadId: input.threadRef.threadId,
+        prompt: input.prompt,
+        messageId: next.key,
+        resendAfterSocketLoss: true,
+      },
     });
-    if (pendingRef.current?.key !== next.key) return;
+    if (pendingRef.current !== next) return;
     if (result._tag === "Success") {
       setPending({ ...next, opened: result.value });
-    } else if (!isAtomCommandInterrupted(result)) {
-      setPending({ ...next, error: sideChatErrorMessage(squashAtomCommandFailure(result)) });
+    } else {
+      const failed = {
+        ...next,
+        error: isAtomCommandInterrupted(result)
+          ? "The connection closed before the question was confirmed."
+          : sideChatErrorMessage(squashAtomCommandFailure(result)),
+      };
+      pendingRef.current = failed;
+      setPending(failed);
     }
   };
 
@@ -151,8 +167,7 @@ export function useSideChat(threadRef: ScopedThreadRef) {
     setOpenThread(threadKey);
   };
 
-  const busy =
-    session !== null && session.error === null && (session !== recovered || sideChatIsBusy(state));
+  const busy = session !== null && session.error === null && sideChatIsBusy(session.opened);
   return {
     session,
     busy,
@@ -281,6 +296,9 @@ export function SideChatPanel(props: {
   } | null>(null);
   const stateRef = useRef<SideChatState | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
+  useEffect(() => {
+    if (session?.error) sendingRef.current = false;
+  }, [session]);
   const endRef = useRef<HTMLDivElement>(null);
 
   // The thread query can still hold the previous exchange after open returns.
@@ -374,7 +392,7 @@ export function SideChatPanel(props: {
     retryRef.current = attempt;
     const result = await sendSideChat({
       environmentId: session.environmentId,
-      input: { sideChatId, prompt, messageId },
+      input: { sideChatId, prompt, messageId, resendAfterSocketLoss: true },
     });
     // A live acknowledgement can release this send before its RPC returns.
     // Its late result must not unlock or overwrite the next question.
@@ -388,8 +406,12 @@ export function SideChatPanel(props: {
       retryRef.current = null;
       setDraft((current) => (current === attempt.draft ? "" : current));
       clearQuoteRef.current?.();
-    } else if (!isAtomCommandInterrupted(result)) {
-      setSendError(sideChatErrorMessage(squashAtomCommandFailure(result)));
+    } else {
+      setSendError(
+        isAtomCommandInterrupted(result)
+          ? "The connection closed before the question was confirmed."
+          : sideChatErrorMessage(squashAtomCommandFailure(result)),
+      );
     }
   };
   const handleInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {

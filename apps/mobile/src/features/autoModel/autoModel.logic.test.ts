@@ -2,6 +2,7 @@ import type { AutoModelRecommendation } from "@t3tools/shared/autoModel/recommen
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  autoModelAfterManualPick,
   autoModelCanEvaluate,
   autoModelEvidenceKey,
   autoModelOutcome,
@@ -137,4 +138,33 @@ it("words the suggestion like web", () => {
   expect(autoModelSuggestionText({ ...quick, tier: "big", label: "Fable 5.2" })).toBe(
     "Needs more power · use Fable 5.2",
   );
+});
+
+it("keeps Auto evaluating when a model is picked before typing, and dismisses after judging", () => {
+  const beforeTyping = autoModelAfterManualPick(EMPTY_AUTO_MODEL_DRAFT);
+  expect(beforeTyping).toBe(EMPTY_AUTO_MODEL_DRAFT);
+  expect(
+    autoModelCanEvaluate({
+      enabled: true,
+      manualSelection: false,
+      busy: false,
+      state: beforeTyping,
+    }),
+  ).toBe(true);
+
+  const judged = mergeAutoModelEvaluation(
+    EMPTY_AUTO_MODEL_DRAFT,
+    { tier: "fast", confidence: 0.9 },
+    quick,
+  );
+  const afterJudged = autoModelAfterManualPick(judged);
+  expect(afterJudged.dismissed).toBe(true);
+  expect(
+    autoModelCanEvaluate({
+      enabled: true,
+      manualSelection: false,
+      busy: false,
+      state: afterJudged,
+    }),
+  ).toBe(false);
 });

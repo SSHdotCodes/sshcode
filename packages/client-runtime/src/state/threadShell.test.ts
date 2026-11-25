@@ -61,6 +61,31 @@ function makeHarness(environmentIds: ReadonlyArray<EnvironmentId> = [environment
 }
 
 describe("v2 thread shell lists", () => {
+  it("skips child lineage indexing until a subagent needs input", () => {
+    const { registry, threads, snapshotAtom } = makeHarness();
+    let parentIdReads = 0;
+    const child = {
+      ...v2ThreadShell,
+      id: ThreadId.make("idle-child"),
+      lineage: {
+        ...v2ThreadShell.lineage,
+        relationshipToParent: "subagent" as const,
+        get parentThreadId() {
+          parentIdReads++;
+          return v2ThreadShell.id;
+        },
+      },
+    };
+    const inputs = threads.childThreadInputsAtom({ environmentId, threadId: v2ThreadShell.id });
+    registry.set(snapshotAtom(environmentId), {
+      ...v2ShellSnapshot,
+      threads: [v2ThreadShell, child],
+    });
+    expect(registry.get(inputs)).toEqual([]);
+    expect(parentIdReads).toBe(0);
+    registry.dispose();
+  });
+
   it("preserves ordered reference arrays when a middle thread changes", () => {
     const { registry, threads, snapshotAtom } = makeHarness();
     const snapshot = {

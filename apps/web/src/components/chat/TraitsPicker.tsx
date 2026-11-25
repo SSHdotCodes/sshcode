@@ -7,6 +7,7 @@ import {
   type ScopedThreadRef,
   type ServerProviderModel,
 } from "@t3tools/contracts";
+import { effortDisplay, type EffortDisplay } from "@t3tools/client-runtime/composer-model-display";
 import {
   applyClaudePromptEffortPrefix,
   buildProviderOptionSelectionsFromDescriptors,
@@ -371,7 +372,7 @@ export function useTraitsSelection({
   return { ...visibility, modelSelection, updateDescriptors, handleSelectChange, selectValue };
 }
 
-/** The reasoning level's name for the model picker trigger, such as "High" or "Ultrathink". */
+/** The current effort for the model picker trigger. */
 export function describeReasoningLevel(input: {
   provider: ProviderDriverKind;
   instanceId?: ProviderInstanceId | undefined;
@@ -381,7 +382,7 @@ export function describeReasoningLevel(input: {
   modelOptions: ProviderOptions | null | undefined;
   reportedModelSelection?: ModelSelection | null | undefined;
   planModeEnabled: boolean;
-}): string | null {
+}): EffortDisplay | null {
   const visibility = getTraitsSectionVisibility(input);
   const descriptor = visibility.selectDescriptors.find(isReasoningSelectDescriptor);
   if (!descriptor || visibility.modelIsUnavailable) return null;
@@ -389,18 +390,17 @@ export function describeReasoningLevel(input: {
     visibility.ultrathinkPromptControlled &&
     descriptor.id === visibility.primarySelectDescriptor?.id
   ) {
-    return "Ultrathink";
+    return effortDisplay(descriptor.options, "ultrathink", "Ultrathink");
   }
   const modelSelection =
     input.instanceId && input.model
       ? { instanceId: input.instanceId, model: input.model, options: input.modelOptions ?? [] }
       : null;
-  const label = getProviderOptionCurrentLabel(
-    descriptor,
-    modelSelection,
-    input.reportedModelSelection,
+  return effortDisplay(
+    descriptor.options,
+    getProviderOptionCurrentValue(descriptor, modelSelection, input.reportedModelSelection),
+    getProviderOptionCurrentLabel(descriptor, modelSelection, input.reportedModelSelection),
   );
-  return typeof label === "string" && label.length > 0 ? label : null;
 }
 
 /** Whether the traits control has anything to show once the Reasoning column takes effort. */

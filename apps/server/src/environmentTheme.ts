@@ -23,6 +23,7 @@ import {
   environmentThemeFileHasColors,
 } from "@t3tools/contracts";
 import { UNPUBLISHABLE_THEME_IDS } from "@t3tools/shared/themePalettes";
+import * as ByteSize from "effect/ByteSize";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -31,6 +32,7 @@ import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -212,6 +214,42 @@ export const readPublishedThemes = Effect.fn(function* (themesDir: string) {
 });
 
 /**
+ * Metadata for the files `readPublishedThemes` can examine. OS directory
+ * watches both batch and drop events (notably FSEvents on macOS), so the
+ * watcher uses this cheap fingerprint as a reconciliation pass rather than
+ * decoding every theme on every tick.
+ */
+const readThemesDirectoryFingerprint = Effect.fn(function* (themesDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const entries = yield* fs.readDirectory(themesDir).pipe(Effect.option);
+  if (Option.isNone(entries)) return "unreadable";
+
+  const fingerprints: Array<string> = [];
+  const themeEntries = entries.value
+    .filter((entry) => entry.endsWith(THEME_FILE_SUFFIX))
+    .toSorted()
+    .slice(0, MAX_THEME_FILES);
+  for (const entry of themeEntries) {
+    const info = yield* fs.stat(`${themesDir}/${entry}`).pipe(Effect.option);
+    if (Option.isNone(info)) {
+      fingerprints.push(`${entry}:missing`);
+      continue;
+    }
+    fingerprints.push(
+      [
+        entry,
+        info.value.type,
+        info.value.dev,
+        Option.getOrNull(info.value.ino) ?? "no-inode",
+        ByteSize.toBigInt(info.value.size).toString(),
+        Option.getOrNull(info.value.mtime)?.getTime() ?? "no-mtime",
+      ].join(":"),
+    );
+  }
+  return fingerprints.join("\n");
+});
+
+/**
  * Reads the directory and folds it into the sequenced state, publishing only
  * a genuine change. Every reader goes through here, so the snapshot a client
  * connects on and the events it then receives come from one ordered source
@@ -269,10 +307,18 @@ const make = Effect.gen(function* () {
     .makeDirectory(environmentThemesDir, { recursive: true })
     .pipe(Effect.ignoreCause({ log: true }));
 
+  const fingerprint = readThemesDirectoryFingerprint(environmentThemesDir).pipe(
+    Effect.provideService(FileSystem.FileSystem, fs),
+  );
+
   // Debounced for the same reason settings watching is: a theme script emits
   // several events per save and `fs.watch` can fire before the content is
   // flushed. Every event triggers a full re-read, so no event needs filtering.
   const watchEvents = fs.watch(environmentThemesDir).pipe(Stream.debounce(Duration.millis(100)));
+
+  // The fingerprint baseline is captured before the service can be used, so a
+  // change that lands before the polling fiber starts still reads as a change.
+  const initialFingerprint = yield* fingerprint;
 
   // Seeds the dedupe so a watch event that reports no actual change (a touch,
   // a rewrite with identical contents) does not retint every client.
@@ -282,6 +328,20 @@ const make = Effect.gen(function* () {
     Effect.forkIn(watcherScope),
     Effect.asVoid,
   );
+
+  // Directory watchers can drop or coalesce events (notably FSEvents on
+  // macOS). Reconcile cheap metadata once a second so a missed notification
+  // only delays a theme change instead of losing it.
+  yield* Effect.gen(function* () {
+    let previous = initialFingerprint;
+    while (true) {
+      yield* Effect.sleep(Duration.seconds(1));
+      const current = yield* fingerprint;
+      if (current === previous) continue;
+      previous = current;
+      yield* refresh.pipe(Effect.ignoreCause({ log: true }));
+    }
+  }).pipe(Effect.ignoreCause({ log: true }), Effect.forkIn(watcherScope), Effect.asVoid);
 
   return {
     current: Effect.map(refresh, (state) => state.themes),

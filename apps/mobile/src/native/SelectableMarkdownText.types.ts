@@ -93,4 +93,7 @@ export interface SelectableMarkdownTextProps {
   readonly onImagePress?: (href: string) => void;
   readonly marginTop?: number;
   readonly marginBottom?: number;
+  readonly userMessageDisclosure?:
+    | import("./UserMessageDisclosure").UserMessageDisclosureProps
+    | undefined;
 }

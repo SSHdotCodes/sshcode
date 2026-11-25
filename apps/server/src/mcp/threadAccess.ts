@@ -8,7 +8,8 @@ import {
   type ProjectId,
   type ProviderInteractionMode,
   type RuntimeMode,
-  type ThreadId,
+  ThreadId,
+  type OrchestratorMcpThreadReference,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
@@ -16,6 +17,7 @@ import * as Effect from "effect/Effect";
 
 import type { OrchestratorV2Error } from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { resolveTaskReference } from "../orchestration-v2/taskReference.ts";
 import * as OrchestrationMcp from "./delegationModes.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
@@ -61,6 +63,26 @@ export interface Caller {
   readonly caller: OrchestrationV2ThreadShell | undefined;
   readonly limits: CallerLimits;
 }
+
+/** Resolve a caller-owned delegated task handle to the child's thread. Unknown input is unchanged. */
+export const resolveTaskThreadReference = Effect.fn("mcp.resolveTaskThreadReference")(function* (
+  threads: ThreadManagement.ThreadManagementService["Service"],
+  parentThreadId: ThreadId | undefined,
+  reference: OrchestratorMcpThreadReference,
+) {
+  const threadId = ThreadId.make(reference);
+  const shell = yield* threads.getThreadShell(threadId).pipe(Effect.mapError(unavailable));
+  if (shell !== null && shell.deletedAt === null) return threadId;
+  if (parentThreadId === undefined || parentThreadId === threadId) return threadId;
+  const parent = yield* threads
+    .getThreadRecords(parentThreadId, ["subagents"])
+    .pipe(Effect.mapError(unavailable));
+  const task = resolveTaskReference(
+    parent.subagents.filter((candidate) => candidate.origin === "app_owned"),
+    reference,
+  );
+  return task?.childThreadId ?? threadId;
+});
 
 export const readCaller = Effect.fn("mcp.readCaller")(function* () {
   const scope = yield* McpInvocationContext.McpInvocationContext;
@@ -174,7 +196,7 @@ export const resolveProjectId = (context: Caller, projectId: ProjectId | undefin
         );
 
 /** A target thread: the one passed, else the calling thread. */
-const resolveThreadId = (context: Caller, threadId: ThreadId | undefined) =>
+const resolveThreadId = (context: Caller, threadId: OrchestratorMcpThreadReference | undefined) =>
   threadId !== undefined
     ? Effect.succeed(threadId)
     : context.caller !== undefined
@@ -190,12 +212,17 @@ const resolveThreadId = (context: Caller, threadId: ThreadId | undefined) =>
 export const readThread = Effect.fn("mcp.readThread")(function* <
   K extends ProjectionRecordField = never,
 >(
-  threadId?: ThreadId,
+  threadId?: OrchestratorMcpThreadReference,
   fields: ReadonlyArray<K> = [],
   filter: ProjectionRecordFilter = { turnItemTypes: ["user_input_request"] },
 ) {
   const context = yield* readCaller();
-  const targetId = yield* resolveThreadId(context, threadId);
+  const requestedTargetId = yield* resolveThreadId(context, threadId);
+  const targetId = yield* resolveTaskThreadReference(
+    context.threads,
+    context.caller?.id,
+    requestedTargetId,
+  );
   const shell = yield* context.threads.getThreadShell(targetId).pipe(Effect.mapError(unavailable));
   if (shell === null || shell.deletedAt !== null) {
     return yield* new OrchestratorMcpFailure({

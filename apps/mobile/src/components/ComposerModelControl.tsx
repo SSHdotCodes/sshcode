@@ -1,13 +1,18 @@
 import type { ComponentProps } from "react";
 import type { ModelCapabilities, ModelSelection } from "@t3tools/contracts";
-import { modelTraits } from "../lib/providerOptions";
+import { composerModelName } from "@t3tools/client-runtime/composer-model-display";
+import { composerModelTraits } from "../lib/providerOptions";
 import { ComposerInlineControl } from "./ComposerToolbar";
+import { EffortGauge } from "./EffortGauge";
 import { FastModeBolt } from "./FastModeBolt";
 
 export function ComposerModelControl({
   capabilities,
   selection,
   reportedSelection,
+  shortName,
+  instanceLabel,
+  prompt,
   ...props
 }: Omit<
   ComponentProps<typeof ComposerInlineControl>,
@@ -16,21 +21,32 @@ export function ComposerModelControl({
   readonly capabilities: ModelCapabilities | null | undefined;
   readonly selection: ModelSelection | null;
   readonly reportedSelection?: ModelSelection | null | undefined;
+  readonly shortName?: string | undefined;
+  readonly instanceLabel?: string | null | undefined;
+  readonly prompt?: string | undefined;
 }) {
-  const traits = modelTraits({ capabilities, selection, reportedSelection });
-  const label = [props.label, traits.effort].filter(Boolean).join(" · ");
+  const traits = composerModelTraits({ capabilities, selection, reportedSelection, prompt });
+  const name = composerModelName({ name: props.label, shortName });
+  const effort = traits.effort;
+  const nameWithInstance = instanceLabel ? `${instanceLabel} · ${name}` : name;
   return (
     <ComposerInlineControl
       {...props}
-      label={label}
+      label={effort?.barCount === 0 ? `${nameWithInstance} · ${effort.label}` : nameWithInstance}
       accessibilityLabel={[
-        label,
+        nameWithInstance,
+        effort ? `Effort: ${effort.label}` : null,
         traits.speed ? `${traits.speed} mode on` : null,
         "Model and reasoning settings",
       ]
         .filter(Boolean)
         .join(", ")}
-      trailingAccessory={traits.speed ? <FastModeBolt /> : null}
+      trailingAccessory={
+        <>
+          {effort && effort.barCount > 0 ? <EffortGauge effort={effort} /> : null}
+          {traits.speed ? <FastModeBolt /> : null}
+        </>
+      }
     />
   );
 }

@@ -112,6 +112,32 @@ describe("ssh command", () => {
       Effect.flip,
       Effect.map(() => {
         assert.deepEqual(spawned[0]?.slice(-4), ["--", "-oProxyCommand=false", "sh", "-s"]);
+        assert.include(spawned[0] ?? [], "ServerAliveInterval=5");
+        assert.include(spawned[0] ?? [], "ServerAliveCountMax=3");
+      }),
+      Effect.provide(
+        Layer.merge(
+          NodeServices.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ),
+      ),
+    );
+  });
+
+  it.effect("omits keepalive options for local ssh -G config resolution", () => {
+    const spawned: Array<ReadonlyArray<string>> = [];
+    const spawner = ChildProcessSpawner.make((command) => {
+      if (ChildProcess.isStandardCommand(command)) spawned.push(command.args);
+      return Effect.succeed(makeFailedProcess({ stdout: "", stderr: "" }));
+    });
+    return runSshCommand(
+      { alias: "devbox", hostname: "devbox", username: null, port: null },
+      { preHostArgs: ["-G"] },
+    ).pipe(
+      Effect.flip,
+      Effect.map(() => {
+        assert.notInclude(spawned[0] ?? [], "ServerAliveInterval=5");
+        assert.notInclude(spawned[0] ?? [], "ServerAliveCountMax=3");
       }),
       Effect.provide(
         Layer.merge(

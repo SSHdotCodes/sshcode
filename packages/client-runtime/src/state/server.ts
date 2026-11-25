@@ -51,6 +51,7 @@ import {
   subscribeDynamicWithSession,
   type EnvironmentRpcInput,
 } from "../rpc/client.ts";
+import { sendWithSocketRecovery, withSendTimeout } from "../rpc/pendingSend.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 import {
@@ -1153,10 +1154,32 @@ export function createServerEnvironmentAtoms<R, E>(
     openSideChat: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:side-chat:open",
       tag: WS_METHODS.sideChatOpen,
+      execute: ({
+        resendAfterSocketLoss,
+        ...input
+      }: EnvironmentRpcInput<typeof WS_METHODS.sideChatOpen> & {
+        readonly resendAfterSocketLoss?: boolean;
+      }) => {
+        const attempt = requestGuarded(WS_METHODS.sideChatOpen, input);
+        return resendAfterSocketLoss && input.messageId
+          ? sendWithSocketRecovery(attempt)
+          : withSendTimeout(attempt);
+      },
     }),
     sendSideChat: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:side-chat:send",
       tag: WS_METHODS.sideChatSend,
+      execute: ({
+        resendAfterSocketLoss,
+        ...input
+      }: EnvironmentRpcInput<typeof WS_METHODS.sideChatSend> & {
+        readonly resendAfterSocketLoss?: boolean;
+      }) => {
+        const attempt = requestGuarded(WS_METHODS.sideChatSend, input);
+        return resendAfterSocketLoss && input.messageId
+          ? sendWithSocketRecovery(attempt)
+          : withSendTimeout(attempt);
+      },
     }),
     closeSideChat: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:side-chat:close",

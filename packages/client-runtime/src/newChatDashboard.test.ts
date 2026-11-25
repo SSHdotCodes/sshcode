@@ -5,6 +5,8 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  ScheduledTaskId,
+  ProjectId,
 } from "@t3tools/contracts";
 import {
   buildNewChatActivity,
@@ -17,6 +19,7 @@ import {
   newChatAccounts,
   newChatUsageWindows,
   selectHappeningNow,
+  selectUpcomingScheduledTasks,
 } from "./newChatDashboard.ts";
 import {
   presentThreadShell,
@@ -42,6 +45,54 @@ function chat(
     ...overrides,
   };
 }
+
+describe("upcoming scheduled tasks", () => {
+  const base = Date.parse("2026-11-07T12:00:00-05:00");
+  const task = (
+    id: string,
+    runAt: string | null,
+    changes: Partial<Parameters<typeof selectUpcomingScheduledTasks>[0][number]> = {},
+  ) => ({
+    id: ScheduledTaskId.make(id),
+    title: `Task ${id}`,
+    enabled: true,
+    schedule: { type: "once" as const, runAt: runAt ?? "2026-11-08T00:00:00.000Z" },
+    nextRunAt: runAt,
+    threadId: null,
+    projectId: ProjectId.make("project-1"),
+    ...changes,
+  });
+
+  it("shows only enabled one-time tasks due within twelve hours, soonest first", () => {
+    const entries = selectUpcomingScheduledTasks(
+      [
+        task("later", "2026-11-08T04:30:00.000Z"),
+        task("soon", "2026-11-07T18:10:00.000Z"),
+        task("middle", "2026-11-07T20:00:00.000Z"),
+        task("too-late", "2026-11-08T05:00:01.000Z"),
+        task("past", "2026-11-07T16:59:00.000Z"),
+        task("disabled", "2026-11-07T18:00:00.000Z", { enabled: false }),
+        task("missing", null),
+        task("interval", "2026-11-07T18:00:00.000Z", {
+          schedule: { type: "interval", everyMs: 60_000 },
+        }),
+      ],
+      base,
+    );
+    expect(entries.map((entry) => entry.task.id)).toEqual(["soon", "middle", "later"]);
+    expect(entries[0]?.startsLabel).toBe("1:10 PM");
+  });
+
+  it("caps the card at three lines", () => {
+    const entries = selectUpcomingScheduledTasks(
+      [1, 2, 3, 4].map((index) =>
+        task(`task-${index}`, `2026-11-07T${String(18 + index).padStart(2, "0")}:00:00.000Z`),
+      ),
+      base,
+    );
+    expect(entries.map((entry) => entry.task.id)).toEqual(["task-1", "task-2", "task-3"]);
+  });
+});
 
 describe("new chat activity", () => {
   it("keeps 26 Sunday-first weeks, with future days blank", () => {

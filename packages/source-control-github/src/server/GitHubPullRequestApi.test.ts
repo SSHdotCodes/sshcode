@@ -1982,6 +1982,29 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
+  it.effect("queries account involvement and authenticated repository owners", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output('[{"login":"member-org"}]')))
+        .mockReturnValueOnce(Effect.succeed(emptySearch()))
+        .mockReturnValueOnce(Effect.succeed(emptySearch()));
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const identity = { cwd: "/w", host: "github.com" };
+      const organizations = yield* cli.getViewerOrganizations(identity);
+      const search = { ...identity, viewer: "octocat", state: "open", limit: 10 } as const;
+      yield* cli.searchPersonalPullRequests({ ...search, scope: "involves" });
+      yield* cli.searchPersonalPullRequests({
+        ...search,
+        scope: "owned",
+        owners: ["octocat", ...organizations],
+      });
+
+      expect(callAt(0)).toMatchObject({ kind: "rest", path: "user/orgs?per_page=100" });
+      expect(searchOfCall(1)).toBe("is:pr involves:@me is:open sort:updated-desc");
+      expect(searchOfCall(2)).toBe("is:pr user:@me org:member-org is:open sort:updated-desc");
+    }),
+  );
+
   it.effect("reads a repository GitHub will not search from its own list", () =>
     Effect.gen(function* () {
       // GitHub answers for a repository outside its search index with no rows and no error.

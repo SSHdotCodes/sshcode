@@ -699,10 +699,10 @@ const layerBase: Layer.Layer<
             commandId: input.commandId,
             events: normalized,
           });
-          // A Stop that changes nothing can still queue the stop of its delegated tasks.
+          // A Stop that changes nothing can still queue delegated-task stops or cancel unsettled effects.
           const sequence =
             storedEvents.at(-1)?.sequence ??
-            (input.effects.length === 0
+            (input.effects.length === 0 && input.cancelUnsettledEffects === undefined
               ? undefined
               : yield* eventStore.latestSequence({ threadId: input.threadId }));
           if (sequence === undefined) {

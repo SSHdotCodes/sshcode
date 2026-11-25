@@ -84,6 +84,41 @@ describe("resolveSubagentMetadata", () => {
     ).toBe("My custom model");
   });
 
+  it("names the effort a run uses when the catalog name carries one", () => {
+    const provider = {
+      driver: ProviderDriverKind.make("acpRegistry"),
+      models: [
+        {
+          slug: "swe-2-1-medium",
+          name: "SWE-2.1 Medium",
+          isCustom: false,
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "thought_level",
+                label: "Thinking",
+                type: "select" as const,
+                role: "reasoning" as const,
+                options: [
+                  { id: "medium", label: "Medium" },
+                  { id: "high", label: "High" },
+                  { id: "xhigh", label: "XHigh" },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const label = (modelOptions?: ReadonlyArray<{ id: string; value: string }>) =>
+      resolveSubagentMetadata({ model: "swe-2-1-medium", modelOptions, provider }).modelLabel;
+    expect(label([{ id: "thought_level", value: "high" }])).toBe("SWE-2.1 High");
+    expect(label([{ id: "thought_level", value: "xhigh" }])).toBe("SWE-2.1 XHigh");
+    // Nothing chosen, or a value the model doesn't offer: the catalog name stands.
+    expect(label()).toBe("SWE-2.1 Medium");
+    expect(label([{ id: "thought_level", value: "turbo" }])).toBe("SWE-2.1 Medium");
+  });
+
   it("keeps unknown model identities and does not invent an unreported model", () => {
     expect(resolveSubagentMetadata({ model: " custom/model " }).modelLabel).toBe("custom/model");
     expect(

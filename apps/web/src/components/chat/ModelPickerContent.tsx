@@ -1875,8 +1875,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           <div
             className={cn(
               "flex max-h-86.5 min-h-0 shrink-0 flex-col border-l border-border/70 bg-muted/40 max-sm:h-56 max-sm:w-full max-sm:border-t max-sm:border-l-0",
-              // Route names ("Hermes · OpenCode Go") need more room than effort levels.
-              showRunsIn ? "w-52" : "w-44",
+              // The effort slider's six stop labels (Low … Ultra) need this much room; route
+              // names ("Hermes · OpenCode Go") a little more.
+              showRunsIn ? "w-56" : "w-52",
             )}
             data-model-picker-side="true"
           >

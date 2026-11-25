@@ -18,7 +18,7 @@ describe("ComposerPendingApprovalActions", () => {
     expect(markup).toContain(">Decline<");
     expect(markup).toContain(">Approve<");
     expect(markup).not.toContain(">Cancel<");
-    expect(markup).not.toContain("Always allow this session");
+    expect(markup).not.toContain("Allow until the agent restarts");
   });
 
   it("keeps secondary provider labels out of the compact action row", () => {
@@ -38,7 +38,7 @@ describe("ComposerPendingApprovalActions", () => {
 
     expect(markup).not.toContain("Always allow Safari");
     expect(markup).toContain(">Approve<");
-    expect(markup).not.toContain("Always allow this session");
+    expect(markup).not.toContain("Allow until the agent restarts");
   });
 
   it("preserves provider labels for the main decisions", () => {

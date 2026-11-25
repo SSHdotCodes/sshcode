@@ -1543,12 +1543,14 @@ export const layerWsRpc = (
       const resolvePullRequestSyncKey = (reference: PullRequestRef) =>
         reference.host !== undefined && reference.repository.includes("/")
           ? Effect.succeed(pullRequestSyncKey(reference))
-          : projectService.getShell(reference.projectId).pipe(
-              Effect.map((project) =>
-                pullRequestSyncKey(reference, Option.getOrUndefined(project)?.repositoryIdentity),
-              ),
-              Effect.orElseSucceed(() => null),
-            );
+          : reference.projectId === undefined
+            ? Effect.succeed(null)
+            : projectService.getShell(reference.projectId).pipe(
+                Effect.map((project) =>
+                  pullRequestSyncKey(reference, Option.getOrUndefined(project)?.repositoryIdentity),
+                ),
+                Effect.orElseSucceed(() => null),
+              );
       const usage = yield* UsageService.UsageService;
       const threadUsage = yield* ThreadUsageService.ThreadUsageService;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;

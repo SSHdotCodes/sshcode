@@ -427,7 +427,7 @@ function ActivityCard({
         weeks={weeks}
         maxCell={28}
         progress={progress}
-        accessibilityLabel={`${insights.total} chats started across ${insights.activeDays} active days in the last ${weeks} weeks`}
+        accessibilityLabel={`${insights.total} ${insights.total === 1 ? "chat" : "chats"} started across ${insights.activeDays} active ${insights.activeDays === 1 ? "day" : "days"} in the last ${weeks} weeks`}
       />
       <Text className="text-foreground-muted" style={[styles.caption, { marginTop: 12 }]}>
         {Math.round(total).toLocaleString()} {insights.total === 1 ? "chat" : "chats"} ·{" "}
@@ -507,7 +507,7 @@ function HarnessCard({
               <View
                 style={styles.legendRow}
                 accessible
-                accessibilityLabel={`${harness?.label ?? entry.key}: ${entry.count} chats, ${share} percent`}
+                accessibilityLabel={`${harness?.label ?? entry.key}: ${entry.count} ${entry.count === 1 ? "chat" : "chats"}, ${share} percent`}
               >
                 <View style={styles.pet}>
                   <HarnessMascot
@@ -777,7 +777,6 @@ function LimitRow({
   accessibilityLabel: string;
 }) {
   const counted = useArrivalCount(Math.round(usedPercent), arrived);
-  const tone = LIMIT_TONE_COLOR[limitTone(usedPercent)];
   return (
     <Stagger index={index} arrived={arrived}>
       <View accessible accessibilityLabel={accessibilityLabel}>
@@ -794,13 +793,14 @@ function LimitRow({
             {detail}
           </Text>
           <Text
-            className={usedPercent >= 80 ? undefined : "text-foreground"}
-            style={[
-              styles.caption,
-              styles.share,
-              { fontWeight: "600" },
-              usedPercent >= 80 ? { color: tone } : null,
-            ]}
+            className={
+              usedPercent >= 90
+                ? "text-danger-foreground"
+                : usedPercent >= 80
+                  ? "text-warning-foreground"
+                  : "text-foreground"
+            }
+            style={[styles.caption, styles.share, { fontWeight: "600" }]}
           >
             {Math.round(counted)}%
           </Text>

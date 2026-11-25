@@ -1,4 +1,4 @@
-import { Pressable } from "react-native";
+import { Platform, Pressable } from "react-native";
 
 import { AppText } from "./AppText";
 import { ListRowLayout, type ListRowContentProps } from "./ListRowLayout";
@@ -37,6 +37,7 @@ export function ListToggleRow(
             accessibilityLabel={props.label}
             accessibilityHint={props.description}
             disabled={props.disabled}
+            style={Platform.OS === "ios" ? { alignSelf: "center" } : undefined}
             onValueChange={props.onValueChange}
             value={props.value}
           />

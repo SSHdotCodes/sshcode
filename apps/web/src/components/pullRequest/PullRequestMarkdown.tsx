@@ -67,7 +67,7 @@ export function PullRequestMarkdown({
   className,
 }: {
   text: string;
-  cwd: string;
+  cwd: string | undefined;
   environmentId: EnvironmentId;
   /** Thread the body is shown beside, so its links can open in that thread's in-app browser. */
   threadRef?: ScopedThreadRef | null;
@@ -102,7 +102,7 @@ export function PullRequestMarkdown({
           );
         }
         const githubMediaUrl = segment.media === "video" ? githubMediaFetchUrl(segment.url) : null;
-        if (githubMediaUrl !== null) {
+        if (githubMediaUrl !== null && cwd !== undefined) {
           return (
             <PullRequestGitHubVideo
               key={`${segment.id}:${segment.url}`}

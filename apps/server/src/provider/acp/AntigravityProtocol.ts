@@ -509,9 +509,11 @@ function antigravityUpdateSteps(
             status:
               step.status === "done"
                 ? "completed"
-                : typeof step.status === "string"
-                  ? step.status
-                  : "pending",
+                : step.status === "skipped"
+                  ? "cancelled"
+                  : step.status === "in_progress"
+                    ? "in_progress"
+                    : "pending",
           },
         ]
       : [],
@@ -533,7 +535,8 @@ export function makeAntigravityUpdateStepsPlans() {
     }
     const key = `${notification.sessionId}\u0000${update.toolCallId}`;
     if (
-      update.title === "Run update_steps" &&
+      typeof update.title === "string" &&
+      /^(?:Run|Running) (?:default_api:)?update_steps\??$/.test(update.title) &&
       (update.kind === undefined || update.kind === null || update.kind === "other")
     ) {
       calls.add(key);

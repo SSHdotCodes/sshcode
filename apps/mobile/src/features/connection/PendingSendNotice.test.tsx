@@ -17,13 +17,17 @@ vi.mock("react-native", () => ({
 vi.mock("../../components/AppText", () => ({
   AppText: ({ children }: { children: ReactNode }) => <span>{children}</span>,
 }));
-vi.mock("../../state/pending-sends", () => ({
-  pendingSends: {
-    sendsAtom: Atom.make([]).pipe(Atom.keepAlive),
-    enqueue: (...args: unknown[]) => h.enqueue(...args),
-  },
-  pendingSendMetadata: () => ({ id: "new-retry-id", createdAt: "2026-10-20T13:00:00.000Z" }),
-}));
+vi.mock("../../state/pending-sends", () => {
+  const sendsAtom = Atom.make([]).pipe(Atom.keepAlive);
+  return {
+    pendingSends: {
+      sendsAtom,
+      awaitingAckAtom: sendsAtom,
+      enqueue: (...args: unknown[]) => h.enqueue(...args),
+    },
+    pendingSendMetadata: () => ({ id: "new-retry-id", createdAt: "2026-10-20T13:00:00.000Z" }),
+  };
+});
 import { appAtomRegistry } from "../../state/atom-registry";
 import { pendingSends } from "../../state/pending-sends";
 import { PendingSendNotice } from "./PendingSendNotice";

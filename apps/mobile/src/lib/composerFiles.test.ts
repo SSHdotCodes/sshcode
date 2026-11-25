@@ -732,6 +732,23 @@ describe("composer file attachments", () => {
     expect(result.files[0]?.name).toBe("file");
   });
 
+  it("keeps the app-owned copy within the filesystem's filename byte limit", async () => {
+    const name = `${"界".repeat(82)}.txt`;
+    mocks.pickFile.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri: "file:///downloads/long.txt", name, mimeType: "text/plain", size: 42 }],
+    });
+
+    const result = await pickComposerFiles({ existingCount: 0 });
+
+    expect(result.error).toBeNull();
+    const file = result.files[0];
+    expect(file?.name).toBe(name);
+    const storedName = file?.fileUri.split("/").at(-1) ?? "";
+    expect(storedName).toMatch(/^attachment-id-界+\.txt$/u);
+    expect(new TextEncoder().encode(storedName).byteLength).toBeLessThanOrEqual(255);
+  });
+
   it("rejects files that exceed the environment's advertised upload limit", async () => {
     mocks.pickFile.mockResolvedValue({
       canceled: false,

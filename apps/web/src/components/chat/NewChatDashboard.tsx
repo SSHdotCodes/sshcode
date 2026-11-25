@@ -1,7 +1,9 @@
 import { use, useId, useMemo, useState, type CSSProperties } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
-import { ActivityIcon, ArrowUpRightIcon, GaugeIcon, PlugIcon, RadioIcon } from "lucide-react";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/reactivity";
+import { ActivityIcon, ArrowUpRightIcon, CalendarClockIcon, GaugeIcon, PlugIcon, RadioIcon } from "lucide-react";
 import type {
   EnvironmentId,
   ExecutionEnvironmentPlatformOs,
@@ -18,9 +20,12 @@ import {
   newChatAccounts,
   newChatUsageWindows,
   selectHappeningNow,
+  selectUpcomingScheduledTasks,
   type ChatBackdropMood,
   type ChatPace,
   type HappeningNowEntry,
+  type UpcomingScheduledTask,
+  type UpcomingScheduledTaskEntry,
 } from "@t3tools/client-runtime/new-chat-dashboard";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { harnessMascotAgentId } from "@t3tools/shared/harnessMascots";
@@ -153,6 +158,72 @@ function HappeningNowRow({
   );
 }
 
+type EnvironmentScheduledTaskList = readonly [EnvironmentId, ReadonlyArray<UpcomingScheduledTask>];
+
+const EMPTY_SCHEDULED_TASK_LISTS_ATOM = Atom.make<ReadonlyArray<EnvironmentScheduledTaskList>>(
+  Object.freeze([]),
+).pipe(Atom.withLabel("web-new-chat-scheduled-tasks:empty"));
+
+/** One derived atom fans the live task subscription out across the connected machines. */
+const scheduledTaskListsAtomFamily = Atom.family((key: string) =>
+  Atom.make((get): ReadonlyArray<EnvironmentScheduledTaskList> => {
+    const environmentIds = JSON.parse(key) as ReadonlyArray<EnvironmentId>;
+    const lists: Array<EnvironmentScheduledTaskList> = [];
+    for (const environmentId of environmentIds) {
+      const result = get(serverEnvironment.scheduledTasksLive({ environmentId, input: {} }));
+      const value = Option.getOrNull(AsyncResult.value(result));
+      if (value !== null) lists.push([environmentId, value.tasks]);
+    }
+    return lists;
+  }).pipe(Atom.withLabel(`web-new-chat-scheduled-tasks:${key}`)),
+);
+
+type DashboardUpcomingScheduledTaskEntry = UpcomingScheduledTaskEntry<
+  UpcomingScheduledTask & { readonly environmentId: EnvironmentId }
+>;
+
+function UpcomingScheduledTaskRow({ entry }: { entry: DashboardUpcomingScheduledTaskEntry }) {
+  const privateLabel = usePrivacyLabel();
+  const environmentId = entry.task.environmentId;
+  const title = privateLabel(
+    "Chat",
+    `scheduled-task:${environmentId}:${entry.task.id}`,
+    entry.task.title,
+  );
+  const starts = `· starts ${entry.startsLabel}`;
+  if (entry.task.threadId !== null) {
+    const ref = scopeThreadRef(environmentId, entry.task.threadId);
+    return (
+      <Link
+        to="/$environmentId/$threadId"
+        params={buildThreadRouteParams(ref)}
+        className={styles["now-row"]}
+        aria-label={`${title} ${starts}`}
+      >
+        <CalendarClockIcon size={18} aria-hidden />
+        <span className={styles["now-title"]}>{title}</span>
+        <span className={styles["now-status"]}>
+          <span className={styles["now-status-text"]}>{starts}</span>
+        </span>
+      </Link>
+    );
+  }
+  return (
+    <Link
+      to="/settings/scheduled-tasks"
+      search={{ environmentId }}
+      className={styles["now-row"]}
+      aria-label={`${title} ${starts}. Open scheduled task settings`}
+    >
+      <CalendarClockIcon size={18} aria-hidden />
+      <span className={styles["now-title"]}>{title}</span>
+      <span className={styles["now-status"]}>
+        <span className={styles["now-status-text"]}>{starts}</span>
+      </span>
+    </Link>
+  );
+}
+
 /**
  * What is going on while you start something new: the chats waiting on you, then the ones
  * working, each a way in. Absent when everything is quiet, so an idle start stays plain.
@@ -183,7 +254,30 @@ function HappeningNow({
       }),
     [threads, now, presentationById, serverConfigs, hiddenWorkflowChats],
   );
-  if (entries.length === 0) return null;
+  const connectedEnvironmentIds = useMemo(
+    () =>
+      [...presentationById.entries()]
+        .filter(([, presentation]) => presentation.connection.phase === "connected")
+        .map(([connectedEnvironmentId]) => connectedEnvironmentId)
+        .sort(),
+    [presentationById],
+  );
+  const scheduledTaskLists = useAtomValue(
+    connectedEnvironmentIds.length === 0
+      ? EMPTY_SCHEDULED_TASK_LISTS_ATOM
+      : scheduledTaskListsAtomFamily(JSON.stringify(connectedEnvironmentIds)),
+  );
+  const upcomingTasks = useMemo(
+    () =>
+      selectUpcomingScheduledTasks(
+        scheduledTaskLists.flatMap(([taskEnvironmentId, tasks]) =>
+          tasks.map((task) => ({ ...task, environmentId: taskEnvironmentId })),
+        ),
+        now,
+      ),
+    [scheduledTaskLists, now],
+  );
+  if (entries.length === 0 && upcomingTasks.length === 0) return null;
   const more = entries.length - HAPPENING_NOW_ROWS;
   const summary = [
     needsYou > 0 ? `${needsYou} ${needsYou === 1 ? "needs" : "need"} you` : null,
@@ -202,16 +296,27 @@ function HappeningNow({
           <RadioIcon aria-hidden />
           Right now
         </h2>
-        <Link to="/board" className={styles.more} aria-label={`${summary}. Open the Board`}>
-          {summary}
-        </Link>
+        {summary ? (
+          <Link to="/board" className={styles.more} aria-label={`${summary}. Open the Board`}>
+            {summary}
+          </Link>
+        ) : null}
       </div>
-      <div className={styles["now-list"]} data-single={entries.length === 1 || undefined}>
+      <div
+        className={styles["now-list"]}
+        data-single={entries.length + upcomingTasks.length === 1 || undefined}
+      >
         {entries.slice(0, HAPPENING_NOW_ROWS).map((entry) => (
           <HappeningNowRow
             key={`${entry.thread.environmentId}:${entry.thread.id}`}
             entry={entry}
             config={serverConfigs.get(entry.thread.environmentId)}
+          />
+        ))}
+        {upcomingTasks.map((entry) => (
+          <UpcomingScheduledTaskRow
+            key={`scheduled:${entry.task.environmentId}:${entry.task.id}`}
+            entry={entry}
           />
         ))}
       </div>

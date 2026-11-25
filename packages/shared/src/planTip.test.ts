@@ -197,4 +197,34 @@ describe("betterPlanTip", () => {
       ),
     ).toMatchObject({ reason: "more-room", fromRemainingPercent: 0.5 });
   });
+
+  it("treats quota windows whose resetsAt has passed as reset (100% remaining)", () => {
+    const now = Date.parse("2026-11-16T14:00:00.000Z");
+    const passedReset = "2026-11-16T13:00:00.000Z";
+    const futureReset = "2026-11-18T14:00:00.000Z";
+    // Selected account had 100% used, but its window already reset an hour ago -> no tip!
+    const ownReset = provider(own.instanceId, [
+      { ...weekly, usedPercent: 100, limited: true, resetsAt: passedReset },
+    ]);
+    const otherFull = provider(added.instanceId, [
+      { ...weekly, usedPercent: 10, resetsAt: futureReset },
+    ]);
+    expect(betterPlanTip([ownReset, otherFull], selection, { now })).toBeNull();
+    expect(betterPlanTip([ownReset, otherFull], selection, { now, newSession: false })).toBeNull();
+
+    // Selected account is low, sibling had stale 100% used that reset an hour ago -> suggest sibling at 100%!
+    const ownLow = provider(own.instanceId, [
+      { ...weekly, usedPercent: 90, resetsAt: futureReset },
+    ]);
+    const otherReset = provider(added.instanceId, [
+      { ...weekly, usedPercent: 100, limited: true, resetsAt: passedReset },
+    ]);
+    expect(betterPlanTip([ownLow, otherReset], selection, { now })).toMatchObject({
+      fromInstanceId: own.instanceId,
+      toInstanceId: added.instanceId,
+      reason: "more-room",
+      fromRemainingPercent: 10,
+      toRemainingPercent: 100,
+    });
+  });
 });

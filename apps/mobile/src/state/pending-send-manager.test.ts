@@ -124,6 +124,19 @@ describe("durable side questions and card answers", () => {
     expect([...h.saved.values()]).toEqual([retry]);
   });
 
+  it("accepts the next question while the acknowledged file awaits cleanup", async () => {
+    const h = harness();
+    await h.manager.enqueue(side);
+    h.manager.acknowledge(side);
+    expect(h.sends()).toEqual([side]);
+    const next = { ...side, id: CommandId.make("next-side-question"), prompt: "next" };
+    await h.manager.enqueue(next);
+    expect(h.sends()).toEqual([side, next]);
+    await h.manager.remove(side);
+    expect(h.sends()).toEqual([next]);
+    expect([...h.saved.keys()]).toEqual([next.id]);
+  });
+
   it("does not forget an acknowledged send if removing its file fails", async () => {
     const h = harness();
     await h.manager.enqueue(side);

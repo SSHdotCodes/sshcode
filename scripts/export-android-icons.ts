@@ -105,7 +105,8 @@ const renderForeground = Effect.fn("androidIcons.renderForeground")(function* (
   fraction = WORDMARK_FRACTION,
 ) {
   const text = yield* readLayerSource(repositoryRoot, "prod", "text.svg");
-  const paths = text.match(/<path[^>]*\/>/g) ?? [];
+  const cursor = yield* readLayerSource(repositoryRoot, "prod", "cursor.svg");
+  const paths = `${text}${cursor}`.match(/<path[^>]*\/>/g) ?? [];
   return yield* rasterize(
     "foreground",
     canvasSvg(size, `<g transform="${wordmarkTransform(size, fraction)}">${paths.join("")}</g>`),

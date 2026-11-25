@@ -45,6 +45,50 @@ export function withDevinLightningSpeed(
   });
 }
 
+const EFFORT_NAME_SUFFIX = /\s+(?:Low|Medium|High|XHigh|Max)$/i;
+
+/** Devin's selectable effort already names the level independently of the model. */
+export function withoutDevinEffortSuffix(
+  models: ReadonlyArray<ServerProviderModel>,
+): ReadonlyArray<ServerProviderModel> {
+  const candidates = models.map((model) => {
+    if (
+      !model.capabilities?.optionDescriptors?.some(
+        (descriptor) => descriptor.type === "select" && descriptor.role === "reasoning",
+      )
+    ) {
+      return model;
+    }
+    const name = model.name.replace(EFFORT_NAME_SUFFIX, "");
+    const shortName = model.shortName?.replace(EFFORT_NAME_SUFFIX, "");
+    return name === model.name && shortName === model.shortName
+      ? model
+      : { ...model, name, ...(shortName === undefined ? {} : { shortName }) };
+  });
+
+  const names = new Map<string, Set<number>>();
+  for (const [index, original] of models.entries()) {
+    const candidate = candidates[index]!;
+    for (const name of [original.name, original.shortName, candidate.name, candidate.shortName]) {
+      if (name === undefined) continue;
+      const key = name.toLowerCase();
+      const owners = names.get(key) ?? new Set<number>();
+      owners.add(index);
+      names.set(key, owners);
+    }
+  }
+  return candidates.map((candidate, index) => {
+    const original = models[index]!;
+    const collides = (name: string) => (names.get(name.toLowerCase())?.size ?? 0) > 1;
+    return (candidate.name !== original.name && collides(candidate.name)) ||
+      (candidate.shortName !== undefined &&
+        candidate.shortName !== original.shortName &&
+        collides(candidate.shortName))
+      ? original
+      : candidate;
+  });
+}
+
 // How long a steer watches for the turn ending under it before calling it delivered.
 const STEER_SETTLE = "1500 millis";
 

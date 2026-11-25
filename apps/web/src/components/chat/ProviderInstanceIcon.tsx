@@ -149,8 +149,8 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
         // of the surface behind it keeps it clear of the glyph's strokes.
         <span
           className={cn(
-            "pointer-events-none absolute -right-1 -bottom-1 z-10 select-none text-[8px] leading-none font-bold",
-            props.accentColor ? "text-(--provider-accent)" : "text-muted-foreground",
+            "pointer-events-none absolute -right-1 -bottom-1 z-10 select-none text-4xs leading-none font-bold",
+            props.accentColor ? "text-(--provider-accent)" : "text-foreground",
           )}
           style={{ textShadow: markHalo(indicatorBackground) }}
           data-provider-instance-mark=""

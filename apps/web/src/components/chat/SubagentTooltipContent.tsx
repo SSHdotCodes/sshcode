@@ -52,7 +52,10 @@ export function SubagentTooltipContent(props: {
   result?: string | null | undefined;
   progress?: string | null | undefined;
 }) {
-  const { modelLabel, workspace: metadata } = resolveSubagentMetadata(props);
+  const { modelLabel, workspace: metadata } = resolveSubagentMetadata({
+    ...props,
+    modelOptions: (props.modelSelection ?? props.childThread?.modelSelection)?.options,
+  });
   const preview = subagentDetailPreview(props);
   const model = props.model?.trim();
   const modelSlug = props.provider

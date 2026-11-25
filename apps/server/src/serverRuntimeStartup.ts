@@ -10,6 +10,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Cause from "effect/Cause";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
@@ -20,10 +21,12 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "./config.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
@@ -146,18 +149,36 @@ export const makeCommandGate = Effect.gen(function* () {
   } satisfies CommandGate;
 });
 
+// Reads only the row count on the read-only SQLite worker so startup telemetry
+// never loads and decodes the full thread shell (which blocked initial client
+// shell snapshots for seconds on large databases).
+export const countHeartbeatThreads = Effect.gen(function* () {
+  const sqlOption = yield* Effect.serviceOption(SqlClient.SqlClient);
+  if (Option.isSome(sqlOption)) {
+    const sql = sqlOption.value;
+    const rows = yield* sql<{ readonly count: number }>`
+      SELECT COUNT(*) AS count
+      FROM orchestration_v2_projection_threads
+      WHERE deleted_at IS NULL
+    `.pipe(NodeSqliteClient.readOnly);
+    return Number(rows[0]?.count ?? 0);
+  }
+  const threads = yield* ThreadManagement.ThreadManagementService;
+  const shellSnapshot = yield* threads.getShellSnapshot();
+  return shellSnapshot.threads.length + shellSnapshot.archivedThreads.length;
+});
+
 const recordStartupHeartbeat = Effect.gen(function* () {
   const analytics = yield* AnalyticsService.AnalyticsService;
   const projects = yield* ProjectService.ProjectService;
-  const threads = yield* ThreadManagement.ThreadManagementService;
 
   const { threadCount, projectCount } = yield* Effect.all({
     projects: projects.snapshot,
-    threads: threads.getShellSnapshot(),
+    threadCount: countHeartbeatThreads,
   }).pipe(
-    Effect.map(({ projects: projectSnapshot, threads: shellSnapshot }) => ({
+    Effect.map(({ projects: projectSnapshot, threadCount }) => ({
       projectCount: projectSnapshot.projects.length,
-      threadCount: shellSnapshot.threads.length + shellSnapshot.archivedThreads.length,
+      threadCount,
     })),
     Effect.catch((cause) =>
       Effect.logWarning("failed to gather V2 startup counts for telemetry", {

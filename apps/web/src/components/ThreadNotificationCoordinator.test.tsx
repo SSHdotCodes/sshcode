@@ -41,6 +41,7 @@ const state = vi.hoisted(() => ({
   navigate: vi.fn(),
   sound: vi.fn(),
   loadProjection: vi.fn(),
+  waitForConnection: vi.fn(),
   respondToApproval: vi.fn(),
   respondToUserInput: vi.fn(),
   showNative: vi.fn(async (_notification: DesktopNotification) => true),
@@ -166,9 +167,16 @@ vi.mock("../state/shell", () => ({
 }));
 vi.mock("../state/notificationRequests", () => ({ notificationThreadProjection: "load" }));
 vi.mock("../state/threads", () => ({
-  threadEnvironment: { respondToApproval: "approval", respondToUserInput: "input" },
+  threadEnvironment: {
+    waitForSendConnection: "wait",
+    respondToApproval: "approval",
+    respondToUserInput: "input",
+  },
 }));
-vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => state.loadProjection }));
+vi.mock("../state/use-atom-command", () => ({
+  useAtomCommand: (command: string) =>
+    command === "wait" ? state.waitForConnection : state.loadProjection,
+}));
 vi.mock("../state/use-orchestration-command", () => ({
   useOrchestrationCommand: (command: string) =>
     command === "approval" ? state.respondToApproval : state.respondToUserInput,
@@ -229,6 +237,7 @@ beforeEach(() => {
   stableParent = null;
   state.nativeListeners.clear();
   state.loadProjection.mockReset();
+  state.waitForConnection.mockResolvedValue({ _tag: "Success" });
   state.respondToApproval.mockResolvedValue({ _tag: "Success" });
   state.respondToUserInput.mockResolvedValue({ _tag: "Success" });
   state.showNative.mockResolvedValue(true);
@@ -574,6 +583,7 @@ describe("mac notification responses", () => {
     expect(state.notification).not.toHaveBeenCalled();
     expect(state.sound).toHaveBeenCalledWith("input", expect.any(Function));
     await nativeResponse({ type: "action", actionIndex: Number(actionIndex) });
+    expect(state.waitForConnection).toHaveBeenCalledOnce();
     expect(state.loadProjection).toHaveBeenCalledTimes(2);
     expect(state.loadProjection).toHaveBeenCalledWith({
       environmentId: "env-1",
@@ -584,6 +594,7 @@ describe("mac notification responses", () => {
       input: {
         threadId: "thread-1",
         requestId: state.inputRequestId,
+        resendAfterSocketLoss: true,
         answers: { "question-1": answer },
       },
     });
@@ -606,6 +617,7 @@ describe("mac notification responses", () => {
           input: {
             threadId: "thread-1",
             requestId: "request-1",
+            resendAfterSocketLoss: true,
             answers: { "question-1": initialAnswer === undefined ? "my answer" : "  my answer  " },
           },
         }),

@@ -1,17 +1,17 @@
 {
   "subagentOrchestrationBytes": 1789,
   "subagentAcpBootstrapAddedBytes": 2780,
-  "claudeSystemAppendBytes": 6811,
-  "codexAdditionalContextBytes": 6811,
+  "claudeSystemAppendBytes": 6814,
+  "codexAdditionalContextBytes": 6814,
   "codexRepeatedTurnAddedBytes": 0,
   "codexPlanFallbackBytes": 2994,
-  "acpBootstrapAddedBytes": 7861,
+  "acpBootstrapAddedBytes": 7864,
   "acpRepeatedTurnAddedBytes": 0,
   "acpModeChangeAddedBytes": 472,
-  "cursorBootstrapAddedBytes": 6916,
+  "cursorBootstrapAddedBytes": 6919,
   "cursorRepeatedTurnAddedBytes": 0,
-  "openCodeSystemBytes": 6813,
-  "mcpToolListJsonBytes": 85382,
-  "agentMcpToolListJsonBytes": 56129,
-  "agentMcpToolOutputSchemaJsonBytes": 66107
+  "openCodeSystemBytes": 6816,
+  "mcpToolListJsonBytes": 85360,
+  "agentMcpToolListJsonBytes": 56107,
+  "agentMcpToolOutputSchemaJsonBytes": 66052
 }

@@ -42,7 +42,7 @@ export function PullRequestGuideTab({
   /** The pull request's title for the notice when a guide is ready, null until the detail loads. */
   title: string | null;
   /** The checkout the guide's prose renders against, as the description does. */
-  workspaceRoot: string;
+  workspaceRoot: string | undefined;
   /** Whether this is the tab on screen. */
   active: boolean;
   /** Whether this reader may queue line comments for a review on this host. */
@@ -59,11 +59,18 @@ export function PullRequestGuideTab({
   /** Told when a written guide comes on screen; a run in progress is not one. */
   onTourShown?: (() => void) | undefined;
 }) {
-  const { query, data, running, canWrite, write } = useReviewGuideWriter({
+  const {
+    query,
+    data,
+    running,
+    canWrite: canWriteGuide,
+    write,
+  } = useReviewGuideWriter({
     environmentId,
     reference,
     title,
   });
+  const canWrite = workspaceRoot !== undefined && canWriteGuide;
   const runKey = guideRunKey(environmentId, reference);
   // Line comments join the review the Code tab collects, so either place shows and sends them.
   const reviewKey = pullRequestReviewKey(reference);

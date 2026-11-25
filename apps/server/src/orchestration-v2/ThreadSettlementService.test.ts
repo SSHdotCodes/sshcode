@@ -498,7 +498,7 @@ function makeSnapshot(
 }
 
 function makePullRequestSummary(input: {
-  readonly projectId: ProjectId;
+  readonly projectId?: ProjectId | undefined;
   readonly repository: string;
   readonly number: number;
   readonly state: "open" | "closed" | "merged";
@@ -566,7 +566,7 @@ const makeHarness = Effect.fn("makeThreadSettlementHarness")(function* (options:
   >([]);
   const summaryCalls = yield* Ref.make<
     ReadonlyArray<{
-      readonly projectId: ProjectId;
+      readonly projectId?: ProjectId | undefined;
       readonly repository: string;
       readonly number: number;
     }>

@@ -3,6 +3,7 @@ import type { ServerProvider } from "@t3tools/contracts";
 import {
   type AccountSelection,
   accountPool,
+  afterReset,
   pickAccountForNewSession,
   usageWindowsForModel,
 } from "./accountBalance.ts";
@@ -18,9 +19,10 @@ export interface PlanTip {
 }
 
 /** How much of an account's tightest limit is left for a model; null when it reports none. */
-export function planHeadroom(provider: ServerProvider, model: string) {
+export function planHeadroom(provider: ServerProvider, model: string, now?: number) {
   let tightest: { remaining: number; label: string } | null = null;
-  for (const window of usageWindowsForModel(provider, model)) {
+  for (const raw of usageWindowsForModel(provider, model)) {
+    const window = now === undefined ? raw : afterReset(raw, now);
     const remaining = isUsageWindowLimited(window) ? 0 : remainingPercent(window);
     if (tightest === null || remaining < tightest.remaining) {
       tightest = { remaining, label: window.label };
@@ -32,29 +34,33 @@ export function planHeadroom(provider: ServerProvider, model: string) {
 /**
  * Suggest a roomier account that can continue this chat; never change its route.
  *
- * With `newSession` (a chat not sent yet) the tip has to agree with where new sessions
- * start: none while that is the chat's own account, and otherwise that account. An
- * account with little left can still be the right start when its unused share expires
- * within hours, and a tip to leave it would contradict the app's own choice.
+ * With `newSession` (default when `options` is passed, for a chat not sent yet) the tip has
+ * to agree with where new sessions start: none while that is the chat's own account, and
+ * otherwise that account. An account with little left can still be the right start when its
+ * unused share expires within hours, and a tip to leave it would contradict the app's own choice.
  */
 export function betterPlanTip(
   providers: ReadonlyArray<ServerProvider>,
   selection: AccountSelection,
-  newSession?: { readonly now: number },
+  options?: { readonly now: number; readonly newSession?: boolean },
 ): PlanTip | null {
   const [from, ...others] = accountPool(providers, selection);
   if (from?.instanceId !== selection.instanceId) return null;
-  const pick = newSession && pickAccountForNewSession(providers, selection, newSession);
+  const now = options?.now;
+  const checkNewSession = options !== undefined && options.newSession !== false;
+  const pick = checkNewSession
+    ? pickAccountForNewSession(providers, selection, { now: options.now })
+    : undefined;
   if (pick && pick.instanceId === selection.instanceId) return null;
   const siblings = pick
     ? others.filter((provider) => provider.instanceId === pick.instanceId)
     : others;
-  const current = planHeadroom(from, selection.model);
+  const current = planHeadroom(from, selection.model, now);
   if (current === null || current.remaining > 20) return null;
 
   let best: { provider: ServerProvider; remaining: number } | null = null;
   for (const provider of siblings) {
-    const candidate = planHeadroom(provider, selection.model);
+    const candidate = planHeadroom(provider, selection.model, now);
     if (candidate !== null && (best === null || candidate.remaining > best.remaining)) {
       best = { provider, remaining: candidate.remaining };
     }

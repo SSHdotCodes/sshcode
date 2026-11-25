@@ -435,6 +435,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
       });
       const updateThread = Effect.fnUntraced(function* (
         patch: Partial<OrchestrationV2ProviderThread>,
+        sessionScoped = false,
       ) {
         if (!thread) return;
         thread = { ...thread, ...patch, updatedAt: yield* DateTime.now };
@@ -442,6 +443,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
           type: "provider_thread.updated",
           driver: MUSE_PROVIDER,
           providerThread: thread,
+          ...(sessionScoped ? { sessionScoped: true as const } : {}),
         });
       });
       const itemIdentity = (turn: ActiveTurn, nativeId: string) =>
@@ -1307,7 +1309,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
             maxTokens: usage.windowTokens ?? currentTurn?.tokenUsage?.maxTokens ?? undefined,
             updatedAt,
           };
-          yield* updateThread({ contextUsage: tokenUsage });
+          yield* updateThread({ contextUsage: tokenUsage }, !active);
           if (currentTurn) {
             const updated = { ...currentTurn, tokenUsage };
             if (active) active.providerTurn = updated;

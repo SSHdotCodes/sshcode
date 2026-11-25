@@ -3,7 +3,18 @@ import {
   compileResolvedKeybindingsConfig,
   DEFAULT_RESOLVED_KEYBINDINGS,
   mergeWithDefaultKeybindings,
+  parseKeybindingShortcut,
 } from "./keybindings.ts";
+
+describe("plus-key shortcuts", () => {
+  it("requires a literal plus key after the modifier separator", () => {
+    expect(parseKeybindingShortcut("mod+")).toBeNull();
+    expect(parseKeybindingShortcut("mod+a+++")).toBeNull();
+    expect(parseKeybindingShortcut("mod+++")).toBeNull();
+    expect(parseKeybindingShortcut("mod++")).toMatchObject({ key: "+", modKey: true });
+    expect(parseKeybindingShortcut("+")).toMatchObject({ key: "+" });
+  });
+});
 
 describe("prompt shortcut compatibility", () => {
   it("fills prompt navigation defaults from older servers while retaining custom bindings", () => {

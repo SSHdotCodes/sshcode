@@ -571,6 +571,10 @@
       "types": "./src/composerModelMath.ts",
       "default": "./src/composerModelMath.ts"
     },
+    "./composer-model-display": {
+      "types": "./src/composerModelDisplay.ts",
+      "default": "./src/composerModelDisplay.ts"
+    },
     "./new-chat-dashboard": {
       "types": "./src/newChatDashboard.ts",
       "default": "./src/newChatDashboard.ts"

@@ -103,7 +103,7 @@ export function OutsideAgentSheet(props: {
       presentationStyle="pageSheet"
       onRequestClose={props.onLater}
     >
-      <View className="flex-1 bg-background">
+      <View className="flex-1 bg-sheet">
         <View className="flex-row items-center justify-between border-b border-border p-4">
           <Text className="text-lg font-semibold">Sign-in request</Text>
           <Pressable accessibilityRole="button" onPress={props.onLater} disabled={busy !== null}>

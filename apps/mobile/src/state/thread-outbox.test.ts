@@ -1336,14 +1336,14 @@ describe("thread outbox", () => {
     ).toEqual({ step: "remove" });
   });
 
-  it("retries instead of parking a file message while the server config loads", () => {
+  it("waits for the subscribed server config before checking file capabilities", () => {
     expect(
       resolveThreadOutboxDispatchStep({
         deliveryAction: "send",
         fileAttachments: [{ name: "report.pdf", sizeBytes: 42 }],
         serverConfig: null,
       }),
-    ).toEqual({ step: "retry" });
+    ).toEqual({ step: "wait" });
   });
 
   it("gates a sending file message on the server's file support and limit", () => {
@@ -1377,7 +1377,7 @@ describe("thread outbox", () => {
         fileAttachments: [],
         serverConfig: null,
       }),
-    ).toEqual({ step: "retry" });
+    ).toEqual({ step: "wait" });
     expect(
       resolveThreadOutboxDispatchStep({
         deliveryAction: "send",

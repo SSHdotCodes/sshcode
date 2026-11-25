@@ -275,7 +275,18 @@ function useThreadGitControlModel(props: ThreadGitMenuProps) {
 }
 
 function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGitHeaderActionItems {
-  const model = useThreadGitControlModel(props);
+  const navigation = useNavigation();
+  const { environmentId, onOpenFilesInspector, threadId } = props;
+  const openFiles = useCallback(() => {
+    if (onOpenFilesInspector) {
+      onOpenFilesInspector();
+      return;
+    }
+    navigation.navigate("ThreadFiles", {
+      environmentId: String(environmentId),
+      threadId: String(threadId),
+    });
+  }, [environmentId, navigation, onOpenFilesInspector, threadId]);
 
   return useMemo(
     () => ({
@@ -301,7 +312,7 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
                     description: "This project has no saved scripts yet",
                     disabled: true,
                     icon: { name: "play", type: "sfSymbol" as const },
-                    label: "No project scripts",
+                    label: "No scripts",
                     onPress: () => {},
                     type: "action" as const,
                   },
@@ -343,14 +354,14 @@ function useThreadGitHeaderActionItems(props: ThreadGitControlsProps): ThreadGit
         icon: { name: "folder", type: "sfSymbol" },
         identifier: "thread-right-files",
         label: "Files",
-        onPress: model.openFiles,
+        onPress: openFiles,
         sharesBackground: true,
         type: "button",
         variant: "plain",
       },
     }),
     [
-      model.openFiles,
+      openFiles,
       props.canOpenFiles,
       props.canOpenTerminal,
       props.canOperateTerminal,
@@ -445,7 +456,7 @@ export function ThreadGitControls(props: ThreadGitControlsProps) {
               onPress={() => {}}
               subtitle="This project has no saved scripts yet"
             >
-              <NativeHeaderToolbar.Label>No project scripts</NativeHeaderToolbar.Label>
+              <NativeHeaderToolbar.Label>No scripts</NativeHeaderToolbar.Label>
             </NativeHeaderToolbar.MenuAction>
           )}
           {props.terminalSessions.map((session) => (

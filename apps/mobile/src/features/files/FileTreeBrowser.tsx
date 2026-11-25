@@ -19,6 +19,7 @@ import {
 
 const fileTreeCache = new WeakMap<ReadonlyArray<ProjectEntry>, ReadonlyArray<FileTreeNode>>();
 const OPTIMISTIC_SELECTION_TIMEOUT_MS = 1_000;
+const FILE_ROW_TARGET_HEIGHT = 44;
 
 function cachedFileTree(entries: ReadonlyArray<ProjectEntry>): ReadonlyArray<FileTreeNode> {
   const cached = fileTreeCache.get(entries);
@@ -67,39 +68,45 @@ const FileTreeRow = memo(function FileTreeRow(props: {
         }
         props.onPressFile(node.path);
       }}
-      className={cn(
-        "mx-2 min-h-[42px] flex-row items-center gap-2 rounded-[12px] px-2 active:bg-subtle",
-        props.selected && "bg-thread-selected",
-      )}
-      style={{ paddingLeft: 8 + depth * 18 }}
+      className="mx-2 min-h-[44px] justify-center"
     >
-      {node.kind === "directory" ? (
-        <SymbolView
-          name={props.expanded ? "chevron.down" : "chevron.right"}
-          size={12}
-          tintColorClassName="accent-icon-muted"
-          type="monochrome"
-        />
-      ) : (
-        <View className="w-3" />
+      {({ pressed }) => (
+        <View
+          className={cn(
+            "min-h-[42px] flex-row items-center gap-2 rounded-[12px] px-2",
+            pressed ? "bg-subtle" : props.selected && "bg-thread-selected",
+          )}
+          style={{ paddingLeft: 8 + depth * 18 }}
+        >
+          {node.kind === "directory" ? (
+            <SymbolView
+              name={props.expanded ? "chevron.down" : "chevron.right"}
+              size={12}
+              tintColorClassName="accent-icon-muted"
+              type="monochrome"
+            />
+          ) : (
+            <View className="w-3" />
+          )}
+          <PierreEntryIcon path={node.path} kind={node.kind} size={17} />
+          <Text
+            className={cn(
+              "min-w-0 flex-1 text-sm leading-normal",
+              props.selected
+                ? "font-t3-bold text-thread-selected-foreground"
+                : node.ignored
+                  ? "font-t3-medium text-foreground-tertiary"
+                  : "font-t3-medium text-foreground-secondary",
+            )}
+            numberOfLines={1}
+          >
+            {node.name}
+          </Text>
+          {node.kind === "directory" && props.expanded && props.loading ? (
+            <AppActivityIndicator size="small" accessibilityLabel={`Loading ${node.name}`} />
+          ) : null}
+        </View>
       )}
-      <PierreEntryIcon path={node.path} kind={node.kind} size={17} />
-      <Text
-        className={cn(
-          "min-w-0 flex-1 text-sm leading-normal",
-          props.selected
-            ? "font-t3-bold text-thread-selected-foreground"
-            : node.ignored
-              ? "font-t3-medium text-foreground-tertiary"
-              : "font-t3-medium text-foreground-secondary",
-        )}
-        numberOfLines={1}
-      >
-        {node.name}
-      </Text>
-      {node.kind === "directory" && props.expanded && props.loading ? (
-        <AppActivityIndicator size="small" accessibilityLabel={`Loading ${node.name}`} />
-      ) : null}
     </Pressable>
   );
 });
@@ -254,7 +261,7 @@ export function FileTreeBrowser(props: {
       automaticallyAdjustsScrollIndicatorInsets={Platform.OS === "ios"}
       keyboardDismissMode="on-drag"
       keyboardShouldPersistTaps="handled"
-      estimatedItemSize={42}
+      estimatedItemSize={FILE_ROW_TARGET_HEIGHT}
       recycleItems
       maintainVisibleContentPosition
       extraData={extraData}
@@ -292,7 +299,7 @@ export function FileTreeBrowser(props: {
                 accessibilityRole="button"
                 onPress={props.onRefresh}
                 disabled={props.isPending}
-                className="mt-3 min-h-11 self-start justify-center rounded-full bg-subtle px-4 active:opacity-70 disabled:opacity-50"
+                className="mt-3 min-h-[44px] self-start justify-center rounded-full bg-subtle px-4 active:opacity-70 disabled:opacity-50"
               >
                 <Text className="text-sm font-t3-medium text-foreground">Try again</Text>
               </Pressable>

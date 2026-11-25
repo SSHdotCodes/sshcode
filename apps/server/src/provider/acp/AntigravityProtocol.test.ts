@@ -18,6 +18,7 @@ import {
   normalizeAntigravitySessionUpdate,
   makeAntigravityReadRepair,
   makeAntigravityStoppedTools,
+  makeAntigravityUpdateStepsPlans,
   normalizeAntigravityToolCall,
   sanitizeAntigravityToolPayload,
   selectAntigravityPermissionOptionId,
@@ -29,6 +30,55 @@ import {
 import { acpToolCallDiffPatch } from "@t3tools/provider-acp/server/adapter";
 
 const isSessionNotification = Schema.is(AcpWireSchema.SessionNotification);
+
+describe("Antigravity update_steps plans", () => {
+  it("recognizes the CLI's namespaced tool title and translates its step statuses", () => {
+    const plans = makeAntigravityUpdateStepsPlans();
+    const notification = {
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "steps-1",
+        title: "Run default_api:update_steps",
+        kind: "other",
+        status: "in_progress",
+        rawInput: {
+          steps: [
+            { title: "Inspect the bug", status: "done" },
+            { title: "Patch the adapter", status: "in_progress" },
+            { title: "Run the tests", status: "pending" },
+            { title: "Unused approach", status: "skipped" },
+            { title: "Failed experiment", status: "failed" },
+          ],
+        },
+      },
+    } satisfies EffectAcpSchema.SessionNotification;
+
+    const rewritten = plans(notification);
+    if (rewritten === undefined) throw new Error("Expected update_steps to become a plan.");
+    expect(rewritten.update).toEqual({
+      sessionUpdate: "plan",
+      entries: [
+        { content: "Inspect the bug", priority: "medium", status: "completed" },
+        { content: "Patch the adapter", priority: "medium", status: "in_progress" },
+        { content: "Run the tests", priority: "medium", status: "pending" },
+        { content: "Unused approach", priority: "medium", status: "cancelled" },
+        { content: "Failed experiment", priority: "medium", status: "pending" },
+      ],
+    });
+    const parsed = parseSessionUpdateEvent(rewritten).events[0];
+    if (parsed?._tag !== "PlanUpdated" || parsed.payload.kind !== "items") {
+      throw new Error("Expected a plan update.");
+    }
+    expect(parsed.payload.plan.map((step) => step.status)).toEqual([
+      "completed",
+      "inProgress",
+      "pending",
+      "cancelled",
+      "pending",
+    ]);
+  });
+});
 
 describe("native Antigravity subagent tools", () => {
   it("recognizes only native invocation titles and excludes MCP tools", () => {

@@ -92,7 +92,7 @@ export function PullRequestsScreen(
       Keyboard.dismiss();
       const params = {
         environmentId: String(item.environmentId),
-        projectId: String(item.projectId),
+        ...(item.projectId === undefined ? {} : { projectId: item.projectId }),
         repository: item.repository,
         number: item.number,
         host: item.host,
@@ -331,7 +331,7 @@ export function PullRequestsScreen(
               className="items-center gap-2 px-8 py-4"
             >
               <Text className="text-xs text-foreground-muted">{result.loadMoreError}</Text>
-              <Text className="text-sm font-t3-medium text-link">Try again</Text>
+              <Text className="text-sm font-t3-medium text-md-link">Try again</Text>
             </Pressable>
           ) : undefined
         }
@@ -351,7 +351,9 @@ export function PullRequestsScreen(
                       : targets.length
                         ? query
                           ? "No results"
-                          : "No matching pull requests"
+                          : controls.state === "open"
+                            ? "No open pull requests"
+                            : "No matching pull requests"
                         : "Connect an environment"
                 }
                 detail={
@@ -359,7 +361,7 @@ export function PullRequestsScreen(
                   (targets.length && connectedTargets.length === 0
                     ? "Reconnect to load pull requests that aren't saved on this device."
                     : targets.length
-                      ? "Pull requests from the selected environments' projects appear here."
+                      ? "Pull requests you open, review or are asked to review on GitHub show here."
                       : "Add an environment in Settings to browse its pull requests.")
                 }
                 variant="plain"

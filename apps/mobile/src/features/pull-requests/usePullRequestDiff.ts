@@ -19,7 +19,7 @@ import {
 
 export type PullRequestParams = {
   readonly environmentId: string;
-  readonly projectId: string;
+  readonly projectId?: string;
   readonly repository: string;
   readonly number: number;
   readonly host?: string;
@@ -32,7 +32,7 @@ export function pullRequestTarget(params: PullRequestParams) {
   return {
     environmentId: EnvironmentId.make(params.environmentId),
     input: {
-      projectId: ProjectId.make(params.projectId),
+      ...(params.projectId === undefined ? {} : { projectId: ProjectId.make(params.projectId) }),
       repository: params.repository,
       number: params.number,
       ...(params.host ? { host: params.host } : {}),

@@ -1190,7 +1190,7 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
     "-o",
     "ControlPersist=no",
     "-o",
-    "ServerAliveInterval=15",
+    "ServerAliveInterval=5",
     "-o",
     "ServerAliveCountMax=3",
     "-n",
@@ -1527,11 +1527,24 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     });
   });
 
+  const checkTunnelAfterPairing = Effect.fnUntraced(function* (entry: SshTunnelEntry) {
+    if (!(yield* entry.process.isRunning.pipe(Effect.orElseSucceed(() => false)))) {
+      return yield* new SshReadinessError({
+        message: `SSH tunnel process for ${entry.httpBaseUrl} exited during pairing.`,
+      });
+    }
+  });
+
   const createTunnelEntry = Effect.fn("ssh/tunnel.ensureTunnelEntry.create")(function* (input: {
     readonly key: string;
     readonly resolvedTarget: DesktopSshEnvironmentTarget;
     readonly runner?: RemoteT3RunnerOptions;
-  }): Effect.fn.Return<SshTunnelEntry, SshEnvironmentEffectError, SshEnvironmentEffectContext> {
+    readonly issuePairingToken?: boolean;
+  }): Effect.fn.Return<
+    { readonly entry: SshTunnelEntry; readonly pairingToken: string | null },
+    SshEnvironmentEffectError,
+    SshEnvironmentEffectContext
+  > {
     yield* Effect.logDebug("ssh.environment.tunnel.create.start", {
       ...sshTargetLogFields(input.resolvedTarget),
       ...sshRunnerLogFields(input.runner),
@@ -1560,7 +1573,10 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       remotePort,
     });
     const entryScope = yield* Scope.make("sequential");
-    const tunnelEntry = yield* runWithSshAuth({
+    // Once the remote server is running, opening the port-forward and minting
+    // a pairing credential are independent SSH sessions — run them in parallel
+    // to eliminate a full serial SSH handshake + remote CLI startup.
+    const startTunnelEffect = runWithSshAuth({
       key: input.key,
       target: input.resolvedTarget,
       operation: (authOptions) =>
@@ -1575,7 +1591,21 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           remoteServerKind: remoteLaunch.remoteServerKind,
           scope: entryScope,
         }),
+    });
+    const issuePairingEffect = input.issuePairingToken
+      ? runWithSshAuth({
+          key: input.key,
+          target: input.resolvedTarget,
+          operation: (authOptions) =>
+            issueRemotePairingToken(input.resolvedTarget, authOptions, input.runner),
+        }).pipe(Effect.map((result) => result.credential))
+      : Effect.succeed<string | null>(null);
+    const [tunnelEntry, pairingToken] = yield* Effect.all([startTunnelEffect, issuePairingEffect], {
+      concurrency: 2,
     }).pipe(
+      Effect.tap(([entry]) =>
+        input.issuePairingToken ? checkTunnelAfterPairing(entry) : Effect.void,
+      ),
       Effect.onExit((exit) =>
         Exit.isSuccess(exit) ? Effect.void : Scope.close(entryScope, Exit.void).pipe(Effect.ignore),
       ),
@@ -1634,20 +1664,49 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         });
       }).pipe(Effect.ignore),
     );
+    // Evict the entry as soon as the ssh forward exits unexpectedly (e.g.
+    // after sleep or keepalive timeout) so the next reconnect starts fresh in
+    // 0ms instead of probing a dead local port for 5 seconds. Deleting before
+    // closing `entryScope` leaves the remote server running.
+    yield* tunnelEntry.process.exitCode.pipe(
+      Effect.flatMap((exitCode) =>
+        Effect.gen(function* () {
+          if (tunnels.get(tunnelEntry.key) !== tunnelEntry) {
+            return;
+          }
+          yield* Effect.logWarning("ssh.environment.tunnel.exitedUnexpectedly", {
+            ...sshTargetLogFields(tunnelEntry.target),
+            key: tunnelEntry.key,
+            localPort: tunnelEntry.localPort,
+            remotePort: tunnelEntry.remotePort,
+            exitCode: Number(exitCode),
+          });
+          tunnels.delete(tunnelEntry.key);
+          yield* closeTunnelEntry(tunnelEntry);
+        }).pipe(Effect.uninterruptible),
+      ),
+      Effect.ignore,
+      Effect.forkIn(managerScope),
+    );
     yield* Effect.logDebug("ssh.environment.tunnel.create.succeeded", {
       ...sshTargetLogFields(input.resolvedTarget),
       key: input.key,
       localPort,
       remotePort,
     });
-    return tunnelEntry;
+    return { entry: tunnelEntry, pairingToken };
   });
 
   const ensureTunnelEntry = Effect.fn("ssh/tunnel.ensureTunnelEntry")(function* (
     key: string,
     resolvedTarget: DesktopSshEnvironmentTarget,
     runner?: RemoteT3RunnerOptions,
-  ): Effect.fn.Return<SshTunnelEntry, SshEnvironmentEffectError, SshEnvironmentEffectContext> {
+    issuePairingToken?: boolean,
+  ): Effect.fn.Return<
+    { readonly entry: SshTunnelEntry; readonly pairingToken: string | null },
+    SshEnvironmentEffectError,
+    SshEnvironmentEffectContext
+  > {
     const entry = tunnels.get(key) ?? null;
 
     if (entry !== null) {
@@ -1657,13 +1716,31 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         localPort: entry.localPort,
         remotePort: entry.remotePort,
       });
-      const readinessExit = yield* Effect.exit(
-        // One probe's worth: a slow link must not read as a dead forward.
-        waitForHttpReady({
-          baseUrl: entry.httpBaseUrl,
-          timeoutMs: SSH_TUNNEL_READY_PROBE_TIMEOUT_MS,
-        }),
-      );
+      const running = yield* entry.process.isRunning.pipe(Effect.orElseSucceed(() => false));
+      const readinessExit = running
+        ? yield* Effect.exit(
+            Effect.raceFirst(
+              // One probe's worth: a slow link must not read as a dead forward.
+              waitForHttpReady({
+                baseUrl: entry.httpBaseUrl,
+                timeoutMs: SSH_TUNNEL_READY_PROBE_TIMEOUT_MS,
+              }),
+              entry.process.exitCode.pipe(
+                Effect.flatMap((exitCode) =>
+                  Effect.fail(
+                    new SshReadinessError({
+                      message: `SSH tunnel process exited during readiness probe for ${entry.httpBaseUrl} (exit ${Number(exitCode)}).`,
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          )
+        : Exit.fail(
+            new SshReadinessError({
+              message: `SSH tunnel process for ${entry.httpBaseUrl} is no longer running.`,
+            }),
+          );
       if (Exit.isSuccess(readinessExit)) {
         yield* Effect.logDebug("ssh.environment.tunnel.reused", {
           ...sshTargetLogFields(resolvedTarget),
@@ -1671,7 +1748,16 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           localPort: entry.localPort,
           remotePort: entry.remotePort,
         });
-        return entry;
+        const pairingResult = issuePairingToken
+          ? yield* runWithSshAuth({
+              key,
+              target: entry.target,
+              operation: (authOptions) =>
+                issueRemotePairingToken(entry.target, authOptions, runner),
+            })
+          : null;
+        if (pairingResult !== null) yield* checkTunnelAfterPairing(entry);
+        return { entry, pairingToken: pairingResult?.credential ?? null };
       }
       yield* Effect.logWarning("ssh.environment.tunnel.existing.stale", {
         ...sshTargetLogFields(resolvedTarget),
@@ -1689,6 +1775,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       key,
       resolvedTarget,
       ...(runner === undefined ? {} : { runner }),
+      ...(issuePairingToken === undefined ? {} : { issuePairingToken }),
     }).pipe(
       Effect.tapError((cause) =>
         Effect.logWarning("ssh.environment.tunnel.create.failed", {
@@ -1733,17 +1820,12 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     return yield* withTargetLock(
       key,
       Effect.gen(function* () {
-        const entry = yield* ensureTunnelEntry(key, resolvedTarget, runner);
-
-        const pairingResult = requestOptions?.issuePairingToken
-          ? yield* runWithSshAuth({
-              key,
-              target: entry.target,
-              operation: (authOptions) =>
-                issueRemotePairingToken(entry.target, authOptions, runner),
-            })
-          : null;
-        const pairingToken = pairingResult?.credential ?? null;
+        const { entry, pairingToken } = yield* ensureTunnelEntry(
+          key,
+          resolvedTarget,
+          runner,
+          requestOptions?.issuePairingToken,
+        );
 
         yield* Effect.logInfo("ssh.environment.ensure.succeeded", {
           ...sshTargetLogFields(entry.target),

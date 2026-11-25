@@ -13,7 +13,11 @@ import { harnessMascotIdentity } from "@t3tools/shared/harnessThemes";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { WorkingStatusIndicator } from "./WorkingStatusIndicator";
 import { type ScopedProjectRef } from "@t3tools/contracts";
-import { ThreadHoverCard, ThreadHoverCardPopup } from "./ThreadHoverCard";
+import {
+  ThreadHoverCard,
+  ThreadHoverCardLastMessage,
+  ThreadHoverCardPopup,
+} from "./ThreadHoverCard";
 import { resolveRenameCommit } from "./chat/ChatHeader";
 import { CollapsibleSectionHeader } from "./ui/collapsible-section-header";
 import {
@@ -770,17 +774,10 @@ function SidebarThreadMessagePreview({
   );
   const snapshot = useCallback(() => prefetch.snapshot(key), [key, prefetch]);
   const cachedPreview = useSyncExternalStore(subscribe, snapshot, snapshot);
-  const preview = cachedPreview ?? sidebarMessagePreview(thread.source.latestVisibleMessage);
-  if (!preview) return null;
   return (
-    <div className="border-t border-border/60 pt-2 text-xs">
-      <div className="mb-1 text-2xs font-medium text-muted-foreground">
-        {preview.label} · Last message
-      </div>
-      <p className="line-clamp-2 leading-relaxed text-foreground/80 wrap-break-word">
-        {preview.text}
-      </p>
-    </div>
+    <ThreadHoverCardLastMessage
+      preview={cachedPreview ?? sidebarMessagePreview(thread.source.latestVisibleMessage)}
+    />
   );
 }
 

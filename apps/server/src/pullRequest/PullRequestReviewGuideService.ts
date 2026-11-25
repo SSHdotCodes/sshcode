@@ -106,17 +106,22 @@ const make = Effect.gen(function* () {
   const keyFor = Effect.fn("PullRequestReviewGuideService.keyFor")(function* (
     input: PullRequestRef,
   ) {
-    const project = Option.getOrUndefined(
-      yield* projects.getShell(input.projectId).pipe(Effect.orElseSucceed(() => Option.none())),
-    );
+    const project =
+      input.projectId === undefined
+        ? undefined
+        : Option.getOrUndefined(
+            yield* projects
+              .getShell(input.projectId)
+              .pipe(Effect.orElseSucceed(() => Option.none())),
+          );
     const key = pullRequestSyncKey(input, project?.repositoryIdentity ?? undefined);
-    if (key === null || project === undefined) {
+    if (key === null) {
       return yield* new PullRequestOperationError({
         operation: "reviewGuide",
         detail: "Could not identify this pull request's host.",
       });
     }
-    return { key, workspaceRoot: project.workspaceRoot, identity: project.repositoryIdentity };
+    return { key, workspaceRoot: project?.workspaceRoot, identity: project?.repositoryIdentity };
   });
 
   /**
@@ -365,7 +370,7 @@ const make = Effect.gen(function* () {
   });
 
   const write = Effect.fn("PullRequestReviewGuideService.write")(function* (
-    input: PullRequestRef,
+    input: PullRequestRef & { readonly projectId: ProjectId },
     key: ThreadPullRequestKey,
     workspaceRoot: string,
     detail: PullRequestDetail,
@@ -460,6 +465,13 @@ const make = Effect.gen(function* () {
       });
     }
     const { key, workspaceRoot, identity } = yield* keyFor(input);
+    const projectId = input.projectId;
+    if (projectId === undefined || workspaceRoot === undefined) {
+      return yield* new PullRequestOperationError({
+        operation: "generateReviewGuide",
+        detail: "A local checkout is needed to generate a review guide.",
+      });
+    }
     yield* requireOwnRepository(key, identity);
     const runKey = keyString(key);
     // A press asks for the head as it is now, not a read shared from the last minute, so a guide
@@ -517,7 +529,15 @@ const make = Effect.gen(function* () {
         return updated;
       });
     const runId = `${runCounter++}`;
-    yield* write(input, key, workspaceRoot, detail, currentHeadSha, runId, owns).pipe(
+    yield* write(
+      { ...input, projectId },
+      key,
+      workspaceRoot,
+      detail,
+      currentHeadSha,
+      runId,
+      owns,
+    ).pipe(
       Effect.andThen(finish(null)),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)

@@ -983,7 +983,7 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
             ) : null}
             <Text
               accessibilityLabel={formatTranscriptTimestamp(row.createdAt)}
-              className="shrink-0 text-2xs tabular-nums text-foreground-subtle"
+              className="shrink-0 text-2xs tabular-nums text-foreground-muted"
               style={{ color: props.iconSubtleColor }}
             >
               {formatTranscriptTimestamp(row.createdAt)}
@@ -1113,7 +1113,7 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
   ) {
     return (
       <View className="my-3 border-y border-border py-3">
-        <Text className="text-center text-xs text-muted-foreground">
+        <Text className="text-center text-xs text-foreground-muted">
           {row.projectedItem.item.message}
         </Text>
       </View>
@@ -1208,7 +1208,7 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
                     row.workEntry.questionAnswer &&
                     hasQuestionAnswer(row.workEntry.questionAnswer)
                       ? "text-foreground"
-                      : "text-foreground-subtle"
+                      : "text-foreground-muted"
                   }
                 >{`  ${answerPreview}`}</Text>
               ) : null}

@@ -272,7 +272,8 @@ const TRANSIENT_BOOTSTRAP_STATUS_CODES = new Set([502, 503, 504]);
 const BOOTSTRAP_RETRY_TIMEOUT_MS = 15_000;
 // The Mac app opens while its own server starts, which can take longer.
 const DESKTOP_BOOTSTRAP_RETRY_TIMEOUT_MS = 60_000;
-const BOOTSTRAP_RETRY_STEP_MS = 500;
+const BOOTSTRAP_RETRY_INITIAL_STEP_MS = 50;
+const BOOTSTRAP_RETRY_MAX_STEP_MS = 500;
 
 export async function retryTransientBootstrap<T>(operation: () => Promise<T>): Promise<T> {
   const startedAt = Date.now();
@@ -280,6 +281,7 @@ export async function retryTransientBootstrap<T>(operation: () => Promise<T>): P
     getDesktopBootstrapCredential() === null
       ? BOOTSTRAP_RETRY_TIMEOUT_MS
       : DESKTOP_BOOTSTRAP_RETRY_TIMEOUT_MS;
+  let nextDelayMs = BOOTSTRAP_RETRY_INITIAL_STEP_MS;
   while (true) {
     try {
       return await operation();
@@ -288,11 +290,13 @@ export async function retryTransientBootstrap<T>(operation: () => Promise<T>): P
         throw error;
       }
 
-      if (Date.now() - startedAt >= timeoutMs) {
+      const remainingMs = timeoutMs - (Date.now() - startedAt);
+      if (remainingMs <= 0) {
         throw error;
       }
 
-      await waitForBootstrapRetry(BOOTSTRAP_RETRY_STEP_MS);
+      await waitForBootstrapRetry(Math.min(nextDelayMs, remainingMs));
+      nextDelayMs = Math.min(nextDelayMs * 2, BOOTSTRAP_RETRY_MAX_STEP_MS);
     }
   }
 }

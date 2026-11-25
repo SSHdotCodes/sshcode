@@ -136,7 +136,7 @@ export function HomeChatTabs(props: {
               <View
                 className={cn(
                   "size-1.5 rounded-full",
-                  chip.status === "attention" ? "bg-warning" : "bg-primary",
+                  chip.status === "attention" ? "bg-warning-foreground" : "bg-primary",
                 )}
               />
             ) : null}

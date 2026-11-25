@@ -1,8 +1,34 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { collectComposerInlineTokens } from "./composerInlineTokens.ts";
+import { serializeComposerFileLink } from "./composerTrigger.ts";
+import { resolveMarkdownFileLinkTarget } from "./markdownLinks.ts";
 
 describe("collectComposerInlineTokens", () => {
+  it.each([
+    "C#/Program.cs",
+    "docs/R&D/notes.md",
+    "docs/Bob's notes.md",
+    "docs/a,b.ts",
+    "docs/100%.md",
+    "docs/why?.md",
+    "icon@2x.png",
+  ])("opens a sent link to %s and recognises the chip when editing", (path) => {
+    const link = serializeComposerFileLink(path);
+    const destination = /\]\((.*)\)$/.exec(link)?.[1];
+    const target = resolveMarkdownFileLinkTarget(destination, "/workspace");
+    expect(target?.replace("/./", "/")).toBe(`/workspace/${path}`);
+    expect(collectComposerInlineTokens(`inspect ${link} please`)).toMatchObject([
+      { type: "mention", value: path, source: link },
+    ]);
+  });
+
+  it("keeps an explicit authored relative path when it needs no serializer prefix", () => {
+    expect(collectComposerInlineTokens("inspect [a.ts](./src/a.ts) please")).toMatchObject([
+      { type: "mention", value: "./src/a.ts" },
+    ]);
+  });
+
   it("collects file links, mentions, and skills with source ranges", () => {
     const text = "Use $ui and inspect [Chat.tsx](src/Chat.tsx) with @AGENTS.md please";
 

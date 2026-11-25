@@ -3526,11 +3526,34 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
-  /** Whether `candidate` lies inside the app's own worktrees folder; others are never parked. */
-  const insideManagedWorktrees = (candidate: string) => {
-    const relative = path.relative(path.resolve(worktreesDir), path.resolve(candidate));
+  const isInsideDirectory = (root: string, candidate: string) => {
+    const relative = path.relative(root, candidate);
     return relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative);
   };
+  const canonicalizeExistingPath = (target: string) =>
+    fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
+  const canonicalizePath = (target: string) =>
+    Effect.gen(function* () {
+      const resolved = path.resolve(target);
+      const direct = yield* fileSystem.realPath(resolved).pipe(Effect.option);
+      if (Option.isSome(direct)) return direct.value;
+      const parent = path.dirname(resolved);
+      if (parent === resolved) return resolved;
+      return path.join(yield* canonicalizeExistingPath(parent), path.basename(resolved));
+    });
+
+  /** Whether `candidate` lies inside the app's own worktrees folder; others are never parked. */
+  const insideManagedWorktrees = (candidate: string) =>
+    Effect.gen(function* () {
+      const resolvedRoot = path.resolve(worktreesDir);
+      const resolvedCandidate = path.resolve(candidate);
+      if (isInsideDirectory(resolvedRoot, resolvedCandidate)) return true;
+      const [canonicalRoot, canonicalCandidate] = yield* Effect.all([
+        canonicalizeExistingPath(resolvedRoot),
+        canonicalizePath(resolvedCandidate),
+      ]);
+      return isInsideDirectory(canonicalRoot, canonicalCandidate);
+    });
   const parkedDirectoryFor = (worktreePath: string) =>
     path.join(path.dirname(path.resolve(worktreePath)), PARKED_WORKTREES_DIRECTORY);
   const isParkedWorktreePath = (worktreePath: string) =>
@@ -3557,8 +3580,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     cwd: string,
     parkDir: string,
   ) {
+    const resolvedParkDir = path.resolve(parkDir);
+    const canonicalParkDir = yield* canonicalizeExistingPath(resolvedParkDir);
     const paths = (yield* registeredWorktreePaths("GitVcsDriver.parkedWorktrees", cwd)).filter(
-      (candidate) => path.dirname(candidate) === parkDir,
+      (candidate) => {
+        const parent = path.dirname(candidate);
+        return parent === canonicalParkDir || parent === resolvedParkDir;
+      },
     );
     const entries = yield* Effect.forEach(paths, (candidate) =>
       fileSystem.stat(candidate).pipe(
@@ -3609,7 +3637,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const parkWorktree = Effect.fn("GitVcsDriver.parkWorktree")(
     function* (input: { readonly cwd: string; readonly path: string }) {
       const worktreePath = path.resolve(input.path);
-      if (!insideManagedWorktrees(worktreePath) || isParkedWorktreePath(worktreePath)) return false;
+      if (!(yield* insideManagedWorktrees(worktreePath)) || isParkedWorktreePath(worktreePath)) {
+        return false;
+      }
       if (!(yield* fileSystem.exists(path.join(worktreePath, ".git")))) return false;
       const parkDir = parkedDirectoryFor(worktreePath);
       const free = yield* freeDiskBytes(path.dirname(worktreePath));
@@ -3642,7 +3672,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         target,
       ]);
       // A rename keeps the folder's old time; the time it was parked decides its age.
-      yield* fileSystem.utimes(target, now, now).pipe(Effect.ignore);
+      // Node `fs.utimes` expects numeric timestamps in epoch seconds, not milliseconds.
+      const parkedAtSeconds = Math.max(0, now / 1000);
+      yield* fileSystem.utimes(target, parkedAtSeconds, parkedAtSeconds).pipe(Effect.ignore);
       yield* Effect.logInfo("GitVcsDriver: parked a finished worktree for reuse", {
         parkedPath: target,
       });
@@ -3663,7 +3695,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       readonly newRefName: string | undefined;
       readonly checkoutWorkers: string;
     }) {
-      if (!insideManagedWorktrees(input.worktreePath)) return false;
+      if (!(yield* insideManagedWorktrees(input.worktreePath))) return false;
       if (yield* fileSystem.exists(input.worktreePath)) return false;
       const now = yield* Clock.currentTimeMillis;
       const candidates = (yield* parkedWorktrees(

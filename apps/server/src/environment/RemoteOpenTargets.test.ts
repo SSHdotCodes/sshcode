@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NetService from "@t3tools/shared/Net";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
@@ -196,5 +197,99 @@ describe("RemoteOpenTargets", () => {
       });
       expect(targets).toEqual([{ kind: "mdns", host: "bb-1.local" }]);
     }),
+  );
+
+  it.effect("retries immediately after a target refresh dies", () => {
+    let spawns = 0;
+    return Effect.gen(function* () {
+      const service = yield* RemoteOpenTargets.RemoteOpenTargets;
+      const first = yield* service.resolveTargets();
+      expect(first).toHaveLength(2);
+      yield* TestClock.adjust("61 seconds");
+      expect(yield* service.resolveTargets()).toEqual(first);
+      yield* TestClock.adjust("1 millis");
+      yield* service.resolveTargets();
+      expect(spawns).toBe(3);
+    }).pipe(
+      Effect.provideService(HostProcess.Hostname, "bb-1"),
+      Effect.provide(
+        RemoteOpenTargets.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              layerNet({ ipv4: true, ipv6: false }),
+              layerSpawner(TAILSCALE_UP, () => {
+                spawns++;
+                if (spawns === 2) throw new Error("target discovery defect");
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  });
+
+  it.effect(
+    "returns cached targets immediately while refreshing in the background after TTL",
+    () => {
+      const releaseRefresh = Deferred.makeUnsafe<void>();
+      let phase = 1;
+      let refreshStarted = false;
+      return Effect.gen(function* () {
+        const service = yield* RemoteOpenTargets.RemoteOpenTargets;
+        const first = yield* service.resolveTargets();
+        expect(first).toEqual([
+          { kind: "tailscale", host: "bb-1.tail1234.ts.net" },
+          { kind: "mdns", host: "bb-1.local" },
+        ]);
+
+        phase = 2;
+        yield* TestClock.adjust("61 seconds");
+
+        // Must return cached targets immediately without waiting on releaseRefresh.
+        const stale = yield* service.resolveTargets();
+        expect(stale).toEqual(first);
+        expect(refreshStarted).toBe(true);
+
+        yield* Deferred.succeed(releaseRefresh, undefined);
+        yield* Effect.yieldNow;
+        expect(yield* service.resolveTargets()).toEqual([{ kind: "mdns", host: "bb-1.local" }]);
+      }).pipe(
+        Effect.provideService(HostProcess.Hostname, "bb-1"),
+        Effect.provide(
+          RemoteOpenTargets.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                layerNet({ ipv4: true, ipv6: false }),
+                Layer.succeed(
+                  ChildProcessSpawner.ChildProcessSpawner,
+                  ChildProcessSpawner.make(() =>
+                    Effect.gen(function* () {
+                      if (phase === 2) {
+                        refreshStarted = true;
+                        yield* Deferred.await(releaseRefresh);
+                      }
+                      const result = phase === 1 ? STATUS_UP : TAILSCALE_DOWN.status;
+                      return ChildProcessSpawner.makeHandle({
+                        pid: ChildProcessSpawner.ProcessId(1),
+                        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(result.exitCode)),
+                        isRunning: Effect.succeed(false),
+                        kill: () => Effect.void,
+                        unref: Effect.succeed(Effect.void),
+                        stdin: Sink.drain,
+                        stdout: Stream.make(encoder.encode(result.stdout)),
+                        stderr: Stream.empty,
+                        all: Stream.empty,
+                        getInputFd: () => Sink.drain,
+                        getOutputFd: () => Stream.empty,
+                      });
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
   );
 });

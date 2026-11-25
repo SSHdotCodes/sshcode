@@ -21,6 +21,8 @@ const h = vi.hoisted(() => ({
   open: vi.fn(),
   answer: vi.fn(),
   saved: new Map<string, PendingSend>(),
+  remove: vi.fn(),
+  loads: 0,
 }));
 vi.mock("react-native", () => ({ Alert: { alert: vi.fn() } }));
 vi.mock("../connection/network-recovery", () => ({
@@ -50,11 +52,15 @@ vi.mock("./pending-sends", async () => {
   const { appAtomRegistry } = await import("./atom-registry");
   return {
     pendingSends: createPendingSendManager(appAtomRegistry, {
-      load: async () => ({ sends: [...h.saved.values()], errors: [] }),
+      load: async () => {
+        h.loads++;
+        return { sends: [...h.saved.values()], errors: [] };
+      },
       write: async (send) => {
         h.saved.set(send.id, send);
       },
       remove: async (send) => {
+        await h.remove();
         h.saved.delete(send.id);
       },
     }),
@@ -94,6 +100,8 @@ beforeEach(() => {
   h.connected = false;
   h.permitted = true;
   h.saved.clear();
+  h.remove.mockReset();
+  h.loads = 0;
   h.open.mockReset();
   h.answer.mockReset();
   appAtomRegistry.set(pendingSends.sendsAtom, []);
@@ -196,27 +204,30 @@ it("keeps a rejected answer visible and does not repeatedly resend it", async ()
   expect(h.saved.size).toBe(1);
 });
 
-it("drops an answer whose card is already closed instead of offering a retry that cannot work", async () => {
-  h.connected = true;
-  h.saved.set(base.id, {
-    ...base,
-    kind: "user-input",
-    requestId: RuntimeRequestId.make("card"),
-    answers: { a: "Restart now (Recommended)" },
-  });
-  h.answer.mockResolvedValue(
-    AsyncResult.failure(
-      Cause.fail({
-        _tag: "OrchestrationDispatchCommandError",
-        message: "Runtime request runtime-request:ask-user:thread:card is resolved.",
-      }),
-    ),
-  );
-  await render();
-  expect(h.answer).toHaveBeenCalledOnce();
-  expect(h.saved.size).toBe(0);
-  expect(appAtomRegistry.get(pendingSends.sendsAtom)).toEqual([]);
-});
+it.each(["OrchestrationV2DispatchCommandError", "OrchestrationDispatchCommandError"])(
+  "drops a closed-card %s without offering a retry",
+  async (tag) => {
+    h.connected = true;
+    h.saved.set(base.id, {
+      ...base,
+      kind: "user-input",
+      requestId: RuntimeRequestId.make("card"),
+      answers: { a: "Restart now (Recommended)" },
+    });
+    h.answer.mockResolvedValue(
+      AsyncResult.failure(
+        Cause.fail({
+          _tag: tag,
+          message: "Runtime request runtime-request:ask-user:thread:card is resolved.",
+        }),
+      ),
+    );
+    await render();
+    expect(h.answer).toHaveBeenCalledOnce();
+    expect(h.saved.size).toBe(0);
+    expect(appAtomRegistry.get(pendingSends.sendsAtom)).toEqual([]);
+  },
+);
 
 it("clears a saved failed answer to a closed card without resending it", async () => {
   h.connected = true;
@@ -251,4 +262,36 @@ it("waits for the destination's operate grant before delivering a restored send"
   await render();
   expect(h.open).not.toHaveBeenCalled();
   expect(h.saved.size).toBe(1);
+});
+
+it("replays immediately when the old socket fails after the replacement is ready", async () => {
+  h.connected = true;
+  h.saved.set(base.id, { ...base, kind: "side-question", prompt: "question" });
+  const first = Promise.withResolvers<unknown>();
+  h.open.mockReturnValueOnce(first.promise).mockResolvedValueOnce(AsyncResult.success({}));
+  await render();
+  h.connected = false;
+  await render();
+  h.connected = true;
+  await render();
+  await act(async () => first.resolve(AsyncResult.failure(Cause.interrupt())));
+  expect(h.open).toHaveBeenCalledTimes(2);
+  expect(h.saved.size).toBe(0);
+  await act(async () => h.wake());
+  expect(h.loads).toBe(1);
+});
+
+it("finishes acknowledged cleanup offline after a transient disk failure", async () => {
+  h.connected = true;
+  h.saved.set(base.id, { ...base, kind: "side-question", prompt: "question" });
+  h.open.mockResolvedValue(AsyncResult.success({}));
+  h.remove.mockRejectedValueOnce(new Error("disk busy"));
+  await render();
+  expect(h.saved.size).toBe(1);
+  expect(appAtomRegistry.get(pendingSends.awaitingAckAtom)).toEqual([]);
+  h.connected = false;
+  await render();
+  await act(async () => vi.advanceTimersByTimeAsync(1000));
+  expect(h.saved.size).toBe(0);
+  expect(h.open).toHaveBeenCalledOnce();
 });

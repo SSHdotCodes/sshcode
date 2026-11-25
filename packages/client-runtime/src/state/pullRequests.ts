@@ -17,6 +17,7 @@ import {
   type PullRequestRef,
   type PullRequestMergeMethod,
   PullRequestOperationError,
+  PullRequestUnavailableError,
   type PullRequestSummary,
   type VcsStatusResult,
 } from "@t3tools/contracts";
@@ -46,6 +47,16 @@ export {
   PullRequestDiffCredentialRejectedError,
 } from "./pullRequestDiffHttp.ts";
 export * as PullRequestDiffLoader from "./pullRequestDiffHttp.ts";
+
+const isPullRequestUnavailableError = Schema.is(PullRequestUnavailableError);
+
+export function isGitHubPullRequestCredentialError(error: unknown): boolean {
+  return (
+    isPullRequestUnavailableError(error) &&
+    error.provider === "github" &&
+    (error.reason === "cli-missing" || error.reason === "cli-unauthenticated")
+  );
+}
 
 /** @public Required to name the error in consumers' inferred pull request results. */
 export class EnvironmentHttpConnectionNotReadyError extends Data.TaggedError(

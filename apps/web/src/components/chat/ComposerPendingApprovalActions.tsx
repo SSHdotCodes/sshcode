@@ -25,7 +25,7 @@ interface ComposerPendingApprovalActionsProps {
 const DEFAULT_APPROVAL_OPTIONS = [
   { decision: "cancel", label: "Cancel" },
   { decision: "decline", label: "Decline" },
-  { decision: "acceptForSession", label: "Always allow this session" },
+  { decision: "acceptForSession", label: "Allow until the agent restarts" },
   { decision: "accept", label: "Approve" },
 ] satisfies ReadonlyArray<ProviderApprovalOption>;
 

@@ -55,6 +55,8 @@ import {
   useModelListSelection,
 } from "../../lib/modelOptions";
 import { scopedProjectKey } from "../../lib/scopedEntities";
+import { autoModelAfterManualPick } from "../autoModel/autoModel.logic";
+import { updateAutoModelDraft } from "../autoModel/autoModelDraftState";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentQuery } from "../../state/query";
@@ -653,9 +655,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     selectedProjectDraft.workspaceSelection?.mode !== undefined ||
     projectSettings.sources.defaultThreadEnvMode !== "environment" ||
     (!t3ProjectFileQuery.isPending && !fileAccessPending);
-  const workspaceMode = canChooseWorkspace
-    ? (selectedProjectDraft.workspaceSelection?.mode ?? defaultWorkspaceMode)
-    : "local";
+  const workspaceMode =
+    canChooseWorkspace || selectedProjectDraft.workspaceSelection?.pullRequestCheckoutRoot
+      ? (selectedProjectDraft.workspaceSelection?.mode ?? defaultWorkspaceMode)
+      : "local";
   const selectedBranchName = selectedProjectDraft.workspaceSelection?.branch ?? null;
   const selectedWorktreePath = selectedProjectDraft.workspaceSelection?.worktreePath ?? null;
   // Keep the user's explicit choice separate from the resolved display value:
@@ -833,6 +836,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       }
       const selection = withRememberedModelOptions(option.selection, options);
       applyDraftModelSelection(selection, pinAccount);
+      updateAutoModelDraft(selectedProjectDraftKey, autoModelAfterManualPick);
       setStickyComposerModelSelection(selection);
     },
     [applyDraftModelSelection, modelOptions, selectedProjectDraftKey],
@@ -853,6 +857,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       updateComposerDraftSettings(selectedProjectDraftKey, {
         modelSelection: nextSelection,
       });
+      updateAutoModelDraft(selectedProjectDraftKey, autoModelAfterManualPick);
       setStickyComposerModelSelection(nextSelection);
     },
     [selectedModel, selectedProjectDraftKey],
@@ -1285,6 +1290,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           worktreePath: message.creation.worktreePath,
           startFromOrigin: message.creation.startFromOrigin ?? false,
           pullRequestReference: message.creation.pullRequestReference,
+          pullRequestCheckoutRoot: message.creation.pullRequestCheckoutRoot,
         },
       });
     }
@@ -1320,7 +1326,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       }
       // A saved choice from before the project went no-project must not
       // survive: those threads always run locally in their own folder.
-      const workspaceSelection = canChooseWorkspace ? draft.workspaceSelection : undefined;
+      const workspaceSelection =
+        canChooseWorkspace || draft.workspaceSelection?.pullRequestCheckoutRoot
+          ? draft.workspaceSelection
+          : undefined;
       // Fall back to the resolved mode (server default) so queued tasks drain
       // with the same mode the composer displayed.
       const mode = workspaceSelection?.mode ?? workspaceMode;
@@ -1363,7 +1372,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           ...(projectCwd !== undefined ? { projectCwd } : {}),
           workspaceMode: mode,
           ...(mode === "worktree" && workspaceSelection?.pullRequestReference
-            ? { pullRequestReference: workspaceSelection.pullRequestReference }
+            ? {
+                pullRequestReference: workspaceSelection.pullRequestReference,
+                pullRequestCheckoutRoot: workspaceSelection.pullRequestCheckoutRoot,
+              }
             : {}),
           // An explicit picker choice wins. Otherwise only a task sending now
           // records the current checkout: a queued local task drains days

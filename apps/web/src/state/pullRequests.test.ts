@@ -1,12 +1,37 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { PullRequestUnavailableError, SourceControlProviderKind } from "@t3tools/contracts";
 import { ProjectId, type PullRequestSummary } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  formatPullRequestListError,
   newestPullRequestObservation,
   newestPullRequestSummary,
   threadPullRequestLinkToSummary,
 } from "./pullRequests";
+
+describe("Pulls list errors", () => {
+  const missingCredential = new PullRequestUnavailableError({
+    provider: SourceControlProviderKind.make("github"),
+    reason: "cli-missing",
+  });
+
+  it("keeps GitHub setup visible when nothing loaded", () => {
+    expect(formatPullRequestListError([Cause.fail(missingCredential)], false)).toBe(
+      missingCredential.message,
+    );
+  });
+
+  it("skips GitHub setup after another environment loaded pull requests", () => {
+    expect(formatPullRequestListError([Cause.fail(missingCredential)], true)).toBeNull();
+    expect(
+      formatPullRequestListError(
+        [Cause.fail(missingCredential), Cause.fail(new Error("Connection lost"))],
+        true,
+      ),
+    ).toBe("Connection lost");
+  });
+});
 
 function summary(overrides: Partial<PullRequestSummary> = {}): PullRequestSummary {
   return {
@@ -104,15 +129,17 @@ describe("pull request summary cache", () => {
         syncedAt: "2026-09-12T00:00:00Z",
       },
     };
-    const saved = threadPullRequestLinkToSummary(link, stale.projectId);
+    const saved = threadPullRequestLinkToSummary(link, stale.projectId!);
     expect(newestPullRequestSummary(stale, saved)?.state).toBe("closed");
     const fresh = summary({ isDraft: true, updatedAt: "2026-09-13T00:00:00Z" });
     expect(newestPullRequestSummary(fresh, saved)).toBe(fresh);
-    expect(threadPullRequestLinkToSummary({ ...link, snapshot: null }, stale.projectId)).toBeNull();
+    expect(
+      threadPullRequestLinkToSummary({ ...link, snapshot: null }, stale.projectId!),
+    ).toBeNull();
     expect(
       threadPullRequestLinkToSummary(
         { ...link, snapshot: { ...link.snapshot, updatedAt: null } },
-        stale.projectId,
+        stale.projectId!,
       ),
     ).toBeNull();
   });

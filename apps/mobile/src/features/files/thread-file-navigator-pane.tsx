@@ -203,7 +203,7 @@ export function ThreadFileNavigatorPane(props: {
           </View>
         )}
         {Platform.OS !== "android" ? (
-          <View className="flex-row items-center gap-2 border-t border-border px-3 py-2">
+          <View className="flex-row items-center gap-2 border-t border-border px-3 py-1.5">
             <SymbolView
               name="magnifyingglass"
               size={15}
@@ -215,7 +215,7 @@ export function ThreadFileNavigatorPane(props: {
               autoCapitalize="none"
               autoCorrect={false}
               clearButtonMode="while-editing"
-              className="min-h-10 flex-1 rounded-xl py-2 text-sm"
+              className="min-h-[44px] flex-1 rounded-xl py-2 text-sm"
               placeholder="Search files"
               value={searchQuery}
               onChangeText={setSearchQuery}

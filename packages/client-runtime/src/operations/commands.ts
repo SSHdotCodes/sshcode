@@ -37,22 +37,12 @@ import {
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { backgroundWorkInterruptTarget } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
-import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as Stream from "effect/Stream";
-import * as SubscriptionRef from "effect/SubscriptionRef";
 
-import * as EnvironmentSupervisor from "../connection/supervisor.ts";
-import {
-  EnvironmentRpcUnavailableError,
-  getInitialServerConfig,
-  isRpcClientError,
-  request,
-} from "../rpc/client.ts";
+import { getInitialServerConfig, request } from "../rpc/client.ts";
+import { awaitSendSession, sendWithSocketRecovery, withSendTimeout } from "../rpc/pendingSend.ts";
 
 interface CommandMetadata {
   readonly commandId?: CommandId;
@@ -227,6 +217,7 @@ export interface RespondToThreadApprovalInput extends ThreadCommandInput {
 }
 
 export interface RespondToThreadUserInputInput extends ThreadCommandInput {
+  readonly resendAfterSocketLoss?: boolean;
   readonly requestId: RuntimeRequestId;
   readonly answers: ProviderUserInputAnswers;
   readonly attachmentsByQuestionId?: import("@t3tools/contracts").UserInputAttachments;
@@ -302,30 +293,6 @@ const allocateCommandId = Effect.fn("EnvironmentCommands.allocateCommandId")(fun
 
 const dispatch = (command: OrchestrationV2Command) =>
   request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, command);
-
-// The socket can close after the server accepted the frame but before it answered.
-// The server replays an accepted commandId from its receipt, so the same command
-// waits out reconnect backoff until the supervisor stops trying. The resend cap
-// stops a frame that kills the socket from looping.
-const MAX_LOST_TRANSPORT_RESENDS = 2;
-
-// A live socket can still carry a command the host never answers; the heartbeat
-// alone would leave the send pending forever.
-const withTurnTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  effect.pipe(
-    Effect.timeoutOrElse({
-      duration: "60 seconds",
-      orElse: () =>
-        Effect.flatMap(EnvironmentSupervisor.EnvironmentSupervisor, ({ target }) =>
-          Effect.fail(
-            new EnvironmentRpcUnavailableError({
-              environmentId: target.environmentId,
-              message: `${target.label} did not confirm the message within 60 seconds.`,
-            }),
-          ),
-        ),
-    }),
-  );
 
 const getProjection = (threadId: ThreadId) =>
   request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, { threadId });
@@ -861,50 +828,24 @@ export const prepareThreadTurn = Effect.fn("EnvironmentCommands.prepareThreadTur
       : {}),
     dispatchMode,
   } satisfies PreparedThreadTurn;
-}, withTurnTimeout);
+}, withSendTimeout);
 
 export const submitPreparedThreadTurn = Effect.fn("EnvironmentCommands.submitPreparedThreadTurn")(
   function* (turn: PreparedThreadTurn, resendAfterSocketLoss = false) {
     const attempt = Effect.gen(function* () {
       if ("type" in turn) return yield* dispatch(turn);
       return yield* request(ORCHESTRATION_V2_WS_METHODS.launchThread, turn);
-    }).pipe(withTurnTimeout);
-    if (!resendAfterSocketLoss) return yield* attempt;
-    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
-    for (let resends = 0; ; resends += 1) {
-      const attemptSession = yield* SubscriptionRef.get(supervisor.session);
-      const exit = yield* Effect.exit(attempt);
-      if (Exit.isSuccess(exit)) return exit.value;
-      // Closing the session interrupts the request, which can beat the protocol error.
-      const lostTransport =
-        Cause.hasInterruptsOnly(exit.cause) ||
-        exit.cause.reasons.some(
-          (reason) => reason._tag === "Fail" && isRpcClientError(reason.error),
-        );
-      if (!lostTransport || resends >= MAX_LOST_TRANSPORT_RESENDS) return yield* exit;
-      const replacement = yield* Effect.raceFirst(
-        SubscriptionRef.changes(supervisor.session).pipe(
-          Stream.filter(
-            (session) =>
-              Option.isSome(session) &&
-              !(Option.isSome(attemptSession) && session.value === attemptSession.value),
-          ),
-          Stream.runHead,
-        ),
-        SubscriptionRef.changes(supervisor.state).pipe(
-          Stream.filter((state) => state.phase === "available" || state.phase === "blocked"),
-          Stream.runHead,
-          Effect.as(Option.none()),
-        ),
-      );
-      if (Option.isNone(replacement)) return yield* exit;
-    }
+    });
+    return yield* resendAfterSocketLoss
+      ? sendWithSocketRecovery(attempt)
+      : withSendTimeout(attempt);
   },
 );
 
 export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(function* (
   input: StartThreadTurnInput,
 ) {
+  if (input.resendAfterSocketLoss) yield* awaitSendSession();
   return yield* submitPreparedThreadTurn(
     yield* prepareThreadTurn(input),
     input.resendAfterSocketLoss,
@@ -979,19 +920,20 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
 
 export const respondToThreadApproval = Effect.fn("EnvironmentCommands.respondToThreadApproval")(
   function* (input: RespondToThreadApprovalInput) {
-    return yield* dispatch({
+    const attempt = dispatch({
       type: "runtime-request.respond",
       commandId: yield* allocateCommandId(input),
       threadId: input.threadId,
       requestId: input.requestId,
       decision: input.decision,
     });
+    return yield* sendWithSocketRecovery(attempt);
   },
 );
 
 export const respondToThreadUserInput = Effect.fn("EnvironmentCommands.respondToThreadUserInput")(
   function* (input: RespondToThreadUserInputInput) {
-    return yield* dispatch({
+    const attempt = dispatch({
       type: "runtime-request.respond",
       commandId: yield* allocateCommandId(input),
       threadId: input.threadId,
@@ -1001,6 +943,9 @@ export const respondToThreadUserInput = Effect.fn("EnvironmentCommands.respondTo
         ? {}
         : { attachmentsByQuestionId: input.attachmentsByQuestionId }),
     });
+    return yield* input.resendAfterSocketLoss
+      ? sendWithSocketRecovery(attempt)
+      : withSendTimeout(attempt);
   },
 );
 
@@ -1188,7 +1133,7 @@ export const retryWorkspacePreparation = Effect.fn("EnvironmentCommands.retryWor
   },
 );
 
-export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(function* (
+const prepareQueuedRunEdit = Effect.fn("EnvironmentCommands.prepareQueuedRunEdit")(function* (
   input: EditQueuedRunInput,
 ) {
   const attachments =
@@ -1236,7 +1181,7 @@ export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(func
           input.edit?.attachments ?? [],
           attachments,
         );
-  return yield* dispatch({
+  return {
     type: "queued-run.edit",
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
@@ -1244,7 +1189,14 @@ export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(func
     text: message.text,
     ...(attachments === undefined ? {} : { attachments }),
     ...(context ? { context } : {}),
-  });
+  } satisfies OrchestrationV2Command;
+}, withSendTimeout);
+
+export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(function* (
+  input: EditQueuedRunInput,
+) {
+  yield* awaitSendSession();
+  return yield* sendWithSocketRecovery(dispatch(yield* prepareQueuedRunEdit(input)));
 });
 
 export type LinkThreadPullRequestInput = Omit<

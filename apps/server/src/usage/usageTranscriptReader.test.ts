@@ -339,4 +339,33 @@ describe("compressed transcripts", () => {
       "old.jsonl",
     ]);
   });
+
+  it("walks nested directories concurrently in deterministic DFS order and skips excluded directory names", async () => {
+    for (const rel of [
+      "a/one.jsonl",
+      "a/nested/two.jsonl",
+      "b/three.jsonl",
+      "notify/ignored.jsonl",
+      "a/tasks/bash-1/ignored2.jsonl",
+      ".index-dirty/ignored3.jsonl",
+    ]) {
+      const full = NodePath.join(dir, rel);
+      await NodeFSP.mkdir(NodePath.dirname(full), { recursive: true });
+      await NodeFSP.writeFile(full, "");
+    }
+    const { files } = await listTranscriptFiles(dir, 0, {
+      skipDirectory: (name) => ["notify", "tasks", ".index-dirty"].includes(name),
+    });
+    const relPaths = files.map((file) => NodePath.relative(dir, file.path));
+    assert.deepStrictEqual(relPaths.toSorted(), [
+      "a/nested/two.jsonl",
+      "a/one.jsonl",
+      "b/three.jsonl",
+    ]);
+    // All files under "a" stay grouped together before or after "b" (DFS order, never interleaved).
+    const aIndices = relPaths
+      .map((rel, index) => (rel.startsWith("a/") ? index : -1))
+      .filter((index) => index >= 0);
+    assert.strictEqual(Math.max(...aIndices) - Math.min(...aIndices), aIndices.length - 1);
+  });
 });

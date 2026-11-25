@@ -292,8 +292,8 @@ export function renderProviderReasoningColumn(
   );
 }
 
-/** The composer model's effort word for the model picker trigger, such as "High". */
-export function providerReasoningLevelLabel(input: TraitsRenderInput): string | null {
+/** The composer model's current effort for the picker trigger. */
+export function providerEffortDisplay(input: TraitsRenderInput) {
   const { selections: resolvedModelOptions } = resolveComposerOptionSelections(
     input.models,
     input.model,

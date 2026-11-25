@@ -1158,7 +1158,15 @@ export type DesktopNotificationResponse =
 
 export const DESKTOP_MEDIA_MAX_BYTES = 32 * 1024 * 1024;
 
+export type DesktopConnectionWakeupReason = "resume" | "unlock-screen" | "network-changed";
+
 export interface DesktopBridge {
+  /**
+   * OS sleep/resume, screen unlock, and network interface changes from the
+   * desktop shell so connections probe or reconnect immediately instead of
+   * waiting for socket ping timeouts. Optional: older desktop builds lack it.
+   */
+  onConnectionWakeup?: (listener: (reason: DesktopConnectionWakeupReason) => void) => () => void;
   prepareDesktopMedia?: (input: {
     name: string;
     mimeType: string;

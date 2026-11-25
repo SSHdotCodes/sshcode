@@ -1,3 +1,6 @@
+import { answeredRequestsAtom } from "../components/chat/answeredRequests";
+import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { derivePendingThreadRequests } from "@t3tools/client-runtime/state/thread-requests";
 import type {
   DesktopNotificationResponse,
@@ -63,6 +66,9 @@ function notificationRequest(
 
 /** A native alert retains its request identity; each response checks a fresh projection. */
 export function useThreadNativeNotification() {
+  const waitForConnection = useAtomCommand(threadEnvironment.waitForSendConnection, {
+    reportFailure: false,
+  });
   const loadProjection = useAtomCommand(notificationThreadProjection, { reportFailure: false });
   const respondToApproval = useOrchestrationCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
@@ -135,6 +141,13 @@ export function useThreadNativeNotification() {
           openChat();
         };
         try {
+          if (
+            original?.type === "question" &&
+            (await waitForConnection({ environmentId, input: undefined }))._tag !== "Success"
+          ) {
+            open();
+            return;
+          }
           const current = await fetchRequest();
           if (!current || !original || !requestId || current.type !== original.type) {
             open();
@@ -183,9 +196,19 @@ export function useThreadNativeNotification() {
             }
             const result = await respondToUserInput({
               environmentId,
-              input: { threadId, requestId, answers: { [current.question.id]: answer } },
+              input: {
+                threadId,
+                requestId,
+                resendAfterSocketLoss: true,
+                answers: { [current.question.id]: answer },
+              },
             });
-            if (result._tag !== "Success") open();
+            if (result._tag === "Success") {
+              appAtomRegistry.update(
+                answeredRequestsAtom(scopedThreadKey(scopeThreadRef(environmentId, threadId))),
+                (current) => new Set([...current, requestId]),
+              );
+            } else open();
             return;
           }
           open();
@@ -244,6 +267,6 @@ export function useThreadNativeNotification() {
       void show();
       return true;
     },
-    [loadProjection, respondToApproval, respondToUserInput],
+    [waitForConnection, loadProjection, respondToApproval, respondToUserInput],
   );
 }

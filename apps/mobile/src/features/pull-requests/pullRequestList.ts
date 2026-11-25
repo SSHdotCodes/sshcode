@@ -4,6 +4,7 @@ import type {
   PullRequestListInput,
   PullRequestListResult,
 } from "@t3tools/contracts";
+import { isGitHubPullRequestCredentialError } from "@t3tools/client-runtime/state/pull-requests";
 import type { PullRequestListControls } from "../../persistence/mobile-preferences";
 
 export const PR_LIST_PAGE_SIZE = 30;
@@ -40,6 +41,19 @@ export type EnvironmentPullRequestListEntry = PullRequestListEntry & {
   readonly environmentId: EnvironmentId;
 };
 
+export function pullRequestListFailureMessages(
+  failures: readonly { environmentId: EnvironmentId; failure: unknown }[],
+  hasLoadedPullRequests: boolean,
+) {
+  return failures
+    .filter(({ failure }) => !hasLoadedPullRequests || !isGitHubPullRequestCredentialError(failure))
+    .map(({ environmentId, failure }) => ({
+      environmentId,
+      projectTitle: "",
+      message: failure instanceof Error ? failure.message : "Couldn't load pull requests.",
+    }));
+}
+
 export const scopedPullRequestListKey = (entry: EnvironmentPullRequestListEntry) =>
   `${entry.environmentId}:${pullRequestListKey(entry)}`;
 
@@ -65,6 +79,7 @@ export function pullRequestListRowsAreEqual(
       previous.checksState === next.checksState &&
       previous.reviewDecision === next.reviewDecision &&
       previous.viewerReviewRequested === next.viewerReviewRequested &&
+      previous.viewerInvolved === next.viewerInvolved &&
       previous.author?.login === next.author?.login &&
       previous.author?.avatarUrl === next.author?.avatarUrl &&
       previous.stack?.position === next.stack?.position &&
@@ -198,6 +213,7 @@ export function filterPullRequestList<
       return false;
     const viewerKey = entry.environmentId ? `${entry.environmentId} ${entry.host}` : entry.host;
     const viewer = viewers[viewerKey];
+    if (controls.involvement === "mine" && entry.viewerInvolved !== true) return false;
     if (controls.involvement === "reviewing" && !entry.viewerReviewRequested) return false;
     if (
       controls.involvement === "authored" &&
@@ -235,7 +251,14 @@ export function filterPullRequestList<
   for (const entry of filtered) {
     const key = pullRequestListKey(entry);
     const held = unique.get(key);
-    if (!held || (!reachable(held) && reachable(entry))) unique.set(key, entry);
+    if (
+      !held ||
+      (!reachable(held) && reachable(entry)) ||
+      (reachable(held) === reachable(entry) &&
+        held.projectId === undefined &&
+        entry.projectId !== undefined)
+    )
+      unique.set(key, entry);
   }
   return [...unique.values()].sort((a, b) =>
     controls.sort === "created"

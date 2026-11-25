@@ -25,6 +25,7 @@ import { EnvironmentRpcRequestObserver } from "@t3tools/client-runtime/rpc";
 import {
   AuthStandardClientScopes,
   type DesktopBridge,
+  type DesktopConnectionWakeupReason,
   type DesktopEnvironmentBootstrap,
   type DesktopSshEnvironmentTarget,
   type EnvironmentId,
@@ -32,6 +33,7 @@ import {
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -58,6 +60,7 @@ import { acknowledgeRpcRequest, trackRpcRequestSent } from "../rpc/requestLatenc
 import {
   desktopLocalConnectionId,
   readDesktopSecondaryBootstrapsResult,
+  supportsDesktopSecondaryBootstraps,
   type DesktopSecondaryBootstrapsRead,
 } from "./desktopLocal";
 import * as ConnectionStorage from "./storage";
@@ -128,15 +131,75 @@ const networkPathChanges = Stream.callback<"network-changed">((queue) =>
   ).pipe(Effect.asVoid),
 );
 
+/** Browsers may freeze a tab hidden this long, and its socket with it. */
+export const WEB_HIDDEN_RECONNECT_AFTER_MS = 5 * 60_000;
+
+/**
+ * The wake a page becoming visible sends. A hidden Mac window keeps its sockets (the OS
+ * reports sleep and network changes itself), so it gets the patient foreground probe: a
+ * quick one would reconnect a busy local server every time the window comes back.
+ */
+export function webVisibilityWakeup(
+  hiddenAtMs: number | null,
+  visibleAtMs: number,
+  desktopShell: boolean,
+): "application-active" | "application-active-reconnect" {
+  return !desktopShell &&
+    hiddenAtMs !== null &&
+    visibleAtMs - hiddenAtMs >= WEB_HIDDEN_RECONNECT_AFTER_MS
+    ? "application-active-reconnect"
+    : "application-active";
+}
+
+export function mapDesktopConnectionWakeup(
+  reason: DesktopConnectionWakeupReason,
+): Wakeups.ConnectionWakeup {
+  switch (reason) {
+    case "resume":
+      return "application-active-reconnect";
+    case "unlock-screen":
+      return "application-active-probe";
+    case "network-changed":
+      return "network-changed";
+  }
+}
+
+const desktopShellWakeups = Stream.callback<Wakeups.ConnectionWakeup>((queue) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      if (typeof window === "undefined") return undefined;
+      return window.desktopBridge?.onConnectionWakeup?.((reason) => {
+        Queue.offerUnsafe(queue, mapDesktopConnectionWakeup(reason));
+      });
+    }),
+    (unsubscribe) => Effect.sync(() => unsubscribe?.()),
+  ).pipe(Effect.asVoid),
+);
+
 const layerWakeups = Wakeups.layer({
   changes: Stream.mergeAll(
     [
-      Stream.callback<"application-active">((queue) =>
+      Stream.callback<Wakeups.ConnectionWakeup>((queue) =>
         Effect.acquireRelease(
           Effect.sync(() => {
+            let hiddenAtMs: number | null =
+              document.visibilityState === "hidden" ? performance.now() : null;
             const listener = () => {
+              if (document.visibilityState === "hidden") {
+                hiddenAtMs ??= performance.now();
+                return;
+              }
               if (document.visibilityState === "visible") {
-                Queue.offerUnsafe(queue, "application-active");
+                const now = performance.now();
+                Queue.offerUnsafe(
+                  queue,
+                  webVisibilityWakeup(
+                    hiddenAtMs,
+                    now,
+                    typeof window.desktopBridge?.onConnectionWakeup === "function",
+                  ),
+                );
+                hiddenAtMs = null;
               }
             };
             document.addEventListener("visibilitychange", listener);
@@ -152,6 +215,7 @@ const layerWakeups = Wakeups.layer({
         Stream.map(() => "credentials-changed" as const),
       ),
       networkPathChanges,
+      desktopShellWakeups,
     ],
     { concurrency: "unbounded" },
   ),
@@ -184,10 +248,33 @@ function sshPreparationError(cause: unknown) {
   });
 }
 
+type DesktopSshEnvironmentBridge = Pick<
+  DesktopBridge,
+  "ensureSshEnvironment" | "fetchSshEnvironmentDescriptor" | "bootstrapSshBearerSession"
+>;
+
+const verifyDesktopSshEnvironment = Effect.fnUntraced(function* (
+  bridge: DesktopSshEnvironmentBridge,
+  httpBaseUrl: string,
+  expectedEnvironmentId: EnvironmentId | undefined,
+) {
+  const descriptor = yield* Effect.tryPromise({
+    try: () => bridge.fetchSshEnvironmentDescriptor(httpBaseUrl),
+    catch: sshPreparationError,
+  });
+  if (expectedEnvironmentId !== undefined && descriptor.environmentId !== expectedEnvironmentId) {
+    return yield* new ConnectionBlockedError({
+      reason: "configuration",
+      detail: `That host reaches ${descriptor.label}, a different machine. Add it as its own environment instead.`,
+    });
+  }
+  return descriptor;
+});
+
 export const provisionDesktopSshEnvironment = Effect.fn(
   "web.connectionPlatform.ssh.provisionDesktop",
 )(function* (
-  bridge: DesktopBridge,
+  bridge: DesktopSshEnvironmentBridge,
   target: DesktopSshEnvironmentTarget,
   expectedEnvironmentId?: EnvironmentId,
 ) {
@@ -205,16 +292,11 @@ export const provisionDesktopSshEnvironment = Effect.fn(
       detail: "The SSH environment did not issue a pairing credential.",
     });
   }
-  const descriptor = yield* Effect.tryPromise({
-    try: () => bridge.fetchSshEnvironmentDescriptor(bootstrap.httpBaseUrl),
-    catch: sshPreparationError,
-  });
-  if (expectedEnvironmentId !== undefined && descriptor.environmentId !== expectedEnvironmentId) {
-    return yield* new ConnectionBlockedError({
-      reason: "configuration",
-      detail: `That host reaches ${descriptor.label}, a different machine. Add it as its own environment instead.`,
-    });
-  }
+  const descriptor = yield* verifyDesktopSshEnvironment(
+    bridge,
+    bootstrap.httpBaseUrl,
+    expectedEnvironmentId,
+  );
   const access = yield* Effect.tryPromise({
     try: () => bridge.bootstrapSshBearerSession(bootstrap.httpBaseUrl, pairingToken),
     catch: sshPreparationError,
@@ -227,8 +309,67 @@ export const provisionDesktopSshEnvironment = Effect.fn(
   };
 });
 
+export interface CachedSshSession {
+  readonly environmentId: EnvironmentId;
+  readonly bearerToken: string;
+}
+
+export function sshTargetCacheKey(target: DesktopSshEnvironmentTarget): string {
+  return `${target.alias}\u0000${target.hostname}\u0000${target.username ?? ""}\u0000${target.port ?? ""}`;
+}
+
+export const prepareDesktopSshEnvironment = Effect.fn(
+  "web.connectionPlatform.prepareDesktopSshEnvironment",
+)(function* (
+  bridge: DesktopSshEnvironmentBridge & Pick<DesktopBridge, "fetchSshSessionState">,
+  target: DesktopSshEnvironmentTarget,
+  cache: Map<string, CachedSshSession>,
+  expectedEnvironmentId: EnvironmentId,
+) {
+  const key = sshTargetCacheKey(target);
+  const cached = cache.get(key);
+  if (
+    cached?.environmentId === expectedEnvironmentId &&
+    typeof bridge.fetchSshSessionState === "function"
+  ) {
+    // Reuse an already-minted bearer session over the ensured tunnel so
+    // reconnects do not spawn a remote SSH pairing command on every drop.
+    const bootstrap = yield* Effect.tryPromise({
+      try: () =>
+        bridge.ensureSshEnvironment(target, {
+          issuePairingToken: false,
+        }),
+      catch: sshPreparationError,
+    });
+    // A surviving loopback forward can now lead to a different server.
+    yield* verifyDesktopSshEnvironment(bridge, bootstrap.httpBaseUrl, expectedEnvironmentId);
+    const sessionState = yield* Effect.tryPromise({
+      try: () => bridge.fetchSshSessionState(bootstrap.httpBaseUrl, cached.bearerToken),
+      catch: sshPreparationError,
+    }).pipe(Effect.option);
+    if (Option.isSome(sessionState) && sessionState.value.authenticated) {
+      return {
+        bootstrap,
+        bearerToken: cached.bearerToken,
+      };
+    }
+    if (cache.get(key) === cached) cache.delete(key);
+  }
+
+  const provisioned = yield* provisionDesktopSshEnvironment(bridge, target, expectedEnvironmentId);
+  cache.set(key, {
+    environmentId: provisioned.environmentId,
+    bearerToken: provisioned.bearerToken,
+  });
+  return {
+    bootstrap: provisioned.bootstrap,
+    bearerToken: provisioned.bearerToken,
+  };
+});
+
 const layerCapabilities = Layer.effectContext(
   Effect.sync(() => {
+    const sshSessionCache = new Map<string, CachedSshSession>();
     const presentation = ClientCapabilities.ClientPresentation.of({
       metadata: clientMetadata(),
     });
@@ -285,7 +426,16 @@ const layerCapabilities = Layer.effectContext(
               detail: "SSH environments are only available in the desktop app.",
             });
           }
-          return yield* provisionDesktopSshEnvironment(bridge, target, expectedEnvironmentId);
+          const provisioned = yield* provisionDesktopSshEnvironment(
+            bridge,
+            target,
+            expectedEnvironmentId,
+          );
+          sshSessionCache.set(sshTargetCacheKey(target), {
+            environmentId: provisioned.environmentId,
+            bearerToken: provisioned.bearerToken,
+          });
+          return provisioned;
         },
       ),
       prepare: Effect.fn("web.connectionPlatform.ssh.prepare")(function* (input) {
@@ -296,30 +446,15 @@ const layerCapabilities = Layer.effectContext(
             detail: "SSH environments are only available in the desktop app.",
           });
         }
-        const bootstrap = yield* Effect.tryPromise({
-          try: () =>
-            bridge.ensureSshEnvironment(input.target, {
-              issuePairingToken: true,
-            }),
-          catch: sshPreparationError,
-        });
-        if (bootstrap.pairingToken === null) {
-          return yield* new ConnectionBlockedError({
-            reason: "authentication",
-            detail: "The SSH environment did not issue a pairing credential.",
-          });
-        }
-        const access = yield* Effect.tryPromise({
-          try: () =>
-            bridge.bootstrapSshBearerSession(bootstrap.httpBaseUrl, bootstrap.pairingToken!),
-          catch: sshPreparationError,
-        });
-        return {
-          bootstrap,
-          bearerToken: access.access_token,
-        };
+        return yield* prepareDesktopSshEnvironment(
+          bridge,
+          input.target,
+          sshSessionCache,
+          input.expectedEnvironmentId,
+        );
       }),
       disconnect: Effect.fn("web.connectionPlatform.ssh.disconnect")(function* (target) {
+        sshSessionCache.delete(sshTargetCacheKey(target));
         const bridge = window.desktopBridge;
         if (bridge === undefined) {
           return;
@@ -423,7 +558,11 @@ const loadSecondaryConnectionRegistration = Effect.fn(
 // Poll cadence for the desktop bootstrap topology. There is no change event on
 // the bridge, so the renderer polls; successful registrations are cached by a
 // signature of their endpoint until bearer credentials approach expiry.
-const PLATFORM_POLL_INTERVAL = "3 seconds";
+// When the primary backend is still booting (e.g. macOS early window launch),
+// retry quickly so we do not stall up to 3 seconds after ECONNREFUSED.
+const PLATFORM_POLL_INTERVAL_MS = 3_000;
+const PLATFORM_POLL_INTERVAL = Duration.millis(PLATFORM_POLL_INTERVAL_MS);
+const PRIMARY_DISCOVERY_RETRY_INITIAL_MS = 100;
 const SECONDARY_BEARER_REFRESH_SKEW_MS = 5_000;
 
 export function secondaryBearerExpiresAtEpochMs(
@@ -622,7 +761,14 @@ export const layerPlatformConnectionSource = Layer.effect(
       }
 
       yield* Ref.set(primaryCacheRef, next);
-      return registrations as ReadonlyArray<PlatformConnectionRegistration>;
+      const needsFastRetry =
+        primaryTopologyRead._tag === "Success" &&
+        primaryTopologyRead.target !== null &&
+        registrations.length === 0;
+      return {
+        registrations: registrations as ReadonlyArray<PlatformConnectionRegistration>,
+        needsFastRetry,
+      };
     }).pipe(Effect.provide(FetchHttpClient.layer));
 
     const buildSecondaryRegistrations = Effect.gen(function* () {
@@ -740,17 +886,42 @@ export const layerPlatformConnectionSource = Layer.effect(
       return registrations as ReadonlyArray<PlatformConnectionRegistration>;
     }).pipe(Effect.provide(FetchHttpClient.layer));
 
-    return PlatformConnectionSource.PlatformConnectionSource.of({
-      registrations: Stream.merge(
-        Stream.tick(PLATFORM_POLL_INTERVAL).pipe(
-          Stream.mapEffect(() => buildPrimaryRegistration),
-          Stream.map((registrations) => ({ source: "primary", registrations })),
-        ),
-        Stream.tick(PLATFORM_POLL_INTERVAL).pipe(
+    const primaryRegistrations = Stream.paginate(
+      { sleepMs: 0, retryDelayMs: PRIMARY_DISCOVERY_RETRY_INITIAL_MS },
+      (state) =>
+        Effect.gen(function* () {
+          if (state.sleepMs > 0) {
+            yield* Effect.sleep(Duration.millis(state.sleepMs));
+          }
+          const result = yield* buildPrimaryRegistration;
+          const nextState = result.needsFastRetry
+            ? {
+                sleepMs: state.retryDelayMs,
+                retryDelayMs: Math.min(state.retryDelayMs * 2, PLATFORM_POLL_INTERVAL_MS),
+              }
+            : {
+                sleepMs: PLATFORM_POLL_INTERVAL_MS,
+                retryDelayMs: PRIMARY_DISCOVERY_RETRY_INITIAL_MS,
+              };
+          return [
+            [{ source: "primary", registrations: result.registrations }],
+            Option.some(nextState),
+          ] as const;
+        }),
+    );
+
+    const secondaryRegistrations = supportsDesktopSecondaryBootstraps()
+      ? Stream.tick(PLATFORM_POLL_INTERVAL).pipe(
           Stream.mapEffect(() => buildSecondaryRegistrations),
           Stream.map((registrations) => ({ source: "secondary", registrations })),
-        ),
-      ).pipe(
+        )
+      : Stream.succeed({
+          source: "secondary",
+          registrations: [] as ReadonlyArray<PlatformConnectionRegistration>,
+        });
+
+    return PlatformConnectionSource.PlatformConnectionSource.of({
+      registrations: Stream.merge(primaryRegistrations, secondaryRegistrations).pipe(
         Stream.scan(
           () => new Map<string, ReadonlyArray<PlatformConnectionRegistration>>(),
           (current, update) => new Map(current).set(update.source, update.registrations),

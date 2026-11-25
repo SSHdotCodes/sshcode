@@ -162,6 +162,166 @@ describe("connectOverRoutes", () => {
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
+  it.effect("does not reuse a relay route prepared ahead for another environment", () =>
+    Effect.gen(function* () {
+      const environmentA = EnvironmentId.make("desk-a");
+      const environmentB = EnvironmentId.make("desk-b");
+      const makeRelayEntry = (environmentId: EnvironmentId): ConnectionCatalogEntry => ({
+        target: new RelayConnectionTarget({ environmentId, label: "Desk" }),
+        profile: Option.none(),
+        enabled: true,
+        alternateRoutes: [],
+      });
+      const entryA = makeRelayEntry(environmentA);
+      const entryB = makeRelayEntry(environmentB);
+      const connectedEnvironmentIds: Array<EnvironmentId> = [];
+      const driver = yield* ConnectionDriver.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.succeed(RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization, {
+              authorizeBearer: () => Effect.die("unused"),
+              authorizeDpop: () => Effect.die("unused"),
+              authorizeDpopHttp: () => Effect.die("unused"),
+              renewDpopBeforeExpiry: () => Effect.die("unused"),
+            }),
+            Layer.succeed(ConnectionResolver.ConnectionResolver, {
+              prepare: (preparedEntry) =>
+                Effect.succeed({
+                  target: preparedEntry.target,
+                  environmentId: preparedEntry.target.environmentId,
+                  httpAuthorization: null,
+                } as PreparedConnection),
+              prepareForUpdate: () => Effect.die("unused"),
+            }),
+            Layer.succeed(RpcSession.RpcSessionFactory, {
+              connect: (prepared) =>
+                Effect.sync(() => {
+                  connectedEnvironmentIds.push(prepared.environmentId);
+                  return {
+                    client: {} as WsRpcProtocolClient,
+                    initialConfig: Effect.never,
+                    subscribeServerConfig: () => Stream.never,
+                    probe: Effect.void,
+                    closed: Effect.never,
+                    ready: Effect.void,
+                  };
+                }),
+            }),
+            RpcHttp.layerRemoteHttpClient(fetch),
+          ),
+        ),
+      );
+
+      yield* driver.prepareAhead!(entryA, {
+        target: entryA.target,
+        profile: entryA.profile,
+      });
+      yield* Effect.yieldNow;
+      yield* driver.connect(entryB, () => Effect.void);
+
+      expect(connectedEnvironmentIds).toEqual([environmentB]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    { updated: false, scenario: "reuses prepared authorization on the same route" },
+    { updated: true, scenario: "prepares again when the saved socket address changes" },
+  ])("$scenario", ({ updated }) =>
+    Effect.gen(function* () {
+      const lanUrl = "http://192.168.1.20:3773";
+      const profile = (wsBaseUrl: string) =>
+        Option.some(
+          new BearerConnectionProfile({
+            connectionId: "lan",
+            environmentId: entry.target.environmentId,
+            label: "Mac",
+            httpBaseUrl: lanUrl,
+            wsBaseUrl,
+          }),
+        );
+      const originalWsUrl = "ws://192.168.1.20:3773";
+      const multi: ConnectionCatalogEntry = {
+        ...entry,
+        profile: profile(originalWsUrl),
+        alternateRoutes: [
+          {
+            target: new RelayConnectionTarget({
+              environmentId: entry.target.environmentId,
+              label: "Mac",
+            }),
+            profile: Option.none(),
+          },
+        ],
+      };
+      let prepareCount = 0;
+      let fetchCount = 0;
+      const driver = yield* ConnectionDriver.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.succeed(RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization, {
+              authorizeBearer: () => Effect.die("unused"),
+              authorizeDpop: () => Effect.die("unused"),
+              authorizeDpopHttp: () => Effect.die("unused"),
+              renewDpopBeforeExpiry: () => Effect.die("unexpected renewal"),
+            }),
+            Layer.succeed(ConnectionResolver.ConnectionResolver, {
+              prepare: (preparedEntry) =>
+                Effect.sync(() => {
+                  prepareCount += 1;
+                  const routeProfile = Option.getOrUndefined(preparedEntry.profile);
+                  return {
+                    target: preparedEntry.target,
+                    environmentId: preparedEntry.target.environmentId,
+                    httpBaseUrl: lanUrl,
+                    socketUrl:
+                      routeProfile?._tag === "BearerConnectionProfile"
+                        ? routeProfile.wsBaseUrl
+                        : "unused",
+                    httpAuthorization: null,
+                  } as PreparedConnection;
+                }),
+              prepareForUpdate: () => Effect.die("unused"),
+            }),
+            Layer.succeed(RpcSession.RpcSessionFactory, {
+              connect: () =>
+                Effect.succeed({
+                  client: {} as WsRpcProtocolClient,
+                  initialConfig: Effect.never,
+                  subscribeServerConfig: () => Stream.never,
+                  probe: Effect.void,
+                  closed: Effect.never,
+                  ready: Effect.void,
+                }),
+            }),
+            RpcHttp.layerRemoteHttpClient(async () => {
+              fetchCount += 1;
+              return Response.json({
+                environmentId: entry.target.environmentId,
+                label: "Mac",
+                platform: { os: "darwin", arch: "arm64" },
+                serverVersion: "0.0.0-test",
+                capabilities: {},
+              });
+            }),
+          ),
+        ),
+      );
+      const lanRoute = { target: multi.target, profile: multi.profile };
+      yield* driver.prepareAhead!(multi, lanRoute);
+      yield* TestClock.adjust("500 millis");
+      const expectedWsUrl = updated ? "ws://192.168.1.20:3774" : originalWsUrl;
+      const connected = yield* driver.connect(
+        { ...multi, profile: profile(expectedWsUrl) },
+        () => Effect.void,
+      );
+
+      expect(connected.prepared.target._tag).toBe("BearerConnectionTarget");
+      expect(connected.prepared.socketUrl).toBe(expectedWsUrl);
+      expect(prepareCount).toBe(updated ? 2 : 1);
+      expect(fetchCount).toBe(updated ? 1 : 0);
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
   it.effect("retains only the winning lease when hedged routes finish together", () =>
     Effect.gen(function* () {
       const first = yield* Deferred.make<void>();

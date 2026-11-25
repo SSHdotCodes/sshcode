@@ -850,7 +850,7 @@ export function formatItemFullDetail(
   );
 }
 
-function toFeedActivity(
+export function toFeedActivity(
   row: OrchestrationV2ProjectedTurnItem,
   attemptId: RunAttemptId | null,
 ): ThreadFeedActivity {
@@ -1411,7 +1411,10 @@ export function deriveThreadFeedPresentation(
     }
   }
   const result: ThreadFeedEntry[] = [];
-  for (const entry of sourceFeed) {
+  const tailEntryId = sourceFeed.at(-1)?.id ?? null;
+  let tailRowsStart = 0;
+  for (const [entryIndex, entry] of sourceFeed.entries()) {
+    if (entryIndex === sourceFeed.length - 1) tailRowsStart = result.length;
     // A provider-native subagent works without a run: its null-run tail is
     // live only while that runless work is active.
     const isActiveTailGroup =
@@ -1483,21 +1486,7 @@ export function deriveThreadFeedPresentation(
   // If the current tool's group is above later content, keep its status at the tail,
   // unless that tool is already on screen as its own row.
   const runningToolShown =
-    runningTool !== undefined &&
-    result.some(
-      (row) =>
-        (row.type === "activity-group" &&
-          row.activities.some((activity) => activity.id === runningTool.id)) ||
-        // A group's header names its one tool ("Running ssh"), and a live group's header names
-        // its latest running tool however many it holds; thoughts beside them don't count.
-        (row.type === "work-toggle" &&
-          row.activities.some((activity) => activity.id === runningTool.id) &&
-          (row.activities.filter((activity) => activity.workEntry.itemType !== "reasoning")
-            .length === 1 ||
-            (row.live &&
-              row.activities.findLast((activity) => activity.lifecycleStatus === "inProgress")
-                ?.id === runningTool.id))),
-    );
+    runningTool !== undefined && result.some((row) => feedRowShowsRunningTool(row, runningTool));
   if (
     isWorking &&
     activeWorkStartedAt !== null &&
@@ -1513,15 +1502,37 @@ export function deriveThreadFeedPresentation(
   ) {
     result.push(thinkingRow(activeWorkStartedAt, activeRunId, runningTool));
   }
-  return result.map((row, index) => {
-    if (!isWorkLogFeedRow(row) || !isWorkLogFeedRow(result[index + 1])) return row;
-    let continued = continuedWorkLogRows.get(row);
-    if (!continued) {
-      continued = { ...row, continuesWorkLog: true };
-      continuedWorkLogRows.set(row, continued);
-    }
-    return continued;
+  const thinkingRowCount =
+    result.length - tailRowsStart > 0 && result.at(-1)?.type === "thinking" ? 1 : 0;
+  const rows = applyContinuedWorkLogRows(result);
+  presentationMetaByRows.set(rows, {
+    tailEntryId,
+    tailRowsStart,
+    thinkingRowCount,
+    runningToolId: runningTool?.id ?? null,
+    activeRunFailed: activeRunId !== null && failedRunIds.has(activeRunId),
   });
+  return rows;
+}
+
+/** Where a full presentation derive placed its tail entry's rows, for incremental patching. */
+export interface ThreadFeedPresentationMeta {
+  readonly tailEntryId: string | null;
+  readonly tailRowsStart: number;
+  readonly thinkingRowCount: number;
+  readonly runningToolId: string | null;
+  readonly activeRunFailed: boolean;
+}
+
+const presentationMetaByRows = new WeakMap<
+  ReadonlyArray<ThreadFeedEntry>,
+  ThreadFeedPresentationMeta
+>();
+
+export function threadFeedPresentationMeta(
+  rows: ReadonlyArray<ThreadFeedEntry>,
+): ThreadFeedPresentationMeta | null {
+  return presentationMetaByRows.get(rows) ?? null;
 }
 
 /** Reuse the normal work-image strip without keeping the folded tool rows mounted. */
@@ -1552,6 +1563,23 @@ function viewedImagesForHiddenGroup(entry: ThreadFeedActivityGroup) {
 
 const continuedWorkLogRows = new WeakMap<ThreadFeedEntry, ThreadFeedEntry>();
 
+/** Marks adjacent work rows so they draw as one continuous log; cached per row object. */
+export function applyContinuedWorkLogRows(
+  result: ReadonlyArray<ThreadFeedEntry>,
+): ThreadFeedEntry[] {
+  return result.map((row, index) => {
+    if (!isWorkLogFeedRow(row) || !isWorkLogFeedRow(result[index + 1]) || row.continuesWorkLog) {
+      return row;
+    }
+    let continued = continuedWorkLogRows.get(row);
+    if (!continued) {
+      continued = { ...row, continuesWorkLog: true };
+      continuedWorkLogRows.set(row, continued);
+    }
+    return continued;
+  });
+}
+
 /** Hide reasoning text in Discord mode while retaining the live status slot. */
 const discordFeedRows = new WeakMap<ThreadFeedEntry, ThreadFeedEntry | null>();
 export function filterDiscordThreadFeed<T extends ThreadFeedEntry>(feed: ReadonlyArray<T>): T[] {
@@ -1579,7 +1607,27 @@ export function filterDiscordThreadFeed<T extends ThreadFeedEntry>(feed: Readonl
   return result;
 }
 
-function isWorkLogFeedRow(row: ThreadFeedEntry | undefined): boolean {
+/** Whether a presented row displays the running tool, so no separate status row is needed. */
+export function feedRowShowsRunningTool(
+  row: ThreadFeedEntry,
+  runningTool: ThreadFeedActivity,
+): boolean {
+  return (
+    (row.type === "activity-group" &&
+      row.activities.some((activity) => activity.id === runningTool.id)) ||
+    // A group's header names its one tool ("Running ssh"), and a live group's header names
+    // its latest running tool however many it holds; thoughts beside them don't count.
+    (row.type === "work-toggle" &&
+      row.activities.some((activity) => activity.id === runningTool.id) &&
+      (row.activities.filter((activity) => activity.workEntry.itemType !== "reasoning").length ===
+        1 ||
+        (row.live &&
+          row.activities.findLast((activity) => activity.lifecycleStatus === "inProgress")?.id ===
+            runningTool.id)))
+  );
+}
+
+export function isWorkLogFeedRow(row: ThreadFeedEntry | undefined): boolean {
   return (
     row !== undefined &&
     (row.type === "work-toggle" ||
@@ -1626,7 +1674,7 @@ function thinkingRow(
   return cachedThinkingRow;
 }
 
-function appendPresentedFeedEntry(
+export function appendPresentedFeedEntry(
   result: ThreadFeedEntry[],
   entry: Exclude<
     ThreadFeedEntry,

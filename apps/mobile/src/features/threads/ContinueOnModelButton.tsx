@@ -1,7 +1,13 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { continueOnOtherPlan } from "@t3tools/client-runtime/plan-tip";
-import { type EnvironmentId, MessageId, type RunId, type ThreadId } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  type EnvironmentId,
+  MessageId,
+  type RunId,
+  type ThreadId,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Haptics from "expo-haptics";
 import { useMemo, useState } from "react";
@@ -11,17 +17,28 @@ import Animated, { FadeInDown } from "react-native-reanimated";
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPillMenu";
-import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
+import {
+  buildModelOptions,
+  groupByProvider,
+  resolveProvidersEnabledForProject,
+} from "../../lib/modelOptions";
+import { useCoarseNow } from "../../lib/useCoarseNow";
 import { uuidv4 } from "../../lib/uuid";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentServerConfigsAtom } from "../../state/server";
+import { useEnvironmentScope } from "../../state/session";
+import { threadAllowsProviderSwitch } from "../../state/thread-provider-switching";
 import {
   environmentThreadDetails,
   environmentThreadShells,
   threadEnvironment,
 } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { type PhoneContinueCandidate, phoneContinueCandidates } from "./continueOnModelCandidates";
+import {
+  type PhoneContinueCandidate,
+  phoneContinueCandidates,
+  resolvePhoneContinueDispatch,
+} from "./continueOnModelCandidates";
 
 /**
  * "Continue on <model>" under the latest failed run when its provider refused or hit a limit:
@@ -42,6 +59,12 @@ export function ContinueOnModelButton(props: {
     const latest = detail?.projection.runs.at(-1);
     return latest?.id === props.runId && latest.status === "failed";
   });
+  const allowsProviderSwitch = useAtomValue(environmentThreadDetails.threadAtom(ref), (detail) =>
+    detail?.projection
+      ? threadAllowsProviderSwitch({ thread: null, projection: detail.projection })
+      : false,
+  );
+  const canOperate = useEnvironmentScope(props.environmentId, AuthOrchestrationOperateScope);
   // Eases in under a run that failed just now; history shows it at rest, since the list
   // remounts rows that scroll back into view.
   const [justFailed] = useState(() => {
@@ -56,8 +79,9 @@ export function ContinueOnModelButton(props: {
   const failedOptions = thread?.modelSelection.options;
   const projectId = thread?.projectId ?? null;
   const { environmentId } = props;
+  const now = useCoarseNow();
   const candidates = useMemo(() => {
-    if (!config || !latestFailed) return [];
+    if (!config || !latestFailed || !allowsProviderSwitch) return [];
     // The chat list is read once a run has failed, not subscribed to: other chats' updates
     // must not re-render this row.
     const history = appAtomRegistry.get(environmentThreadShells.threadShellsAtom).flatMap((chat) =>
@@ -71,18 +95,24 @@ export function ContinueOnModelButton(props: {
           ]
         : [],
     );
+    const projectProviders = resolveProvidersEnabledForProject(config, projectId);
     const plan =
       failedInstanceId !== null && failedModel !== null
-        ? continueOnOtherPlan(config.settings.balanceAccounts, config.providers, {
-            instanceId: failedInstanceId,
-            model: failedModel,
-          })
+        ? continueOnOtherPlan(
+            config.settings.balanceAccounts,
+            projectProviders,
+            {
+              instanceId: failedInstanceId,
+              model: failedModel,
+            },
+            now,
+          )
         : null;
     return phoneContinueCandidates(
       groupByProvider(buildModelOptions(config, null, undefined, projectId)),
       failedInstanceId,
       history,
-      undefined,
+      now,
       plan !== null && failedModel !== null
         ? {
             ...plan,
@@ -93,23 +123,30 @@ export function ContinueOnModelButton(props: {
       config.settings.balanceAccounts ? null : failedModel,
     );
   }, [
+    allowsProviderSwitch,
     config,
     environmentId,
     failedInstanceId,
     failedModel,
     failedOptions,
     latestFailed,
+    now,
     projectId,
   ]);
   const startTurn = useAtomCommand(threadEnvironment.startTurn, "continue on another model");
   const [busy, setBusy] = useState(false);
   const [first, ...others] = candidates;
-  if (!latestFailed || thread === null || first === undefined) return null;
+  if (!latestFailed || !canOperate || thread === null || first === undefined) return null;
 
   const continueOn = (candidate: PhoneContinueCandidate) => {
     if (busy) return;
     setBusy(true);
     void Haptics.selectionAsync();
+    const dispatch = resolvePhoneContinueDispatch({
+      config,
+      selection: candidate.selection,
+      interactionMode: thread.interactionMode,
+    });
     void startTurn({
       environmentId: props.environmentId,
       input: {
@@ -120,9 +157,9 @@ export function ContinueOnModelButton(props: {
           text: "Continue.",
           attachments: [],
         },
-        modelSelection: candidate.selection,
+        modelSelection: dispatch.modelSelection,
         runtimeMode: thread.runtimeMode,
-        interactionMode: thread.interactionMode,
+        interactionMode: dispatch.interactionMode,
         dispatchMode: "auto",
       },
     }).finally(() => setBusy(false));

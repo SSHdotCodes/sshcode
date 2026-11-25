@@ -1,5 +1,6 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { executeAtomQuery, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { isGitHubPullRequestCredentialError } from "@t3tools/client-runtime/state/pull-requests";
 import type { EnvironmentId, PullRequestDiffStat, PullRequestListInput } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
@@ -10,6 +11,7 @@ import {
   appendPullRequestListPage,
   mergeEnvironmentPullRequestPages,
   nextPullRequestListInput,
+  pullRequestListFailureMessages,
   pullRequestListHead,
   pullRequestListKey,
   scopedPullRequestListKey,
@@ -146,11 +148,21 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
           pagesFamily(JSON.stringify(target)),
           pullRequestListHead(null, response.value),
         );
+        return response.value.entries.length > 0;
       }),
     );
     if (requests.current.refresh === controller) delete requests.current.refresh;
-    if (!controller.signal.aborted && activeScope.current === scopeKey)
-      setLoading({ key: scopeKey, page: false, refresh: false, error: requestErrors(responses) });
+    if (!controller.signal.aborted && activeScope.current === scopeKey) {
+      const hasLoadedPullRequests = responses.some(
+        (response) => response.status === "fulfilled" && response.value === true,
+      );
+      setLoading({
+        key: scopeKey,
+        page: false,
+        refresh: false,
+        error: requestErrors(responses, hasLoadedPullRequests),
+      });
+    }
   };
 
   const data = useMemo(
@@ -207,6 +219,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
           (row) =>
             row.environmentId === environmentId &&
             row.provider === "github" &&
+            row.projectId !== undefined &&
             row.additions + row.deletions === 0,
         )
         .map(({ projectId, host, repository, number }) => ({
@@ -262,17 +275,14 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
   );
   const errors = useMemo(
     () =>
-      sources.flatMap(({ target, result }) => {
-        if (result._tag !== "Failure") return [];
-        const cause = Cause.squash(result.cause);
-        return [
-          {
-            environmentId: target.environmentId,
-            projectTitle: "",
-            message: cause instanceof Error ? cause.message : "Couldn't load pull requests.",
-          },
-        ];
-      }),
+      pullRequestListFailureMessages(
+        sources.flatMap(({ target, result }) =>
+          result._tag === "Failure"
+            ? [{ environmentId: target.environmentId, failure: Cause.squash(result.cause) }]
+            : [],
+        ),
+        sources.some(({ result }) => result._tag === "Success" && result.value.entries.length > 0),
+      ),
     [sources],
   );
   const listing = useMemo(() => ({ ...data, errors: [...data.errors, ...errors] }), [data, errors]);
@@ -295,11 +305,15 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
   };
 }
 
-function requestErrors(results: readonly PromiseSettledResult<unknown>[]) {
+function requestErrors(
+  results: readonly PromiseSettledResult<unknown>[],
+  hasLoadedPullRequests = false,
+) {
   return (
     results
       .flatMap((result) =>
-        result.status === "rejected"
+        result.status === "rejected" &&
+        (!hasLoadedPullRequests || !isGitHubPullRequestCredentialError(result.reason))
           ? [
               result.reason instanceof Error
                 ? result.reason.message

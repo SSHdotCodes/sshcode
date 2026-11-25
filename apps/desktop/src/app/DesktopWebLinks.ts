@@ -2,9 +2,12 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { WEB_LINK_OPEN_CHANNEL } from "../ipc/channels.ts";
+import * as DesktopWindow from "../window/DesktopWindow.ts";
+import * as DesktopState from "./DesktopState.ts";
 
 /** An http(s) link the operating system handed to SSHCode as the default browser. */
 export const isWebLink = (value: string) => {
@@ -27,7 +30,10 @@ export class DesktopWebLinks extends Context.Service<
   DesktopWebLinks,
   {
     /** Queues a link and delivers it as soon as the renderer is listening. */
-    readonly receive: (url: string) => Effect.Effect<void>;
+    readonly receive: (
+      url: string,
+      options?: { readonly activate?: boolean },
+    ) => Effect.Effect<void>;
     /** The renderer started or stopped listening; listening flushes queued links. */
     readonly setRendererReady: (ready: boolean) => Effect.Effect<void>;
   }
@@ -35,6 +41,8 @@ export class DesktopWebLinks extends Context.Service<
 
 const make = Effect.gen(function* () {
   const electronWindow = yield* ElectronWindow.ElectronWindow;
+  const desktopWindow = yield* DesktopWindow.DesktopWindow;
+  const desktopState = yield* DesktopState.DesktopState;
   const pending: Array<string> = [];
   /** The page that said it is listening; a reload or crash replaces it, and it must say so again. */
   let listening: Electron.WebContents | null = null;
@@ -82,10 +90,19 @@ const make = Effect.gen(function* () {
   });
 
   return DesktopWebLinks.of({
-    receive: (url) =>
-      Effect.suspend(() => {
+    receive: (url, options) =>
+      Effect.gen(function* () {
         pending.push(url);
-        return flush;
+        yield* flush;
+        if (options?.activate === false || pending.length === 0) return;
+        if (yield* Ref.get(desktopState.quitting)) return;
+        const window = yield* electronWindow.currentMainOrFirst;
+        if (Option.isSome(window)) return;
+        yield* desktopWindow.activate.pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Could not reopen the desktop window for link", cause),
+          ),
+        );
       }).pipe(Effect.withSpan("DesktopWebLinks.receive")),
     setRendererReady: (ready) =>
       (ready ? startListening : Effect.sync(stopListening)).pipe(

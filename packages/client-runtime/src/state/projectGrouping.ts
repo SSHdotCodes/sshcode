@@ -363,7 +363,7 @@ export function buildProjectGroups<TProject extends EnvironmentProject>(input: {
       key,
       label:
         input.groupScratchProjects && representative.isScratch
-          ? "No project"
+          ? "Default folder"
           : members.length > 1
             ? deriveProjectGroupLabel({
                 representative,

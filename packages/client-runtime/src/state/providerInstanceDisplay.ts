@@ -48,39 +48,51 @@ export function resolveProviderInstanceDisplayName(
   return trimmedSnapshotName || kindLabel;
 }
 
-/**
- * Turn a display name into up to two initials for the badge: the first two
- * characters of a single word, or the first character of each of the first
- * two words. Iterates by code point so an emoji never splits into surrogates.
- */
-export function providerInstanceInitials(label: string): string {
-  const words = label
-    .replace(/[_-]+/g, " ")
+function providerLabelWords(label: string): string[] {
+  return label
+    .replace(/[^\P{P}'’]+/gu, " ")
     .split(/\s+/u)
-    .filter((word) => !/^\p{P}+$/u.test(word));
-  if (words.length === 0) return "";
-  if (words.length === 1) return Array.from(words[0]!).slice(0, 2).join("").toUpperCase();
+    .map((word) => word.replace(/^['’]+|['’]+$/gu, ""))
+    .filter(Boolean);
+}
+
+function camelCaseWords(word: string): string[] {
+  return word.replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2").split(" ");
+}
+
+function firstTwoInitials(words: string[]): string {
   return words
     .slice(0, 2)
-    .map((word) => Array.from(word)[0]?.toUpperCase() ?? "")
-    .join("");
+    .map((word) => Array.from(word)[0] ?? "")
+    .join("")
+    .toUpperCase();
 }
 
 /**
- * The one character that marks an added account on its provider's glyph: the
- * account's number when the name ends in one ("Work-2" is "2"), else the
- * name's first letter. A character and not a dot, because dots already mean
- * unread and needs-input.
+ * Take the initials of two words or CamelCase segments, or the first two
+ * characters of a single word. Iterates by code point to keep emoji whole.
+ */
+export function providerInstanceInitials(label: string): string {
+  const words = providerLabelWords(label);
+  if (words.length !== 1) return firstTwoInitials(words);
+  const word = words[0]!;
+  const segments = camelCaseWords(word);
+  return segments.length > 1
+    ? firstTwoInitials(segments)
+    : Array.from(word).slice(0, 2).join("").toUpperCase();
+}
+
+/**
+ * Mark an added account with its number when the name ends in one ("Work-2"
+ * is "2"). Otherwise use its initial, or the initials of a single CamelCase name.
  */
 export function providerInstanceMark(label: string): string {
-  const words = label
-    .replace(/[_-]+/g, " ")
-    .split(/\s+/u)
-    .filter((word) => word.length > 0 && !/^\p{P}+$/u.test(word));
+  const words = providerLabelWords(label);
   if (words.length === 0) return "";
   const last = words[words.length - 1]!;
   if (/^\d{1,2}$/u.test(last)) return last;
-  return (Array.from(words[0]!)[0] ?? "").toUpperCase();
+  const first = words[0]!;
+  return firstTwoInitials(words.length === 1 ? camelCaseWords(first) : [first]);
 }
 
 /** Only `#rrggbb` accent colors render; anything else is treated as unset. */

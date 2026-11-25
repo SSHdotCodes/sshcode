@@ -1,6 +1,7 @@
 import type { ComponentProps, ReactNode } from "react";
 import { TooltipPopup } from "./ui/tooltip";
 import { cn } from "~/lib/utils";
+import type { threadMessagePreview } from "./threadMessagePreview";
 
 export function ThreadHoverCardPopup({ className, ...props }: ComponentProps<typeof TooltipPopup>) {
   return (
@@ -32,6 +33,24 @@ export function ThreadHoverCard({
       </div>
       <div className="grid gap-1.5 pl-0.5 text-xs text-muted-foreground">{children}</div>
       {footer}
+    </div>
+  );
+}
+
+export function ThreadHoverCardLastMessage({
+  preview,
+}: {
+  preview: ReturnType<typeof threadMessagePreview>;
+}) {
+  if (!preview) return null;
+  return (
+    <div className="border-t border-border/60 pt-2 text-xs">
+      <div className="mb-1 text-2xs font-medium text-muted-foreground">
+        {preview.label} · Last message
+      </div>
+      <p className="line-clamp-2 leading-relaxed text-foreground/80 wrap-break-word">
+        {preview.text}
+      </p>
     </div>
   );
 }

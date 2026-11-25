@@ -28,7 +28,10 @@ import { AsyncResult, Atom } from "effect/reactivity";
 
 import { isConnectedWithConfig } from "../components/settings/scopedSettings";
 import { environmentCatalog } from "../connection/catalog";
-import { connectionAtomRuntime } from "../connection/runtime";
+import {
+  WEB_SERVER_CONFIG_SUBSCRIPTION_OPTIONS,
+  connectionAtomRuntime,
+} from "../connection/runtime";
 import { primaryEnvironmentIdAtom, themeEnvironmentIdAtom } from "./primaryEnvironment";
 import { environmentSession } from "./session";
 
@@ -40,11 +43,7 @@ import { environmentSession } from "./session";
 // before caching, so following all of them costs a few KB per environment.
 export const serverEnvironment = createServerEnvironmentAtoms(connectionAtomRuntime, {
   initialConfigValueAtom: environmentSession.initialConfigValueAtom,
-  environmentThemes: true,
-  chatTabs: true,
-  usageLimitSources: true,
-  usageLimitsCommand: true,
-  compactProviders: true,
+  ...WEB_SERVER_CONFIG_SUBSCRIPTION_OPTIONS,
 });
 export const agentToolsEnvironment = createAgentToolsAtoms(connectionAtomRuntime, {
   settingsValueAtom: serverEnvironment.settingsValueAtom,

@@ -12,6 +12,10 @@ import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import type { QueuedThreadMessage } from "./thread-outbox-model";
 
+// Only the composer that just allocated these thread and command IDs can vouch for
+// an unsent creation. Restored records and edited tasks still need reconciliation.
+export const freshThreadCreations = new WeakSet<QueuedThreadMessage>();
+
 /**
  * A new task navigates to its thread screen the moment it is queued, before the
  * server has created the thread. Until the shell arrives the screen renders a

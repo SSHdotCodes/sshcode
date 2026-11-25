@@ -134,7 +134,8 @@ export const ComposerAddMenu = memo(function ComposerAddMenu(props: {
             Scheduled messages…
           </MenuItem>
         ) : null}
-        {props.onSubagentsChange && (!props.existingThread || questPanelRole() !== null) ? (
+        {/* Rarely touched, so a chat's switch lives in its Agents panel. A Quest panel has none. */}
+        {props.onSubagentsChange && questPanelRole() !== null ? (
           // A switch, not an action named after its state: "Subagents On" read as a command.
           <MenuCheckboxItem
             variant="switch"

@@ -101,7 +101,7 @@ const UsageLimitsTool = Tool.make("usage_limits", {
 
 export const DelegateTaskTool = Tool.make("delegate_task", {
   description:
-    "Start one child owned by this thread, with only your self-contained task brief and no parent history. Requires a running agent in a SSHCode thread. Shares this checkout; isolation='worktree' starts from its last local commit, without uncommitted edits. From a scratch chat also pass the absolute repositoryPath; naming it in task text does not select it. Settings inherit unless target overrides them; requested runtimeMode must be supported, inherited modes step down if needed. Use a new clientRequestId for each task or independent review round; reuse only for retries of that call. Follow-ups needing the same child's history use t3_thread_send to childThreadId, unless its workspace was removed. Keep the short taskId for task_status/cancel. mode='wait' ends on completion, a question or timeout; waitTimedOut leaves the child running.",
+    "Start one child owned by this thread, with only your self-contained task brief and no parent history. Requires a running agent in an SSHCode thread. Shares this checkout; isolation='worktree' starts from its last local commit, without uncommitted edits. From a scratch chat also pass the absolute repositoryPath; naming it in task text does not select it. Settings inherit unless target overrides them; requested runtimeMode must be supported, inherited modes step down if needed. Use a new clientRequestId for each task or independent review round; reuse only for retries of that call. Follow-ups needing the same child's history use t3_thread_send with its taskId, which every thread tool and task_status/cancel also accepts, unless its workspace was removed. mode='wait' ends on completion, a question or timeout; waitTimedOut leaves the child running.",
   parameters: OrchestratorMcpDelegateTaskInput,
   success: OrchestratorMcpDelegateTaskResult,
   failure: OrchestratorMcpFailure,
@@ -114,7 +114,7 @@ export const DelegateTaskTool = Tool.make("delegate_task", {
 
 const TaskStatusTool = Tool.make("task_status", {
   description:
-    "Read a task owned by this parent thread. childRunId and summary describe its original run; published results stay stable. workState distinguishes working, waiting_for_children and result_available. A finished turn with nested work is not a finished task. failure has provider errors and may remain retryable after automatic retries. hasPendingChildRuns includes later child turns even after the task ends; task_cancel stops them too. Held work reports held. latestTerminal* reports later non-monitor results. latestTerminalSummary is null when it would repeat summary. Completion wakes and terminal reads acknowledge parent delivery.",
+    "Read a task owned by this parent thread. Summary describes its original run; published results stay stable. workState distinguishes working, waiting_for_children and result_available. A finished turn with nested work is not a finished task. failure has provider errors and may remain retryable after automatic retries. hasPendingChildRuns includes later child turns even after the task ends; task_cancel stops them too. Held work reports held. latestTerminal* reports later non-monitor results. latestTerminalSummary is null when it would repeat summary. Completion wakes and terminal reads acknowledge parent delivery.",
   parameters: OrchestratorMcpTaskStatusInput,
   success: OrchestratorMcpDelegateTaskResult,
   failure: OrchestratorMcpFailure,
@@ -348,7 +348,7 @@ const ThreadReadTool = Tool.make("t3_thread_read", {
 
 export const ThreadUpdateTool = Tool.make("t3_thread_update", {
   description:
-    "Update a thread. Omit threadId for this thread. Use title for rename, pullRequest for link_pull_request, or runId for cancel_queued. settle moves a finished thread out of the active list and unsettle brings it back. Workspace and branch changes are unsupported. clientRequestId makes retries idempotent.",
+    "Update a thread. Omit threadId for this thread. rename uses title, link_pull_request uses pullRequest, cancel_queued uses runId. settle removes from active; this thread settles when your turn ends; unsettle restores. Workspace and branch unsupported. clientRequestId dedupes retries.",
   parameters: ThreadMetadataMcpUpdateInput,
   success: ThreadMetadataMcpUpdateResult,
   failure: OrchestratorMcpFailure,
@@ -361,7 +361,7 @@ export const ThreadUpdateTool = Tool.make("t3_thread_update", {
 
 const ThreadSendTool = Tool.make("t3_thread_send", {
   description:
-    "Send to a thread in this environment; its permission modes cannot exceed yours. For independent review rounds use delegate_task with the full brief and a new clientRequestId. Follow-ups needing a child's history use childThreadId; a completed task gets a new short taskId, whose completion notifies the parent. Original results stay stable. If its workspace was removed, start a new delegate instead. To answer a pending question, use t3_pending_request_respond, never a message. mode='auto' starts idle threads, steers active turns or queues until steerable. From a child to its parent, auto holds progress for the next turn, waking it within 2 minutes; queue wakes it now. queue requests a separate turn, steer updates one in flight, restart interrupts and restarts. Reuse clientRequestId only for retries.",
+    "Send to a thread in this environment; its permission modes cannot exceed yours. For independent review rounds use delegate_task with the full brief and a new clientRequestId. Follow-ups needing a child's history use its taskId; a completed task gets a new short taskId, whose completion notifies the parent. Original results stay stable. If its workspace was removed, start a new delegate instead. To answer a pending question, use t3_pending_request_respond, never a message. mode='auto' starts idle threads, steers active turns or queues until steerable. From a child to its parent, auto holds progress for the next turn, waking it within 2 minutes; queue wakes it now. queue requests a separate turn, steer updates one in flight, restart interrupts and restarts. Reuse clientRequestId only for retries.",
   parameters: OrchestratorMcpThreadSendInput,
   success: OrchestratorMcpThreadSendResult,
   failure: OrchestratorMcpFailure,

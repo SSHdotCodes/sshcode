@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   EnvironmentId,
+  PullRequestUnavailableError,
   SourceControlProviderKind,
   type PullRequestListEntry,
   type PullRequestListResult,
@@ -12,6 +13,7 @@ import {
   mergePullRequestListEntries,
   mergeEnvironmentPullRequestPages,
   nextPullRequestListInput,
+  pullRequestListFailureMessages,
   pullRequestListFacets,
   pullRequestListHead,
   pullRequestListReviewStatus,
@@ -20,6 +22,33 @@ import {
   pullRequestListRowsAreEqual,
   withoutScratchProjectScope,
 } from "./pullRequestList";
+
+describe("Pulls list errors", () => {
+  const tower = EnvironmentId.make("tower");
+  const mac = EnvironmentId.make("mac");
+  const missingCredential = new PullRequestUnavailableError({
+    provider: SourceControlProviderKind.make("github"),
+    reason: "cli-unauthenticated",
+  });
+
+  it("keeps GitHub setup visible when nothing loaded", () => {
+    expect(
+      pullRequestListFailureMessages([{ environmentId: tower, failure: missingCredential }], false),
+    ).toMatchObject([{ environmentId: tower, message: missingCredential.message }]);
+  });
+
+  it("hides only the GitHub setup notice when another environment loaded pull requests", () => {
+    expect(
+      pullRequestListFailureMessages(
+        [
+          { environmentId: tower, failure: missingCredential },
+          { environmentId: mac, failure: new Error("Connection lost") },
+        ],
+        true,
+      ),
+    ).toMatchObject([{ environmentId: mac, message: "Connection lost" }]);
+  });
+});
 
 function entry(number: number, patch: Partial<PullRequestListEntry> = {}): PullRequestListEntry {
   return {

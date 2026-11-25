@@ -10,6 +10,8 @@ import type { WorktreeSetupCardProps } from "./worktree-setup-card";
 export interface ThreadFeedRowStoreState {
   readonly copiedRowId: string | null;
   readonly expandedWorkRows: Record<string, boolean>;
+  readonly editingMessageId?: MessageId | null;
+  readonly editingQueuedMessageIds?: Readonly<Record<MessageId, true>>;
   readonly dispatchingMessageId: MessageId | null;
   readonly steerWait: SteerWait | null;
   readonly unsettledTurnId: RunId | null;
@@ -34,6 +36,8 @@ function sameRowStoreState(a: ThreadFeedRowStoreState, b: ThreadFeedRowStoreStat
   return (
     a.copiedRowId === b.copiedRowId &&
     a.expandedWorkRows === b.expandedWorkRows &&
+    a.editingMessageId === b.editingMessageId &&
+    a.editingQueuedMessageIds === b.editingQueuedMessageIds &&
     a.dispatchingMessageId === b.dispatchingMessageId &&
     a.steerWait === b.steerWait &&
     a.unsettledTurnId === b.unsettledTurnId &&
@@ -77,6 +81,8 @@ export interface ThreadFeedRowVolatileSlice {
   readonly avatar: ReturnType<typeof discordAvatarIdentity> | undefined;
   readonly copiedRowId: string | null;
   readonly expandedRowsKey: string;
+  readonly userMessageExpanded: boolean;
+  readonly isEditingUserMessage: boolean;
   readonly isDispatching: boolean;
   readonly steerWait: SteerWait | null;
   readonly isUnsettledTurn: boolean;
@@ -85,6 +91,10 @@ export interface ThreadFeedRowVolatileSlice {
   readonly worktreeSetup: WorktreeSetupCardProps | null;
   readonly setupWorkingStartedAt: string | null;
   readonly messageRunActive: boolean;
+}
+
+export function userMessageExpansionKey(messageId: MessageId): string {
+  return `user-message:${messageId}`;
 }
 
 export function selectRowVolatileSlice(
@@ -114,6 +124,14 @@ export function selectRowVolatileSlice(
     avatar: isMessage ? state.agentAvatars?.get(item.message.runId ?? "") : undefined,
     copiedRowId,
     expandedRowsKey,
+    userMessageExpanded:
+      isMessage &&
+      item.message.role === "user" &&
+      (state.expandedWorkRows[userMessageExpansionKey(item.message.id)] ?? false),
+    isEditingUserMessage:
+      isMessage &&
+      (item.message.id === state.editingMessageId ||
+        state.editingQueuedMessageIds?.[item.message.id] === true),
     isDispatching:
       isMessage &&
       item.pendingMessage !== undefined &&
@@ -149,6 +167,8 @@ export function sameRowVolatileSlice(
     a.avatar === b.avatar &&
     a.copiedRowId === b.copiedRowId &&
     a.expandedRowsKey === b.expandedRowsKey &&
+    a.userMessageExpanded === b.userMessageExpanded &&
+    a.isEditingUserMessage === b.isEditingUserMessage &&
     a.isDispatching === b.isDispatching &&
     a.steerWait === b.steerWait &&
     a.isUnsettledTurn === b.isUnsettledTurn &&

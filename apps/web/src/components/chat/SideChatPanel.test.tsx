@@ -169,3 +169,26 @@ it("opens ready for a question about selected text and forgets the text when clo
   act(() => current.setOpen(false));
   expect(current.quote).toBeNull();
 });
+
+it("releases an interrupted opening without an echo and retries the same question id", async () => {
+  mount();
+  const input = {
+    environmentId: threadRef.environmentId,
+    threadRef,
+    kind: "btw" as const,
+    prompt: "question",
+  };
+  act(() => {
+    void current.open(input);
+  });
+  expect(current.busy).toBe(true);
+  await act(async () => harness.resolve!(AsyncResult.failure(Cause.interrupt())));
+  expect(current.busy).toBe(false);
+  expect(current.session?.error).toMatch(/connection closed/i);
+  act(() => {
+    void current.open(input);
+  });
+  expect(harness.calls[1]?.input.messageId).toBe(harness.calls[0]?.input.messageId);
+  await act(async () => harness.resolve!(AsyncResult.success(complete)));
+  expect(current.busy).toBe(false);
+});

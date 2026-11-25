@@ -91,6 +91,48 @@ export class ThreadSearch extends Context.Service<
   }
 >()("t3/orchestration-v2/ThreadSearch") {}
 
+// Search finds the chats a person works in. A subagent chat repeats its lead's words (the
+// brief, the report) and is opened from the lead's card, so its hits were noise; leaving
+// subagents out also covers the agents inside a dedicated workflow lineage.
+// Provenance already lives in projection JSON, so old indexes repair on sync.
+const visibleSearchThread = (
+  sql: SqlClient.SqlClient,
+) => sql`json_extract(t.payload_json,'$.creationSource') IS NOT 'workflows'
+  AND json_extract(t.payload_json,'$.lineage.relationshipToParent') IS NOT 'subagent'`;
+// A chat no longer shows a rolled-back turn, nor a message of a stopped turn that no shown
+// item carries, such as a queued prompt that never ran (unless storage maintenance kept it);
+// search must not find them either.
+const hiddenSearchMessage = (sql: SqlClient.SqlClient) => sql`EXISTS (
+  SELECT 1 FROM orchestration_v2_projection_runs r
+  WHERE r.run_id = m.run_id
+    AND (
+      r.status = 'rolled_back'
+      OR (
+        r.status = 'cancelled'
+        AND COALESCE(json_extract(r.payload_json, '$.retainQueuedMessage'), 0) = 0
+        AND NOT EXISTS (
+          SELECT 1 FROM orchestration_v2_projection_turn_items i
+          WHERE i.run_id = r.run_id
+            AND json_extract(i.payload_json, '$.messageId') = m.message_id
+            AND json_extract(i.payload_json, '$.inputIntent') IS NOT 'queued_turn'
+        )
+      )
+    )
+)`;
+
+/** One rowid window of searchable messages, before embedding or index writes. */
+export const readSearchBackfillBatch = (sql: SqlClient.SqlClient, cursor: number) => sql`
+  SELECT m.rowid AS "rowId", m.message_id AS "messageId", m.thread_id AS "threadId",
+    m.role AS source, json_extract(m.payload_json, '$.text') AS text,
+    m.created_at AS "createdAt", m.updated_at AS "updatedAt", ${hiddenSearchMessage(sql)} AS hidden
+  FROM orchestration_v2_projection_messages m
+  CROSS JOIN orchestration_v2_projection_threads t ON t.thread_id = m.thread_id
+  CROSS JOIN projection_projects p ON p.project_id = t.project_id
+  WHERE m.rowid > ${cursor} AND m.streaming = 0 AND m.role IN ('user', 'assistant')
+    AND t.deleted_at IS NULL AND p.deleted_at IS NULL AND ${visibleSearchThread(sql)}
+  ORDER BY m.rowid LIMIT 100
+`;
+
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const fs = yield* FileSystem.FileSystem;
@@ -126,32 +168,8 @@ export const make = Effect.gen(function* () {
   const mapError = (cause: unknown) =>
     new ThreadSearchError({ operation: Schema.isSchemaError(cause) ? "decode" : "query", cause });
   const read = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(NodeSqliteClient.readOnly);
-  // Search finds the chats a person works in. A subagent chat repeats its lead's words (the
-  // brief, the report) and is opened from the lead's card, so its hits were noise; leaving
-  // subagents out also covers the agents inside a dedicated workflow lineage.
-  // Provenance already lives in projection JSON, so old indexes repair on sync.
-  const visibleThread = sql`json_extract(t.payload_json,'$.creationSource') IS NOT 'workflows'
-    AND json_extract(t.payload_json,'$.lineage.relationshipToParent') IS NOT 'subagent'`;
-  // A chat no longer shows a rolled-back turn, nor a message of a stopped turn that no shown
-  // item carries, such as a queued prompt that never ran (unless storage maintenance kept it);
-  // search must not find them either.
-  const hiddenMessage = sql`EXISTS (
-    SELECT 1 FROM orchestration_v2_projection_runs r
-    WHERE r.run_id = m.run_id
-      AND (
-        r.status = 'rolled_back'
-        OR (
-          r.status = 'cancelled'
-          AND COALESCE(json_extract(r.payload_json, '$.retainQueuedMessage'), 0) = 0
-          AND NOT EXISTS (
-            SELECT 1 FROM orchestration_v2_projection_turn_items i
-            WHERE i.run_id = r.run_id
-              AND json_extract(i.payload_json, '$.messageId') = m.message_id
-              AND json_extract(i.payload_json, '$.inputIntent') IS NOT 'queued_turn'
-          )
-        )
-      )
-  )`;
+  const visibleThread = visibleSearchThread(sql);
+  const hiddenMessage = hiddenSearchMessage(sql);
   const refreshThreads = Effect.gen(function* () {
     const rows = yield* read(
       sql`SELECT t.thread_id AS "threadId",t.project_id AS "projectId",t.title,CASE WHEN t.archived_at IS NULL THEN 0 ELSE 1 END AS archived FROM orchestration_v2_projection_threads t JOIN projection_projects p ON p.project_id=t.project_id WHERE t.deleted_at IS NULL AND p.deleted_at IS NULL AND ${visibleThread}`,
@@ -209,9 +227,9 @@ export const make = Effect.gen(function* () {
           yield* invalidateCount;
           repairSequence = sequence;
         }
-        const rows = yield* read(
-          sql`SELECT m.rowid AS "rowId",m.message_id AS "messageId",m.thread_id AS "threadId",m.role AS source,json_extract(m.payload_json,'$.text') AS text,m.created_at AS "createdAt",m.updated_at AS "updatedAt",${hiddenMessage} AS hidden FROM orchestration_v2_projection_messages m CROSS JOIN orchestration_v2_projection_threads t ON t.thread_id=m.thread_id CROSS JOIN projection_projects p ON p.project_id=t.project_id WHERE m.rowid > ${cursor} AND m.streaming=0 AND m.role IN ('user','assistant') AND t.deleted_at IS NULL AND p.deleted_at IS NULL AND ${visibleThread} ORDER BY m.rowid LIMIT 100`,
-        ).pipe(Effect.flatMap(decodeMessages));
+        const rows = yield* read(readSearchBackfillBatch(sql, cursor)).pipe(
+          Effect.flatMap(decodeMessages),
+        );
         if (rows.some((row) => !knownThreads.has(row.threadId))) yield* refreshThreads;
         // Also clears hidden messages an index built before this rule still holds.
         for (const row of rows) if (row.hidden) yield* index.removeMessage(row.messageId);

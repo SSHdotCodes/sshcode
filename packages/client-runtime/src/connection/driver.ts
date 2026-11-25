@@ -8,6 +8,7 @@ import * as Clock from "effect/Clock";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Option from "effect/Option";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -335,25 +336,28 @@ export const make = Effect.gen(function* () {
   const cache = yield* Effect.serviceOption(Persistence.EnvironmentCacheStore);
   // Last working route id per environment (null when checked and empty/cleared).
   const lastGoodRoutes = new Map<string, string | null>();
-  // Route authorizations started ahead of a likely reconnect, by route id.
+  // Route authorizations started ahead of a likely reconnect, scoped to their environment.
   const preparedAhead = new Map<
     string,
     {
+      readonly route: ConnectionRoute;
       readonly startedAt: number;
       readonly prepared: Fiber.Fiber<PreparedConnection, ConnectionAttemptError>;
     }
   >();
+  const prepareAheadKey = (entry: ConnectionCatalogEntry, route: ConnectionRoute) =>
+    JSON.stringify([entry.target.environmentId, connectionRouteId(route.target)]);
 
   const prepareAhead = Effect.fn("ConnectionDriver.prepareAhead")(function* (
     entry: ConnectionCatalogEntry,
     route: ConnectionRoute,
   ) {
-    const routeId = connectionRouteId(route.target);
+    const routeId = prepareAheadKey(entry, route);
     const previous = preparedAhead.get(routeId);
     const startedAt = yield* Clock.currentTimeMillis;
     // Bounded by its own request timeouts; nothing waits on it unless a connect takes it.
     const prepared = yield* resolver.prepare(routeEntry(entry, route)).pipe(Effect.forkDetach);
-    preparedAhead.set(routeId, { startedAt, prepared });
+    preparedAhead.set(routeId, { route, startedAt, prepared });
     if (previous !== undefined) yield* Fiber.interrupt(previous.prepared);
   });
 
@@ -362,17 +366,19 @@ export const make = Effect.gen(function* () {
     entry: ConnectionCatalogEntry,
     route: ConnectionRoute,
   ) {
-    const routeId = connectionRouteId(route.target);
+    const routeId = prepareAheadKey(entry, route);
     const ahead = preparedAhead.get(routeId);
     preparedAhead.delete(routeId);
-    if (
-      ahead !== undefined &&
-      (yield* Clock.currentTimeMillis) - ahead.startedAt <= PREPARED_AHEAD_TTL_MS
-    ) {
-      const exit = yield* Fiber.await(ahead.prepared);
-      if (Exit.isSuccess(exit)) return exit.value;
-    } else if (ahead !== undefined) {
-      yield* Fiber.interrupt(ahead.prepared);
+    if (ahead !== undefined) {
+      if (
+        Equal.equals(ahead.route, route) &&
+        (yield* Clock.currentTimeMillis) - ahead.startedAt <= PREPARED_AHEAD_TTL_MS
+      ) {
+        const exit = yield* Fiber.await(ahead.prepared);
+        if (Exit.isSuccess(exit)) return exit.value;
+      } else {
+        yield* Fiber.interrupt(ahead.prepared);
+      }
     }
     return yield* resolver.prepare(routeEntry(entry, route));
   });
@@ -406,35 +412,58 @@ export const make = Effect.gen(function* () {
   ) => {
     const httpBaseUrl = routeHttpBaseUrl(route);
     if (httpBaseUrl === null) return Effect.succeed<RouteCheck>("unchecked");
-    // The descriptor is public, so this sends no credential to whatever
-    // answers at a saved LAN address on a different network.
-    return fetchRemoteEnvironmentDescriptor({
-      httpBaseUrl,
-      timeoutMs: ROUTE_CHECK_TIMEOUT_MS,
+    const routeId = prepareAheadKey(entry, route);
+    return Effect.gen(function* () {
+      // A fresh, already-succeeded prepareAhead already verified this route's
+      // descriptor and minted its ticket, so skip a duplicate descriptor RTT.
+      const ahead = preparedAhead.get(routeId);
+      if (
+        ahead !== undefined &&
+        Equal.equals(ahead.route, route) &&
+        (yield* Clock.currentTimeMillis) - ahead.startedAt <= PREPARED_AHEAD_TTL_MS
+      ) {
+        const ready = ahead.prepared.pollUnsafe();
+        if (
+          ready !== undefined &&
+          Exit.isSuccess(ready) &&
+          ready.value.environmentId === entry.target.environmentId &&
+          ready.value.httpBaseUrl === httpBaseUrl
+        ) {
+          return "answered" as RouteCheck;
+        }
+      }
+      // The descriptor is public, so this sends no credential to whatever
+      // answers at a saved LAN address on a different network.
+      return yield* fetchRemoteEnvironmentDescriptor({
+        httpBaseUrl,
+        timeoutMs: ROUTE_CHECK_TIMEOUT_MS,
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: ROUTE_CHECK_TIMEOUT_MS,
+          orElse: () =>
+            Effect.fail(new RemoteEnvironmentAuthTimeoutError(httpBaseUrl, ROUTE_CHECK_TIMEOUT_MS)),
+        }),
+        Effect.tap((descriptor) =>
+          descriptor.environmentId === entry.target.environmentId &&
+          Option.isSome(recentDescriptors)
+            ? recentDescriptors.value.remember(httpBaseUrl, descriptor)
+            : Effect.void,
+        ),
+        Effect.flatMap((descriptor) =>
+          descriptor.environmentId === entry.target.environmentId
+            ? Effect.succeed<RouteCheck>("answered")
+            : reportFailure(
+                environmentMismatchError({
+                  expected: entry.target.environmentId,
+                  actual: descriptor.environmentId,
+                }),
+              ).pipe(Effect.as<RouteCheck>("silent")),
+        ),
+        Effect.catch((error) =>
+          reportFailure(mapRemoteEnvironmentError(error)).pipe(Effect.as<RouteCheck>("silent")),
+        ),
+      );
     }).pipe(
-      Effect.timeoutOrElse({
-        duration: ROUTE_CHECK_TIMEOUT_MS,
-        orElse: () =>
-          Effect.fail(new RemoteEnvironmentAuthTimeoutError(httpBaseUrl, ROUTE_CHECK_TIMEOUT_MS)),
-      }),
-      Effect.tap((descriptor) =>
-        descriptor.environmentId === entry.target.environmentId && Option.isSome(recentDescriptors)
-          ? recentDescriptors.value.remember(httpBaseUrl, descriptor)
-          : Effect.void,
-      ),
-      Effect.flatMap((descriptor) =>
-        descriptor.environmentId === entry.target.environmentId
-          ? Effect.succeed<RouteCheck>("answered")
-          : reportFailure(
-              environmentMismatchError({
-                expected: entry.target.environmentId,
-                actual: descriptor.environmentId,
-              }),
-            ).pipe(Effect.as<RouteCheck>("silent")),
-      ),
-      Effect.catch((error) =>
-        reportFailure(mapRemoteEnvironmentError(error)).pipe(Effect.as<RouteCheck>("silent")),
-      ),
       Effect.provideService(HttpClient.HttpClient, httpClient),
       Effect.withSpan("ConnectionDriver.checkRoute", {
         attributes: { "connection.target.kind": route.target._tag },

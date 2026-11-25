@@ -69,6 +69,7 @@ import { resolveReviewAvailability } from "./reviewAvailability";
 import { resolveSelectedReviewFileId } from "./reviewPaneSelection";
 import { buildReviewSectionMenu } from "./review-section-menu";
 import { reportShowcaseSceneRendered } from "../showcase/showcaseRenderSignal";
+import { useHideTestFilesPreference } from "../pull-requests/usePullRequestFileFilter";
 
 function ReviewHeader(
   props: Parameters<typeof useReviewHeaderPresentation>[0] & {
@@ -76,6 +77,9 @@ function ReviewHeader(
     readonly sectionMenu: ReturnType<typeof buildReviewSectionMenu>;
     readonly showSectionToolbar: boolean;
     readonly showChangedFilesToggle: boolean;
+    readonly showTestFilter: boolean;
+    readonly hideTestFiles: boolean;
+    readonly onToggleTestFiles: () => void;
     readonly onSelectSection: (sectionId: string) => void;
     readonly onReturnToThread: () => void;
   },
@@ -102,20 +106,30 @@ function ReviewHeader(
       hideBottomBorder
       options={{ headerTintColor: props.iconColor, headerTitle: props.title }}
       backInSplitView={{ accessibilityLabel: "Back to chat", icon: "chevron.left" }}
-      actions={
-        props.showChangedFilesToggle
+      actions={[
+        ...(props.showTestFilter
+          ? [
+              {
+                accessibilityLabel: props.hideTestFiles ? "Show test files" : "Hide test files",
+                icon: "line.3.horizontal.decrease.circle" as const,
+                selected: props.hideTestFiles,
+                onPress: props.onToggleTestFiles,
+              },
+            ]
+          : []),
+        ...(props.showChangedFilesToggle
           ? [
               {
                 accessibilityLabel: panes.auxiliaryPaneVisible
                   ? "Hide changed files"
                   : "Show changed files",
-                icon: "sidebar.right",
+                icon: "sidebar.right" as const,
                 selected: panes.auxiliaryPaneVisible,
                 onPress: toggleAuxiliaryPane,
               },
             ]
-          : undefined
-      }
+          : []),
+      ]}
       menus={[
         ...(presentation.gitMenu ? [presentation.gitMenu] : []),
         ...(props.showSectionToolbar
@@ -493,7 +507,10 @@ export function ReviewSheet(props: ReviewSheetProps) {
     sections: reviewSections,
     selectedSectionId: selectedSection?.id ?? null,
   });
+  const NativeReviewDiffView = resolveNativeReviewDiffView();
+  const fileFilter = useHideTestFilesPreference();
   const {
+    allFiles,
     headerDiffSummary,
     nativeReviewDiffData,
     parsedDiff,
@@ -507,12 +524,12 @@ export function ReviewSheet(props: ReviewSheetProps) {
     selectedSection,
     revision: diffPreviewRevision,
     draftMessage,
+    hideTestFiles: NativeReviewDiffView !== null && fileFilter.hideTestFiles,
   });
   // Resolution returns null while Expo registers the native view (or forever
   // when the binary lacks it). Rendering a null component type crashes the
   // app, so callers must fall back — ThreadFeed's ReviewCommentCard does the
   // same check.
-  const NativeReviewDiffView = resolveNativeReviewDiffView();
   const nativeReviewDiffViewRef = useRef<NativeReviewDiffViewHandle>(null);
   const showcasedReviewDrawRef = useRef<string | null>(null);
   // Native pull-to-refresh on the diff surface (replaces the old Refresh menu item).
@@ -526,11 +543,10 @@ export function ReviewSheet(props: ReviewSheetProps) {
     }
   }, [refreshSelectedSection]);
   const reviewFileNavigatorRef = useRef<ReviewFileNavigatorHandle>(null);
-  const reviewFiles = parsedDiff.kind === "files" ? parsedDiff.files : [];
   const fileVisibility = useReviewFileVisibility({
     threadKey: reviewCache.threadKey,
     sectionId: selectedSection?.id ?? null,
-    files: reviewFiles,
+    files: allFiles,
     cachedExpandedFileIds: selectedSection?.id
       ? reviewCache.expandedFileIdsBySection[selectedSection.id]
       : undefined,
@@ -545,6 +561,12 @@ export function ReviewSheet(props: ReviewSheetProps) {
     selectedSection,
     nativeReviewDiffData,
   });
+  const toggleTestFiles = () => {
+    commentSelection.clearSelection();
+    fileFilter.toggle();
+  };
+  const allFilesHidden =
+    parsedDiff.kind === "files" && parsedDiff.files.length === 0 && allFiles.length > 0;
   const nativeBridge = useNativeReviewDiffBridge({
     threadKey: reviewCache.threadKey,
     sectionId: selectedSection?.id ?? null,
@@ -674,6 +696,7 @@ export function ReviewSheet(props: ReviewSheetProps) {
   // controls that cannot navigate.
   const showChangedFilesPane =
     !showConnectionNotice &&
+    !allFilesHidden &&
     selectedSection !== null &&
     parsedDiff.kind === "files" &&
     NativeReviewDiffView !== null;
@@ -734,6 +757,11 @@ export function ReviewSheet(props: ReviewSheetProps) {
         selectedSection={selectedSection}
         showSectionToolbar={showSectionToolbar}
         showChangedFilesToggle={showChangedFilesToggle}
+        showTestFilter={
+          !showConnectionNotice && NativeReviewDiffView !== null && allFiles.length > 0
+        }
+        hideTestFiles={fileFilter.hideTestFiles}
+        onToggleTestFiles={toggleTestFiles}
         onRefresh={handlePullToRefresh}
         onSelectSection={selectSection}
         onReturnToThread={handleReturnToThread}
@@ -759,7 +787,10 @@ export function ReviewSheet(props: ReviewSheetProps) {
                 onRetry={handleRetryEnvironment}
               />
             </View>
-          ) : selectedSection && parsedDiff.kind === "files" && NativeReviewDiffView ? (
+          ) : selectedSection &&
+            parsedDiff.kind === "files" &&
+            NativeReviewDiffView &&
+            !allFilesHidden ? (
             <View
               className="flex-1"
               style={{
@@ -861,6 +892,21 @@ export function ReviewSheet(props: ReviewSheetProps) {
                 >
                   <AppActivityIndicator size="small" />
                   <Text className="text-xs text-foreground-muted">Loading diff…</Text>
+                </View>
+              ) : allFilesHidden ? (
+                <View className="items-center gap-2 px-6 py-6">
+                  <Text className="text-sm font-t3-bold text-foreground">
+                    Only test files changed
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    className="min-h-11 justify-center px-3 active:opacity-70"
+                    onPress={fileFilter.showAll}
+                  >
+                    <Text className="text-sm font-t3-medium text-primary-text">
+                      Show test files
+                    </Text>
+                  </Pressable>
                 </View>
               ) : parsedDiff.kind === "empty" ? (
                 <View

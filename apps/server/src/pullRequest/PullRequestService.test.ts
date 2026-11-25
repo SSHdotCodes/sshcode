@@ -1,4 +1,4 @@
-import { SourceControlProviderKind } from "@t3tools/contracts";
+import { ProjectId, SourceControlProviderKind } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeV8 from "node:v8";
 import * as NodeVM from "node:vm";
@@ -7,6 +7,7 @@ import * as KeyValueStore from "effect/persistence/KeyValueStore";
 import { assert, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -15,13 +16,15 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
+import type * as SqlError from "effect/sql/SqlError";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as TestClock from "effect/testing/TestClock";
 import type {
   OrchestrationProjectShell,
-  ProjectId,
   PullRequestReviewCapabilities,
   PullRequestReviewerCapabilities,
+  SourceControlProviderDiscoveryItem,
 } from "@t3tools/contracts";
 import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts/settings";
 import type { ServerSettings } from "@t3tools/contracts";
@@ -537,6 +540,9 @@ function makeService(input: {
   readonly settings?: ServerSettings;
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
+  readonly githubHosts?: ReadonlyArray<string>;
+  readonly discoverGitHub?: () => SourceControlProviderDiscoveryItem | undefined;
+  readonly seed?: Effect.Effect<unknown, SqlError.SqlError, SqlClient.SqlClient>;
   readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
   readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
 }) {
@@ -554,6 +560,33 @@ function makeService(input: {
         ),
         Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
           resolveLink: () => undefined,
+          discoverProvider: () =>
+            Effect.sync(() =>
+              input.discoverGitHub !== undefined
+                ? input.discoverGitHub()
+                : input.githubHosts === undefined
+                  ? undefined
+                  : {
+                      kind: SourceControlProviderKind.make("github"),
+                      label: "GitHub",
+                      installHint: "Install gh",
+                      status: "available",
+                      version: Option.none(),
+                      detail: Option.none(),
+                      auth: {
+                        status: "authenticated",
+                        host: Option.fromNullishOr(input.githubHosts[0]),
+                        account: Option.some("octocat"),
+                        detail: Option.none(),
+                        accounts: input.githubHosts.map((host) => ({
+                          host,
+                          account: "octocat",
+                          authenticated: true,
+                          active: true,
+                        })),
+                      },
+                    },
+            ),
           resolveHandle:
             input.resolveHandle ?? (() => Effect.die("Unexpected provider refinement")),
         }),
@@ -571,16 +604,678 @@ function makeService(input: {
         SourceControlRateLimit.layer,
         // The real store over a database of its own, so the environment-kept marks are exercised
         // through the SQL that holds them rather than through a stand-in that agrees with itself.
-        PullRequestFilesViewed.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+        PullRequestFilesViewed.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
         Layer.effect(PullRequestReadCache.PullRequestReadCache, PullRequestReadCache.make).pipe(
           Layer.provide(KeyValueStore.layerMemory),
           Layer.provide(NodeServices.layer),
         ),
       ),
     ),
-    (context) => Effect.provideContext(PullRequestService.make, context),
+    (context) =>
+      Effect.provideContext(
+        (input.seed ?? Effect.void).pipe(Effect.andThen(PullRequestService.make)),
+        context,
+      ),
   );
 }
+
+it.effect("merges local and personal rows by host, repository, and number", () =>
+  Effect.gen(function* () {
+    const hosted = changeRequest(7, "2026-07-05T00:00:00Z");
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "Local project",
+          workspaceRoot: "/local",
+          repository: "team/repo",
+        }),
+      ],
+      githubHosts: ["github.com", "github.example"],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [hosted, changeRequest(9, "2026-07-04T00:00:00Z")],
+              truncated: false,
+              continues: false,
+            }),
+          listPersonalChangeRequests: ({ host, scope, state, filters, query }) => {
+            assert.strictEqual(state, "open");
+            assert.deepStrictEqual(filters, { author: "octocat" });
+            assert.strictEqual(query, "example");
+            return Effect.succeed({
+              items:
+                scope === "involves" && host === "github.com"
+                  ? [{ ...hosted, repository: "other/repo" }]
+                  : [{ ...hosted, repository: "TEAM/REPO" }],
+              nextCursor: null,
+            });
+          },
+        }),
+      ],
+    });
+    const input = { state: "open", query: "example", filters: { author: "octocat" } } as const;
+    const all = yield* service.list(input);
+    assert.deepStrictEqual(
+      all.entries.map(({ host, repository, number }) => [host, repository.toLowerCase(), number]),
+      [
+        ["github.com", "team/repo", 7],
+        ["github.com", "other/repo", 7],
+        ["github.example", "team/repo", 7],
+        ["github.com", "team/repo", 9],
+      ],
+    );
+    assert.strictEqual(all.entries[0]?.projectId, "p1");
+    assert.isTrue(all.entries[0]?.viewerInvolved);
+    assert.isUndefined(all.entries[1]?.projectId);
+    const mine = yield* service.list({ ...input, involvement: "mine" });
+    assert.lengthOf(mine.entries, 3);
+    assert.isTrue(mine.entries.every((entry) => entry.viewerInvolved));
+  }),
+);
+
+it.effect("opens hosted GitHub detail and activity with no project", () =>
+  Effect.gen(function* () {
+    const host = "github.example";
+    const service = yield* makeService({
+      projects: [],
+      githubHosts: [host],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          getChangeRequest: (input) => {
+            assert.strictEqual(input.host, host);
+            assert.strictEqual(input.repository, "team/repo");
+            assert.strictEqual(input.number, 7);
+            return Effect.succeed({ ...hostedChangeRequest("Hosted description"), number: 7 });
+          },
+          getChangeRequestActivity: () =>
+            Effect.succeed({
+              comments: [],
+              commentCount: 0,
+              commentsTruncated: false,
+              reviewThreads: [],
+              commits: [],
+            }),
+        }),
+      ],
+    });
+    const ref = { host, repository: "team/repo", number: 7 };
+    const detail = yield* service.detail(ref);
+    assert.strictEqual(detail.number, 7);
+    assert.strictEqual(detail.body, "Hosted description");
+    assert.isUndefined(detail.projectId);
+    assert.isUndefined(detail.workspaceRoot);
+    assert.deepStrictEqual((yield* service.activity(ref)).comments, []);
+  }),
+);
+
+it.effect("lists repos from recent worktrees and provider session directories", () =>
+  Effect.gen(function* () {
+    const parent = project({ id: "scratch", title: "Scratch", workspaceRoot: "/scratch" });
+    const seen: string[] = [];
+    const service = yield* makeService({
+      projects: [parent],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequests: ({ repository }) =>
+            Effect.sync(() => {
+              seen.push(repository);
+              return {
+                items: [
+                  changeRequest(1, "2026-07-05T00:00:00Z"),
+                  {
+                    ...changeRequest(2, "2026-07-05T00:00:00Z"),
+                    author: { login: "bilal", name: null, avatarUrl: null },
+                  },
+                ],
+                truncated: false,
+                continues: false,
+              };
+            }),
+          getChangeRequest: () => Effect.succeed(hostedChangeRequest("Worktree description")),
+        }),
+      ],
+      resolveRepositoryIdentity: (cwd) =>
+        Effect.succeed(
+          cwd === "/scratch"
+            ? null
+            : (project({
+                id: "repo",
+                title: "Repository",
+                workspaceRoot: cwd,
+                repository: `team${cwd}`,
+              }).repositoryIdentity ?? null),
+        ),
+      seed: Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const now = yield* DateTime.now;
+        const recent = DateTime.formatIso(now);
+        const old = DateTime.formatIso(DateTime.subtract(now, { days: 31 }));
+        yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+          VALUES (${parent.id}, ${parent.title}, ${parent.workspaceRoot}, '[]', ${recent}, ${recent})`;
+        yield* sql`INSERT INTO orchestration_v2_projection_threads
+          (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+          VALUES ('recent', ${parent.id}, '', '', '', '', ${recent}, ${recent}, '{"worktreePath":"/worktree"}'),
+                 ('old', ${parent.id}, '', '', '', '', ${old}, ${old}, '{"worktreePath":"/old"}')`;
+        yield* sql`INSERT INTO orchestration_v2_projection_provider_sessions
+          (provider_session_id, provider, status, updated_at, payload_json)
+          VALUES ('session', '', '', ${recent}, '{"cwd":"/session"}')`;
+        yield* sql`INSERT INTO orchestration_v2_projection_provider_session_bindings
+          (provider_session_id, thread_id) VALUES ('session', 'recent')`;
+      }),
+    });
+    const listed = yield* service.list({ state: "open" });
+    assert.sameMembers(seen, ["team/worktree", "team/session"]);
+    assert.sameDeepMembers(
+      listed.entries.map(({ number, repository, viewerInvolved }) => [
+        number,
+        repository,
+        viewerInvolved,
+      ]),
+      [
+        [2, "team/worktree", true],
+        [2, "team/session", true],
+      ],
+    );
+    const detail = yield* service.detail({
+      host: "github.com",
+      repository: "team/session",
+      number: 1,
+    });
+    assert.strictEqual(detail.projectId, parent.id);
+    assert.strictEqual(detail.workspaceRoot, "/session");
+  }),
+);
+
+it.effect("limits discovered repositories to involvement unless the viewer owns them", () =>
+  Effect.gen(function* () {
+    const scratch = project({ id: "scratch", title: "Scratch", workspaceRoot: "/scratch" });
+    const upstream = "pingdotgg/t3code";
+    const viewerOwned = "octocat/fork";
+    const memberOwned = "member-org/tools";
+    const registered = "other-org/project";
+    const hostedOwned = "member-org/hosted";
+    const reads: string[] = [];
+    let organizationReads = 0;
+    const author = { login: "someone-else", name: null, avatarUrl: null };
+    const row = (number: number, repository: string, byViewer = false) => ({
+      ...changeRequest(number, `2026-07-0${number}T00:00:00Z`),
+      repository,
+      ...(byViewer ? {} : { author }),
+      reviewRequestLogins: [],
+    });
+    const service = yield* makeService({
+      projects: [
+        scratch,
+        project({
+          id: "registered",
+          title: "Project",
+          workspaceRoot: "/project",
+          repository: registered,
+        }),
+      ],
+      githubHosts: ["github.com"],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          getViewer: () => Effect.succeed("octocat"),
+          getViewerOrganizations: () =>
+            Effect.sync(() => {
+              organizationReads++;
+              return ["Member-Org"];
+            }),
+          listChangeRequestsAcross: ({ repositories }) =>
+            Effect.sync(() => {
+              reads.push(...repositories);
+              return {
+                items: repositories.map((repository) => row(1, repository)),
+                truncated: false,
+              };
+            }),
+          listPersonalChangeRequests: (input) => {
+            if (input.scope === "owned") {
+              assert.deepStrictEqual(input.owners, ["octocat", "member-org"]);
+              return Effect.succeed({
+                items: [row(5, hostedOwned), row(6, upstream)],
+                nextCursor: null,
+              });
+            }
+            const items = {
+              author: [row(2, upstream, true)],
+              "review-requested": [row(3, upstream)],
+              involves: [row(2, upstream, true), row(4, upstream)],
+            }[input.scope];
+            return Effect.succeed({
+              items: !input.repositories || input.repositories.includes(upstream) ? items : [],
+              nextCursor: null,
+            });
+          },
+        }),
+      ],
+      resolveRepositoryIdentity: (cwd) =>
+        Effect.succeed(
+          cwd === "/scratch"
+            ? null
+            : (project({
+                id: "checkout",
+                title: "Checkout",
+                workspaceRoot: cwd,
+                repository: cwd.slice(1),
+              }).repositoryIdentity ?? null),
+        ),
+      seed: Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const recent = DateTime.formatIso(yield* DateTime.now);
+        yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+          VALUES (${scratch.id}, ${scratch.title}, ${scratch.workspaceRoot}, '[]', ${recent}, ${recent})`;
+        for (const repository of [upstream, viewerOwned, memberOwned]) {
+          yield* sql`INSERT INTO orchestration_v2_projection_threads
+            (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+            VALUES (${repository}, ${scratch.id}, '', '', '', '', ${recent}, ${recent},
+              ${JSON.stringify({ worktreePath: `/${repository}` })})`;
+        }
+      }),
+    });
+
+    const all = yield* service.list({ state: "open", involvement: "all" });
+    assert.sameMembers(reads, [viewerOwned, memberOwned, registered]);
+    assert.sameDeepMembers(
+      all.entries.map(({ repository, number, viewerInvolved }) => [
+        repository,
+        number,
+        viewerInvolved,
+      ]),
+      [
+        [upstream, 2, true],
+        [upstream, 3, true],
+        [upstream, 4, true],
+        [viewerOwned, 1, undefined],
+        [memberOwned, 1, undefined],
+        [hostedOwned, 5, undefined],
+        [registered, 1, undefined],
+      ],
+    );
+    assert.isTrue(
+      all.entries
+        .filter((entry) => entry.repository === upstream)
+        .every((entry) => entry.projectId === scratch.id),
+    );
+
+    const scoped = yield* service.list({
+      state: "open",
+      involvement: "all",
+      projectId: scratch.id,
+    });
+    assert.sameMembers(
+      scoped.entries.map((entry) => entry.number),
+      [1, 1, 2, 3, 4],
+    );
+    assert.strictEqual(organizationReads, 1);
+
+    for (const [involvement, ids] of [
+      ["mine", [2, 3, 4]],
+      ["authored", [2]],
+      ["reviewing", [3]],
+    ] as const) {
+      const result = yield* service.list({ state: "open", involvement });
+      assert.sameMembers(
+        result.entries
+          .filter((entry) => entry.repository === upstream)
+          .map((entry) => entry.number),
+        [...ids],
+      );
+    }
+  }),
+);
+
+it.effect(
+  "opens hosted GitHub detail without attaching an unrelated local project on the same host",
+  () =>
+    Effect.gen(function* () {
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "local",
+            title: "Local App",
+            workspaceRoot: "/local",
+            repository: "team/local",
+          }),
+        ],
+        githubHosts: ["github.com"],
+        providers: [
+          fakeProvider(SourceControlProviderKind.make("github"), {
+            getChangeRequest: (input) => {
+              assert.strictEqual(input.host, "github.com");
+              assert.strictEqual(input.repository, "other/repo");
+              assert.strictEqual(input.number, 42);
+              return Effect.succeed({ ...hostedChangeRequest("Hosted PR"), number: 42 });
+            },
+          }),
+        ],
+      });
+      const ref = { host: "github.com", repository: "other/repo", number: 42 };
+      const detail = yield* service.detail(ref);
+      assert.isUndefined(detail.projectId);
+      assert.strictEqual(detail.projectTitle, "other/repo");
+      assert.isUndefined(detail.workspaceRoot);
+
+      const summary = yield* service.summary(ref);
+      assert.isUndefined(summary.projectId);
+    }),
+);
+
+it.effect("reads diff stats for recent-chat repositories without a host on the stat ref", () =>
+  Effect.gen(function* () {
+    const parent = project({ id: "scratch", title: "Scratch", workspaceRoot: "/scratch" });
+    const service = yield* makeService({
+      projects: [parent],
+      providers: [
+        fakeProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequestStats: ({ changeRequests }) =>
+            Effect.succeed(
+              changeRequests.map(({ repository, number }) => ({
+                repository,
+                number,
+                additions: 12,
+                deletions: 4,
+              })),
+            ),
+        }),
+      ],
+      resolveRepositoryIdentity: (cwd) =>
+        Effect.succeed(
+          cwd === "/scratch"
+            ? null
+            : (project({
+                id: "repo",
+                title: "Repository",
+                workspaceRoot: cwd,
+                repository: `team${cwd}`,
+              }).repositoryIdentity ?? null),
+        ),
+      seed: Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const recent = DateTime.formatIso(yield* DateTime.now);
+        yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+          VALUES (${parent.id}, ${parent.title}, ${parent.workspaceRoot}, '[]', ${recent}, ${recent})`;
+        yield* sql`INSERT INTO orchestration_v2_projection_threads
+          (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+          VALUES ('recent', ${parent.id}, '', '', '', '', ${recent}, ${recent}, '{"worktreePath":"/worktree"}')`;
+      }),
+    });
+
+    const result = yield* service.listStats({
+      refs: [{ projectId: parent.id, repository: "team/worktree", number: 1 }],
+    });
+    assert.deepStrictEqual(result.stats, [
+      {
+        projectId: parent.id,
+        repository: "team/worktree",
+        number: 1,
+        additions: 12,
+        deletions: 4,
+      },
+    ]);
+  }),
+);
+
+it.effect("surfaces cli-missing when gh is missing and the workspace has no git projects", () =>
+  Effect.gen(function* () {
+    const github = SourceControlProviderKind.make("github");
+    const service = yield* makeService({
+      projects: [],
+      discoverGitHub: () => ({
+        kind: github,
+        label: "GitHub",
+        installHint: "Install gh",
+        status: "missing",
+        version: Option.none(),
+        detail: Option.some("gh is not installed"),
+        auth: {
+          status: "unknown",
+          host: Option.none(),
+          account: Option.none(),
+          detail: Option.none(),
+        },
+      }),
+      providers: [
+        fakeProvider(github, {
+          getViewer: () =>
+            Effect.fail(
+              new PullRequestProviderError({
+                provider: github,
+                operation: "getViewer",
+                reason: "missing-tool",
+                detail: "Install gh.",
+              }),
+            ),
+          listPersonalChangeRequests: () => Effect.succeed({ items: [], nextCursor: null }),
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(service.list({ state: "open" }));
+    assert.strictEqual(error._tag, "PullRequestUnavailableError");
+    assert.strictEqual(error.reason, "cli-missing");
+  }),
+);
+
+it.effect(
+  "surfaces not-authenticated when gh is logged out without projects and recovers after sign-in",
+  () =>
+    Effect.gen(function* () {
+      const github = SourceControlProviderKind.make("github");
+      let signedIn = false;
+      const service = yield* makeService({
+        projects: [],
+        discoverGitHub: () => ({
+          kind: github,
+          label: "GitHub",
+          installHint: "Install gh",
+          status: "available",
+          version: Option.none(),
+          detail: Option.none(),
+          auth: signedIn
+            ? {
+                status: "authenticated",
+                host: Option.some("github.com"),
+                account: Option.some("octocat"),
+                detail: Option.none(),
+                accounts: [
+                  {
+                    host: "github.com",
+                    account: "octocat",
+                    authenticated: true,
+                    active: true,
+                  },
+                ],
+              }
+            : {
+                status: "unauthenticated",
+                host: Option.none(),
+                account: Option.none(),
+                detail: Option.some("Run gh auth login."),
+                accounts: [],
+              },
+        }),
+        providers: [
+          fakeProvider(github, {
+            getViewer: () =>
+              signedIn
+                ? Effect.succeed("octocat")
+                : Effect.fail(
+                    new PullRequestProviderError({
+                      provider: github,
+                      operation: "getViewer",
+                      reason: "unauthenticated",
+                      detail: "Run gh auth login.",
+                    }),
+                  ),
+            listPersonalChangeRequests: ({ scope }) =>
+              Effect.succeed({
+                items:
+                  scope === "involves"
+                    ? [{ ...changeRequest(11, "2026-07-05T00:00:00Z"), repository: "team/repo" }]
+                    : [],
+                nextCursor: null,
+              }),
+          }),
+        ],
+      });
+
+      const firstError = yield* Effect.flip(service.list({ state: "open" }));
+      assert.strictEqual(firstError._tag, "PullRequestUnavailableError");
+      assert.strictEqual(firstError.reason, "cli-unauthenticated");
+
+      signedIn = true;
+      const recovered = yield* service.list({ state: "open" });
+      assert.deepStrictEqual(
+        recovered.entries.map((entry) => entry.number),
+        [11],
+      );
+    }),
+);
+
+it.effect("surfaces rate-limited personal search failures when no local projects are read", () =>
+  Effect.gen(function* () {
+    const github = SourceControlProviderKind.make("github");
+    let rateLimited = false;
+    const service = yield* makeService({
+      projects: [],
+      githubHosts: ["github.com"],
+      providers: [
+        fakeProvider(github, {
+          getViewer: () => Effect.succeed("octocat"),
+          listPersonalChangeRequests: () =>
+            rateLimited
+              ? Effect.fail(
+                  new PullRequestProviderError({
+                    provider: github,
+                    operation: "listPersonalChangeRequests",
+                    reason: "rate-limited",
+                    detail: "GitHub API rate limit exceeded.",
+                  }),
+                )
+              : Effect.succeed({
+                  items: [
+                    { ...changeRequest(12, "2026-07-05T00:00:00Z"), repository: "team/repo" },
+                  ],
+                  nextCursor: null,
+                }),
+        }),
+      ],
+    });
+
+    const initial = yield* service.list({ state: "open" });
+    assert.lengthOf(initial.entries, 1);
+
+    rateLimited = true;
+    // Viewer stays cached in viewersByHost; a new state filter misses listCache and hits the rate limit.
+    const error = yield* Effect.flip(service.list({ state: "closed" }));
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    if (error._tag === "PullRequestOperationError") {
+      assert.include(error.detail.toLowerCase(), "rate limit");
+    }
+  }),
+);
+
+it.effect("includes authored and review-requested non-GitHub PRs in Mine involvement", () =>
+  Effect.gen(function* () {
+    const gitlab = SourceControlProviderKind.make("gitlab");
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "gl",
+          title: "GitLab App",
+          workspaceRoot: "/gl",
+          repository: "group/app",
+          provider: gitlab,
+          host: "gitlab.com",
+        }),
+      ],
+      providers: [
+        fakeProvider(gitlab, {
+          getViewer: () => Effect.succeed("octocat"),
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [
+                {
+                  ...changeRequest(1, "2026-07-05T00:00:00Z"),
+                  author: { login: "octocat", name: null, avatarUrl: null },
+                  reviewRequestLogins: [],
+                },
+                {
+                  ...changeRequest(2, "2026-07-04T00:00:00Z"),
+                  author: { login: "teammate", name: null, avatarUrl: null },
+                  reviewRequestLogins: ["octocat"],
+                },
+                {
+                  ...changeRequest(3, "2026-07-03T00:00:00Z"),
+                  author: { login: "teammate", name: null, avatarUrl: null },
+                  reviewRequestLogins: [],
+                },
+              ],
+              truncated: false,
+              continues: false,
+            }),
+        }),
+      ],
+    });
+
+    const mine = yield* service.list({ state: "open", involvement: "mine" });
+    assert.deepStrictEqual(
+      mine.entries.map((entry) => entry.number),
+      [1, 2],
+    );
+    assert.isTrue(mine.entries.every((entry) => entry.viewerInvolved));
+
+    const all = yield* service.list({ state: "open" });
+    assert.isTrue(all.entries.find((entry) => entry.number === 1)?.viewerInvolved);
+    assert.isTrue(all.entries.find((entry) => entry.number === 2)?.viewerInvolved);
+    assert.isUndefined(all.entries.find((entry) => entry.number === 3)?.viewerInvolved);
+  }),
+);
+
+it.effect(
+  "includes local GitHub Enterprise hosts not reported by gh discovery in Mine involvement",
+  () =>
+    Effect.gen(function* () {
+      const github = SourceControlProviderKind.make("github");
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "ghe",
+            title: "Enterprise API",
+            workspaceRoot: "/ghe",
+            repository: "corp/api",
+            provider: github,
+            host: "ghe.example",
+          }),
+        ],
+        githubHosts: ["github.com"],
+        providers: [
+          fakeProvider(github, {
+            getViewer: () => Effect.succeed("octocat"),
+            listPersonalChangeRequests: ({ host, scope }) =>
+              Effect.succeed({
+                items:
+                  host === "ghe.example" && scope === "involves"
+                    ? [{ ...changeRequest(5, "2026-07-05T00:00:00Z"), repository: "corp/api" }]
+                    : [],
+                nextCursor: null,
+              }),
+          }),
+        ],
+      });
+
+      const mine = yield* service.list({ state: "open", involvement: "mine" });
+      assert.deepStrictEqual(
+        mine.entries.map((entry) => [entry.host, entry.projectId, entry.number]),
+        [["ghe.example", "ghe", 5]],
+      );
+      assert.isTrue(mine.entries[0]?.viewerInvolved);
+    }),
+);
 
 it.effect("lists GitHub Enterprise PRs for a stored unknown repository after host discovery", () =>
   Effect.gen(function* () {
@@ -2179,7 +2874,7 @@ it.effect("reports repositories on a host that could not be read", () =>
     assert.strictEqual(result.entries.length, 1);
     assert.deepStrictEqual(
       result.errors.map((error) => error.projectId),
-      ["p2"],
+      [ProjectId.make("p2")],
     );
   }),
 );
@@ -4550,9 +5245,9 @@ it.effect("reads a host's repositories in one search, and files the rows back un
     assert.deepStrictEqual(
       result.entries.map((entry) => [entry.projectId, entry.number]),
       [
-        ["p2", 1],
-        ["p1", 2],
-        ["p3", 3],
+        [ProjectId.make("p2"), 1],
+        [ProjectId.make("p1"), 2],
+        [ProjectId.make("p3"), 3],
       ],
     );
   }),

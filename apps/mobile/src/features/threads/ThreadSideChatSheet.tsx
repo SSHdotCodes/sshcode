@@ -98,7 +98,7 @@ function ThreadSideChatContent({ route }: StaticScreenProps<ThreadSideChatParams
   const environmentId = EnvironmentId.make(route.params.environmentId);
   const threadId = ThreadId.make(route.params.threadId);
   const initialPrompt = route.params.prompt?.trim() ?? "";
-  const queuedSends = useAtomValue(pendingSends.sendsAtom);
+  const queuedSends = useAtomValue(pendingSends.awaitingAckAtom);
   const queued = queuedSends.find(
     (send) =>
       send.kind === "side-question" &&
@@ -168,7 +168,7 @@ function ThreadSideChatContent({ route }: StaticScreenProps<ThreadSideChatParams
       : null;
   useEffect(() => {
     if (queued && state?.messages.some((message) => message.id === queued.id)) {
-      void pendingSends.remove(queued).catch(() => undefined);
+      pendingSends.acknowledge(queued);
     }
   }, [queued, state]);
   const ended = sideChatEnded(state);

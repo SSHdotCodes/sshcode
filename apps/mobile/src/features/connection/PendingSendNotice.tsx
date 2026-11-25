@@ -13,7 +13,7 @@ export function PendingSendNotice(props: {
   /** Float this far from the top, below a header that overlaps the content. */
   readonly top?: number;
 }) {
-  const sends = useAtomValue(pendingSends.sendsAtom).filter(
+  const sends = useAtomValue(pendingSends.awaitingAckAtom).filter(
     (send) =>
       send.environmentId === props.environmentId &&
       send.threadId === props.threadId &&

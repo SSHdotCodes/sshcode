@@ -63,7 +63,7 @@ vi.mock("~/state/pullRequests", async (importOriginal) => ({
 vi.mock("~/state/vcs", () => ({ vcsEnvironment: { listRefs: () => null } }));
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: (query: string) => ({
-    data: query === "detail" ? detail : null,
+    data: query === "detail" ? currentDetail : null,
     isPending: false,
     isSuccess: true,
     error: null,
@@ -223,9 +223,11 @@ const threadRef: ScopedThreadRef = {
 };
 const draftId = DraftId.make("draft-1");
 const newDraftId = DraftId.make("new-draft");
+let currentDetail: PullRequestDetailView = detail;
 let renderer: ReactTestRenderer;
 
 beforeEach(() => {
+  currentDetail = detail;
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", { addEventListener: vi.fn(), removeEventListener: vi.fn() });
   useComposerDraftStore.setState({ draftsByThreadKey: {} });
@@ -435,4 +437,34 @@ it("changes the title only for the active tab's main scroller", async () => {
   code.scrollTop = 0;
   await act(async () => mainScroll.props.onScrollCapture({ target: code }));
   expect(titleFold().props.inert).toBe(false);
+});
+
+it("hides worktree handoff actions when the pull request has no local checkout root", async () => {
+  currentDetail = { ...detail, workspaceRoot: undefined };
+  await act(async () => {
+    renderer = create(
+      <PullRequestDetailPanel
+        environmentId={threadRef.environmentId}
+        reference={currentDetail}
+        context="page"
+        shortcutsEnabled={false}
+        getShortcutContext={() => ({
+          terminalFocus: false,
+          terminalOpen: false,
+          previewFocus: false,
+          previewOpen: false,
+          isWeb: true,
+          isDesktop: false,
+        })}
+      />,
+    );
+  });
+
+  const buttonText = (node: ReturnType<typeof renderer.root.findAllByType>[number]): string =>
+    node.children.map((child) => (typeof child === "string" ? child : buttonText(child))).join("");
+  const buttons = renderer.root.findAllByType("button");
+  expect(buttons.filter((node) => node.props["aria-label"] === "Check out")).toHaveLength(0);
+  expect(
+    buttons.filter((node) => buttonText(node).includes("Fix findings in a chat")),
+  ).toHaveLength(0);
 });

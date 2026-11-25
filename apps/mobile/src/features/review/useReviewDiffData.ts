@@ -22,8 +22,14 @@ import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import { reviewEnvironment } from "../../state/review";
+import {
+  filterPullRequestTestFiles,
+  isPullRequestTestFile,
+  visibleReviewPatchIndices,
+} from "../pull-requests/pullRequestFileFilters";
 
 const EMPTY_INLINE_REVIEW_COMMENTS = Object.freeze([]);
+const EMPTY_REVIEW_FILES: ReadonlyArray<ReviewRenderableFile> = [];
 type ParsedFilePatch = AsyncResult.AsyncResult<
   { source: ReviewDiffPreviewSource; parsed: ReviewParsedDiff },
   unknown
@@ -128,8 +134,9 @@ export function useReviewDiffData(input: {
   readonly selectedSection: ReviewSectionItem | null;
   readonly revision: string | undefined;
   readonly draftMessage: string;
+  readonly hideTestFiles: boolean;
 }) {
-  const { draftMessage, selectedSection, threadKey } = input;
+  const { draftMessage, selectedSection, threadKey, hideTestFiles } = input;
   const selectedSectionId = selectedSection?.id ?? null;
   const source = selectedSection?.source;
   const lazySource = source?.truncated && source.files ? source : null;
@@ -149,17 +156,25 @@ export function useReviewDiffData(input: {
   const registry = useContext(RegistryContext);
   const { environmentId, cwd } = input;
   const scope = JSON.stringify([environmentId, cwd, lazySource?.kind, source?.baseRef]);
-  const [requested, setRequested] = useState({ scope, indices: [0, 1, 2] });
+  const lazyFiles = lazySource?.files;
+  const seedIndices = useMemo(
+    () => visibleReviewPatchIndices(lazyFiles ?? [], hideTestFiles),
+    [lazyFiles, hideTestFiles],
+  );
+  const [requested, setRequested] = useState<{ scope: string; indices: number[] }>({
+    scope,
+    indices: [],
+  });
   const indices = useMemo(
-    () => new Set(requested.scope === scope ? requested.indices : [0, 1, 2]),
-    [requested, scope],
+    () => new Set([...seedIndices, ...(requested.scope === scope ? requested.indices : [])]),
+    [requested, scope, seedIndices],
   );
   const queries = useMemo(
     () =>
       !environmentId || !cwd || !lazySource
         ? []
         : (lazySource.files ?? []).map((file, index) =>
-            indices.has(index)
+            indices.has(index) && (!hideTestFiles || !isPullRequestTestFile(file.path))
               ? reviewEnvironment.diffFilePatch({
                   environmentId,
                   input: {
@@ -177,7 +192,7 @@ export function useReviewDiffData(input: {
                 })
               : null,
           ),
-    [environmentId, cwd, lazySource, indices, scope],
+    [environmentId, cwd, lazySource, indices, scope, hideTestFiles],
   );
   const parsedQuery = useMemo(
     () =>
@@ -217,18 +232,23 @@ export function useReviewDiffData(input: {
   }, [input.revision, queries, registry, scope]);
   const loadVisibleFile = useCallback(
     (fileId: string | null, retry = false) => {
+      if (!lazyFiles) return;
       const index =
-        fileId === null ? 0 : (lazySource?.files?.findIndex((file) => file.path === fileId) ?? -1);
+        fileId === null
+          ? (seedIndices[0] ?? -1)
+          : lazyFiles.findIndex((file) => file.path === fileId);
       if (index < 0) return;
       setRequested((current) => {
-        const previous = current.scope === scope ? current.indices : [0, 1, 2];
-        const added = [index, index + 1, index + 2].filter((next) => !previous.includes(next));
+        const previous = current.scope === scope ? current.indices : [];
+        const added = visibleReviewPatchIndices(lazyFiles, hideTestFiles, index).filter(
+          (next) => !indices.has(next) && !previous.includes(next),
+        );
         return added.length === 0 ? current : { scope, indices: [...previous, ...added] };
       });
       if (retry && patches[index]?._tag === "Failure" && queries[index])
         registry.refresh(queries[index]);
     },
-    [lazySource, scope, patches, queries, registry],
+    [lazyFiles, seedIndices, hideTestFiles, scope, indices, patches, queries, registry],
   );
   const parsedDiff = useMemo<ReviewParsedDiff>(() => {
     if (!lazySource?.files) return applyReviewDiffMetadata(previewDiff, selectedSection);
@@ -258,15 +278,19 @@ export function useReviewDiffData(input: {
     }
     return inlineReviewComments.filter((comment) => comment.sectionId === selectedSectionId);
   }, [inlineReviewComments, selectedSectionId]);
+  const shownDiff = useMemo(
+    () => filterPullRequestTestFiles(parsedDiff, hideTestFiles),
+    [parsedDiff, hideTestFiles],
+  );
   const nativeReviewDiffData = useMemo(
     () =>
       measureReviewWork("build-native-diff-data", () =>
         getCachedNativeReviewDiffData({
-          parsedDiff,
+          parsedDiff: shownDiff,
           comments: selectedSectionInlineComments,
         }),
       ),
-    [parsedDiff, selectedSectionInlineComments],
+    [shownDiff, selectedSectionInlineComments],
   );
   const pendingReviewCommentCount = useMemo(
     () => countReviewCommentContexts(draftMessage),
@@ -293,7 +317,8 @@ export function useReviewDiffData(input: {
   }, [nativeReviewDiffData.rows.length, parsedDiff, selectedSection?.id]);
 
   return {
-    parsedDiff,
+    parsedDiff: shownDiff,
+    allFiles: parsedDiff.kind === "files" ? parsedDiff.files : EMPTY_REVIEW_FILES,
     loadVisibleFile,
     isPending: patches.some((patch) => patch?._tag === "Initial" || patch?.waiting),
     headerDiffSummary,

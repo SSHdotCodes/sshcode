@@ -1,3 +1,5 @@
+import { parseMarkdownFileLink } from "./markdownLinks.ts";
+
 export type ComposerTriggerKind =
   | "path"
   | "chat"
@@ -20,13 +22,14 @@ function composerFileLinkBasename(path: string): string {
 }
 
 function escapeMarkdownLinkLabel(label: string): string {
-  return label.replaceAll("\\", "\\\\").replaceAll("[", "\\[").replaceAll("]", "\\]");
+  return label.replace(/[\\[\]&]/g, "\\$&");
 }
 
 function encodeMarkdownLinkDestination(path: string): string {
   return encodeURI(path)
     .replaceAll("(", "%28")
     .replaceAll(")", "%29")
+    .replaceAll("&", "%26")
     .replaceAll("#", "%23")
     .replaceAll("?", "%3F")
     .replaceAll("\\", "%5C");
@@ -34,7 +37,26 @@ function encodeMarkdownLinkDestination(path: string): string {
 
 export function serializeComposerFileLink(path: string): string {
   const label = escapeMarkdownLinkLabel(composerFileLinkBasename(path));
-  return `[${label}](${encodeMarkdownLinkDestination(path)})`;
+  const encoded = encodeMarkdownLinkDestination(path);
+  const destination = needsDotSlashPrefix(path, encoded) ? `./${encoded}` : encoded;
+  return `[${label}](${destination})`;
+}
+
+function needsDotSlashPrefix(path: string, encoded: string): boolean {
+  return (
+    path.length > 0 &&
+    !/^(?:[a-z][a-z\d+.-]*:|[\\/])/i.test(path) &&
+    !parseMarkdownFileLink(encoded)
+  );
+}
+
+export function composerFileLinkPath(encoded: string, decoded: string): string {
+  if (!encoded.startsWith("./")) return decoded;
+  const path = decoded.slice(2);
+  const bare = encoded.slice(2);
+  return needsDotSlashPrefix(path, bare) && encodeMarkdownLinkDestination(path) === bare
+    ? path
+    : decoded;
 }
 
 function clampCursor(text: string, cursor: number): number {

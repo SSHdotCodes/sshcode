@@ -98,7 +98,8 @@ vi.mock("../hooks/useLocalStorage", () => ({
   getLocalStorageItem: () => "vscode",
   setLocalStorageItem: vi.fn(),
 }));
-vi.mock("../hooks/useCopyToClipboard", () => ({
+vi.mock("../hooks/useCopyToClipboard", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../hooks/useCopyToClipboard")>()),
   writeTextToClipboard: state.copy,
   useCopyToClipboard: () => ({ copyToClipboard: state.copy, isCopied: false }),
 }));

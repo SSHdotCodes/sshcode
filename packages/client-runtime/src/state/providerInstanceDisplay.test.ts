@@ -59,6 +59,15 @@ describe("providerInstanceMark", () => {
     expect(providerInstanceMark("😀 Work")).toBe("😀");
     expect(providerInstanceMark("")).toBe("");
   });
+  it.each([
+    ["Max 1", "1"],
+    ["Team 20x", "T"],
+    ["StudioGrok 2", "2"],
+    ["StudioGrok", "SG"],
+    ["SuperClaude", "SC"],
+  ])("gives %s the account mark %s", (name, mark) => {
+    expect(providerInstanceMark(name)).toBe(mark);
+  });
 });
 
 describe("providerInstanceInitials", () => {
@@ -68,6 +77,20 @@ describe("providerInstanceInitials", () => {
 
   it("takes the first character of each of the first two words", () => {
     expect(providerInstanceInitials("Codex Personal")).toBe("CP");
+  });
+
+  it.each([
+    ["Max 1", "M1"],
+    ["Team 20x", "T2"],
+    ["StudioGrok 2", "S2"],
+    ["StudioGrok", "SG"],
+    ["ClaudeAPI", "CA"],
+    ["(ClaudeProx)", "CP"],
+    ["ClaudeProx Work", "CW"],
+    ["Alex’s Codex", "AC"],
+    ["Codex (hub)", "CH"],
+  ])("gives %s the initials %s", (name, initials) => {
+    expect(providerInstanceInitials(name)).toBe(initials);
   });
 
   it("ignores words past the first two", () => {

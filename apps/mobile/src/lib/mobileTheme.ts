@@ -261,6 +261,19 @@ function markdownLinkColor(c: ThemeColors, appearance: MobileThemeAppearance): s
   return appearance === "dark" ? "#6ea8ff" : "#1d5bd8";
 }
 
+/** Links in the user's own bubble keep the theme's link colour, made readable on the bubble. */
+export function userBubbleLinkColor(
+  variables: Pick<
+    MobileThemeVariables,
+    "--color-md-link" | "--color-user-bubble" | "--color-screen"
+  >,
+): string {
+  return themeColorWithContrast(
+    variables["--color-md-link"],
+    flattenThemeColor(variables["--color-user-bubble"], variables["--color-screen"]),
+  );
+}
+
 export function createMobileThemeVariables(
   colors: ThemeColors,
   appearance: MobileThemeAppearance,

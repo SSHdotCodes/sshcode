@@ -34,10 +34,11 @@ export function PullRequestMarkdownRepository(props: {
   readonly children: ReactNode;
 }) {
   const target = pullRequestTarget(props.params);
-  const project = useProject({
-    environmentId: target.environmentId,
-    projectId: target.input.projectId,
-  });
+  const project = useProject(
+    target.input.projectId === undefined
+      ? null
+      : { environmentId: target.environmentId, projectId: target.input.projectId },
+  );
   const cwd = project?.workspaceRoot;
   const media = useMemo(
     () => (cwd ? { environmentId: target.environmentId, cwd } : null),

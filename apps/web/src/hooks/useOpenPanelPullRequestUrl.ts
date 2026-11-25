@@ -24,18 +24,20 @@ export function useOpenPanelPullRequestUrl(threadRef: ScopedThreadRef | null) {
     : threadRef?.environmentId;
   const supportsMultiplePullRequests = useSupportsMultiplePullRequests(environmentId ?? null);
   const project = useProject(
-    requestedReference && environmentId
+    requestedReference?.projectId !== undefined && environmentId
       ? scopeProjectRef(environmentId, ProjectId.make(requestedReference.projectId))
       : null,
   );
   const reference = useMemo(() => {
     if (requestedReference === null) return null;
     const input = {
-      projectId: ProjectId.make(requestedReference.projectId),
+      ...(requestedReference.projectId === undefined
+        ? {}
+        : { projectId: ProjectId.make(requestedReference.projectId) }),
       repository: requestedReference.repository,
       number: requestedReference.number,
     };
-    return supportsMultiplePullRequests
+    return supportsMultiplePullRequests || requestedReference.projectId === undefined
       ? resolvePullRequestReferenceHost(
           {
             ...input,

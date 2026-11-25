@@ -4,7 +4,7 @@ import { GlassView } from "expo-glass-effect";
 import { AppActivityIndicator } from "../../components/AppActivityIndicator";
 import { SymbolView } from "../../components/AppSymbol";
 import { useCallback, useEffect, useRef } from "react";
-import { Pressable, StyleSheet, useColorScheme, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -12,6 +12,7 @@ import { AppText as Text } from "../../components/AppText";
 import { APP_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import type { GitActionProgress } from "../../state/use-vcs-action-state";
 
@@ -77,7 +78,8 @@ function OverlayContent(props: { readonly progress: GitActionProgress }) {
   const glassSurface = colors["--color-glass-surface"];
   const foreground = colors["--color-foreground"];
   const shadowColor = colors["--color-primary-shadow"];
-  const isDarkMode = useColorScheme() === "dark";
+  const { themeAppearance } = useAppearancePreferences();
+  const isDarkMode = themeAppearance === "dark";
   const glassTint = themeColorWithAlpha(String(glassSurface), isDarkMode ? 0.48 : 0.38);
   const glassBorder = themeColorWithAlpha(String(foreground), isDarkMode ? 0.18 : 0.12);
   const content = (

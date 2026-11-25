@@ -5,7 +5,8 @@ import { MessagesSquareIcon } from "lucide-react";
 
 import { useLinkedThreadShell } from "~/state/entities";
 import { ContextChip, ContextChipLabel } from "./ContextChip";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { Tooltip, TooltipTrigger } from "./ui/tooltip";
+import { ThreadChipPreview } from "./ThreadChipPreview";
 
 /**
  * Inline chip for an attached thread, in the composer and in sent messages. Prefers the
@@ -46,7 +47,7 @@ export function ThreadContextChip(props: {
           </ContextChip>
         }
       />
-      <TooltipPopup side="top">{shell ? "Open chat" : "Chat no longer available"}</TooltipPopup>
+      <ThreadChipPreview shell={shell} title={title} />
     </Tooltip>
   );
 }

@@ -120,7 +120,7 @@ export function PullRequestActionToolbar(props: {
   const agent = usePullRequestAgentActions(props.params, props.pr, props.filePath);
   const canReview = permissions.verdicts.length > 0;
   const pendingReview = canReview && draft.comments.length > 0;
-  const showAgentControls = agent.canAsk || !permissions.connected;
+  const showAgentControls = agent.canAsk;
   const canOpenThread = agent.threads.length > 0 || showAgentControls;
   const threadLabel = agent.threads.length ? "Continue chat" : "Work on PR";
   const primaryLabel = pendingReview ? `Submit review · ${draft.comments.length}` : threadLabel;

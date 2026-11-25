@@ -61,6 +61,8 @@ import {
   promoteQueuedRun,
   reorderActiveThread,
   reorderQueuedRun,
+  respondToThreadApproval,
+  respondToThreadUserInput,
   revertThreadCheckpoint,
   settleThread,
   startThreadTurn,
@@ -1527,6 +1529,173 @@ describe("V2 environment commands", () => {
         ["message.dispatch", "command-lost-ack"],
       ]);
       expect(Exit.isSuccess(exit)).toBe(true);
+    }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect("sends a turn tapped during backoff as soon as a session arrives", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      const session = yield* SubscriptionRef.get(supervisor.session);
+      yield* SubscriptionRef.set(supervisor.state, {
+        ...CONNECTED_STATE,
+        phase: "backoff" as const,
+      });
+      yield* SubscriptionRef.set(supervisor.session, Option.none());
+      const waiting = yield* startThreadTurn(helloTurn("reconnect", true)).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("2 seconds");
+      expect(commands).toHaveLength(0);
+      yield* SubscriptionRef.set(supervisor.session, session);
+      yield* Fiber.join(waiting);
+      expect(commands.map((command) => command.commandId)).toEqual(["command-reconnect"]);
+    }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect.each(["answer", "edit"] as const)(
+    "replays a lost %s receipt once with exactly the same payload",
+    (kind) =>
+      Effect.gen(function* () {
+        const commands: OrchestrationV2Command[] = [];
+        const supervisor = yield* makeSupervisor({ commands, projects: [] });
+        const healthy = Option.getOrThrow(yield* SubscriptionRef.get(supervisor.session));
+        yield* SubscriptionRef.set(
+          supervisor.session,
+          Option.some({
+            ...healthy,
+            client: {
+              ...healthy.client,
+              [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
+                Effect.gen(function* () {
+                  commands.push(command as OrchestrationV2Command);
+                  yield* SubscriptionRef.set(supervisor.session, Option.some(healthy));
+                  return yield* socketClosed();
+                }),
+            },
+          }),
+        );
+        const send =
+          kind === "answer"
+            ? respondToThreadUserInput({
+                threadId: v2ThreadId,
+                requestId: RuntimeRequestId.make("request"),
+                answers: { question: "yes" },
+                resendAfterSocketLoss: true,
+              })
+            : editQueuedRun({ threadId: v2ThreadId, runId: RunId.make("run"), text: "edited" });
+        yield* send.pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        );
+        expect(commands).toHaveLength(2);
+        expect(commands[1]).toEqual(commands[0]);
+      }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect("replays a lost approval receipt once with exactly the same payload", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      const healthy = Option.getOrThrow(yield* SubscriptionRef.get(supervisor.session));
+      yield* SubscriptionRef.set(
+        supervisor.session,
+        Option.some({
+          ...healthy,
+          client: {
+            ...healthy.client,
+            [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
+              Effect.gen(function* () {
+                commands.push(command as OrchestrationV2Command);
+                yield* SubscriptionRef.set(supervisor.session, Option.some(healthy));
+                return yield* socketClosed();
+              }),
+          },
+        }),
+      );
+
+      yield* respondToThreadApproval({
+        threadId: v2ThreadId,
+        requestId: RuntimeRequestId.make("request"),
+        decision: "accept",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(commands).toHaveLength(2);
+      expect(commands[1]).toEqual(commands[0]);
+    }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect("releases a protocol failure when the same socket still answers", () =>
+    Effect.gen(function* () {
+      const supervisor = yield* makeSupervisor({ commands: [], projects: [] });
+      const healthy = Option.getOrThrow(yield* SubscriptionRef.get(supervisor.session));
+      yield* SubscriptionRef.set(
+        supervisor.session,
+        Option.some({
+          ...healthy,
+          client: {
+            ...healthy.client,
+            [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: () => Effect.fail(socketClosed()),
+          },
+        }),
+      );
+      const result = yield* startThreadTurn(helloTurn("protocol-error", true)).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.flip,
+      );
+      expect(result._tag).toBe("RpcClientError");
+    }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect("reuses an identified command if a slow probe leaves the same session open", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      const healthy = Option.getOrThrow(yield* SubscriptionRef.get(supervisor.session));
+      const client = {
+        ...healthy.client,
+        [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
+          Effect.suspend(() => {
+            if (commands.length > 0)
+              return healthy.client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand](command);
+            commands.push(command);
+            return Effect.fail(socketClosed());
+          }),
+      } as unknown as WsRpcProtocolClient;
+      yield* SubscriptionRef.set(
+        supervisor.session,
+        Option.some({ ...healthy, client, probe: Effect.sleep("4 seconds") }),
+      );
+      const sending = yield* startThreadTurn(helloTurn("slow-probe", true)).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("2999 millis");
+      expect(commands).toHaveLength(1);
+      yield* TestClock.adjust("1 milli");
+      yield* Fiber.join(sending);
+      expect(commands).toHaveLength(2);
+      expect(commands[1]).toEqual(commands[0]);
+    }).pipe(Effect.provide(layerTestCrypto)),
+  );
+
+  it.effect("releases an offline composer after five minutes without a session", () =>
+    Effect.gen(function* () {
+      const supervisor = yield* makeSupervisor({ commands: [], projects: [] });
+      yield* SubscriptionRef.set(supervisor.session, Option.none());
+      yield* SubscriptionRef.set(supervisor.state, {
+        ...CONNECTED_STATE,
+        phase: "offline" as const,
+      });
+      const waiting = yield* startThreadTurn(helloTurn("offline", true)).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.flip,
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("299999 millis");
+      expect(waiting.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("1 milli");
+      expect((yield* Fiber.join(waiting))._tag).toBe("EnvironmentRpcUnavailableError");
     }).pipe(Effect.provide(layerTestCrypto)),
   );
 

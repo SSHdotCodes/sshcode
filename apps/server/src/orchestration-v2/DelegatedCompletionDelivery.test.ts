@@ -2195,6 +2195,85 @@ it.layer(layerTest)("delegated tasks whose agent goes on by itself", (it) => {
       assert.isFalse(yield* orchestrator.delegatedTaskResultPending(ended.childThreadId));
     }),
   );
+
+  it.effect(
+    "cancels pending provider-continuation grace and settles the child task on thread.stop",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread:quiet-stop-parent");
+        const runId = RunId.make("run:quiet-stop-parent");
+        const rootNodeId = NodeId.make("node:quiet-stop-parent");
+        const projectId = ProjectId.make("project:quiet-stop-parent");
+        yield* seedParentWithTerminalTask({
+          threadId,
+          runId,
+          taskId: NodeId.make("task:quiet-stop-anchor"),
+          projectId,
+          rootNodeId,
+          deliveryState: "acknowledged",
+          deliveryTaskIds: [NodeId.make("task:quiet-stop-anchor")],
+          completionWake: "always",
+          now,
+        });
+        const quietChild = yield* seedRestartCancelledChild({
+          parentThreadId: threadId,
+          projectId,
+          parentRunId: runId,
+          rootNodeId,
+          name: "quiet-stop-child",
+          completionWake: "always",
+          continuationPending: false,
+          runStatus: "completed",
+          quietEnd: true,
+          now,
+        });
+        yield* eventSink.write({
+          commandId: CommandId.make("command:quiet-stop-child:reply"),
+          events: [
+            {
+              id: EventId.make("event:quiet-stop-child:reply"),
+              type: "message.updated" as const,
+              threadId: quietChild.childThreadId,
+              runId: quietChild.childRunId,
+              occurredAt: now,
+              payload: {
+                id: MessageId.make("message:quiet-stop-child:reply"),
+                threadId: quietChild.childThreadId,
+                runId: quietChild.childRunId,
+                nodeId: null,
+                role: "assistant" as const,
+                text: "Done with the first pass.",
+                attachments: [],
+                streaming: false,
+                createdBy: "agent" as const,
+                creationSource: "server" as const,
+                createdAt: now,
+                updatedAt: now,
+              },
+            },
+          ],
+        });
+        yield* orchestrator.recoverDelegatedTasks;
+        assert.isTrue(yield* orchestrator.delegatedTaskResultPending(quietChild.childThreadId));
+
+        yield* orchestrator.dispatch({
+          type: "thread.stop",
+          commandId: CommandId.make("command:quiet-stop-child:stop"),
+          threadId: quietChild.childThreadId,
+          reason: "Stopped by user.",
+        });
+
+        // Without waiting 30s for the grace timer, Stop cancels the continuation wait and settles.
+        assert.isFalse(yield* orchestrator.delegatedTaskResultPending(quietChild.childThreadId));
+        const parentProjection = yield* orchestrator.getThreadProjection(threadId);
+        const task = parentProjection.subagents.find((row) => row.id === quietChild.taskId);
+        assert.equal(task?.status, "completed");
+        assert.equal(task?.result, "Done with the first pass.");
+      }),
+  );
 });
 
 it.layer(layerTest)("delegated tasks across a server restart", (it) => {

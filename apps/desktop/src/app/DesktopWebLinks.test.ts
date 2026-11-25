@@ -4,14 +4,18 @@ import * as NodeEvents from "node:events";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { WEB_LINK_OPEN_CHANNEL } from "../ipc/channels.ts";
+import * as DesktopWindow from "../window/DesktopWindow.ts";
+import * as DesktopState from "./DesktopState.ts";
 import * as DesktopWebLinks from "./DesktopWebLinks.ts";
 
-const makeWindow = () => {
+const makeWindow = (options: { readonly openInitially?: boolean } = {}) => {
   const sent: Array<string> = [];
   const revealed: Array<unknown> = [];
+  let activateCalls = 0;
   const webContents = Object.assign(new NodeEvents.EventEmitter(), {
     isDestroyed: () => false,
     send: (channel: string, url: string) => {
@@ -19,21 +23,48 @@ const makeWindow = () => {
     },
   });
   const window = { webContents } as unknown as Electron.BrowserWindow;
+  let currentWindow: Option.Option<Electron.BrowserWindow> =
+    options.openInitially === false ? Option.none() : Option.some(window);
   /** The web app starts loading a new page, as a reload does. */
   const reload = () =>
     webContents.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+  const closeWindow = () => {
+    currentWindow = Option.none();
+    webContents.emit("destroyed");
+  };
   const layer = DesktopWebLinks.layer.pipe(
     Layer.provide(
-      Layer.succeed(
-        ElectronWindow.ElectronWindow,
-        ElectronWindow.ElectronWindow.of({
-          currentMainOrFirst: Effect.succeed(Option.some(window)),
-          reveal: (target: Electron.BrowserWindow) => Effect.sync(() => void revealed.push(target)),
-        } as unknown as ElectronWindow.ElectronWindow["Service"]),
+      Layer.mergeAll(
+        Layer.succeed(
+          ElectronWindow.ElectronWindow,
+          ElectronWindow.ElectronWindow.of({
+            currentMainOrFirst: Effect.sync(() => currentWindow),
+            reveal: (target: Electron.BrowserWindow) =>
+              Effect.sync(() => void revealed.push(target)),
+          } as unknown as ElectronWindow.ElectronWindow["Service"]),
+        ),
+        Layer.succeed(
+          DesktopWindow.DesktopWindow,
+          DesktopWindow.DesktopWindow.of({
+            activate: Effect.sync(() => {
+              activateCalls += 1;
+              currentWindow = Option.some(window);
+            }),
+          } as unknown as DesktopWindow.DesktopWindow["Service"]),
+        ),
+        DesktopState.layer,
       ),
     ),
+    Layer.provideMerge(DesktopState.layer),
   );
-  return { sent, revealed, layer, reload };
+  return {
+    sent,
+    revealed,
+    layer,
+    reload,
+    closeWindow,
+    getActivateCalls: () => activateCalls,
+  };
 };
 
 describe("DesktopWebLinks", () => {
@@ -90,4 +121,42 @@ describe("DesktopWebLinks", () => {
       assert.deepStrictEqual(sent, ["https://example.com/during-reload"]);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect(
+    "reopens the main window when a link arrives with all windows closed and delivers it once ready",
+    () => {
+      const { sent, revealed, layer, closeWindow, getActivateCalls } = makeWindow();
+      return Effect.gen(function* () {
+        const webLinks = yield* DesktopWebLinks.DesktopWebLinks;
+        yield* webLinks.setRendererReady(true);
+        closeWindow();
+
+        yield* webLinks.receive("t3code://new?prompt=hi");
+        assert.strictEqual(getActivateCalls(), 1);
+        assert.deepStrictEqual(sent, []);
+
+        yield* webLinks.setRendererReady(true);
+        assert.deepStrictEqual(sent, ["t3code://new?prompt=hi"]);
+        assert.strictEqual(revealed.length, 1);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect(
+    "does not reopen a window when quitting or when activation is deferred during cold launch",
+    () => {
+      const { layer, getActivateCalls } = makeWindow({ openInitially: false });
+      return Effect.gen(function* () {
+        const webLinks = yield* DesktopWebLinks.DesktopWebLinks;
+        const desktopState = yield* DesktopState.DesktopState;
+
+        yield* webLinks.receive("https://example.com/cold-launch", { activate: false });
+        assert.strictEqual(getActivateCalls(), 0);
+
+        yield* Ref.set(desktopState.quitting, true);
+        yield* webLinks.receive("https://example.com/while-quitting");
+        assert.strictEqual(getActivateCalls(), 0);
+      }).pipe(Effect.provide(layer));
+    },
+  );
 });

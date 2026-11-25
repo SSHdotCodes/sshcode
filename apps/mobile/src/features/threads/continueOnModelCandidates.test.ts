@@ -1,8 +1,8 @@
-import { ProviderInstanceId } from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId, type ServerConfig } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
-import { phoneContinueCandidates } from "./continueOnModelCandidates";
+import { phoneContinueCandidates, resolvePhoneContinueDispatch } from "./continueOnModelCandidates";
 
 function group(instanceId: string, driver: string, models: ReadonlyArray<[string, boolean]>) {
   return {
@@ -182,4 +182,60 @@ it("offers an unaffected model while another model on the account is limited", (
     now,
   );
   expect(result.map((candidate) => candidate.selection.model)).toEqual(["opus"]);
+});
+
+describe("resolvePhoneContinueDispatch", () => {
+  it("freezes target default options and resets plan mode when target has no plan toggle", () => {
+    const instanceId = ProviderInstanceId.make("antigravity");
+    const config = {
+      providers: [
+        {
+          instanceId,
+          driver: ProviderDriverKind.make("antigravity"),
+          enabled: true,
+          installed: true,
+          version: null,
+          status: "ready",
+          auth: { status: "authenticated" },
+          checkedAt: "2026-11-17T16:00:00.000Z",
+          showInteractionModeToggle: false,
+          models: [
+            {
+              slug: "gemini-4-neon",
+              name: "Gemini 4 Neon",
+              isCustom: false,
+              capabilities: {
+                optionDescriptors: [
+                  {
+                    id: "thought_level",
+                    label: "Thought level",
+                    type: "select",
+                    options: [{ id: "high", label: "High", isDefault: true }],
+                    currentValue: "high",
+                  },
+                  { id: "fastMode", label: "Fast Mode", type: "boolean", currentValue: true },
+                ],
+              },
+            },
+          ],
+          slashCommands: [],
+          skills: [],
+        },
+      ],
+    } as unknown as ServerConfig;
+    const dispatch = resolvePhoneContinueDispatch({
+      config,
+      selection: { instanceId, model: "gemini-4-neon" },
+      interactionMode: "plan",
+    });
+    expect(dispatch.interactionMode).toBe("default");
+    expect(dispatch.modelSelection).toEqual({
+      instanceId,
+      model: "gemini-4-neon",
+      options: [
+        { id: "thought_level", value: "high" },
+        { id: "fastMode", value: false },
+      ],
+    });
+  });
 });

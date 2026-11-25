@@ -104,6 +104,8 @@ const STREAMING_THRESHOLD_BYTES = 8 * 1024 * 1024;
 const NEWLINE = 0x0a;
 /** `stat` calls one transcript walk keeps in flight. The libuv pool has 4 threads. */
 const STAT_CONCURRENCY = 32;
+/** Directory reads kept in flight per walk without flooding the libuv thread pool. */
+const READDIR_CONCURRENCY = 8;
 const CARRIAGE_RETURN = 0x0d;
 
 function selectUsageFields(fields: SelectedFields) {
@@ -147,33 +149,68 @@ function fnv1a(buffer: Buffer): number {
 export async function listTranscriptFiles(
   root: string,
   sinceMs: number,
-  options?: { readonly fileName?: string; readonly compressedSinceMs?: number },
+  options?: {
+    readonly fileName?: string;
+    readonly compressedSinceMs?: number;
+    /** A child of the transcript root has depth 1. */
+    readonly skipDirectory?: (name: string, depth: number) => boolean;
+  },
 ): Promise<{ readonly files: readonly TranscriptFile[]; readonly failedPaths: number }> {
   const fileName = options?.fileName;
+  const skipDirectory = options?.skipDirectory;
   const compressedSinceMs = Math.max(sinceMs, options?.compressedSinceMs ?? sinceMs);
-  const candidates: string[] = [];
   let failedPaths = 0;
-  const walk = async (dir: string): Promise<void> => {
+
+  // Bound concurrent `readdir` calls while keeping results in exact depth-first
+  // `readdir` order: slots are held only across the single `readdir` syscall,
+  // never while awaiting child subdirectories, so nested trees cannot deadlock.
+  let activeReads = 0;
+  const waiters: Array<() => void> = [];
+  const readDirBounded = async (dir: string) => {
+    if (activeReads >= READDIR_CONCURRENCY) {
+      await new Promise<void>((resolve) => {
+        waiters.push(resolve);
+      });
+    }
+    activeReads += 1;
+    try {
+      return await NodeFSP.readdir(dir, { withFileTypes: true });
+    } finally {
+      activeReads -= 1;
+      waiters.shift()?.();
+    }
+  };
+
+  const walk = async (dir: string, depth: number): Promise<string[]> => {
     let entries;
     try {
-      entries = await NodeFSP.readdir(dir, { withFileTypes: true });
+      entries = await readDirBounded(dir);
     } catch {
       failedPaths += 1;
-      return;
+      return [];
     }
+    const items: Array<string | Promise<string[]>> = [];
     for (const entry of entries) {
       const child = NodePath.join(dir, entry.name);
-      if (entry.isDirectory()) await walk(child);
-      else if (
+      if (entry.isDirectory()) {
+        if (skipDirectory?.(entry.name, depth + 1)) continue;
+        items.push(walk(child, depth + 1));
+      } else if (
         fileName !== undefined
           ? entry.name === fileName
           : entry.name.endsWith(".jsonl") || isCompressedTranscript(entry.name)
       ) {
-        candidates.push(child);
+        items.push(child);
       }
     }
+    const candidates: string[] = [];
+    for (const item of items) {
+      if (typeof item === "string") candidates.push(item);
+      else candidates.push(...(await item));
+    }
+    return candidates;
   };
-  await walk(root);
+  const candidates = await walk(root, 0);
 
   const found: Array<TranscriptFile | undefined> = Array.from({ length: candidates.length });
   // Each worker pulls the next candidate from one shared iterator.

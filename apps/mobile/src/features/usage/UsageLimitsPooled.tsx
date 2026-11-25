@@ -124,9 +124,10 @@ function ProviderLimitsCard({
         <View className="gap-0.5">
           <Text
             className={
-              forecastText.warn ? "text-sm font-t3-medium" : "text-sm text-foreground-muted"
+              forecastText.warn
+                ? "text-sm font-t3-medium text-warning-foreground"
+                : "text-sm text-foreground-muted"
             }
-            style={forecastText.warn ? { color: LIMIT_TONE_COLOR.warn } : undefined}
           >
             {forecast.kind === "runsOut" ? "Heads up. " : ""}
             {forecastText.text}
@@ -170,7 +171,7 @@ function ProviderLimitsCard({
               </Text>
             ) : null}
             {shared ? (
-              <Text className="text-xs" style={{ color: LIMIT_TONE_COLOR.warn }}>
+              <Text className="text-xs text-warning-foreground">
                 {describeLimitForecast(shared, now).text}
               </Text>
             ) : null}
@@ -271,7 +272,7 @@ function StorageCard({
           {[text.trash, text.checked].filter(Boolean).join(" · ")}
         </Text>
         {storage.error ? (
-          <Text className="text-xs" style={{ color: LIMIT_TONE_COLOR.warn }}>
+          <Text className="text-xs text-warning-foreground">
             Could not refresh: {storage.error}
           </Text>
         ) : null}

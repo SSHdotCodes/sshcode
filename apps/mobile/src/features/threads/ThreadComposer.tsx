@@ -974,6 +974,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       providerGroups: threadProviderGroups,
       selectedModel: currentModelSelection,
       reportedModelSelection: props.reportedModelSelection,
+      prompt: props.draftMessage,
+      onPromptChange: props.onChangeDraftMessage,
       onSelectModel: (option) => props.onUpdateModelSelection(option.selection),
       optionDescriptors: providerOptionDescriptors,
       onUpdateOptionSelections: (options) => {
@@ -990,6 +992,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     [
       currentModelSelection,
       props.reportedModelSelection,
+      props.draftMessage,
+      props.onChangeDraftMessage,
       currentRuntimeMode,
       props.onUpdateModelSelection,
       props.onUpdateRuntimeMode,
@@ -1109,27 +1113,43 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         {selectedProviderStatus?.compatibilityAdvisory?.message &&
         (selectedProviderStatus.compatibilityAdvisory.status === "unsupported" ||
           selectedProviderStatus.compatibilityAdvisory.status === "broken") ? (
-          <Text
-            accessibilityRole={
-              selectedProviderStatus.compatibilityAdvisory.status === "broken" ? "alert" : undefined
-            }
-            accessibilityLiveRegion={
-              selectedProviderStatus.compatibilityAdvisory.status === "broken"
-                ? "assertive"
-                : "polite"
-            }
+          <View
             className={
               selectedProviderStatus.compatibilityAdvisory.status === "broken"
-                ? "bg-danger px-3 py-2 text-xs text-danger-foreground"
-                : "px-3 py-2 text-xs text-foreground"
+                ? "mb-2 rounded-2xl border border-danger-border bg-danger px-3.5 py-2"
+                : "mb-2 rounded-2xl border border-border bg-card px-3.5 py-2"
             }
           >
-            {selectedProviderStatus.compatibilityAdvisory.message}
-          </Text>
+            <Text
+              accessibilityRole={
+                selectedProviderStatus.compatibilityAdvisory.status === "broken"
+                  ? "alert"
+                  : undefined
+              }
+              accessibilityLiveRegion={
+                selectedProviderStatus.compatibilityAdvisory.status === "broken"
+                  ? "assertive"
+                  : "polite"
+              }
+              className={
+                selectedProviderStatus.compatibilityAdvisory.status === "broken"
+                  ? "text-xs text-danger-foreground"
+                  : "text-xs text-foreground"
+              }
+            >
+              {selectedProviderStatus.compatibilityAdvisory.message}
+            </Text>
+          </View>
         ) : null}
         {modelUnavailable ? (
-          <Pressable accessibilityRole="button" className="px-3 py-2" onPress={openSettings}>
-            <Text className="text-xs text-foreground">Model unavailable. Open model settings.</Text>
+          <Pressable
+            accessibilityRole="button"
+            className="mb-2 rounded-2xl border border-warning-border bg-warning px-3.5 py-2 active:opacity-70"
+            onPress={openSettings}
+          >
+            <Text className="text-xs font-t3-medium text-warning-foreground">
+              Model unavailable. Open model settings.
+            </Text>
           </Pressable>
         ) : null}
 
@@ -1500,7 +1520,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                             size={size}
                           />
                         )}
-                        label={acpInstanceName ? `${acpInstanceName} · ${modelLabel}` : modelLabel}
+                        label={modelLabel}
+                        shortName={currentModelOption?.shortName}
+                        instanceLabel={acpInstanceName}
+                        prompt={props.draftMessage}
                         maxWidth="100%"
                         onPress={openSettings}
                       />

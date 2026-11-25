@@ -298,7 +298,7 @@ function FileContent(props: {
   if (props.activeMode === "preview" && isBrowserFile) {
     return props.workspaceHtml ? (
       <View className="flex-1">
-        <View className="flex-row items-center gap-2 border-b border-border px-4 py-2">
+        <View className="flex-row items-center gap-2 border-b border-border px-4">
           <Text className="text-xs text-foreground-muted">
             {props.scriptsAllowed
               ? "Scripts are on for this file"
@@ -307,6 +307,7 @@ function FileContent(props: {
           <Pressable
             onPress={() => props.setScriptsAllowed(!props.scriptsAllowed)}
             accessibilityRole="button"
+            className="min-h-[44px] min-w-[44px] justify-center"
           >
             <Text className="text-xs text-foreground">
               {props.scriptsAllowed ? "Turn scripts off" : "Run"}

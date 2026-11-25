@@ -489,7 +489,7 @@ export function PullRequestDetailPanel({
     environmentConfigs.get(environmentId)?.environment.capabilities.threadPullRequests === true;
   const reference = useMemo(
     () =>
-      supportsThreadPullRequests
+      supportsThreadPullRequests || requestedReference.projectId === undefined
         ? resolvePullRequestReferenceHost(requestedReference, repositoryIdentity)
         : {
             projectId: requestedReference.projectId,
@@ -500,7 +500,8 @@ export function PullRequestDetailPanel({
   );
   const pullRequestKey = `${reference.projectId}:${reference.host ?? ""}:${reference.repository}#${reference.number}`;
   const matchingListEntry =
-    listEntry?.projectId === reference.projectId &&
+    listEntry !== null &&
+    listEntry !== undefined &&
     listEntry.repository.toLowerCase() === reference.repository.toLowerCase() &&
     (reference.host === undefined ||
       listEntry.host.toLowerCase() === reference.host.toLowerCase()) &&
@@ -834,7 +835,7 @@ export function PullRequestDetailPanel({
     });
   }, []);
   const branchRefsQuery = useEnvironmentQuery(
-    detail === null
+    detail?.workspaceRoot === undefined
       ? null
       : vcsEnvironment.listRefs({
           environmentId,
@@ -853,7 +854,9 @@ export function PullRequestDetailPanel({
   // pull request nobody can read costs one request rather than two.
   const stackReference = useMemo(
     () =>
-      detail === null || detail.capabilities.stacks !== true || !supportsThreadPullRequests
+      detail === null ||
+      detail.capabilities.stacks !== true ||
+      !(supportsThreadPullRequests || requestedReference.projectId === undefined)
         ? null
         : { ...reference, host: reference.host ?? parseChangeRequestUrl(detail.url)?.host },
     [detail, reference, supportsThreadPullRequests],
@@ -960,11 +963,17 @@ export function PullRequestDetailPanel({
   }, [environmentId, projects, reference.number, reference.projectId, reference.repository]);
   // Beside a thread there is nothing to pick: the hand-offs land in that thread's composer, and
   // the thread is already on one server's copy of the branch.
+  const originCheckoutProjectId =
+    context === "page" &&
+    detail?.workspaceRoot !== undefined &&
+    detail.workspaceRoot === project?.workspaceRoot
+      ? reference.projectId
+      : undefined;
   const pickableEnvironments = useMemo(
     () =>
-      context === "page"
+      originCheckoutProjectId !== undefined
         ? resolvePickableEnvironments(
-            { environmentId, projectId: reference.projectId },
+            { environmentId, projectId: originCheckoutProjectId },
             projects,
             environments.map((environment) => ({
               environmentId: environment.environmentId,
@@ -973,7 +982,7 @@ export function PullRequestDetailPanel({
             })),
           )
         : [],
-    [context, environmentId, environments, projects, reference.projectId],
+    [environmentId, environments, originCheckoutProjectId, projects],
   );
   // Which server the reader chose, and only for the pull request they chose it on: this one panel
   // shows a different pull request every time it is opened, and the choice does not follow.
@@ -988,8 +997,8 @@ export function PullRequestDetailPanel({
   const acting =
     pickableEnvironments.find((entry) => entry.environmentId === chosenEnvironmentId) ?? null;
   const actingEnvironmentId = acting?.environmentId ?? environmentId;
-  const checkoutRoot =
-    acting?.workspaceRoot ?? detail?.workspaceRoot ?? project?.workspaceRoot ?? null;
+  const checkoutRoot = acting?.workspaceRoot ?? detail?.workspaceRoot ?? null;
+  const checkoutProjectId = acting?.projectId ?? detail?.projectId;
   const canOperateThread = useEnvironmentScope(actingEnvironmentId, AuthOrchestrationOperateScope);
   const prepareThread = usePreparePullRequestThreadAction({
     environmentId: actingEnvironmentId,
@@ -1115,7 +1124,13 @@ export function PullRequestDetailPanel({
   };
 
   const attachTarget = composerDraftTarget ?? null;
-  const canPrepareWorktree = prepareThread.isAllowed && canOperateThread;
+  const canStartChat = checkoutRoot !== null && checkoutProjectId !== undefined;
+  const canAsk = attachTarget !== null || canStartChat;
+  const canPrepareWorktree =
+    checkoutRoot !== null &&
+    checkoutProjectId !== undefined &&
+    prepareThread.isAllowed &&
+    canOperateThread;
   const canFixFindings = attachTarget !== null || canPrepareWorktree;
   const handoffLabels = pullRequestHandoffLabels(attachTarget !== null);
   // The guide is written from the menu as well as its tab, so a reader can ask for a rewrite
@@ -1181,7 +1196,12 @@ export function PullRequestDetailPanel({
   ): Promise<{ draftId: DraftId } | null> => {
     const session =
       opened ??
-      (await newThread(projectRef).then(
+      (await newThread(
+        projectRef,
+        acting === null && checkoutRoot !== null && checkoutRoot !== project?.workspaceRoot
+          ? { worktreePath: checkoutRoot, envMode: "local" }
+          : undefined,
+      ).then(
         (result) => result,
         () => null,
       ));
@@ -1218,8 +1238,9 @@ export function PullRequestDetailPanel({
       });
       return;
     }
+    if (checkoutProjectId === undefined || checkoutRoot === null) return;
     setHandoff(kind);
-    const projectRef = scopeProjectRef(actingEnvironmentId, acting?.projectId ?? detail.projectId);
+    const projectRef = scopeProjectRef(actingEnvironmentId, checkoutProjectId);
     const opened = await openThreadWithTask(projectRef, task);
     setHandoff(null);
     if (opened !== null && options?.keepGuide === true) {
@@ -1279,7 +1300,7 @@ export function PullRequestDetailPanel({
       });
       return;
     }
-    if (checkoutRoot === null) return;
+    if (checkoutRoot === null || checkoutProjectId === undefined) return;
     if (
       !prepareThread.isAllowed ||
       !readEnvironmentScope(actingEnvironmentId, AuthSourceControlWriteScope)
@@ -1302,10 +1323,7 @@ export function PullRequestDetailPanel({
     });
     // Wherever the reader chose to act: the thread, the checkout it is pointed at and the composer
     // the task lands in are all one server's, and picking another one moves all three.
-    const projectRef = scopeProjectRef(
-      actingEnvironmentId,
-      acting?.projectId ?? handoffSummary.projectId,
-    );
+    const projectRef = scopeProjectRef(actingEnvironmentId, checkoutProjectId);
     // The thread is opened before the checkout rather than after it, because the project's setup
     // script only runs for a checkout that knows which thread it is for — and a worktree with no
     // dependencies installed is not something anyone can test.
@@ -1347,7 +1365,9 @@ export function PullRequestDetailPanel({
     // no worktree of its own, so the thread runs where the repository already is.
     const pointed = await newThread(projectRef, {
       branch: prepared.value.branch,
-      worktreePath: prepared.value.worktreePath,
+      worktreePath:
+        prepared.value.worktreePath ??
+        (acting === null && checkoutRoot !== project?.workspaceRoot ? checkoutRoot : null),
       envMode: prepared.value.worktreePath === null ? "local" : "worktree",
     }).then(
       (session) => session !== null,
@@ -1682,7 +1702,7 @@ export function PullRequestDetailPanel({
       : 0;
 
   const checkoutControl =
-    context === "page" ? (
+    context === "page" && checkoutRoot !== null ? (
       <Menu>
         <Tooltip>
           <TooltipTrigger
@@ -1738,7 +1758,7 @@ export function PullRequestDetailPanel({
       </Menu>
     ) : null;
 
-  const resolveConflictsControl = (
+  const resolveConflictsControl = canAsk ? (
     <Tooltip>
       <TooltipTrigger
         render={
@@ -1762,7 +1782,7 @@ export function PullRequestDetailPanel({
         {handoff === "conflicts" ? "Preparing..." : "Resolve conflicts"}
       </TooltipPopup>
     </Tooltip>
-  );
+  ) : null;
 
   // The list already has the pull request's identity and summary. Keep them on screen
   // and let the richer detail read replace the remaining placeholders in place.
@@ -2233,34 +2253,39 @@ export function PullRequestDetailPanel({
                     <RefreshIcon size="sm" refreshing={refreshing} />
                     Refresh
                   </MenuItem>
-                  <MenuItem disabled={handoff !== null} onClick={askAboutPullRequest}>
-                    <MessageCircleQuestionIcon className="mt-1 size-3.5 shrink-0 self-start" />
-                    <span className="flex min-w-0 flex-col">
-                      <span>{handoff === "ask" ? "Opening..." : "Ask a question"}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {attachTarget !== null
-                          ? "Adds the pull request to this chat's composer."
-                          : "Opens a chat that knows which pull request you mean."}
-                      </span>
-                    </span>
-                  </MenuItem>
-                  <MenuItem disabled={handoff !== null} onClick={explainPullRequest}>
-                    <BookOpenIcon className="mt-1 size-3.5 shrink-0 self-start" />
-                    <span className="flex min-w-0 flex-col">
-                      <span>{handoff === "explain" ? "Opening..." : "Explain this PR"}</span>
-                      <span className="text-xs text-muted-foreground">
-                        A walk through the diff and what to read closely.
-                      </span>
-                    </span>
-                  </MenuItem>
-                  <MenuItem
-                    disabled={handoff !== null || !canFixFindings}
-                    onClick={startFixFindings}
-                  >
-                    <HammerIcon className="size-3.5" />
-                    {handoff === "findings" ? "Preparing..." : handoffLabels.fixFindings}
-                  </MenuItem>
-                  {reviewGuidesEnabled && guideWriter.canWrite ? (
+                  {canAsk ? (
+                    <>
+                      <MenuItem disabled={handoff !== null} onClick={askAboutPullRequest}>
+                        <MessageCircleQuestionIcon className="mt-1 size-3.5 shrink-0 self-start" />
+                        <span className="flex min-w-0 flex-col">
+                          <span>{handoff === "ask" ? "Opening..." : "Ask a question"}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {attachTarget !== null
+                              ? "Adds the pull request to this chat's composer."
+                              : "Opens a chat that knows which pull request you mean."}
+                          </span>
+                        </span>
+                      </MenuItem>
+                      <MenuItem disabled={handoff !== null} onClick={explainPullRequest}>
+                        <BookOpenIcon className="mt-1 size-3.5 shrink-0 self-start" />
+                        <span className="flex min-w-0 flex-col">
+                          <span>{handoff === "explain" ? "Opening..." : "Explain this PR"}</span>
+                          <span className="text-xs text-muted-foreground">
+                            A walk through the diff and what to read closely.
+                          </span>
+                        </span>
+                      </MenuItem>
+                    </>
+                  ) : null}
+                  {canFixFindings ? (
+                    <MenuItem disabled={handoff !== null} onClick={startFixFindings}>
+                      <HammerIcon className="size-3.5" />
+                      {handoff === "findings" ? "Preparing..." : handoffLabels.fixFindings}
+                    </MenuItem>
+                  ) : null}
+                  {reviewGuidesEnabled &&
+                  detail.workspaceRoot !== undefined &&
+                  guideWriter.canWrite ? (
                     <MenuItem disabled={guideWriter.running} onClick={writeGuide}>
                       <SparklesIcon className="size-3.5" />
                       {guideWriter.running
@@ -3016,10 +3041,13 @@ export function PullRequestDetailPanel({
                   canComment={
                     detail.capabilities.review.inlineComment && detail.viewerPermissions.comment
                   }
-                  onAskAboutLines={(comment, request) =>
-                    addSelectionToAgent({ comment, request }, { keepGuide: true })
+                  onAskAboutLines={
+                    canAsk
+                      ? (comment, request) =>
+                          addSelectionToAgent({ comment, request }, { keepGuide: true })
+                      : null
                   }
-                  onAskAboutStop={askAboutGuideStop}
+                  onAskAboutStop={canAsk ? askAboutGuideStop : null}
                   onFinishReview={
                     detail.capabilities.review.verdicts.some((verdict) =>
                       detail.viewerPermissions.verdicts.includes(verdict),
@@ -3060,7 +3088,7 @@ export function PullRequestDetailPanel({
                 <Suspense fallback={<DiffPanelLoadingState label="Loading pull request diff..." />}>
                   <PullRequestCodeTab
                     scrollerRef={scrollerRefs.code}
-                    onAddToAgentSelection={addSelectionToAgent}
+                    {...(canAsk ? { onAddToAgentSelection: addSelectionToAgent } : {})}
                     environmentId={environmentId}
                     reference={reference}
                     detail={detail}

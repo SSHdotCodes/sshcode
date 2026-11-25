@@ -11246,6 +11246,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         )
           ? Effect.void
           : Ref.update(effects, (existing) => [...existing, delegatedTasksStopEffect(command)]);
+      const cancelContinuation = (existing?: {
+        readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
+        readonly reason: string;
+      }) => ({
+        effectTypes: [...(existing?.effectTypes ?? []), "provider-continuation.await" as const],
+        reason: existing?.reason ?? command.reason ?? "Thread was stopped.",
+      });
       const target =
         projection.runs.findLast(
           (run) =>
@@ -11275,7 +11282,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           yield* Ref.update(events, (existing) => [...existing, ...written]);
           yield* Ref.update(effects, (existing) => [...existing, ...enqueued]);
           yield* stopDelegatedTasks;
-          return interrupted.value;
+          return cancelContinuation(interrupted.value);
         }
         yield* Effect.logWarning("thread.stop could not interrupt the running turn", {
           threadId: command.threadId,
@@ -11296,7 +11303,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       yield* holdStoppedThread({ command, events, projection, cohortRunIds: [], now });
       yield* stopDelegatedTasks;
-      return undefined;
+      return cancelContinuation();
     });
 
   const dispatchCheckpointRollback = (
@@ -13473,7 +13480,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
 
-    if (plan.events.length === 0 && plan.effects.length === 0) {
+    if (
+      plan.events.length === 0 &&
+      plan.effects.length === 0 &&
+      plan.cancelUnsettledEffects === undefined
+    ) {
       // A settle that ended nothing still records its receipt: a replayed Stop
       // effect then finds it instead of settling work that appeared since.
       const resultSequence = yield* Effect.gen(function* () {

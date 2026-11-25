@@ -5,6 +5,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
@@ -22,7 +23,9 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopUserData from "./DesktopUserData.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { openClerkTokenStorage } from "./ClerkTokenStore.ts";
+import * as DesktopState from "./DesktopState.ts";
 import * as DesktopWebLinks from "./DesktopWebLinks.ts";
+import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 declare const __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: string | undefined;
 
@@ -60,6 +63,8 @@ export class DesktopClerk extends Context.Service<
       never,
       | ElectronApp.ElectronApp
       | ElectronWindow.ElectronWindow
+      | DesktopWindow.DesktopWindow
+      | DesktopState.DesktopState
       | DesktopWebLinks.DesktopWebLinks
       | Scope.Scope
     >;
@@ -148,8 +153,15 @@ export const make = Effect.gen(function* () {
     configure: Effect.gen(function* () {
       const electronApp = yield* ElectronApp.ElectronApp;
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      const desktopWindow = yield* DesktopWindow.DesktopWindow;
+      const desktopState = yield* DesktopState.DesktopState;
       const webLinks = yield* DesktopWebLinks.DesktopWebLinks;
-      const context = yield* Effect.context<ElectronWindow.ElectronWindow>();
+      const context = yield* Effect.context<
+        | ElectronApp.ElectronApp
+        | ElectronWindow.ElectronWindow
+        | DesktopWindow.DesktopWindow
+        | DesktopState.DesktopState
+      >();
       const runPromise = Effect.runPromiseWith(context);
 
       // The single-instance lock (taken at bridge creation) forwards deep links
@@ -160,6 +172,19 @@ export const make = Effect.gen(function* () {
         yield* electronApp.quit;
         return yield* Effect.interrupt;
       }
+
+      // Pre-ready open-url/open-file events arrive on cold launch before bootstrap
+      // opens the initial window; defer window activation until Electron is ready.
+      let appReady = false;
+      yield* electronApp.whenReady.pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            appReady = true;
+          }),
+        ),
+        Effect.ignoreCause,
+        Effect.forkScoped,
+      );
 
       const startProviderAuthHandoff = (value: string | undefined) => {
         if (!value) return false;
@@ -196,7 +221,13 @@ export const make = Effect.gen(function* () {
         const page = `${ElectronProtocol.getDesktopUrl(environment.isDevelopment)}${destination.slice(linkOrigin.length)}`;
         void runPromise(
           Effect.gen(function* () {
-            const mainWindow = yield* electronWindow.currentMainOrFirst;
+            let mainWindow = yield* electronWindow.currentMainOrFirst;
+            if (Option.isNone(mainWindow)) {
+              if (yield* Ref.get(desktopState.quitting)) return;
+              yield* electronApp.whenReady;
+              yield* desktopWindow.activate;
+              mainWindow = yield* electronWindow.currentMainOrFirst;
+            }
             if (Option.isNone(mainWindow)) return;
             yield* Effect.promise(() => mainWindow.value.loadURL(page));
             yield* electronWindow.reveal(mainWindow.value);
@@ -210,25 +241,25 @@ export const make = Effect.gen(function* () {
       };
       // Prompt links and thread links (`sshcode://new?…`, `sshcode://threads/…`) reach the
       // renderer through the same queue as web links; it routes them in the app.
-      const openAppLink = (value: string | undefined) => {
+      const openAppLink = (value: string | undefined, activate: boolean) => {
         if (!value || promptLinkAppPath(value) === null) return false;
-        void runPromise(webLinks.receive(value));
+        void runPromise(webLinks.receive(value, { activate }));
         return true;
       };
       const args = yield* HostProcess.Arguments;
-      args.some((value) => startProviderAuthHandoff(value) || openAppLink(value));
+      args.some((value) => startProviderAuthHandoff(value) || openAppLink(value, false));
       // As the default browser, macOS hands SSHCode every web link through the same event.
-      const openWebLink = (url: string) => {
+      const openWebLink = (url: string, activate: boolean) => {
         if (!DesktopWebLinks.isWebLink(url)) return false;
-        void runPromise(webLinks.receive(url));
+        void runPromise(webLinks.receive(url, { activate }));
         return true;
       };
       yield* electronApp.on("open-url", (event: { preventDefault: () => void }, url: string) => {
         if (
           startProviderAuthHandoff(url) ||
           resumeProviderAuth(url) ||
-          openWebLink(url) ||
-          openAppLink(url)
+          openWebLink(url, appReady) ||
+          openAppLink(url, appReady)
         )
           event.preventDefault();
       });
@@ -236,21 +267,34 @@ export const make = Effect.gen(function* () {
       yield* electronApp.on("open-file", (event: { preventDefault: () => void }, path: string) => {
         if (!DesktopWebLinks.isWebPageFile(path)) return;
         event.preventDefault();
-        void runPromise(webLinks.receive(NodeURL.pathToFileURL(path).href));
+        void runPromise(webLinks.receive(NodeURL.pathToFileURL(path).href, { activate: appReady }));
       });
       yield* electronApp.on("second-instance", (_event: unknown, argv: readonly string[]) => {
         if (
           argv?.some(
             (value) =>
-              startProviderAuthHandoff(value) || resumeProviderAuth(value) || openAppLink(value),
+              startProviderAuthHandoff(value) ||
+              resumeProviderAuth(value) ||
+              openWebLink(value, true) ||
+              openAppLink(value, true),
           )
         )
           return;
         void runPromise(
           Effect.gen(function* () {
             const mainWindow = yield* electronWindow.currentMainOrFirst;
-            if (Option.isSome(mainWindow)) yield* electronWindow.reveal(mainWindow.value);
-          }),
+            if (Option.isSome(mainWindow)) {
+              yield* electronWindow.reveal(mainWindow.value);
+              return;
+            }
+            if (yield* Ref.get(desktopState.quitting)) return;
+            yield* electronApp.whenReady;
+            yield* desktopWindow.activate;
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Could not reopen the desktop window on second launch", cause),
+            ),
+          ),
         );
       });
     }).pipe(Effect.withSpan("desktop.clerk.configure")),

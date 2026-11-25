@@ -215,7 +215,7 @@
   }
 }
 /*
- * Right now spans the top when anything is running. Under it, Activity beside Usage (about
+ * Right now spans the top when anything is running or due. Under it, Activity beside Usage (about
  * the same height), then This month across the row below. Without Usage, This month takes
  * its place. (Activity used to span two rows beside both and stood half empty.)
  */

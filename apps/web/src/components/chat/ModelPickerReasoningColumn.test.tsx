@@ -9,9 +9,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { isReasoningSelectDescriptor } from "@t3tools/shared/model";
 import { describe, expect, it } from "vite-plus/test";
 
-import { DraftId } from "../../composerDraftStore";
 import { deriveProviderInstanceEntries } from "../../providerInstances";
-import { ModelPickerReasoningColumn } from "./ModelPickerReasoningColumn";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import {
   describeReasoningLevel,
@@ -90,7 +88,7 @@ describe("Reasoning column", () => {
         modelOptions: [],
         planModeEnabled: false,
       }),
-    ).toBe("High");
+    ).toEqual({ label: "High", barCount: 3, filledBars: 3, fx: 1, accent: undefined });
     expect(
       describeReasoningLevel({
         provider: CODEX,
@@ -103,51 +101,9 @@ describe("Reasoning column", () => {
       }),
     ).toBeNull();
   });
-
-  it("lists the levels with the default named and the current one checked", () => {
-    const markup = renderToStaticMarkup(
-      <ModelPickerReasoningColumn
-        provider={CODEX}
-        instanceId={INSTANCE}
-        models={[model([EFFORT, FAST])]}
-        model="gpt-6.1-sol"
-        prompt=""
-        onPromptChange={() => {}}
-        modelOptions={[]}
-        planModeEnabled={false}
-        draftId={DraftId.make("draft-reasoning-column")}
-        modelLabel="GPT-6.1-Sol"
-      />,
-    );
-    expect(markup).toContain("Reasoning");
-    expect(markup).toContain("GPT-6.1-Sol");
-    expect(markup).toContain(">Default<");
-    expect(markup.match(/aria-checked="true"/g)).toHaveLength(1);
-    expect(markup).toMatch(/aria-checked="true"[^>]*>.*High/);
-    // Fast stays in the composer's traits control.
-    expect(markup).not.toContain("Fast Mode");
-  });
-
-  it("says so when the model has no effort levels", () => {
-    const markup = renderToStaticMarkup(
-      <ModelPickerReasoningColumn
-        provider={CODEX}
-        instanceId={INSTANCE}
-        models={[model([FAST])]}
-        model="gpt-6.1-sol"
-        prompt=""
-        onPromptChange={() => {}}
-        modelOptions={[]}
-        planModeEnabled={false}
-        draftId={DraftId.make("draft-reasoning-column-none")}
-        modelLabel="GPT-6.1-Sol"
-      />,
-    );
-    expect(markup).toContain("No effort levels");
-  });
 });
 
-describe("ProviderModelPicker effort word", () => {
+describe("ProviderModelPicker effort meter", () => {
   const provider: ServerProvider = {
     instanceId: INSTANCE,
     driver: CODEX,
@@ -176,7 +132,7 @@ describe("ProviderModelPicker effort word", () => {
         }
         onInstanceModelChange={() => {}}
         reasoningColumn={<div />}
-        triggerSuffix="High"
+        triggerEffort={{ label: "High", barCount: 3, filledBars: 3, fx: 1 }}
         triggerShortcut="composer.effort"
         {...(selectedModels ? { selectedModels } : {})}
       />,
@@ -185,7 +141,7 @@ describe("ProviderModelPicker effort word", () => {
   it("follows the model name and takes the effort shortcut", () => {
     const markup = render();
     expect(markup).toContain('data-chat-provider-model-picker-effort="true"');
-    expect(markup).toMatch(/GPT-6\.1-Sol.*High/);
+    expect(markup).toContain('aria-label="GPT-6.1-Sol, Effort: High"');
     expect(markup).toContain('data-composer-shortcut="composer.effort"');
   });
 

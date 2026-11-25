@@ -1,12 +1,12 @@
 import type {
   OrchestratorMcpDelegateTaskInput,
-  OrchestratorMcpDelegateTaskResult,
   OrchestratorMcpFailure,
   ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 
+import type { DelegateTaskDetails } from "../mcp/delegateTaskDetails.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import type { WorkflowsService } from "./WorkflowsService.ts";
 
@@ -40,7 +40,7 @@ export type WorkflowsDelegate = (
   readonly threadId: ThreadId;
   readonly spawn: (
     input: OrchestratorMcpDelegateTaskInput,
-  ) => Effect.Effect<OrchestratorMcpDelegateTaskResult, OrchestratorMcpFailure>;
+  ) => Effect.Effect<DelegateTaskDetails, OrchestratorMcpFailure>;
 };
 
 let delegate: WorkflowsDelegate | null = null;

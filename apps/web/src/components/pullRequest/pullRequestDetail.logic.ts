@@ -189,13 +189,13 @@ type LegacyLinkedPullRequest = Pick<ThreadLinkedPullRequest, "repository" | "num
  */
 export function pullRequestPanelContext(
   thread: {
-    readonly projectId: string | null;
+    readonly projectId?: string | null | undefined;
     readonly pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
     readonly linkedPullRequest?: LegacyLinkedPullRequest | null | undefined;
     readonly branchPullRequest?: LegacyLinkedPullRequest | null | undefined;
   },
   surface: {
-    readonly projectId: string;
+    readonly projectId?: string | undefined;
     readonly host?: string | undefined;
     readonly repository: string;
     readonly number: number;
@@ -226,7 +226,7 @@ export function pullRequestPanelContext(
 }
 
 export function threadPullRequestPanelTarget(thread: {
-  readonly projectId: string;
+  readonly projectId?: string | undefined;
   readonly pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null | undefined;
   readonly branchPullRequest?: ThreadLinkedPullRequest | null | undefined;
@@ -1374,7 +1374,7 @@ export function resolvePullRequestReferenceHost(
 
 export interface PullRequestDetailSnapshotRef {
   readonly host?: string | undefined;
-  readonly projectId: string;
+  readonly projectId?: string | undefined;
   readonly repository: string;
   readonly number: number;
 }
@@ -1444,7 +1444,8 @@ export function resolveDisplayedPullRequestDetail(input: {
   if (input.live !== null) return input.live;
   if (
     input.cached === null ||
-    input.cached.projectId !== input.reference.projectId ||
+    (input.reference.projectId !== undefined &&
+      input.cached.projectId !== input.reference.projectId) ||
     input.cached.repository.toLowerCase() !== input.reference.repository.toLowerCase() ||
     input.cached.number !== input.reference.number
   ) {

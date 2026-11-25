@@ -114,7 +114,13 @@ export function resolveAutoFeatureBranchName(
 /**
  * Strip the remote prefix from a remote ref such as `origin/feature/demo`.
  */
-export function deriveLocalBranchNameFromRemoteRef(branchName: string): string {
+export function deriveLocalBranchNameFromRemoteRef(
+  branchName: string,
+  remoteName?: string,
+): string {
+  if (remoteName && branchName.startsWith(`${remoteName}/`)) {
+    return branchName.slice(remoteName.length + 1);
+  }
   const firstSeparatorIndex = branchName.indexOf("/");
   if (firstSeparatorIndex <= 0 || firstSeparatorIndex === branchName.length - 1) {
     return branchName;
@@ -190,7 +196,7 @@ export function normalizeGitRemoteUrl(value: string): string {
         );
       }
     } catch {
-      return normalized;
+      // Keep handling URL-shaped fallbacks below.
     }
   }
 
@@ -203,6 +209,13 @@ export function normalizeGitRemoteUrl(value: string): string {
     return azureDevOpsRepositoryKey(scpHost, scpPath.split("/")) ?? `${scpHost}/${scpPath}`;
   }
 
+  // Fallback keys reach clients too. Keep the SSH login, hostname and repository path.
+  const url = /^([a-z][a-z0-9+.-]*):\/\/(?:([^/?#:@]*)(?::[^/?#]*)?@)?([^?#]*)/.exec(normalized);
+  if (url !== null) {
+    const [, scheme = "", user = "", rest = ""] = url;
+    const login = scheme === "ssh" && user ? `${user}@` : "";
+    return `${scheme}://${login}${rest.replace(/\/+$/g, "").replace(/\.git$/i, "")}`;
+  }
   return normalized;
 }
 

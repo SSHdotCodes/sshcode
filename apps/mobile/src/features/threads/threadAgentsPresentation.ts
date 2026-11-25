@@ -7,10 +7,11 @@ import {
   formatSubagentDisplayTitle,
   subagentDetailPreview,
 } from "@t3tools/client-runtime/state/subagent-display";
-import { isActiveSubagentStatus } from "@t3tools/client-runtime/state/subagentRuntime";
+import {
+  isActiveSubagentStatus,
+  subagentPromptTitle,
+} from "@t3tools/client-runtime/state/subagentRuntime";
 import type { EnvironmentId, OrchestrationV2Subagent, ThreadId } from "@t3tools/contracts";
-
-const PROMPT_TITLE_LIMIT = 80;
 
 export type SubagentRowTone = "working" | "completed" | "failed" | "stopped";
 
@@ -30,9 +31,7 @@ function rowTitle(subagent: Pick<OrchestrationV2Subagent, "title" | "prompt">): 
   if (title) return formatSubagentDisplayTitle(title);
   const prompt = subagent.prompt.trim();
   if (prompt.length === 0) return "Subagent";
-  return prompt.length > PROMPT_TITLE_LIMIT
-    ? `${prompt.slice(0, PROMPT_TITLE_LIMIT - 3)}...`
-    : prompt;
+  return subagentPromptTitle(prompt);
 }
 
 function rowTone(status: OrchestrationV2Subagent["status"]): SubagentRowTone {

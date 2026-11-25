@@ -6,12 +6,23 @@ import { expect, it, vi } from "vite-plus/test";
 import { ComposerModelControl } from "./ComposerModelControl";
 import { useModelListSelection } from "../lib/modelOptions";
 
+vi.mock("react-native", () => ({
+  View: (props: { children?: React.ReactNode }) => <span>{props.children}</span>,
+}));
 vi.mock("./ComposerToolbar", () => ({
-  ComposerInlineControl: (props: { label: string; accessibilityLabel: string }) => (
-    <button aria-label={props.accessibilityLabel}>{props.label}</button>
+  ComposerInlineControl: (props: {
+    label: string;
+    accessibilityLabel: string;
+    trailingAccessory?: React.ReactNode;
+  }) => (
+    <button aria-label={props.accessibilityLabel}>
+      {props.label}
+      {props.trailingAccessory}
+    </button>
   ),
 }));
 vi.mock("./FastModeBolt", () => ({ FastModeBolt: () => null }));
+vi.mock("./EffortGauge", () => ({ EffortGauge: () => null }));
 
 it("updates an open phone's model selector selection and composer label after a Mac pick", () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -57,13 +68,13 @@ it("updates an open phone's model selector selection and composer label after a 
   try {
     act(() => root.render(<Probe selection={phoneChoice} label="Claude Fable 5.2" />));
     expect(pickerSelection).toBe(phoneChoice);
-    expect(host.textContent).toContain("Claude Fable 5.2");
+    expect(host.textContent).toContain("Fable 5.2");
     // Update the mounted component, without navigating, remounting, or sending.
     act(() => root.render(<Probe selection={macChoice} label="Claude Opus 5.5" />));
     expect(pickerSelection).toBe(macChoice);
-    expect(host.textContent).toBe("Claude Opus 5.5 · High");
+    expect(host.textContent).toBe("Opus 5.5");
     expect(host.querySelector("button")?.getAttribute("aria-label")).toContain(
-      "Claude Opus 5.5 · High",
+      "Opus 5.5, Effort: High",
     );
     expect(host.textContent).not.toContain("Fable");
   } finally {

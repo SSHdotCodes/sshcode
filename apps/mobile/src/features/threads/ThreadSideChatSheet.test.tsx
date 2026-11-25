@@ -91,8 +91,9 @@ vi.mock("../../state/pending-sends", async () => {
   return {
     pendingSends: {
       sendsAtom,
+      awaitingAckAtom: sendsAtom,
       enqueue: (send: PendingSend) => harness.enqueue(send),
-      remove: async (send: PendingSend) =>
+      acknowledge: (send: PendingSend) =>
         appAtomRegistry.set(
           sendsAtom,
           appAtomRegistry.get(sendsAtom).filter((item) => item.id !== send.id),

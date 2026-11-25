@@ -597,6 +597,11 @@ function vcsRefsCacheKey(environmentId: EnvironmentId, cwd: string) {
   return `${environmentId}:${cwd}`;
 }
 
+/** Stored in SERVER_CONFIG_STORE_NAME beside the cached config to avoid an IndexedDB upgrade. */
+function lastRouteCacheKey(environmentId: EnvironmentId) {
+  return `${environmentId}:#last-route`;
+}
+
 const decodeCatalog = Effect.fn("web.connectionStorage.decodeCatalog")(function* (raw: string) {
   return yield* decodeConnectionCatalogDocument(raw).pipe(
     Effect.mapError((cause) => catalogError("decode", cause)),
@@ -1210,6 +1215,24 @@ export const layer = Layer.effectContext(
           ],
           { discard: true },
         ).pipe(Effect.mapError((cause) => persistenceError("remove-thread", cause))),
+      loadLastRoute: (environmentId) =>
+        readDatabaseValue(
+          database,
+          SERVER_CONFIG_STORE_NAME,
+          lastRouteCacheKey(environmentId),
+        ).pipe(
+          Effect.map((value) =>
+            typeof value === "string" && value.length > 0 ? Option.some(value) : Option.none(),
+          ),
+          Effect.mapError((cause) => persistenceError("load-server-config", cause)),
+        ),
+      saveLastRoute: (environmentId, routeId) =>
+        writeDatabaseValue(
+          database,
+          SERVER_CONFIG_STORE_NAME,
+          lastRouteCacheKey(environmentId),
+          routeId,
+        ).pipe(Effect.mapError((cause) => persistenceError("save-server-config", cause))),
       clear: (environmentId) =>
         Effect.all(
           [
@@ -1221,6 +1244,11 @@ export const layer = Layer.effectContext(
               IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
             ),
             removeDatabaseValue(database, SERVER_CONFIG_STORE_NAME, environmentId),
+            removeDatabaseValue(
+              database,
+              SERVER_CONFIG_STORE_NAME,
+              lastRouteCacheKey(environmentId),
+            ),
             removeDatabaseValuesInRange(
               database,
               VCS_REFS_STORE_NAME,

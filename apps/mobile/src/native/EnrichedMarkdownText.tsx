@@ -38,6 +38,8 @@ import { themeColorWithAlpha } from "../lib/mobileTheme";
 import { mayRenderMath } from "../lib/mathDetection";
 import { MermaidDiagramView, renderMermaidDiagram } from "./MermaidDiagram";
 import { copyTextWithHaptic } from "../lib/copyTextWithHaptic";
+import { UserMessageDisclosure } from "./UserMessageDisclosure";
+import { canMeasureUserMessageLines } from "./userMessageDisclosure.logic";
 import {
   ENRICHED_INLINE_FILE_LINK_REGEX,
   enrichedTextLinkRegex,
@@ -514,24 +516,20 @@ export function MobileEnrichedMarkdownText(
         }
       : undefined;
 
-    return (
-      <View
-        style={{
-          flexShrink: 1,
-          minWidth: 0,
-          marginTop: props.marginTop,
-          marginBottom: props.marginBottom,
-        }}
-      >
+    const renderNativeText = (lines?: number, measuring = false) => {
+      const hasLineLimit = lines !== undefined;
+      return (
         <EnrichedMarkdownText
           markdown={markdown}
           markdownStyle={markdownStyle}
-          onDocumentAssets={onDocumentAssets}
+          onDocumentAssets={hasLineLimit ? undefined : onDocumentAssets}
           renderMedia={
-            renderImage || diagrams.size > 0 || mathDiagrams.size > 0 ? renderMedia : undefined
+            !hasLineLimit && (renderImage || diagrams.size > 0 || mathDiagrams.size > 0)
+              ? renderMedia
+              : undefined
           }
           resolveImageSource={
-            resolveImageSource || diagrams.size > 0 || mathDiagrams.size > 0
+            !hasLineLimit && (resolveImageSource || diagrams.size > 0 || mathDiagrams.size > 0)
               ? resolveNativeImageSource
               : undefined
           }
@@ -542,10 +540,14 @@ export function MobileEnrichedMarkdownText(
           }
           linkRecognition={linkRecognition}
           containerStyle={{ flexShrink: 1, minWidth: 0 }}
-          flavor="github"
-          selectable={!props.displayOnly}
+          flavor={hasLineLimit ? "commonmark" : "github"}
+          numberOfLines={lines}
+          ellipsizeMode={hasLineLimit ? "clip" : undefined}
+          selectable={!props.displayOnly && !measuring}
           contextMenuItems={
-            props.displayOnly ? undefined : props.messageActions?.map((action) => ({ ...action }))
+            props.displayOnly || measuring
+              ? undefined
+              : props.messageActions?.map((action) => ({ ...action }))
           }
           selectionClipboard={selectionClipboard}
           selectionColor={props.textStyle.selectionColor}
@@ -558,11 +560,40 @@ export function MobileEnrichedMarkdownText(
           enableTaskListItemToggle={false}
           enableCodeBlockWrapToggle
           spoilerOverlay="solid"
-          onLinkPress={({ url }) => onLinkPress(url)}
-          onLinkLongPress={onLinkLongPress}
-          linkContextMenuItems={linkContextMenuItems}
+          onLinkPress={measuring ? undefined : ({ url }) => onLinkPress(url)}
+          onLinkLongPress={measuring ? undefined : onLinkLongPress}
+          linkContextMenuItems={measuring ? undefined : linkContextMenuItems}
           linkPillContent={linkPillContent}
         />
+      );
+    };
+
+    return (
+      <View
+        style={{
+          flexShrink: 1,
+          minWidth: 0,
+          marginTop: props.marginTop,
+          marginBottom: props.marginBottom,
+        }}
+      >
+        {props.userMessageDisclosure && canMeasureUserMessageLines(markdown) ? (
+          <UserMessageDisclosure
+            key={JSON.stringify([
+              markdown,
+              props.textStyle.fontSize,
+              props.textStyle.lineHeight,
+              props.textStyle.fontFamily,
+            ])}
+            {...props.userMessageDisclosure}
+            renderText={renderNativeText}
+            lineHeight={markdownStyle.paragraph?.lineHeight ?? props.textStyle.lineHeight}
+          >
+            {renderNativeText()}
+          </UserMessageDisclosure>
+        ) : (
+          renderNativeText()
+        )}
       </View>
     );
   };

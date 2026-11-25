@@ -1,6 +1,8 @@
+import { useAtomValue } from "@effect/atom-react";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
+import { Atom } from "effect/reactivity";
 import { useEffect, useState } from "react";
 
 import ChatView from "./ChatView";
@@ -21,7 +23,6 @@ import {
   useThreadBootstrap,
   useThreadStatus,
 } from "../state/entities";
-import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
 import {
   buildThreadRouteParams,
@@ -29,6 +30,14 @@ import {
   resolveThreadRouteRenderState,
   type ThreadRouteTarget,
 } from "../threadRoutes";
+
+const shellNotReadyAtom = Atom.make(false);
+// Every kept route only needs to know when its environment can confirm a missing chat.
+const shellReadyAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.map(environmentShell.stateValueAtom(environmentId), (state) =>
+    isThreadRouteSnapshotAuthoritative(state.status),
+  ).pipe(Atom.setIdleTTL(0)),
+);
 
 /**
  * The single chat surface behind both `/draft/$draftId` and
@@ -88,12 +97,11 @@ export function ThreadRouteView({
         })
       : null;
 
-  const shell = useEnvironmentQuery(
-    serverThreadRef === null ? null : environmentShell.stateAtom(serverThreadRef.environmentId),
+  const bootstrapComplete = useAtomValue(
+    serverThreadRef === null ? shellNotReadyAtom : shellReadyAtom(serverThreadRef.environmentId),
   );
   const serverThreadShell = serverThread;
   const environmentThreadRefs = useEnvironmentThreadRefs(serverThreadRef?.environmentId ?? null);
-  const bootstrapComplete = isThreadRouteSnapshotAuthoritative(shell.data?.status);
   const promotedDraftId = useComposerDraftStore((store) =>
     target.kind === "server" ? store.getDraftIdByRef(target.threadRef) : null,
   );

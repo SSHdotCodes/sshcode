@@ -112,12 +112,12 @@ describe("ComposerAddMenu", () => {
   );
 });
 
-it("offers an existing chat's switch in a Quest thread panel and leaves it in Agents on desktop", async () => {
+it("keeps the subagents switch out of the menu on desktop, new chat or not, and offers it in a Quest panel", async () => {
   const change = vi.fn();
-  const menu = (key: string) => (
+  const menu = (key: string, existingThread = true) => (
     <ComposerAddMenu
       key={key}
-      existingThread
+      existingThread={existingThread}
       showAttachFiles={false}
       comparisonEnabled={false}
       comparisonDisabled={false}
@@ -132,6 +132,9 @@ it("offers an existing chat's switch in a Quest thread panel and leaves it in Ag
       item.textContent?.includes("Subagents"),
     );
   await act(async () => root.render(menu("desktop")));
+  await act(async () => addTrigger().click());
+  expect(switchItem()).toBeUndefined();
+  await act(async () => root.render(menu("desktop-new-chat", false)));
   await act(async () => addTrigger().click());
   expect(switchItem()).toBeUndefined();
   window.history.replaceState(null, "", "?sshcodePanel=thread");

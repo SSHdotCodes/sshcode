@@ -2,7 +2,7 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/models";
 
 export type PullRequestEnvironmentTarget = {
   readonly environmentId: string;
-  readonly projectId: string;
+  readonly projectId?: string;
   readonly repository: string;
   readonly host?: string;
 };

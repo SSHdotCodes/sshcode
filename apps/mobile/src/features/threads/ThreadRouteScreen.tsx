@@ -69,11 +69,11 @@ import {
 import { ActionSheetIOS, Alert, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useConnectionsReady } from "../../state/workspace";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { useEnvironmentShellReadiness } from "../../state/shell";
 import { restoredNewTaskDraftKey } from "../../state/new-task-draft-key";
 import { clearPendingThreadCreationOutcome } from "../../state/pending-thread-creation";
 import { recoverFailedThreadDraft } from "../../state/recover-failed-thread-draft";
-import { useEnvironmentQuery } from "../../state/query";
 import {
   dismissGitActionResult,
   useGitActionProgress,
@@ -693,26 +693,28 @@ function ThreadRouteContent(
     [composer.interactionMode, composer.modelSelection, composer.runtimeMode, selectedThread],
   );
 
+  const { threadHeaderItems } = useAppearancePreferences();
+  const showsTerminalHeaderItem = threadHeaderItems.includes("terminal");
   /* ─── Native header theming ──────────────────────────────────────── */
   const usesNativeHeaderGlass = NATIVE_LIQUID_GLASS_SUPPORTED;
+  // SSHCode has no projects to speak of: a chat in its machine's scratch folder names only the machine.
+  const headerProjectTitle =
+    selectedThreadProject &&
+    !isScratchProject(
+      selectedThreadProject,
+      routeEnvironmentRuntime?.serverConfig?.scratchWorkspaceRoot ?? null,
+    )
+      ? selectedThreadProject.title
+      : null;
   const headerSubtitle = [
-    selectedThreadProject?.title ?? null,
+    headerProjectTitle,
     selectedEnvironmentConnection?.environmentLabel ?? null,
   ]
     .filter(Boolean)
     .join(" · ");
-  /* ─── Git status for native header trigger ───────────────────────── */
-  const gitStatus = useEnvironmentQuery(
-    selectedThread !== null && selectedThreadCwd !== null
-      ? vcsEnvironment.status({
-          environmentId: selectedThread.environmentId,
-          input: { cwd: selectedThreadCwd },
-        })
-      : null,
-  );
   const { sessions: knownTerminalSessions } = useKnownTerminalSessions({
-    environmentId: selectedThread?.environmentId ?? null,
-    threadId: selectedThread?.id ?? null,
+    environmentId: showsTerminalHeaderItem ? (selectedThread?.environmentId ?? null) : null,
+    threadId: showsTerminalHeaderItem ? (selectedThread?.id ?? null) : null,
   });
   const terminalMenuSessions = useMemo(
     () =>
@@ -887,8 +889,8 @@ function ThreadRouteContent(
     void navigation.navigate("Connections");
   }, [navigation]);
   const stopMonitors = useThreadMonitors(
-    selectedThread?.environmentId ?? null,
-    selectedThread?.id ?? null,
+    composer.interruptibleRunId !== null ? (selectedThread?.environmentId ?? null) : null,
+    composer.interruptibleRunId !== null ? (selectedThread?.id ?? null) : null,
   );
   const stopHelperSummary = describeThreadHelpers({
     subagents: selectedThreadDetail?.subagents ?? [],
@@ -1117,7 +1119,7 @@ function ThreadRouteContent(
         ? () => void handleMergeBack()
         : undefined,
     currentBranch: selectedThread?.branch ?? null,
-    gitStatus: gitStatus.data,
+    gitStatus: null,
     gitOperationLabel: gitActionState.currentLabel,
     canOpenTerminal:
       Boolean(selectedThreadProject?.workspaceRoot) && (canReadTerminal || canOperateTerminal),

@@ -3519,7 +3519,89 @@ describe("EnvironmentSupervisor routes", () => {
       expect(Option.getOrThrow(yield* SubscriptionRef.get(supervisor.prepared)).target._tag).toBe(
         "RelayConnectionTarget",
       );
+      expect(yield* Ref.get(harness.preparedAhead)).toEqual(["relay"]);
     }),
+  );
+
+  it.effect(
+    "does not treat initial unknown-to-online discovery as a mid-session network change",
+    () =>
+      Effect.gen(function* () {
+        const probeCount = yield* Ref.make(0);
+        const allowProbe = yield* Ref.make(false);
+        const harness = yield* makeHarness({
+          networkStatus: "unknown",
+          openDurationMs: 25,
+          probe: () =>
+            Ref.update(probeCount, (count) => count + 1).pipe(
+              Effect.andThen(
+                Ref.get(allowProbe).pipe(Effect.flatMap((ok) => (ok ? Effect.void : Effect.never))),
+              ),
+            ),
+        });
+        const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+          initiallyDesired: true,
+        }).pipe(
+          Effect.provide(harness.dependencies),
+          Effect.provideService(ConnectionTimings, MOBILE_CONNECTION_TIMINGS),
+        );
+
+        yield* awaitState(
+          supervisor.state,
+          (state) => state.phase === "connected" && state.generation === 1,
+        );
+        // iOS Connectivity starts "unknown" and resolves "online" shortly after launch.
+        yield* harness.setNetworkStatus("online");
+        yield* Effect.yieldNow;
+        expect(yield* Ref.get(probeCount)).toBe(0);
+
+        // Because handshakeRoundTripMs (25ms) was preserved, a subsequent long resume
+        // on a dead socket fails over in 1,000ms instead of regressing to 8,000ms.
+        yield* harness.wake("application-active-reconnect");
+        yield* TestClock.adjust("1 second");
+        yield* awaitState(
+          supervisor.state,
+          (state) => state.phase === "connected" && state.generation === 2,
+        );
+        expect(yield* Ref.get(probeCount)).toBe(1);
+      }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect(
+    "does not abort an in-flight LAN attempt when T3 Connect credentials hydrate on cold start",
+    () =>
+      Effect.gen(function* () {
+        const lanPreparing = yield* Deferred.make<void>();
+        const finishLan = yield* Deferred.make<void>();
+        const harness = yield* makeHarness({
+          checkRoute: (route) =>
+            Effect.succeed(
+              route.target._tag === "BearerConnectionTarget" ? "answered" : "unchecked",
+            ),
+          prepare: (_attempt, target) =>
+            target._tag === "BearerConnectionTarget"
+              ? Deferred.succeed(lanPreparing, undefined).pipe(
+                  Effect.andThen(Deferred.await(finishLan)),
+                  Effect.as(preparedFor(target)),
+                )
+              : Effect.succeed(preparedFor(target)),
+        });
+        const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_RELAY_ENTRY, {
+          initiallyDesired: true,
+        }).pipe(Effect.provide(harness.dependencies));
+
+        yield* Deferred.await(lanPreparing);
+        // Clerk finishing hydration emits credentials-changed while LAN is connecting.
+        yield* harness.wake("credentials-changed");
+        yield* Effect.yieldNow;
+        yield* Deferred.succeed(finishLan, undefined);
+
+        yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+        expect(yield* Ref.get(harness.prepareCount)).toBe(1);
+        expect(Option.getOrThrow(yield* SubscriptionRef.get(supervisor.prepared)).target._tag).toBe(
+          "BearerConnectionTarget",
+        );
+      }),
   );
 
   it.effect("keeps a LAN session when the T3 Connect account changes", () =>

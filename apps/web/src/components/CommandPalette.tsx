@@ -1427,8 +1427,8 @@ function OpenCommandPaletteDialog(props: {
       {
         kind: "action" as const,
         value: "new-thread-in:no-project",
-        searchTerms: ["no project", "without project", "none"],
-        title: "No project",
+        searchTerms: ["default folder", "no project", "without project", "none"],
+        title: "Default folder",
         icon: <MessageSquareDashedIcon className={ITEM_ICON_CLASS} />,
         shortcutCommand: "chat.newWithoutProject" as const,
         run: () => startScratchThread(scratchTargetEnvironmentId),
@@ -2251,7 +2251,7 @@ function OpenCommandPaletteDialog(props: {
       kind: "action",
       value: "action:restart-agent-session",
       searchTerms: ["restart", "reset", "reload", "agent", "session", "skills", "plugins", "mcp"],
-      title: "Restart agent session",
+      title: "Restart agent",
       icon: <RotateCcwIcon className={ITEM_ICON_CLASS} />,
       // Stopping the provider process keeps the conversation: the next message
       // spawns a fresh one that resumes it and reloads skills, plugins, and MCP
@@ -2270,8 +2270,8 @@ function OpenCommandPaletteDialog(props: {
         // stop shows in the thread.
         toastManager.add({
           type: "success",
-          title: "Agent session will restart",
-          description: "Your next message starts a fresh session.",
+          title: "The agent will restart",
+          description: "The agent starts fresh with your next message.",
         });
         const project = projectByKey.get(`${environmentId}:${thread.projectId}`);
         if (!project) return;

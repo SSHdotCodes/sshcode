@@ -24,7 +24,6 @@ import {
   OrchestrationV2WorkspacePreparation,
   type OrchestrationV2ServerCommand,
   OrchestratorMcpDelegateTaskInput,
-  type OrchestratorMcpDelegateTaskResult,
   type WorkflowDefinition,
 } from "@t3tools/contracts";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
@@ -52,6 +51,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { derive } from "@t3tools/provider-core/server/IdAllocator";
+import { type DelegateTaskDetails } from "../mcp/delegateTaskDetails.ts";
 import { pendingTaskNeeds } from "../mcp/pendingTaskRequests.ts";
 import { resolveRuntimeMode, resolveInteractionMode } from "../mcp/delegationModes.ts";
 import * as Rankings from "../subagentRankings/SubagentRankings.ts";
@@ -91,11 +91,9 @@ export class WorkflowsService extends Context.Service<
         readonly leadThreadId: ThreadId;
         readonly parentThreadId?: ThreadId;
       },
-      spawn: (
-        lead: OrchestratorMcpDelegateTaskInput,
-      ) => Effect.Effect<OrchestratorMcpDelegateTaskResult, E, R>,
+      spawn: (lead: OrchestratorMcpDelegateTaskInput) => Effect.Effect<DelegateTaskDetails, E, R>,
     ) => Effect.Effect<
-      OrchestratorMcpDelegateTaskResult & { readonly runId: WorkflowRunId },
+      DelegateTaskDetails & { readonly runId: WorkflowRunId },
       E | WorkflowsError,
       R
     >;
@@ -109,9 +107,9 @@ export class WorkflowsService extends Context.Service<
         input: OrchestratorMcpDelegateTaskInput,
         context?: WorkflowContextRecord,
         admit?: (command: DelegationCommand) => Effect.Effect<void, WorkflowsError>,
-      ) => Effect.Effect<OrchestratorMcpDelegateTaskResult, E, R>,
+      ) => Effect.Effect<DelegateTaskDetails, E, R>,
       context?: OrchestrationMessageContext,
-    ) => Effect.Effect<OrchestratorMcpDelegateTaskResult, E | WorkflowsError, R>;
+    ) => Effect.Effect<DelegateTaskDetails, E | WorkflowsError, R>;
     readonly refresh: Effect.Effect<void, WorkflowsError>;
     /**
      * After an agent saves a workflow: its name is only a seed, replaced by a

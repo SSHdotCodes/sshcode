@@ -1,7 +1,10 @@
 import {
   activeProviderFailure,
+  type ModelSelection,
   type ProjectId,
   type ProviderInstanceId,
+  type ProviderInteractionMode,
+  type ProviderOptionSelection,
   type ServerProvider,
 } from "@t3tools/contracts";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
@@ -13,7 +16,9 @@ import {
   continueOnProviders,
   usedModels,
 } from "@t3tools/shared/continueOnModel";
+import { createModelSelection } from "@t3tools/shared/model";
 
+import { getComposerProviderState } from "./composerProviderState";
 import { resolveAppModelSelectionForInstance } from "../../modelSelection";
 import {
   deriveProviderInstanceEntries,
@@ -71,10 +76,15 @@ export function continueOnModelCandidates(input: {
   const failedModel = input.failedModel ?? null;
   const plan =
     input.failedInstanceId !== null && failedModel !== null
-      ? continueOnOtherPlan(input.settings.balanceAccounts, providers, {
-          instanceId: input.failedInstanceId,
-          model: failedModel,
-        })
+      ? continueOnOtherPlan(
+          input.settings.balanceAccounts,
+          providers,
+          {
+            instanceId: input.failedInstanceId,
+            model: failedModel,
+          },
+          now,
+        )
       : null;
   const planEntry =
     plan === null
@@ -144,6 +154,44 @@ export function continueOnModelCandidates(input: {
     ];
   });
   return [...otherPlan, ...defaults];
+}
+
+/** Freeze target defaults and clamp interactionMode for the target provider before continuing. */
+export function resolveContinueOnModelDispatch(input: {
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly candidate: ContinueCandidate;
+  readonly rememberedOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
+  readonly interactionMode: ProviderInteractionMode;
+  readonly planModeEnabled: boolean;
+}): {
+  readonly modelSelection: ModelSelection;
+  readonly interactionMode: ProviderInteractionMode;
+} {
+  const { candidate } = input;
+  // The same model on the other plan keeps running the way this chat does.
+  const baseOptions =
+    candidate.otherPlan !== true &&
+    input.rememberedOptions !== undefined &&
+    input.rememberedOptions.length > 0
+      ? input.rememberedOptions
+      : candidate.options;
+  const targetProvider = input.providers.find(
+    (provider) => provider.instanceId === candidate.instanceId,
+  );
+  const modelOptions = targetProvider
+    ? getComposerProviderState({
+        provider: targetProvider.driver,
+        model: candidate.model,
+        models: targetProvider.models,
+        modelOptions: baseOptions,
+        planModeEnabled: input.planModeEnabled,
+      }).modelOptionsForDispatch
+    : baseOptions;
+  return {
+    modelSelection: createModelSelection(candidate.instanceId, candidate.model, modelOptions),
+    interactionMode:
+      targetProvider?.showInteractionModeToggle === false ? "default" : input.interactionMode,
+  };
 }
 
 export { canContinueOnAnotherModel } from "@t3tools/shared/continueOnModel";

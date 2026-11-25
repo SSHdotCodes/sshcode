@@ -281,7 +281,7 @@ it("keeps removed prompt mechanics in their advertised tool descriptions", () =>
     "self-contained task brief",
     "last local commit, without uncommitted edits",
     "absolute repositoryPath",
-    "Keep the short taskId",
+    "every thread tool and task_status/cancel",
     "new clientRequestId for each task or independent review round",
     "reuse only for retries",
     "never a message",

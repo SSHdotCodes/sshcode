@@ -3,6 +3,7 @@ import {
   ProviderDriverKind,
   ProviderThreadId,
   ProviderTurnId,
+  type ServerProviderModel,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -11,7 +12,7 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as EffectAcpErrors from "effect-acp/errors";
 
-import { steerDevinTurn, withDevinLightningSpeed } from "./devinAcp.ts";
+import { steerDevinTurn, withDevinLightningSpeed, withoutDevinEffortSuffix } from "./devinAcp.ts";
 
 // Devin answers a mid-turn prompt only when the turn it joined ends (or fails it at once).
 const setup = (reply: "pending" | "refused" = "pending") =>
@@ -156,5 +157,53 @@ describe("withDevinLightningSpeed", () => {
     ]) as Array<ReturnType<typeof speedModel>>;
     assert.strictEqual(fastLabel(swe!), "Lightning");
     assert.strictEqual(fastLabel(claude!), "Fast");
+  });
+});
+
+describe("withoutDevinEffortSuffix", () => {
+  const model = (slug: string, name: string, shortName?: string): ServerProviderModel => ({
+    slug,
+    name,
+    ...(shortName ? { shortName } : {}),
+    isCustom: false,
+    capabilities: {
+      optionDescriptors: [
+        {
+          id: "thought_level",
+          label: "Reasoning",
+          type: "select",
+          role: "reasoning",
+          options: [{ id: "medium", label: "Medium", isDefault: true }],
+        },
+      ],
+    },
+  });
+
+  it("strips only the final effort word while retaining the slug and capabilities", () => {
+    const medium = model("swe-2.1-medium", "SWE-2.1 Medium", "SWE Medium");
+    const flash = model("swe-2-flash-medium", "SWE-2 Flash Medium");
+    const fast = model("swe-2.1-ultrafast-low", "SWE-2.1 Ultrafast Low");
+    const bare = model("claude-sonnet", "Claude Sonnet");
+    const withoutReasoning = { ...model("provider-max", "Provider Max"), capabilities: {} };
+    const [renamedMedium, renamedFlash, renamedFast, unchanged, nonReasoning] =
+      withoutDevinEffortSuffix([medium, flash, fast, bare, withoutReasoning]);
+
+    assert.deepStrictEqual(renamedMedium, { ...medium, name: "SWE-2.1", shortName: "SWE" });
+    assert.strictEqual(renamedFlash?.name, "SWE-2 Flash");
+    assert.strictEqual(renamedFast?.name, "SWE-2.1 Ultrafast");
+    assert.strictEqual(unchanged, bare);
+    assert.strictEqual(nonReasoning, withoutReasoning);
+  });
+
+  it("keeps names when either stripped spelling would overlap another model", () => {
+    const variants = [
+      model("a-low", "Model A Low"),
+      model("a-high", "Model A High"),
+      model("b-xhigh", "Model B XHigh"),
+      model("b", "Model B"),
+      model("c-max", "Model C Max", "Shared Max"),
+      model("d", "Model D", "Shared"),
+    ];
+    assert.deepStrictEqual(withoutDevinEffortSuffix(variants), variants);
   });
 });

@@ -21,6 +21,7 @@ import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import {
   getProviderOptionCurrentLabel,
   getProviderOptionCurrentValue,
+  isReasoningOptionId,
 } from "@t3tools/shared/model";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import { type NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -101,34 +102,29 @@ import {
 } from "../layout/native-mail-search-toolbar";
 import { useNativeMailSearchToolbar } from "../../native/use-native-mail-search-toolbar";
 import { ModelRow, ChoiceRow } from "./ThreadSettingsRows";
+import { ThreadSettingsEffort } from "./ThreadSettingsEffort";
 import {
   findMakerModel,
   makerUsesOf,
-  modelMakerSearchNames,
   type ModelRouteMemory,
 } from "@t3tools/client-runtime/model-makers";
 import { resolveModelPickerFavorites } from "@t3tools/client-runtime/model-picker-catalog";
 import {
   accountPinAfterPick,
-  accountRouteStep,
   rankAccountRoutes,
   routeStanding,
   type AccountRouteSession,
 } from "@t3tools/client-runtime/account-routes";
 import {
   buildModelOptionMakerCatalog,
-  makerIcon,
-  makerModelRoute,
   modelOptionRoute,
   orderMakerGroupsByUse,
   readModelRouteMemory,
-  routeOptions,
   routeRowOption,
   routeAccountDetails,
   saveModelRoute,
   type ModelOptionMakerGroup,
   type ModelOptionMakerModel,
-  type ModelOptionRoute,
 } from "./modelMakerCatalog";
 import {
   compatibleRuntimeModeForChoices,
@@ -137,30 +133,19 @@ import {
 } from "./thread-settings-options";
 import {
   canCommitPendingModel,
-  favoritesFirst,
   modelFavoriteKey,
-  modelMatchesCatalogQuery,
-  orderFavoriteRows,
   pendingModelAfterPress,
-  providerSectionIsCollapsed,
   threadSettingsListItems,
 } from "./thread-settings-sheet-state";
 import {
-  providerHealthNotice,
-  type ProviderHealthNotice,
-} from "@t3tools/client-runtime/providerHealth";
-import { formatProviderUpdateRequiredNotice } from "@t3tools/client-runtime/providerUpdateRequiredModels";
+  FAVORITES_PROVIDER_FILTER,
+  MAKER_FILTER_PREFIX,
+  type MakerMarkProps,
+  type ThreadSettingsCatalogRowItem,
+  type ThreadSettingsProviderCatalog,
+  useThreadSettingsCatalogItems,
+} from "./use-thread-settings-catalog-items";
 
-/**
- * Everyday harnesses start expanded; every other provider (OpenRouter catalogs
- * and friends) starts folded so a 300-model catalog cannot bury the list. All
- * provider headers remain user-collapsible.
- */
-const PRIMARY_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
-  "claudeAgent",
-  "codex",
-  "antigravity",
-]);
 /**
  * Keep measured row changes stable, but let catalog mutations use the list's
  * native bounds so a filtered catalog that underflows returns to the top.
@@ -183,9 +168,7 @@ const EMPTY_MODEL_FAVORITES: ReadonlyArray<{
   readonly provider: ProviderInstanceId;
   readonly model: string;
 }> = [];
-const FAVORITES_PROVIDER_FILTER = "@favorites";
 const EMPTY_PROVIDERS: ReadonlyArray<ServerProvider> = [];
-type MakerMarkProps = ReturnType<typeof makerIcon>;
 
 /** A maker's mark: its harness glyph or registry icon, its own logo, or its initials. */
 function MakerMark(props: MakerMarkProps & { readonly size: number }) {
@@ -259,7 +242,7 @@ function ProviderHeader(props: {
         accessibilityLabel={`${props.label}, ${props.modelCount} models`}
         accessibilityRole="button"
         accessibilityState={{ expanded: !props.collapsed }}
-        className="mx-4 mt-1 min-h-11 flex-row items-center gap-2 rounded-xl px-1 pt-2 active:opacity-60 android:min-h-12"
+        className="mx-4 mt-1 min-h-[44px] flex-row items-center gap-2 rounded-xl px-1 pt-2 active:opacity-60 android:min-h-12"
         onPress={props.onToggle}
       >
         {content}
@@ -278,6 +261,7 @@ function ProviderHeader(props: {
 function DisclosureRow(props: {
   readonly label: string;
   readonly fast?: boolean;
+  readonly fastLit?: boolean;
   readonly value: string | undefined;
   readonly onPress: () => void;
   readonly isLast?: boolean;
@@ -287,12 +271,12 @@ function DisclosureRow(props: {
       accessibilityRole="button"
       onPress={props.onPress}
       className={cn(
-        "min-h-11 flex-row items-center gap-2 bg-grouped-card px-4 py-2 active:bg-subtle android:min-h-14",
+        "min-h-[44px] flex-row items-center gap-2 bg-grouped-card px-4 py-2 active:bg-subtle android:min-h-14",
         !props.isLast && "border-b border-border-subtle",
       )}
     >
       <Text className="text-sm font-t3-medium text-foreground">{props.label}</Text>
-      {props.fast ? <FastModeBolt /> : null}
+      {props.fast ? <FastModeBolt lit={props.fastLit ?? true} /> : null}
       <View className="flex-1" />
       {props.value ? (
         <Text className="text-sm text-foreground-muted" numberOfLines={1}>
@@ -321,14 +305,14 @@ function SwitchRow(props: {
   return (
     <View
       className={cn(
-        "min-h-11 flex-row items-center justify-between bg-grouped-card px-4 py-1",
+        "min-h-[44px] flex-row items-center justify-between bg-grouped-card px-4 py-1",
         !props.isLast && "border-b border-border-subtle",
       )}
     >
       <View className="flex-1 pr-3">
         <View className="flex-row items-center gap-2">
           <Text className="text-sm font-t3-medium text-foreground">{props.label}</Text>
-          {props.fast ? <FastModeBolt /> : null}
+          {props.fast ? <FastModeBolt lit={props.value} /> : null}
         </View>
         {props.description ? (
           <Text className="pb-1 pt-0.5 text-xs leading-4 text-foreground-muted">
@@ -336,11 +320,26 @@ function SwitchRow(props: {
           </Text>
         ) : null}
       </View>
-      <ThemedSwitch
-        accessibilityLabel={props.label}
-        onValueChange={props.onValueChange}
-        value={props.value}
-      />
+      {Platform.OS === "ios" ? (
+        <Pressable
+          accessibilityRole="switch"
+          accessibilityLabel={props.label}
+          accessibilityHint={props.description}
+          accessibilityState={{ checked: props.value }}
+          onPress={() => props.onValueChange(!props.value)}
+          className="-my-1 h-[44px] justify-center"
+        >
+          <View pointerEvents="none" accessibilityElementsHidden>
+            <ThemedSwitch value={props.value} />
+          </View>
+        </Pressable>
+      ) : (
+        <ThemedSwitch
+          accessibilityLabel={props.label}
+          onValueChange={props.onValueChange}
+          value={props.value}
+        />
+      )}
     </View>
   );
 }
@@ -370,6 +369,8 @@ type ThreadSettingsSessionProps = {
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
   /** A subagent works with its lead chat's access: the picker offers no runtime of its own. */
   readonly runtimeHidden?: boolean | undefined;
+  readonly prompt?: string | undefined;
+  readonly onPromptChange?: ((prompt: string) => void) | undefined;
 };
 
 export type ExistingThreadSettingsRouteSession = ThreadSettingsSessionProps & {
@@ -434,6 +435,8 @@ type ThreadSettingsSessionValue = {
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
   readonly runtimeHidden: boolean;
   readonly displayedDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
+  readonly displayedPrompt: string;
+  readonly canChangePrompt: boolean;
   readonly displayedModelSelection: ModelSelection | null;
   readonly reportedModelSelection: ModelSelection | null;
   readonly providerExpansionOverrides: ReadonlySet<string>;
@@ -880,6 +883,8 @@ function ThreadSettingsSessionProvider(
       onUpdateRuntimeMode: draft.setRuntimeMode,
       runtimeHidden: props.runtimeHidden === true,
       displayedDescriptors,
+      displayedPrompt: draft.displayedPrompt,
+      canChangePrompt: props.onPromptChange !== undefined,
       displayedModelSelection: draft.selection,
       reportedModelSelection:
         draft.selection !== props.selectedModel ? null : (props.reportedModelSelection ?? null),
@@ -914,6 +919,8 @@ function ThreadSettingsSessionProvider(
       commitPendingModel,
       compatibleRuntimeMode,
       displayedDescriptors,
+      draft.displayedPrompt,
+      props.onPromptChange,
       favoriteKeys,
       favoritesLoaded,
       providerExpansionOverrides,
@@ -968,44 +975,8 @@ function useThreadSettingsSession() {
   return value;
 }
 
-type ThreadSettingsProviderCatalog = {
-  readonly key: string;
-  readonly driver: string | undefined;
-  readonly iconUrl: string | undefined;
-  readonly symbol?: "star.fill" | undefined;
-  readonly logo?: ModelMakerLogo | undefined;
-  readonly monogram?: string | undefined;
-  readonly label: string;
-  readonly collapsible: boolean;
-  readonly collapsed: boolean;
-  readonly modelCount: number;
-  readonly models: ReadonlyArray<ModelOption>;
-  /** Its latest run failed; shown under the header even while collapsed. */
-  readonly health: ProviderHealthNotice | null;
-};
-
 type ThreadSettingsCatalogItem =
-  | {
-      readonly kind: "provider";
-      readonly key: string;
-      readonly provider: ThreadSettingsProviderCatalog;
-    }
-  | {
-      readonly kind: "model";
-      readonly key: string;
-      readonly option: ModelOption;
-      /** The maker's mark before the label, for lists that mix makers without headers. */
-      readonly maker?: MakerMarkProps | undefined;
-      /** A model row's routes; it reads as picked or starred when any of them is. */
-      readonly routes?: ReadonlyArray<ModelOption> | undefined;
-      readonly isFirst: boolean;
-      readonly isLast: boolean;
-    }
-  | {
-      readonly kind: "notice";
-      readonly key: string;
-      readonly text: string;
-    }
+  | ThreadSettingsCatalogRowItem
   | {
       readonly kind: "empty";
       readonly key: "empty";
@@ -1110,283 +1081,6 @@ function ThreadSettingsProviderListHeader(props: {
   );
 }
 
-/** Makers whose lists start open, like the everyday harnesses before them. */
-const PRIMARY_MAKERS: ReadonlySet<string> = new Set(["openai", "anthropic"]);
-const MAKER_FILTER_PREFIX = "maker:";
-
-/**
- * The catalog by model maker. Browsing lists each model once, staging its best
- * route; search and favorites list every route, named "model" then "route".
- */
-function makerCatalogItems(
-  session: ThreadSettingsSessionValue,
-  withMaker = false,
-): ReadonlyArray<ThreadSettingsCatalogItem> {
-  const filter = session.providerFilter;
-  const favoritesOnly = filter === FAVORITES_PROVIDER_FILTER;
-  const searching = session.searchQuery.trim().length > 0;
-  const perRoute = searching || favoritesOnly;
-  const isNarrowed = filter !== null || searching;
-  const account = accountRouteStep<ModelOptionRoute>(session.providers, session.accountSession);
-  const items = session.makerGroups.flatMap((group): ThreadSettingsCatalogItem[] => {
-    const key = `${MAKER_FILTER_PREFIX}${group.maker.id}`;
-    if (filter !== null && !favoritesOnly && filter !== key) return [];
-    type Row = { readonly option: ModelOption; readonly routes?: ReadonlyArray<ModelOption> };
-    const rows = group.models.flatMap((model): Row[] => {
-      const options = routeOptions(model);
-      if (perRoute) {
-        const runnable = model.routes.filter(
-          (route) => !route.source.option.isUnavailable && !route.source.option.isHidden,
-        );
-        const shown = new Set<string>();
-        return model.routes.flatMap((listed): Row[] => {
-          const hasFavorite = listed.sources.some((source) =>
-            session.favoriteKeys.has(source.option.key),
-          );
-          if (favoritesOnly && !hasFavorite) return [];
-          const starred = routeRowOption(model, listed);
-          // A provider's accounts are one row, on the account the chat would use: accounts
-          // are picked by name under Runs in only.
-          const route = account(listed, runnable.length > 0 ? runnable : model.routes) ?? listed;
-          if (shown.has(route.key)) return [];
-          const option = route === listed ? starred : routeRowOption(model, route);
-          const matches = modelMatchesCatalogQuery({
-            model: option,
-            providerLabel: `${modelMakerSearchNames(group.maker)} ${route.source.option.providerLabel}`,
-            query: session.searchQuery,
-          });
-          if (!matches) return [];
-          shown.add(route.key);
-          // The star stays the one the user set, whichever account the row shows.
-          const routes = [
-            ...route.sources.map((source) => source.option),
-            ...(route === listed ? [] : listed.sources.map((source) => source.option)),
-          ];
-          return [{ option, routes }];
-        });
-      }
-      const route = makerModelRoute(model, session.displayedOption, session.routeMemory, account);
-      return route
-        ? [{ option: routeRowOption(model, route, model.routes.length - 1), routes: options }]
-        : [];
-    });
-    if (rows.length === 0) return [];
-    const collapsed = providerSectionIsCollapsed({
-      defaultExpanded:
-        PRIMARY_MAKERS.has(group.maker.id) ||
-        group.models.some((model) => routeOptions(model).some(session.isApplied)),
-      hasExpansionOverride: session.providerExpansionOverrides.has(key),
-      isNarrowed,
-    });
-    const icon = makerIcon(group);
-    const shownRows = collapsed ? [] : rows;
-    return [
-      {
-        kind: "provider",
-        key: `provider:${key}`,
-        provider: {
-          key,
-          driver: icon.driver,
-          iconUrl: icon.iconUrl,
-          logo: icon.logo,
-          monogram: icon.monogram,
-          label: group.maker.label,
-          collapsible: !isNarrowed,
-          collapsed,
-          modelCount: rows.length,
-          models: shownRows.map((row) => row.option),
-          health: null,
-        },
-      },
-      ...shownRows.map((row, index) => ({
-        kind: "model" as const,
-        key: `model:${row.option.key}`,
-        option: row.option,
-        maker: withMaker ? icon : undefined,
-        routes: row.routes,
-        isFirst: index === 0,
-        isLast: index === shownRows.length - 1,
-      })),
-    ];
-  });
-  // Browsing every maker: the starred models first, as their own section, each on its
-  // starred route; the makers below still list them in place.
-  const favorites = filter === null && !searching ? favoriteCatalogItems(session, isNarrowed) : [];
-  // Models a harness is too old to run name no maker until they arrive, so they list last.
-  const notices = favoritesOnly
-    ? []
-    : session.providerGroups.flatMap((group) => {
-        const text = group.updateRequired
-          ? formatProviderUpdateRequiredNotice(group.updateRequired, session.searchQuery)
-          : null;
-        return text ? [{ kind: "notice" as const, key: `notice:${group.providerKey}`, text }] : [];
-      });
-  return [...favorites, ...items, ...notices];
-}
-
-const FAVORITES_SECTION_KEY = "@favorites-section";
-
-/** The Favorites filter's rows as one section at the top of the full catalog. */
-function favoriteCatalogItems(
-  session: ThreadSettingsSessionValue,
-  isNarrowed: boolean,
-): ReadonlyArray<ThreadSettingsCatalogItem> {
-  // Favorites mix makers under one header, so each row carries its maker's mark.
-  const rows = orderFavoriteRows(
-    makerCatalogItems({ ...session, providerFilter: FAVORITES_PROVIDER_FILTER }, true).flatMap(
-      (item) => (item.kind === "model" ? [item] : []),
-    ),
-    session.favoriteKeys,
-  );
-  if (rows.length === 0) return [];
-  const collapsed = providerSectionIsCollapsed({
-    defaultExpanded: true,
-    hasExpansionOverride: session.providerExpansionOverrides.has(FAVORITES_SECTION_KEY),
-    isNarrowed,
-  });
-  const shown = collapsed ? [] : rows;
-  return [
-    {
-      kind: "provider",
-      key: `provider:${FAVORITES_SECTION_KEY}`,
-      provider: {
-        key: FAVORITES_SECTION_KEY,
-        driver: undefined,
-        iconUrl: undefined,
-        symbol: "star.fill",
-        label: "Favorites",
-        collapsible: true,
-        collapsed,
-        modelCount: rows.length,
-        models: shown.map((row) => row.option),
-        health: null,
-      },
-    },
-    // The same models list again under their makers, so these keys get their own prefix.
-    ...shown.map((row, index) => ({
-      ...row,
-      key: `favorite:${row.key}`,
-      isFirst: index === 0,
-      isLast: index === shown.length - 1,
-    })),
-  ];
-}
-
-function useThreadSettingsCatalogItems(
-  session: ThreadSettingsSessionValue,
-): ReadonlyArray<ThreadSettingsCatalogItem> {
-  return useMemo(
-    () =>
-      !session.manageHidden
-        ? makerCatalogItems(session)
-        : session.providerGroups.flatMap((group) => {
-            // Hiding is per harness, so managing hidden models keeps the harness list.
-            if (
-              session.providerFilter !== null &&
-              session.providerFilter !== FAVORITES_PROVIDER_FILTER &&
-              !session.providerFilter.startsWith(MAKER_FILTER_PREFIX) &&
-              group.providerKey !== session.providerFilter
-            ) {
-              return [];
-            }
-            const driver = group.models[0]?.providerDriver ?? group.providerKey;
-            const catalogModels =
-              session.manageHidden ||
-              session.showLegacy ||
-              session.providerFilter === FAVORITES_PROVIDER_FILTER
-                ? group.models
-                : group.models.filter(
-                    (model) =>
-                      !model.isLegacy ||
-                      session.isDisplayed(model) ||
-                      session.favoriteKeys.has(model.key),
-                  );
-            const visibleModels = favoritesFirst(
-              catalogModels.filter(
-                (model) =>
-                  (session.providerFilter !== FAVORITES_PROVIDER_FILTER ||
-                    session.favoriteKeys.has(model.key)) &&
-                  modelMatchesCatalogQuery({
-                    model,
-                    providerLabel: group.providerLabel,
-                    query: session.searchQuery,
-                  }),
-              ),
-              session.favoriteKeys,
-            );
-            // Favorites list only selectable models, so it never explains gated ones.
-            const updateRequiredNotice =
-              group.updateRequired && session.providerFilter !== FAVORITES_PROVIDER_FILTER
-                ? formatProviderUpdateRequiredNotice(group.updateRequired, session.searchQuery)
-                : null;
-            if (visibleModels.length === 0 && !updateRequiredNotice) {
-              return [];
-            }
-            const isPrimary = driver !== undefined && PRIMARY_PROVIDER_DRIVERS.has(driver);
-            // Staging a model must not change disclosure state. The applied model
-            // stays stable for the lifetime of this picker (Save closes it), so it
-            // is safe to use as the initial selected-provider default.
-            const containsAppliedSelection = group.models.some(session.isApplied);
-            const isNarrowed =
-              session.providerFilter !== null || session.searchQuery.trim().length > 0;
-            const collapsible = !isNarrowed;
-            const collapsed = providerSectionIsCollapsed({
-              defaultExpanded: isPrimary || containsAppliedSelection,
-              hasExpansionOverride: session.providerExpansionOverrides.has(group.providerKey),
-              isNarrowed,
-            });
-            const provider: ThreadSettingsProviderCatalog = {
-              key: group.providerKey,
-              driver,
-              iconUrl: group.models[0]?.providerIconUrl,
-              label: group.providerLabel,
-              collapsible,
-              collapsed,
-              modelCount: visibleModels.length,
-              models: collapsed ? [] : visibleModels,
-              health: group.recentFailure
-                ? providerHealthNotice({ recentFailure: group.recentFailure }, Date.now())
-                : null,
-            };
-            return [
-              {
-                kind: "provider" as const,
-                key: `provider:${group.providerKey}`,
-                provider,
-              },
-              ...provider.models.map((option, index) => ({
-                kind: "model" as const,
-                key: `model:${option.key}`,
-                option,
-                isFirst: index === 0,
-                isLast: index === provider.models.length - 1,
-              })),
-              ...(!collapsed && updateRequiredNotice
-                ? [
-                    {
-                      kind: "notice" as const,
-                      key: `notice:${group.providerKey}`,
-                      text: updateRequiredNotice,
-                    },
-                  ]
-                : []),
-            ];
-          }),
-    // Not the whole session: it changes on every option tap, and this walks every model.
-    [
-      session.favoriteKeys,
-      session.isApplied,
-      session.isDisplayed,
-      session.manageHidden,
-      session.providerExpansionOverrides,
-      session.providerFilter,
-      session.providerGroups,
-      session.searchQuery,
-      session.showLegacy,
-    ],
-  );
-}
-
 function ThreadSettingsOptionsItem(props: {
   readonly animationsReady: boolean;
   readonly onOpenSubmenu: (submenu: ThreadSettingsSubmenuPage) => void;
@@ -1444,6 +1138,27 @@ function ThreadSettingsOptionsItem(props: {
         {session.displayedDescriptors.map((descriptor, index) => {
           const fast = fastModeControl(descriptor);
           const isLast = session.runtimeHidden && index === lastDescriptor;
+          if (
+            descriptor.type === "select" &&
+            (descriptor.role === "reasoning" || isReasoningOptionId(descriptor.id))
+          ) {
+            // Prompt-typed modes (Ultrathink) stay out of the picker; the slider shows the
+            // effort the model runs at.
+            return (
+              <ThreadSettingsEffort
+                key={descriptor.id}
+                label={descriptor.label}
+                options={selectableChoices(descriptor)}
+                value={getProviderOptionCurrentValue(
+                  descriptor,
+                  session.displayedModelSelection,
+                  session.reportedModelSelection,
+                )}
+                isLast={isLast}
+                onPick={(id) => session.applyOptionChange(descriptor.id, id)}
+              />
+            );
+          }
           if (fast && !fast.choices) {
             return (
               <SwitchRow
@@ -1452,9 +1167,13 @@ function ThreadSettingsOptionsItem(props: {
                 label={fast.switchLabel}
                 fast
                 value={fast.enabled}
-                onValueChange={(value) =>
-                  session.applyOptionChange(descriptor.id, value ? fast.onValue : fast.offValue)
-                }
+                onValueChange={(value) => {
+                  // Switching Fast on lands with a sharp snap as the bolt strikes.
+                  if (value) {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid).catch(() => undefined);
+                  }
+                  session.applyOptionChange(descriptor.id, value ? fast.onValue : fast.offValue);
+                }}
               />
             );
           }
@@ -1472,6 +1191,7 @@ function ThreadSettingsOptionsItem(props: {
                   isLast={isLast}
                   label={fast ? "Fast" : descriptor.label}
                   fast={fast !== null}
+                  fastLit={fast?.enabled}
                   value={
                     fast?.label ??
                     getProviderOptionCurrentLabel(
@@ -2319,6 +2039,8 @@ export function NewTaskThreadSettingsRouteScreen() {
       }
       optionDescriptors={optionDescriptors}
       onUpdateOptionSelections={flow.setSelectedModelOptions}
+      prompt={flow.prompt}
+      onPromptChange={flow.setPrompt}
       runtimeMode={flow.runtimeMode}
       onUpdateRuntimeMode={flow.setRuntimeMode}
       onClose={() => navigation.goBack()}

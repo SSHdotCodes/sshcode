@@ -140,6 +140,8 @@ describe("commandProgramName", () => {
 
   it.each([
     ["source ~/.nvm/nvm.sh && nvm use", "nvm"],
+    ['cd /repo && eval "$(fnm env --shell zsh)" && fnm use', "fnm"],
+    ['eval "$(/opt/homebrew/bin/brew shellenv)" && pnpm test', "pnpm"],
     [". ./.env && pnpm test", "pnpm"],
     ["export CI=1 && vp test run", "vp"],
     ["unset DEBUG; node app.js", "node"],

@@ -37,4 +37,13 @@ describe("pull requests route search", () => {
     expect(matchedSearch("/pull-requests?q=fix")?.q).toBe("fix");
     expect(matchedSearch("/pull-requests?q=%224089%22")?.q).toBe("4089");
   });
+
+  it("caps long searches without splitting an emoji", () => {
+    const exact = `${"a".repeat(198)}💡`;
+    const prefix = "a".repeat(199);
+    expect(matchedSearch(`/pull-requests?q=${encodeURIComponent(exact + " tail")}`)?.q).toBe(exact);
+    expect(matchedSearch(`/pull-requests?q=${encodeURIComponent(prefix + "💡 tail")}`)?.q).toBe(
+      prefix,
+    );
+  });
 });

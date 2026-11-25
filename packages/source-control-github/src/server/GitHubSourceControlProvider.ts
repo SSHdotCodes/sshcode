@@ -80,6 +80,26 @@ function authAccounts(accounts: ReadonlyArray<GitHubAuthStatusAccount>) {
   }));
 }
 
+const GITHUB_AUTH_JSON_UPDATE_HINT =
+  "GitHub CLI is too old to report sign-in status. Update `gh` to 2.81.0 or newer (for example `brew upgrade gh`) and rescan.";
+
+/** Only the successful login lines from `gh auth status --active` identify a host. */
+function legacyAuthenticatedAccounts(text: string): ReadonlyArray<GitHubAuthStatusAccount> {
+  return Array.from(
+    text.matchAll(
+      /^\s*✓?\s*Logged in to ([a-z0-9.-]+(?::\d+)?) account ([a-z0-9_.-]+) \(([^)]+)\)/gimu,
+    ),
+    ([, host, account, source]) => ({
+      host: host!.toLowerCase(),
+      account: account!,
+      active: true,
+      authenticated: true,
+      error: null,
+      environmentVariable: /^(?:GH|GITHUB)_(?:ENTERPRISE_)?TOKEN$/u.test(source!) ? source! : null,
+    }),
+  );
+}
+
 /**
  * Reads `gh auth status --json hosts`. The headline account is the one GitHub requests will
  * use: Settings can pin a login per host or turn a host off, and an environment token beats both.
@@ -89,7 +109,9 @@ export function parseGitHubAuth(
   settings: GitHubClient.GitHubSettings = readSourceControlHostSettings(GitHubClient.settings, {}),
 ) {
   const output = combinedAuthOutput(input);
-  const authStatus = parseGitHubAuthStatus(input.stdout);
+  const json = parseGitHubAuthStatus(input.stdout);
+  const legacy = json.parsed ? [] : legacyAuthenticatedAccounts(output);
+  const authStatus = legacy.length === 0 ? json : { parsed: true, accounts: legacy };
   const hosts = [...new Set(authStatus.accounts.map((entry) => entry.host))];
   const fallback = findAuthenticatedGitHubAccount(authStatus.accounts);
   // Lead with the host gh would pick, unless Settings turned it off.
@@ -146,8 +168,7 @@ export function parseGitHubAuth(
   if (input.exitCode !== 0 && output.includes("unknown flag: --json")) {
     return providerAuth({
       status: "unknown",
-      detail:
-        "GitHub CLI is too old to report sign-in status. Update `gh` to 2.81.0 or newer (for example `brew upgrade gh`) and rescan.",
+      detail: GITHUB_AUTH_JSON_UPDATE_HINT,
     });
   }
 
@@ -210,11 +231,27 @@ export const makeDiscovery = Effect.gen(function* () {
           Effect.orElseSucceed(() => undefined),
         ),
       );
-      const cli = yield* probeSourceControlProvider({
+      const result = yield* probeSourceControlProvider({
         cwd,
         process,
         spec: { ...discovery, parseAuth: (input) => parseGitHubAuth(input, settings) },
       });
+      const cli = Option.contains(result.auth.detail, GITHUB_AUTH_JSON_UPDATE_HINT)
+        ? yield* process
+            .run({
+              operation: "source-control.discovery.auth",
+              command: "gh",
+              args: ["auth", "status", "--active"],
+              cwd,
+              allowNonZeroExit: true,
+              timeoutMs: 8_000,
+              maxOutputBytes: 8_000,
+            })
+            .pipe(
+              Effect.map((output) => ({ ...result, auth: parseGitHubAuth(output, settings) })),
+              Effect.orElseSucceed(() => result),
+            )
+        : result;
       // A token saved in Settings wins over the environment, which wins over gh.
       const savedToken = (settings.tokens["github.com"] ?? "").trim() !== "";
       const variable = environmentTokenVariable(environment);
@@ -786,10 +823,15 @@ export const make = Effect.gen(function* () {
             normalizeGitRemoteUrl(remote.url).split("/").slice(1).join("/") ===
               nameWithOwner.toLowerCase(),
         )?.name ?? null;
-      const baseRemote = Effect.suspend(() => {
-        const known = remoteFor(baseNameWithOwner);
-        return known === null ? git.resolvePrimaryRemoteName(input.cwd) : Effect.succeed(known);
-      });
+      const knownBaseRemote = remoteFor(baseNameWithOwner);
+      if (reference.kind === "url" && knownBaseRemote === null) {
+        return yield* failure("This checkout does not belong to the pull request's repository.");
+      }
+      const baseRemote = Effect.suspend(() =>
+        knownBaseRemote === null
+          ? git.resolvePrimaryRemoteName(input.cwd)
+          : Effect.succeed(knownBaseRemote),
+      );
       // A fork's branch named like the base's default branch is checked out under the owner's
       // prefix. Without the default branch that collision cannot be ruled out, and the checkout
       // would reset the local default branch to the fork's commit, so it fails instead.

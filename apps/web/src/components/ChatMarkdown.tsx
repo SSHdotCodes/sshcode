@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 import { isEmojiOnlyMessage } from "@t3tools/shared/emoji";
 import { useEmojiSupport } from "~/hooks/useEmojiSupport";
 import { parseLinkChip } from "@t3tools/shared/githubLinks";
@@ -172,6 +173,7 @@ import { getClientSettings, useClientSettings } from "../hooks/useSettings";
 import {
   chatMarkdownClipboardPayload,
   serializeTableElementToCsv,
+  serializeTableElementToHtml,
   serializeTableElementToMarkdown,
 } from "../markdown-clipboard";
 import {
@@ -211,7 +213,7 @@ import {
   useOpenChangeRequestLink,
 } from "~/lib/openPullRequestLink";
 import { useOpenLink } from "../browser/useOpenLink";
-import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
+import { ClipboardWriteError, writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { isPreviewAvailableFor } from "../browser/previewRuntime";
 import {
   isBrowserPreviewFile,
@@ -373,11 +375,12 @@ const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
 const WINDOWS_DRIVE_PATH_REGEX = /^[A-Za-z]:[\\/]/;
 const MAX_HIGHLIGHT_CACHE_ENTRIES = 500;
 const MAX_HIGHLIGHT_CACHE_MEMORY_BYTES = 50 * 1024 * 1024;
+const isClipboardWriteError = Schema.is(ClipboardWriteError);
 
 interface MarkdownActionFailureContext {
   readonly operation: string;
   readonly target?: string;
-  readonly format?: "markdown" | "csv";
+  readonly format?: "markdown" | "csv" | "html";
   readonly language?: string;
   readonly fenceTitle?: string;
   readonly copyTarget?: string;
@@ -593,7 +596,6 @@ function readInitialWordWrapSetting(): boolean {
 }
 
 function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
   const tableRef = useRef<HTMLTableElement | null>(null);
   const [expanded, setExpanded] = useState(readInitialWordWrapSetting);
   const [copied, setCopied] = useState(false);
@@ -631,18 +633,21 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
     setExpanded((value) => !value);
   }
 
-  const handleCopy = useCallback(async (format: "markdown" | "csv") => {
-    const table = containerRef.current?.querySelector("table");
+  const handleCopy = useCallback(async (format: "markdown" | "csv" | "html") => {
+    const table = tableRef.current;
     if (!table) return;
     try {
-      if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
-        throw new Error("Clipboard API unavailable.");
-      }
       const text =
-        format === "markdown"
-          ? serializeTableElementToMarkdown(table)
-          : serializeTableElementToCsv(table);
-      await navigator.clipboard.writeText(text);
+        format === "csv"
+          ? serializeTableElementToCsv(table)
+          : serializeTableElementToMarkdown(table);
+      const html = format === "html" ? serializeTableElementToHtml(table) : "";
+      const didCopy = await writeTextToClipboard(
+        text,
+        "table",
+        html ? { "text/html": `<meta charset="utf-8">${html}` } : undefined,
+      );
+      if (!didCopy) return;
       if (copiedTimerRef.current != null) {
         clearTimeout(copiedTimerRef.current);
       }
@@ -651,8 +656,11 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
         setCopied(false);
         copiedTimerRef.current = null;
       }, 1200);
-    } catch (cause) {
-      reportMarkdownCopyFailure({ operation: "copy-table", format }, cause);
+    } catch (error) {
+      reportMarkdownCopyFailure(
+        { operation: "copy-table", format },
+        isClipboardWriteError(error) ? error.cause : error,
+      );
     }
   }, []);
 
@@ -667,11 +675,7 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
   );
 
   return (
-    <div
-      ref={containerRef}
-      className="chat-markdown-table-container"
-      data-expanded={expanded ? "true" : "false"}
-    >
+    <div className="chat-markdown-table-container" data-expanded={expanded ? "true" : "false"}>
       <ScrollArea radius="none" chainVerticalScroll scrollFade className="w-full max-w-full">
         <table ref={tableRef} {...props}>
           {children}
@@ -716,6 +720,7 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
             <TooltipPopup side="top">{copyLabel}</TooltipPopup>
           </Tooltip>
           <MenuPopup align="end">
+            <MenuItem onClick={() => handleCopy("html")}>Copy table</MenuItem>
             <MenuItem onClick={() => handleCopy("markdown")}>Copy as Markdown</MenuItem>
             <MenuItem onClick={() => handleCopy("csv")}>Copy as CSV</MenuItem>
           </MenuPopup>

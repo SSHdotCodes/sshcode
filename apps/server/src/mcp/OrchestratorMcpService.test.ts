@@ -1506,6 +1506,96 @@ describe("OrchestratorMcpService", () => {
       }),
   );
 
+  it.effect("cancels a delegated task during provider continuation grace", () =>
+    Effect.gen(function* () {
+      const parentThreadId = ThreadId.make("thread:mcp-cancel-continuation-parent");
+      const childThreadId = ThreadId.make("thread:mcp-cancel-continuation-child");
+      const childRunId = RunId.make("run:mcp-cancel-continuation-child");
+      const taskId = NodeId.make("node:mcp-cancel-continuation-task");
+      const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const parentProjection = {
+        thread: { id: parentThreadId },
+        runs: [],
+        contextTransfers: [],
+        subagents: [
+          {
+            id: taskId,
+            threadId: parentThreadId,
+            origin: "app_owned",
+            childThreadId,
+            driver: "codex",
+            model: "gpt-5.6-terra",
+            status: "running",
+            result: null,
+            completionDelivery: { state: "pending" },
+          },
+        ],
+      } as unknown as OrchestrationV2ThreadProjection;
+      const childProjection = {
+        thread: { id: childThreadId },
+        runs: [
+          {
+            id: childRunId,
+            ordinal: 1,
+            status: "completed",
+          },
+        ],
+        contextTransfers: [],
+        messages: [],
+        subagents: [],
+        providerThreads: [],
+        runtimeRequests: [],
+      } as unknown as OrchestrationV2ThreadProjection;
+      const layerDependencies = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadRecords: (threadId) =>
+            Effect.succeed(threadId === parentThreadId ? parentProjection : childProjection),
+          getThreadShell: (threadId) => Effect.succeed(liveThreadShell(threadId)),
+          dispatch: (command) =>
+            Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+              Effect.as({} as never),
+            ),
+          stopDelegatedTasks: () => Effect.void,
+          delegatedTaskResultPending: () => Effect.succeed(true),
+        }),
+        ServerSettings.layerTest(),
+        mockProviderRegistry({ getProviders: Effect.succeed([]) }),
+        Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+          list: () => Effect.succeed([]),
+        }),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+      );
+      const scope: McpInvocationScope = {
+        environmentId: EnvironmentId.make("environment:mcp-cancel-continuation"),
+        requestNamespace: "provider-session:mcp-cancel-continuation",
+        thread: {
+          threadId: parentThreadId,
+          providerSessionId: "provider-session:mcp-cancel-continuation",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        client: undefined,
+        capabilities: new Set(["orchestration"]),
+        issuedAt: 1,
+      };
+
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const result = yield* service.cancelTask(scope, {
+          taskId: taskReference(taskId),
+          clientRequestId: "cancel-continuation-grace-task",
+        });
+        assert.equal(result.status, "cancel_requested");
+        assert.deepEqual(
+          (yield* Ref.get(dispatched)).map((command) => (command as { type: string }).type),
+          ["thread.stop", "delegated_task.completion-delivery.dispose"],
+        );
+      }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
+    }),
+  );
+
   it.effect("refuses to cancel a task whose child now runs above the parent's modes", () =>
     Effect.gen(function* () {
       const parentThreadId = ThreadId.make("thread:mcp-cancel-dispose-failed-parent");

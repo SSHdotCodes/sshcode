@@ -60,7 +60,7 @@ function RowButton(props: {
       disabled={props.disabled}
       hitSlop={8}
       onPress={props.onPress}
-      className="min-h-11 justify-center px-1 active:opacity-60"
+      className="min-h-[44px] justify-center px-1 active:opacity-60"
     >
       <Text
         className={cn(
@@ -96,7 +96,7 @@ function HarnessRow(props: {
     >
       <Pressable
         accessibilityRole="button"
-        className="min-h-11 flex-row items-center gap-2 border-b border-border-subtle bg-grouped-card px-4 py-2 active:bg-subtle android:min-h-14"
+        className="min-h-[44px] flex-row items-center gap-2 border-b border-border-subtle bg-grouped-card px-4 py-2 active:bg-subtle android:min-h-14"
       >
         <Text className="text-sm font-t3-medium text-foreground">{props.label}</Text>
         <View className="flex-1" />
@@ -233,7 +233,7 @@ export function ModelManagerCard(props: {
             autoCapitalize="none"
             autoCorrect={false}
             autoFocus
-            className="min-h-11 min-w-0 flex-1 py-2 text-sm text-foreground"
+            className="min-h-[44px] min-w-0 flex-1 py-2 text-sm text-foreground"
             onChangeText={setText}
             onSubmitEditing={() => submit(text)}
             placeholder="Model id or URL to add, or “remove …”"
@@ -264,7 +264,7 @@ export function ModelManagerCard(props: {
       <Pressable
         accessibilityRole="button"
         onPress={() => setOpen(true)}
-        className="min-h-11 flex-row items-center gap-2 bg-grouped-card px-4 py-2 active:bg-subtle android:min-h-14"
+        className="min-h-[44px] flex-row items-center gap-2 bg-grouped-card px-4 py-2 active:bg-subtle android:min-h-14"
       >
         <SymbolView
           name="plus"

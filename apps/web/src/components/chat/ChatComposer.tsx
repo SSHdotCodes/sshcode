@@ -1,3 +1,4 @@
+import { canWaitForComposerConnection } from "./composerConnection";
 import { AutoModelSuggestion } from "../../autoModel/AutoModelSuggestion";
 import { composerImageDedupKey, readComposerImageBytes } from "../../lib/composerImageFingerprint";
 import type { ComposerAttachmentInsertion } from "../composerAttachmentInsertion";
@@ -60,6 +61,7 @@ import type {
   ScopedThreadRef,
   ServerProvider,
   ThreadId,
+  RunId,
   SnapShotSource,
 } from "@t3tools/contracts";
 import { parseSideChatCommand, sideChatKindForDriver } from "@t3tools/contracts";
@@ -122,8 +124,6 @@ import {
   getAntigravitySendBlockReason,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
-  threadShellHasStarted,
-  threadHasStarted,
 } from "../ChatView.logic";
 import {
   dataTransferHasComposerMention,
@@ -148,6 +148,7 @@ import {
   composerDraftHasUserContent,
   composerTargetKey,
   hydrateImagesFromPersisted,
+  readComposerDraftStore,
   useComposerDraftStore,
   useComposerThreadDraft,
   useEffectiveComposerModelState,
@@ -344,7 +345,7 @@ import {
   getComposerPromptInjectionState,
   getComposerProviderState,
   renderProviderTraitsMenuContent,
-  providerReasoningLevelLabel,
+  providerEffortDisplay,
   renderProviderReasoningColumn,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
@@ -1185,16 +1186,11 @@ import {
 } from "../../providerInstances";
 import { type AppModelOption, getAppModelOptionsForInstance } from "../../modelSelection";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
-import {
-  isVideoAttachment,
-  type SessionPhase,
-  type Thread,
-  type ThreadShell,
-  videoMimeType,
-} from "../../types";
+import { isVideoAttachment, type SessionPhase, videoMimeType } from "../../types";
 import {
   buildComposerPromptHistoryEntries,
   type ComposerPromptHistoryMentions,
+  type ComposerPromptHistoryMessage,
   insertEarlierPrompt,
   type ComposerPromptHistoryEntry,
   stepComposerPromptHistory,
@@ -1202,7 +1198,6 @@ import {
 } from "./composerPromptHistory";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type {
-  TimelineEntry,
   LatestProposedPlanState,
   PendingApproval,
   PendingUserInput,
@@ -1211,10 +1206,7 @@ import {
   resolveComposerDispatchMode,
   type ComposerDispatchMode,
 } from "@t3tools/client-runtime/state/composer-dispatch";
-import {
-  deriveLatestContextWindowSnapshot,
-  type ContextWindowSnapshot,
-} from "../../lib/contextWindow";
+import type { ContextWindowSnapshot } from "../../lib/contextWindow";
 import {
   getProviderSlashCommandsForSlashMenu,
   getProviderSkillsForSlashMenu,
@@ -1639,11 +1631,18 @@ export interface ChatComposerProps {
   // Thread context
   activeThreadId: ThreadId | null;
   activeThreadEnvironmentId: EnvironmentId | undefined;
-  activeThread: Thread | undefined;
-  /** The routed server thread's shell, present before its detail loads. */
-  activeThreadShell: ThreadShell | null;
-  /** Timeline messages including optimistic sends, for ArrowUp prompt recall. */
-  promptHistoryEntries: ReadonlyArray<TimelineEntry>;
+  threadStarted: boolean;
+  /** The routed server thread's shell can be present before its detail loads. */
+  hasThreadShell: boolean;
+  threadShellStarted: boolean;
+  threadTitle: string | undefined;
+  threadSubagentsEnabled: boolean | undefined;
+  runtimeProviderInstanceId: ProviderInstanceId | undefined;
+  runtimeActiveRunId: RunId | null;
+  hasEarlierPrompts: boolean;
+  hasTimelineEntries: boolean;
+  /** Includes optimistic sends for ArrowUp prompt recall. */
+  readPromptHistoryMessages: () => ReadonlyArray<ComposerPromptHistoryMessage>;
   isServerThread: boolean;
   /** The running chat's "use your other account" tip: whether it was closed, and closing it. */
   accountTip?:
@@ -1723,9 +1722,7 @@ export interface ChatComposerProps {
   activeProjectId: ProjectId | null;
 
   // Context window
-  contextWindowEntries: Parameters<typeof deriveLatestContextWindowSnapshot>[0];
-  contextWindowLiveUsage: Parameters<typeof deriveLatestContextWindowSnapshot>[1];
-  contextWindowProviderThread: Parameters<typeof deriveLatestContextWindowSnapshot>[2];
+  activeContextWindow: ContextWindowSnapshot | null;
   compactThreadUnavailable: boolean;
   compactDisabled: boolean;
   compactDisabledReason: string | null;
@@ -1858,8 +1855,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onMultipleModelSelectionsChange: setMultipleModelSelections,
     activeThreadId,
     activeThreadEnvironmentId,
-    activeThread,
-    promptHistoryEntries,
+    threadStarted,
+    hasThreadShell,
+    threadShellStarted,
+    threadTitle,
+    threadSubagentsEnabled,
+    runtimeProviderInstanceId,
+    runtimeActiveRunId,
+    hasEarlierPrompts,
+    hasTimelineEntries,
+    readPromptHistoryMessages,
     isServerThread: _isServerThread,
     isLocalDraftThread: _isLocalDraftThread,
     forceExpandedOnMobile,
@@ -1896,9 +1901,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadModelSelection,
     reportedModelSelection,
     activeProjectId,
-    contextWindowEntries,
-    contextWindowLiveUsage,
-    contextWindowProviderThread,
+    activeContextWindow,
     compactThreadUnavailable,
     compactDisabled,
     compactDisabledReason,
@@ -1957,19 +1960,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     editingQueuedAttachments,
     onRemoveEditingQueuedAttachment,
   } = props;
-  const activeContextWindow = useMemo(
-    () =>
-      deriveLatestContextWindowSnapshot(
-        contextWindowEntries,
-        contextWindowLiveUsage,
-        contextWindowProviderThread,
-      ),
-    [contextWindowEntries, contextWindowLiveUsage, contextWindowProviderThread],
-  );
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const composerDraftTargetKey = composerTargetKey(composerDraftTarget);
   const onProviderModelSelect: ChatComposerProps["onProviderModelSelect"] = (...args) => {
-    if (!threadHasStarted(activeThread) && !threadShellHasStarted(props.activeThreadShell)) {
+    if (!threadStarted && !threadShellStarted) {
       updateAutoModelDraft(composerDraftTarget, autoModelAfterManualPick);
     }
     onProviderModelSelectProp(...args);
@@ -2188,41 +2182,32 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             environmentId,
           })
       : null);
-  const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
+  // Store actions are stable across draft writes.
+  const {
+    setPrompt: setComposerDraftPrompt,
+    addImages: addComposerDraftImages,
+    removeImage: removeComposerDraftImage,
+    addFiles: addComposerDraftFiles,
+    removeFile: removeComposerDraftFile,
+    setFileUpload: setComposerDraftFileUpload,
+    insertTerminalContext: insertComposerDraftTerminalContext,
+    setTerminalContexts: setComposerDraftTerminalContexts,
+    removePreviewAnnotation: removeComposerDraftPreviewAnnotation,
+    removeReviewComment: removeComposerDraftReviewComment,
+    clearPersistedAttachments: clearComposerDraftPersistedAttachments,
+    clearTerminalContexts: clearComposerDraftTerminalContexts,
+    clearComposerPromptAndImages: clearComposerDraftPromptAndImages,
+    syncPersistedAttachments: syncComposerDraftPersistedAttachments,
+    getComposerDraft,
+    addTerminalContexts: addComposerDraftTerminalContexts,
+    addReviewComment: addComposerDraftReviewComment,
+    addPreviewAnnotation: addComposerDraftPreviewAnnotation,
+    addThreadContexts: addComposerDraftThreadContexts,
+    setThreadContexts: setComposerDraftThreadContexts,
+    setContextInsertionHandler,
+  } = readComposerDraftStore();
   // A new chat follows the account with room; an account the user picked by name is theirs.
-  const accountPinned = useComposerDraftStore(
-    (store) => store.getComposerDraft(composerDraftTarget)?.modelAccountPinned === true,
-  );
-  const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
-  const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
-  const addComposerDraftFiles = useComposerDraftStore((store) => store.addFiles);
-  const removeComposerDraftFile = useComposerDraftStore((store) => store.removeFile);
-  const setComposerDraftFileUpload = useComposerDraftStore((store) => store.setFileUpload);
-  const insertComposerDraftTerminalContext = useComposerDraftStore(
-    (store) => store.insertTerminalContext,
-  );
-  const setComposerDraftTerminalContexts = useComposerDraftStore(
-    (store) => store.setTerminalContexts,
-  );
-  const removeComposerDraftPreviewAnnotation = useComposerDraftStore(
-    (store) => store.removePreviewAnnotation,
-  );
-  const removeComposerDraftReviewComment = useComposerDraftStore(
-    (store) => store.removeReviewComment,
-  );
-  const clearComposerDraftPersistedAttachments = useComposerDraftStore(
-    (store) => store.clearPersistedAttachments,
-  );
-  const clearComposerDraftTerminalContexts = useComposerDraftStore(
-    (store) => store.clearTerminalContexts,
-  );
-  const clearComposerDraftPromptAndImages = useComposerDraftStore(
-    (store) => store.clearComposerPromptAndImages,
-  );
-  const syncComposerDraftPersistedAttachments = useComposerDraftStore(
-    (store) => store.syncPersistedAttachments,
-  );
-  const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
+  const accountPinned = composerDraft.modelAccountPinned === true;
 
   useEffect(() => {
     if (!attachmentUploadsCapabilityKnown) {
@@ -2341,7 +2326,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         // the idle session it is leaving.
         candidateInstanceIds: composerProviderCandidates({
           picked: selectedProviderByThreadId,
-          runtime: activeThread?.runtime?.providerInstanceId,
+          runtime: runtimeProviderInstanceId,
           chosen: activeThreadModelSelection?.instanceId,
           projectDefault: activeProjectDefaultModelSelection?.instanceId,
           switchesByHandoff: lockedProvider === null,
@@ -2349,12 +2334,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             providerInstanceEntries.find((entry) => entry.instanceId === instanceId)?.driverKind,
         }),
         lockedProvider,
-        lockedInstanceId:
-          activeThread?.runtime?.providerInstanceId ?? activeThreadModelSelection?.instanceId,
+        lockedInstanceId: runtimeProviderInstanceId ?? activeThreadModelSelection?.instanceId,
       }),
     [
       activeProjectDefaultModelSelection?.instanceId,
-      activeThread?.runtime?.providerInstanceId,
+      runtimeProviderInstanceId,
       activeThreadModelSelection?.instanceId,
       selectedProviderByThreadId,
       lockedProvider,
@@ -2452,12 +2436,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   });
   const [subagentsOffConfirmOpen, setSubagentsOffConfirmOpen] = useState(false);
   const draftSubagentsEnabled = useComposerDraftStore((store) =>
-    props.activeThreadShell
-      ? undefined
-      : store.getDraftThread(composerDraftTarget)?.subagentsEnabled,
+    hasThreadShell ? undefined : store.getDraftThread(composerDraftTarget)?.subagentsEnabled,
   );
   const setSubagentsEnabled = (enabled: boolean) => {
-    if (!props.activeThreadShell) {
+    if (!hasThreadShell) {
       useComposerDraftStore
         .getState()
         .setDraftThreadContext(composerDraftTarget, { subagentsEnabled: enabled });
@@ -2647,7 +2629,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const reserveContextWindowMeter = shouldReserveContextWindowMeter({
     meterEnabled: settings.contextWindowMeterEnabled,
     detailLoading: props.threadSyncPhase === "loading",
-    threadStarted: threadShellHasStarted(props.activeThreadShell),
+    threadStarted: threadShellStarted,
     providerReportsContextWindow: selectedProviderStatus
       ? selectedProviderStatus.reportsContextWindow === true
       : null,
@@ -3437,8 +3419,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onPicked: () => setIsComposerModelPickerOpen(false),
       })
     : null;
-  const modelReasoningLabel = reasoningColumnShown
-    ? providerReasoningLevelLabel(providerTraitsPickerInput)
+  const modelEffort = reasoningColumnShown
+    ? providerEffortDisplay(providerTraitsPickerInput)
     : null;
   const [inlineRestingControlsHost, setInlineRestingControlsHost] = useState<HTMLDivElement | null>(
     null,
@@ -3482,6 +3464,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     !composerDraftHasUserContent(composerDraft ? { ...composerDraft, prompt: "" } : null) &&
     parseSideChatCommand(prompt, sideChatKindForDriver(lockedProvider ?? selectedProvider)) !==
       null;
+  const disconnectedSendBlocked =
+    environmentUnavailable !== null &&
+    (!canWaitForComposerConnection(environmentUnavailable.connection.phase) ||
+      (!activePendingProgress &&
+        (showResumeAction || showPlanFollowUpPrompt || pendingApprovals.length > 0)));
   const collapsedComposerPrimaryActionDisabled =
     phase === "running" ||
     isSendBusy ||
@@ -3489,7 +3476,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isConnecting ||
     noProviderAvailable ||
     projectSelectionRequired ||
-    environmentUnavailable !== null ||
+    disconnectedSendBlocked ||
     (!composerSendState.hasSendableContent && !showResumeAction);
   const collapsedComposerPrimaryActionLabel = showResumeAction ? "Resume chat" : "Send message";
   const showMobilePendingAnswerActions =
@@ -3532,15 +3519,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     removeComposerDraftFile(attachmentDraftTarget, fileId);
   };
 
-  const addComposerDraftTerminalContexts = useComposerDraftStore(
-    (store) => store.addTerminalContexts,
-  );
-  const addComposerDraftReviewComment = useComposerDraftStore((store) => store.addReviewComment);
-  const addComposerDraftPreviewAnnotation = useComposerDraftStore(
-    (store) => store.addPreviewAnnotation,
-  );
-  const addComposerDraftThreadContexts = useComposerDraftStore((store) => store.addThreadContexts);
-  const setComposerDraftThreadContexts = useComposerDraftStore((store) => store.setThreadContexts);
   const buildContextClipboardFragment = (contextIds: ReadonlyArray<string>): string | null => {
     const wanted = new Set(contextIds);
     const copiedFiles = new Map<string, File>();
@@ -3589,7 +3567,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (records.length === 0) return null;
     const fragment = encodeComposerContextFragment({
       version: 1,
-      source: { environmentId, ...(activeThread ? { threadId: activeThread.id } : {}) },
+      source: { environmentId, ...(activeThreadId !== null ? { threadId: activeThreadId } : {}) },
       records,
     });
     if (fragment) rememberCopiedComposerAttachments(environmentId, copiedFiles);
@@ -3836,7 +3814,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const conflicts = existing !== undefined;
       switch (record.kind) {
         case "terminal": {
-          const threadId = activeThread?.id ?? activeThreadId;
+          const threadId = activeThreadId;
           if (!threadId) break;
           const imported = terminalContextDraftFromRecord(record, threadId);
           const draft = conflicts ? { ...imported, id: randomUUID() } : imported;
@@ -4862,11 +4840,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   // Prompt history (ArrowUp / ArrowDown)
   // ------------------------------------------------------------------
-  // Entries are built on the keypress, not per render: the timeline changes
-  // on every streamed delta and ArrowUp is rare.
-  const promptHistoryEntriesRef = useRef(promptHistoryEntries);
-  promptHistoryEntriesRef.current = promptHistoryEntries;
-
   // The composer persists across threads. A recall from thread A must not
   // be treated as active in thread B, where the text-match fallback could
   // otherwise turn B's own draft into a browsing position.
@@ -4892,17 +4865,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // the list opens. Null while closed.
   const [earlierPrompts, setEarlierPrompts] =
     useState<ReadonlyArray<ComposerPromptHistoryEntry> | null>(null);
-  const hasEarlierPrompts = promptHistoryEntries.some(
-    (entry) => entry.kind === "message" && entry.message.role === "user",
-  );
   const openEarlierPromptsStable = useStableCallback(() =>
-    setEarlierPrompts(
-      buildComposerPromptHistoryEntries(
-        promptHistoryEntriesRef.current.flatMap((entry) =>
-          entry.kind === "message" ? [entry.message] : [],
-        ),
-      ),
-    ),
+    setEarlierPrompts(buildComposerPromptHistoryEntries(readPromptHistoryMessages())),
   );
   const closeEarlierPromptsStable = useStableCallback(() => setEarlierPrompts(null));
   const useEarlierPromptStable = useStableCallback((picked: string) => {
@@ -4947,11 +4911,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     const step = stepComposerPromptHistory({
       direction,
-      entries: buildComposerPromptHistoryEntries(
-        promptHistoryEntriesRef.current.flatMap((entry) =>
-          entry.kind === "message" ? [entry.message] : [],
-        ),
-      ),
+      entries: buildComposerPromptHistoryEntries(readPromptHistoryMessages()),
       position: promptHistoryPositionRef.current,
       currentPrompt: promptRef.current,
     });
@@ -6004,10 +5964,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           memoized picker re-render as you type. */}
       {settings.autoModelEnabled &&
       multipleModelSelections === null &&
-      promptHistoryEntries.length === 0 &&
-      !threadHasStarted(activeThread) &&
-      !threadShellHasStarted(props.activeThreadShell) &&
-      (routeKind === "draft" || (props.activeThreadShell !== null && activeThread !== undefined)) &&
+      !hasTimelineEntries &&
+      !threadStarted &&
+      !threadShellStarted &&
+      (routeKind === "draft" || (hasThreadShell && activeThreadId !== null)) &&
       !composerDraft.autoModel?.sent ? (
         <AutoModelSuggestion
           anchor={autoModelAnchor}
@@ -6164,7 +6124,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         {...(modelReasoningColumn
           ? {
               reasoningColumn: modelReasoningColumn,
-              triggerSuffix: modelReasoningLabel,
+              triggerEffort: modelEffort,
               triggerShortcut: "composer.effort",
             }
           : {})}
@@ -6965,9 +6925,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ensureLeadingBoundary: true,
     });
   const insertContextReferencesAtCaretStable = useStableCallback(insertContextReferencesAtCaret);
-  const setContextInsertionHandler = useComposerDraftStore(
-    (store) => store.setContextInsertionHandler,
-  );
   useEffect(() => {
     return setContextInsertionHandler(composerDraftTarget, insertContextReferencesAtCaretStable);
   }, [composerDraftTarget, insertContextReferencesAtCaretStable, setContextInsertionHandler]);
@@ -7325,7 +7282,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         );
       },
       addTerminalContext: (selection: TerminalContextSelection) => {
-        if (!activeThread) return;
+        if (activeThreadId === null) return;
         // Answers are plain text, so a terminal excerpt cannot ride along with one. Writing it
         // to the chat draft instead would hide it until the question closes.
         if (activePendingProgress) {
@@ -7339,7 +7296,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         const snapshot = readComposerSnapshotStable();
         const context = {
           id: randomUUID(),
-          threadId: activeThread.id,
+          threadId: activeThreadId,
           createdAt: new Date().toISOString(),
           ...selection,
         };
@@ -7370,8 +7327,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         updateAutoModelDraft(composerDraftTarget, (state) => ({ ...state, sent: true })),
       getSendContext: () => ({
         ...(!getComposerDraft(composerDraftTarget)?.autoModel?.sent &&
-        !threadHasStarted(activeThread) &&
-        !threadShellHasStarted(props.activeThreadShell)
+        !threadStarted &&
+        !threadShellStarted
           ? {
               autoModelFeedback: autoModelOutcome(getComposerDraft(composerDraftTarget)?.autoModel),
             }
@@ -7418,8 +7375,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       },
     }),
     [
-      activeThread,
-      props.activeThreadShell,
+      activeThreadId,
+      threadStarted,
+      threadShellStarted,
       addComposerAttachments,
       foldPastedText,
       composerDraftTarget,
@@ -7742,7 +7700,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               sendDisabledReason={sendDisabledReason}
                               isConnecting={isConnecting}
                               isEnvironmentUnavailable={
-                                environmentUnavailable !== null ||
+                                disconnectedSendBlocked ||
                                 noProviderAvailable ||
                                 projectSelectionRequired
                               }
@@ -8453,7 +8411,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 : showProviderUnavailable
                                   ? "Enable a provider in Settings to send a message"
                                   : discord
-                                    ? `Message #${activeThread?.title || props.activeThreadShell?.title || "new chat"}`
+                                    ? `Message #${threadTitle || "new chat"}`
                                     : COMPOSER_PLACEHOLDER
                     }
                     disabled={
@@ -8483,9 +8441,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       sendDisabledReason={sendDisabledReason}
                       isConnecting={isConnecting}
                       isEnvironmentUnavailable={
-                        environmentUnavailable !== null ||
-                        noProviderAvailable ||
-                        projectSelectionRequired
+                        disconnectedSendBlocked || noProviderAvailable || projectSelectionRequired
                       }
                       isPreparingWorktree={false}
                       hasSendableContent={false}
@@ -8544,10 +8500,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       {...(hasEarlierPrompts
                         ? { onShowEarlierPrompts: openEarlierPromptsStable }
                         : {})}
-                      existingThread={Boolean(props.activeThreadShell)}
+                      existingThread={hasThreadShell}
                       subagentsEnabled={
-                        props.activeThreadShell
-                          ? props.activeThreadShell.subagentsEnabled !== false
+                        hasThreadShell
+                          ? threadSubagentsEnabled !== false
                           : draftSubagentsEnabled !== false
                       }
                       {...(activeThreadId === null ||
@@ -8651,7 +8607,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     pendingAction={pendingPrimaryAction}
                     isRunning={phase === "running" && !isSideChatPrompt}
                     canInterrupt={canInterrupt}
-                    runId={activeThread?.runtime?.activeRunId ?? null}
+                    runId={runtimeActiveRunId}
                     canSteer={canSteer && !isCompacting}
                     followUpBehavior={followUpBehavior}
                     alternateShortcutLabel={shortcutLabelForCommand(
@@ -8675,9 +8631,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     sendDisabledReason={sendDisabledReason}
                     isConnecting={isConnecting}
                     isEnvironmentUnavailable={
-                      environmentUnavailable !== null ||
-                      noProviderAvailable ||
-                      projectSelectionRequired
+                      disconnectedSendBlocked || noProviderAvailable || projectSelectionRequired
                     }
                     isPreparingWorktree={isPreparingWorktree}
                     hasSendableContent={composerSendState.hasSendableContent}

@@ -28,6 +28,7 @@ import {
   ChevronDownIcon,
   ClockIcon,
   EyeIcon,
+  UserIcon,
   LayersIcon,
   ListChecksIcon,
   PenLineIcon,
@@ -53,6 +54,7 @@ import {
 
 import {
   filterPullRequestsByInvolvement,
+  deduplicatePullRequestGroups,
   findScopedProject,
   collectPullRequestListFacets,
   groupPullRequestsByInvolvement,
@@ -240,6 +242,7 @@ function PullRequestGroupHeader({
 // The state filters wear the same glyphs the rows do, so the two read as one vocabulary.
 const INVOLVEMENT_TABS = [
   { value: "all", label: "All", Icon: LayersIcon },
+  { value: "mine", label: "Mine", Icon: UserIcon },
   { value: "reviewing", label: "Reviewing", Icon: EyeIcon },
   { value: "authored", label: "Authored", Icon: PenLineIcon },
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<PullRequestInvolvement>>;
@@ -308,7 +311,11 @@ function pullRequestSearchLabels(raw: unknown): Partial<Pick<PullRequestsSearch,
 export const Route = createFileRoute("/_chat/pull-requests")({
   validateSearch: (raw: Record<string, unknown>): PullRequestsSearch => ({
     involvement:
-      raw.involvement === "reviewing" || raw.involvement === "authored" ? raw.involvement : "all",
+      raw.involvement === "reviewing" ||
+      raw.involvement === "authored" ||
+      raw.involvement === "mine"
+        ? raw.involvement
+        : "all",
     state:
       raw.state === "closed" || raw.state === "merged" || raw.state === "all" ? raw.state : "open",
     ...(SORT_OPTIONS.some((option) => option.value === raw.sort)
@@ -338,7 +345,11 @@ export const Route = createFileRoute("/_chat/pull-requests")({
       : {}),
     // Always an own key: the router lays this result over the parent route's unvalidated
     // search, so leaving out a `q` the URL parser made a number would let the number through.
-    q: typeof raw.q === "string" && raw.q ? raw.q.slice(0, 200) : undefined,
+    // Truncating a URL query can leave the leading half of a surrogate pair at the cap.
+    q:
+      typeof raw.q === "string" && raw.q
+        ? raw.q.slice(0, 200).replace(/[\uD800-\uDBFF]$/u, "")
+        : undefined,
     ...(raw.draft === "only" || raw.draft === "hide" ? { draft: raw.draft } : {}),
     ...(raw.review === "approved" ||
     raw.review === "changes-requested" ||
@@ -488,7 +499,8 @@ function PullRequestsRouteView() {
   const selectedEnvironmentId = resolveSelectedEnvironmentId(
     search.selectedEnvironmentId,
     knownEnvironmentIds,
-    scopedEnvironmentId,
+    scopedEnvironmentId ??
+      (capableEnvironments.length === 1 ? capableEnvironments[0]!.environmentId : null),
   );
   const selectedProject = useMemo(
     () => findScopedProject(projects, selectedEnvironmentId, selectedProjectId),
@@ -670,13 +682,12 @@ function PullRequestsRouteView() {
     for (const project of projects) {
       totals.set(project.environmentId, (totals.get(project.environmentId) ?? 0) + 1);
     }
-    return queryEnvironmentIds.flatMap((environmentId) => {
-      const projectIds = assignment.get(environmentId);
-      if (projectIds === undefined) return [];
+    return queryEnvironmentIds.map((environmentId) => {
+      const projectIds = assignment.get(environmentId) ?? [];
       // It lists everything it holds anyway, so the filter is left off and a one-server workspace
       // asks exactly the question it asked before.
-      if (projectIds.length === (totals.get(environmentId) ?? 0)) return [{ environmentId }];
-      return [{ environmentId, projectIds }];
+      if (projectIds.length === (totals.get(environmentId) ?? 0)) return { environmentId };
+      return { environmentId, projectIds };
     });
   }, [projects, projectsKnown, queryEnvironmentIds, scopedProjectId]);
   // Part of the scope, since a different split is a different question and its answers must not
@@ -1585,7 +1596,7 @@ function PullRequestsRouteView() {
     // for another sort. The readiness queue is the default browse order, not a way to bury a
     // closer text match.
     return sortPullRequestGroups(
-      enriched,
+      deduplicatePullRequestGroups(enriched),
       sort,
       typedParsed.text,
       (entry) =>
@@ -1738,19 +1749,23 @@ function PullRequestsRouteView() {
     [displayGroups],
   );
 
-  const linkedSelection = useMemo(
-    () =>
-      search.repository && search.number && selectedProject
-        ? {
-            environmentId: selectedProject.environmentId,
-            repository: search.repository,
-            number: search.number,
-            projectId: selectedProject.id,
-            ...(selectedHost ? { host: selectedHost } : {}),
-          }
-        : null,
-    [search.number, search.repository, selectedProject, selectedHost],
-  );
+  const linkedSelection = useMemo(() => {
+    const environmentId = selectedProject?.environmentId ?? selectedEnvironmentId;
+    if (
+      !search.repository ||
+      !search.number ||
+      environmentId === null ||
+      (selectedProject === undefined && selectedHost === undefined)
+    )
+      return null;
+    return {
+      environmentId,
+      repository: search.repository,
+      number: search.number,
+      projectId: selectedProject?.id,
+      ...(selectedHost ? { host: selectedHost } : {}),
+    };
+  }, [search.number, search.repository, selectedProject, selectedHost, selectedEnvironmentId]);
   const rightPanelAvailable = selectedPullRequestSurface !== null;
   // Maximized like the thread view's panel, with the list collapsing out of the way. Opening a
   // guide maximizes the panel for its wider layout; only the reader's own toggle restores it, so
@@ -1774,7 +1789,7 @@ function PullRequestsRouteView() {
           environmentId: activePullRequestSurface.environmentId,
           repository: activePullRequestSurface.repository,
           number: activePullRequestSurface.number,
-          projectId: activePullRequestSurface.projectId as ProjectId,
+          projectId: activePullRequestSurface.projectId as ProjectId | undefined,
           host:
             activePullRequestSurface.host ??
             (selectedProject?.repositoryIdentity
@@ -1793,7 +1808,7 @@ function PullRequestsRouteView() {
         : {
             repository: surface.repository,
             number: surface.number,
-            selectedProjectId: surface.projectId as ProjectId,
+            selectedProjectId: surface.projectId as ProjectId | undefined,
             selectedHost: surface.host,
             ...(surface.environmentId === undefined
               ? {}
@@ -1830,12 +1845,18 @@ function PullRequestsRouteView() {
   const unavailableProjects = useMemo(
     () =>
       new Map(
-        listErrors.map(
-          (error) =>
-            [
-              pullRequestProjectKey({ id: error.projectId, environmentId: error.environmentId }),
-              error.message,
-            ] as const,
+        listErrors.flatMap((error) =>
+          error.projectId === undefined
+            ? []
+            : [
+                [
+                  pullRequestProjectKey({
+                    id: error.projectId,
+                    environmentId: error.environmentId,
+                  }),
+                  error.message,
+                ] as const,
+              ],
         ),
       ),
     [listErrors],
@@ -1930,7 +1951,6 @@ function PullRequestsRouteView() {
         <PullRequestListGhost rows={7} />
       ) : shownCount === 0 ? (
         <PullRequestListEmptyState
-          hasProjects={!projectsKnown || projects.length > 0}
           refreshing={refreshing}
           onRefresh={() => void refreshFromHost()}
           query={typedQuery}
@@ -2335,7 +2355,7 @@ function PullRequestsRouteView() {
                 });
               }}
               reference={{
-                projectId: renderedPullRequestSurface.projectId as ProjectId,
+                projectId: renderedPullRequestSurface.projectId as ProjectId | undefined,
                 repository: renderedPullRequestSurface.repository,
                 number: renderedPullRequestSurface.number,
                 ...(renderedPullRequestSurface.host

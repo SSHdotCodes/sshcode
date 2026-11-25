@@ -86,7 +86,11 @@ type SupervisorSignal =
   | { readonly _tag: "ConnectRequested" }
   | { readonly _tag: "DisconnectRequested" }
   | { readonly _tag: "RetryRequested" }
-  | { readonly _tag: "NetworkChanged"; readonly network: NetworkStatus }
+  | {
+      readonly _tag: "NetworkChanged";
+      readonly network: NetworkStatus;
+      readonly initialDiscovery?: boolean;
+    }
   | { readonly _tag: "Wakeup"; readonly reason: ConnectionWakeups.ConnectionWakeup }
   | { readonly _tag: "BetterRouteAvailable"; readonly routeId: string };
 
@@ -367,6 +371,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     desired: options?.initiallyDesired ?? false,
     network: targetNetwork(yield* connectivity.status),
   };
+  let hasKnownNetwork = initialIntent.network !== "unknown";
   const intent = yield* Ref.make(initialIntent);
   const signals = yield* Queue.unbounded<SupervisorSignal>();
   const resetRetryState = yield* Ref.make(false);
@@ -492,6 +497,27 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
 
   let routeFailures: ReadonlyMap<string, ConnectionAttemptError> = new Map();
   let activeRouteId: string | null = null;
+  let attemptStartedT3ConnectRoute = false;
+
+  const routeUsesT3Connect = (route: ConnectionRoute) =>
+    route.target._tag === "RelayConnectionTarget" ||
+    (Option.isSome(route.profile) &&
+      route.profile.value._tag === "BearerConnectionProfile" &&
+      route.profile.value.authorization === "t3-connect");
+
+  const markRouteIfT3Connect = Effect.fnUntraced(function* (routeTarget: ConnectionTarget) {
+    if (routeTarget._tag === "RelayConnectionTarget") {
+      attemptStartedT3ConnectRoute = true;
+      return;
+    }
+    const routeId = connectionRouteId(routeTarget);
+    const matched = (yield* currentRoutes).find(
+      (candidate) => connectionRouteId(candidate.target) === routeId,
+    );
+    if (matched !== undefined && routeUsesT3Connect(matched)) {
+      attemptStartedT3ConnectRoute = true;
+    }
+  });
 
   const recordRouteFailure = (routeId: string, error: ConnectionAttemptError) =>
     SubscriptionRef.update(state, (current) => {
@@ -512,7 +538,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     if (next._tag === "Wakeup" && next.reason === "network-changed") networkPathVersion++;
     if (
       Option.isSome(networkTiming) &&
-      (next._tag === "NetworkChanged" ||
+      ((next._tag === "NetworkChanged" && next.initialDiscovery !== true) ||
         (next._tag === "Wakeup" && next.reason === "network-changed"))
     ) {
       for (const route of connectionRoutes(yield* Ref.get(currentEntry))) {
@@ -576,10 +602,12 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       } else {
         activeRouteId = connectionRouteId(progress.target);
         synchronizingSessions.delete(activeRouteId);
+        yield* markRouteIfT3Connect(progress.target);
       }
     }
     if ("prepared" in progress) {
       activeRouteId = connectionRouteId(progress.prepared.target);
+      yield* markRouteIfT3Connect(progress.prepared.target);
       yield* SubscriptionRef.set(prepared, Option.some(progress.prepared));
     }
     markLoad(`connect.${progress.stage}`, {
@@ -603,6 +631,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     lastFailure: ConnectionAttemptError | null,
     synchronizedRoutes: Ref.Ref<number>,
   ) {
+    attemptStartedT3ConnectRoute = false;
     return yield* driver.connect(yield* attemptEntry, (progress) =>
       (progress.stage === "synchronizing"
         ? Ref.update(synchronizedRoutes, (count) => count + 1)
@@ -727,8 +756,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
             return true;
           }
           if (next.reason === "credentials-changed" && usesRelay) {
-            yield* logManagedRelayAccountChange;
-            return false;
+            const routes = yield* currentRoutes;
+            if (attemptStartedT3ConnectRoute || routes.every(routeUsesT3Connect)) {
+              yield* logManagedRelayAccountChange;
+              return false;
+            }
           }
           break;
       }
@@ -771,6 +803,9 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     next: SupervisorSignal,
     roundTripMs: number | undefined,
   ): Duration.Input | undefined => {
+    if (next._tag === "NetworkChanged" && next.initialDiscovery === true) {
+      return undefined;
+    }
     const roundTripBeforeChange = roundTripMs;
     if (
       next._tag === "NetworkChanged" ||
@@ -884,7 +919,9 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       }
       // A new network or a return to the app may have brought a better route back.
       if (
-        (next._tag === "NetworkChanged" && next.network !== "offline") ||
+        (next._tag === "NetworkChanged" &&
+          next.network !== "offline" &&
+          next.initialDiscovery !== true) ||
         (next._tag === "Wakeup" && ConnectionWakeups.resetsRetryBackoff(next.reason))
       ) {
         yield* requestBetterRouteCheck(lease);
@@ -909,13 +946,28 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       yield* Ref.set(probeUnanswered, true);
       yield* Ref.set(longResumeProbeUnanswered, isLongResume(next));
       // After a long time away the OS has often killed the socket. Authorize
-      // its route meanwhile, so a replacement skips straight to opening.
-      if (isLongResume(next) && driver.prepareAhead !== undefined) {
-        const routeId = connectionRouteId(lease.prepared.target);
-        const route = (yield* currentRoutes).find(
-          (candidate) => connectionRouteId(candidate.target) === routeId,
-        );
-        if (route !== undefined) yield* driver.prepareAhead(yield* Ref.get(currentEntry), route);
+      // its route meanwhile, so a replacement skips straight to opening. When
+      // the network changes while on a direct route, authorize a relay fallback
+      // ahead so leaving Wi-Fi does not pay relay discovery after the probe.
+      if (driver.prepareAhead !== undefined) {
+        if (isLongResume(next)) {
+          const routeId = connectionRouteId(lease.prepared.target);
+          const route = (yield* currentRoutes).find(
+            (candidate) => connectionRouteId(candidate.target) === routeId,
+          );
+          if (route !== undefined) yield* driver.prepareAhead(yield* Ref.get(currentEntry), route);
+        } else if (
+          next._tag === "Wakeup" &&
+          next.reason === "network-changed" &&
+          lease.prepared.target._tag !== "RelayConnectionTarget"
+        ) {
+          const relayFallback = (yield* currentRoutes).find(
+            (candidate) => candidate.target._tag === "RelayConnectionTarget",
+          );
+          if (relayFallback !== undefined) {
+            yield* driver.prepareAhead(yield* Ref.get(currentEntry), relayFallback);
+          }
+        }
       }
       markLoad("connect.probe.started", {
         environment: target.environmentId.slice(0, 8),
@@ -1442,14 +1494,27 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   );
 
   const applyNetwork = (network: NetworkStatus) =>
-    Ref.modify(intent, (current) => {
-      const next = targetNetwork(network);
-      return current.network === next
-        ? [false, current]
-        : ([true, { ...current, network: next }] as const);
-    }).pipe(
-      Effect.flatMap((changed) =>
-        changed ? signal({ _tag: "NetworkChanged", network }) : Effect.void,
+    Ref.modify(
+      intent,
+      (current): readonly ["unchanged" | "initial-discovery" | "changed", SupervisorIntent] => {
+        const next = targetNetwork(network);
+        if (current.network === next) {
+          return ["unchanged", current];
+        }
+        const initialDiscovery =
+          !hasKnownNetwork && current.network === "unknown" && next === "online";
+        if (next !== "unknown") hasKnownNetwork = true;
+        return [initialDiscovery ? "initial-discovery" : "changed", { ...current, network: next }];
+      },
+    ).pipe(
+      Effect.flatMap((change) =>
+        change === "unchanged"
+          ? Effect.void
+          : signal({
+              _tag: "NetworkChanged",
+              network,
+              ...(change === "initial-discovery" ? { initialDiscovery: true } : {}),
+            }),
       ),
     );
   // A restarted listener may have missed changes while it was down.

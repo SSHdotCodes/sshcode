@@ -7,7 +7,6 @@ import type {
   PullRequestAction,
   PullRequestComment,
   PullRequestCommit,
-  PullRequestInvolvement,
   PullRequestListState,
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
@@ -44,7 +43,10 @@ import {
   type GitLabMergeRequestListItem,
   type GitLabProjectUsers,
 } from "./gitLabMergeRequestJson.ts";
-import type { ProviderListCursor } from "@t3tools/source-control-core/server/PullRequestProvider";
+import type {
+  ProviderListCursor,
+  RepositoryPullRequestInvolvement,
+} from "@t3tools/source-control-core/server/PullRequestProvider";
 
 /**
  * Names the read that produced unusable output, so a failure reports the call it came from
@@ -227,7 +229,7 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly cwd: string;
       readonly repository: string;
       readonly state: PullRequestListState;
-      readonly involvement: PullRequestInvolvement;
+      readonly involvement: RepositoryPullRequestInvolvement;
       readonly viewer: string;
       readonly limit: number;
       /** Free text for GitLab's own `search`, which matches title and description. */
@@ -441,7 +443,7 @@ function stateParam(state: PullRequestListState): string {
 }
 
 function involvementParams(input: {
-  readonly involvement: PullRequestInvolvement;
+  readonly involvement: RepositoryPullRequestInvolvement;
   readonly viewer: string;
 }): ReadonlyArray<readonly [string, string]> {
   switch (input.involvement) {
@@ -570,7 +572,7 @@ export const make = Effect.gen(function* () {
     readonly cwd: string;
     readonly repository: string;
     readonly state: PullRequestListState;
-    readonly involvement: PullRequestInvolvement;
+    readonly involvement: RepositoryPullRequestInvolvement;
     readonly viewer: string;
     readonly limit: number;
     readonly query?: string | undefined;

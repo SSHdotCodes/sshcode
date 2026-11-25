@@ -19,7 +19,9 @@ describe("presentApprovalCard", () => {
     expect(card.appName).toBeNull();
     expect(card.allow?.label).toBe("Allow");
     expect(card.deny?.label).toBe("Deny");
-    expect(card.secondary.map((option) => option.label)).toEqual(["Allow for this session"]);
+    expect(card.secondary.map((option) => option.label)).toEqual([
+      "Allow until the agent restarts",
+    ]);
     expect(`${card.title}\n${card.detail}`).not.toContain("Command approval requested");
   });
 

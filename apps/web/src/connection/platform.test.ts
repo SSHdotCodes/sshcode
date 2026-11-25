@@ -26,13 +26,18 @@ import {
   canReuseCachedPlatformRegistration,
   isRejectedBootstrapCredentialError,
   isRejectedSecondaryBootstrap,
+  mapDesktopConnectionWakeup,
   nextRejectedSecondaryBootstrap,
+  prepareDesktopSshEnvironment,
   primaryRegistrationToRetainAfterTopologyRead,
   provisionDesktopSshEnvironment,
+  type CachedSshSession,
   readPrimaryEnvironmentTargetResult,
   secondaryRegistrationsToRetainAfterTopologyRead,
   secondaryBearerExpiresAtEpochMs,
   secondaryBearerRefreshAtEpochMs,
+  WEB_HIDDEN_RECONNECT_AFTER_MS,
+  webVisibilityWakeup,
 } from "./platform.ts";
 
 const TARGET: DesktopSshEnvironmentTarget = {
@@ -124,6 +129,105 @@ describe("desktop SSH pairing", () => {
       ).pipe(Effect.flip);
 
       expect(calls).toEqual(["ensure", "descriptor"]);
+    }),
+  );
+
+  it.effect("reuses cached SSH bearer sessions across reconnects without re-pairing", () =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      let sessionValid = true;
+      let reachedEnvironment = EnvironmentId.make("environment-ssh");
+      let tokenSeq = 0;
+      const descriptorBridge = makeBridge(calls);
+      const bridge = {
+        fetchSshEnvironmentDescriptor: async (httpBaseUrl: string) => ({
+          ...(await descriptorBridge.fetchSshEnvironmentDescriptor(httpBaseUrl)),
+          environmentId: reachedEnvironment,
+        }),
+        ensureSshEnvironment: async (
+          target: DesktopSshEnvironmentTarget,
+          options?: { readonly issuePairingToken?: boolean },
+        ) => {
+          calls.push(options?.issuePairingToken ? "ensure:pair" : "ensure:reuse");
+          return {
+            target,
+            httpBaseUrl: "http://127.0.0.1:3201/",
+            wsBaseUrl: "ws://127.0.0.1:3201/",
+            pairingToken: options?.issuePairingToken ? `pair-${++tokenSeq}` : null,
+          };
+        },
+        bootstrapSshBearerSession: async () => {
+          calls.push("token");
+          return {
+            access_token: `bearer-${tokenSeq}`,
+            issued_token_type: "urn:ietf:params:oauth:token-type:access_token" as const,
+            token_type: "Bearer" as const,
+            expires_in: 3_600,
+            scope: AuthStandardClientScopes.join(" "),
+          };
+        },
+        fetchSshSessionState: async () => {
+          calls.push("session");
+          return {
+            authenticated: sessionValid,
+            auth: { policy: "desktop-managed-local", bootstrapMethods: [] },
+          } as never;
+        },
+      };
+      const cache = new Map<string, CachedSshSession>();
+      const expectedEnvironmentId = reachedEnvironment;
+
+      // Cold prepare mints a pairing credential and caches the bearer token.
+      const first = yield* prepareDesktopSshEnvironment(
+        bridge,
+        TARGET,
+        cache,
+        expectedEnvironmentId,
+      );
+      expect(first.bearerToken).toBe("bearer-1");
+      expect(calls).toEqual(["ensure:pair", "descriptor", "token"]);
+
+      // Reconnect reuses the cached bearer token without requesting a pairing token.
+      calls.length = 0;
+      const second = yield* prepareDesktopSshEnvironment(
+        bridge,
+        TARGET,
+        cache,
+        expectedEnvironmentId,
+      );
+      expect(second.bearerToken).toBe("bearer-1");
+      expect(calls).toEqual(["ensure:reuse", "descriptor", "session"]);
+
+      // Expired/revoked bearer falls back to issuing a fresh pairing token.
+      calls.length = 0;
+      sessionValid = false;
+      const third = yield* prepareDesktopSshEnvironment(
+        bridge,
+        TARGET,
+        cache,
+        expectedEnvironmentId,
+      );
+      expect(third.bearerToken).toBe("bearer-2");
+      expect(calls).toEqual([
+        "ensure:reuse",
+        "descriptor",
+        "session",
+        "ensure:pair",
+        "descriptor",
+        "token",
+      ]);
+
+      // The same loopback URL can now forward to a different environment.
+      calls.length = 0;
+      reachedEnvironment = EnvironmentId.make("different-ssh-environment");
+      const result = yield* prepareDesktopSshEnvironment(
+        bridge,
+        TARGET,
+        cache,
+        expectedEnvironmentId,
+      ).pipe(Effect.result);
+      expect(calls).toEqual(["ensure:reuse", "descriptor"]);
+      expect(result).toMatchObject({ _tag: "Failure", failure: { reason: "configuration" } });
     }),
   );
 });
@@ -482,7 +586,8 @@ describe("platform startup isolation", { concurrent: false }, () => {
         );
         yield* Deferred.await(refused);
         yield* Effect.yieldNow;
-        yield* TestClock.adjust("3 seconds");
+        // Fast initial discovery retry recovers in 100ms instead of waiting a full 3s poll tick.
+        yield* TestClock.adjust("100 millis");
         expect(Option.getOrThrow(yield* Fiber.join(pending))[0]?.target.environmentId).toBe(
           "local-recovered",
         );
@@ -493,4 +598,73 @@ describe("platform startup isolation", { concurrent: false }, () => {
       );
     },
   );
+
+  it.effect("does not poll desktop secondary bootstraps on macOS", () => {
+    const bootstrapReads = vi.fn(() => [
+      {
+        id: PRIMARY_LOCAL_ENVIRONMENT_ID,
+        label: "This Mac",
+        httpBaseUrl: "http://127.0.0.1:42123/",
+        wsBaseUrl: "ws://127.0.0.1:42123/",
+      },
+    ]);
+    vi.stubGlobal("window", {
+      location: { href: "http://127.0.0.1:42123/", origin: "http://127.0.0.1:42123" },
+      desktopBridge: {
+        getClientPlatform: () => "darwin",
+        getLocalEnvironmentBootstraps: bootstrapReads,
+        getLocalEnvironmentBearerToken: async () => "fake-primary-bearer",
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          environmentId: "local-mac",
+          label: "This Mac",
+          platform: { os: "darwin", arch: "arm64" },
+          serverVersion: "0.0.0-test",
+          capabilities: { repositoryIdentity: true },
+        }),
+      ),
+    );
+    return Effect.gen(function* () {
+      const source = yield* PlatformConnectionSource.PlatformConnectionSource;
+      const discovered = yield* Deferred.make<void>();
+      yield* source.registrations.pipe(
+        Stream.runForEach((entries) =>
+          entries.some((entry) => entry.target.environmentId === "local-mac")
+            ? Deferred.succeed(discovered, undefined)
+            : Effect.void,
+        ),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(discovered);
+      // Only the single primary poll read bootstraps; secondary polling did not run.
+      expect(bootstrapReads).toHaveBeenCalledTimes(1);
+    }).pipe(
+      Effect.provide(layerPlatformConnectionSource),
+      Effect.provideService(FetchHttpClient.Fetch, globalThis.fetch),
+    );
+  });
+});
+
+describe("desktop and visibility wakeups", () => {
+  it("maps OS resume, screen unlock, and network changes to fast supervisor wakeups", () => {
+    expect(mapDesktopConnectionWakeup("resume")).toBe("application-active-reconnect");
+    expect(mapDesktopConnectionWakeup("unlock-screen")).toBe("application-active-probe");
+    expect(mapDesktopConnectionWakeup("network-changed")).toBe("network-changed");
+  });
+
+  it("keeps the patient probe for a Mac window and reconnects a long-hidden browser tab", () => {
+    expect(webVisibilityWakeup(null, 5_000, false)).toBe("application-active");
+    expect(webVisibilityWakeup(1_000, 1_000 + WEB_HIDDEN_RECONNECT_AFTER_MS - 1, false)).toBe(
+      "application-active",
+    );
+    expect(webVisibilityWakeup(1_000, 1_000 + WEB_HIDDEN_RECONNECT_AFTER_MS, false)).toBe(
+      "application-active-reconnect",
+    );
+    // A hidden Mac window keeps its sockets; sleep and network changes come from the OS.
+    expect(webVisibilityWakeup(1_000, 1_000 + 60 * 60_000, true)).toBe("application-active");
+  });
 });

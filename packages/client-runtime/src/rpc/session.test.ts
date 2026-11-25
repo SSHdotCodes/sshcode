@@ -1681,6 +1681,117 @@ describe("RpcSessionFactory", () => {
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
+  it.effect(
+    "gives a resumed socket one watchdog interval after OS suspension and ignores suspended Pong RTT",
+    () =>
+      Effect.gen(function* () {
+        const baseClock = yield* Clock.Clock;
+        let suspensionOffsetNanos = 0n;
+        const suspendableClock: Clock.Clock = {
+          currentTimeMillisUnsafe: () =>
+            baseClock.currentTimeMillisUnsafe() + Number(suspensionOffsetNanos / 1_000_000n),
+          currentTimeMillis: Effect.sync(
+            () => baseClock.currentTimeMillisUnsafe() + Number(suspensionOffsetNanos / 1_000_000n),
+          ),
+          currentTimeNanosUnsafe: () => baseClock.currentTimeNanosUnsafe() + suspensionOffsetNanos,
+          currentTimeNanos: Effect.sync(
+            () => baseClock.currentTimeNanosUnsafe() + suspensionOffsetNanos,
+          ),
+          monotonicTimeNanosUnsafe: () =>
+            baseClock.monotonicTimeNanosUnsafe() + suspensionOffsetNanos,
+          monotonicTimeNanos: Effect.sync(
+            () => baseClock.monotonicTimeNanosUnsafe() + suspensionOffsetNanos,
+          ),
+          sleep: (duration) => baseClock.sleep(duration),
+        };
+
+        const { factory, sockets } = yield* makeFactory();
+        const session = yield* factory
+          .connect(PREPARED)
+          .pipe(Effect.provideService(Clock.Clock, suspendableClock));
+        const readyFiber = yield* Effect.forkChild(session.ready);
+        const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
+        const socket = yield* awaitSocket(sockets);
+
+        socket.open();
+        yield* completeInitialConfig(socket);
+        yield* Fiber.join(readyFiber);
+
+        // Let one ping go out before the OS suspends the app for 60 seconds.
+        yield* TestClock.adjust("5 seconds");
+        expect(socket.sent.map((message) => decodeJson(message)).filter(isPing)).toHaveLength(1);
+
+        // Simulate iOS suspending the process for 60s before the next 5s tick fires.
+        suspensionOffsetNanos += 60_000_000_000n;
+        // A buffered Pong arriving on wake must not poison RTT / timeout budgets.
+        socket.serverMessage(encodeJson({ _tag: "Pong" }));
+        yield* TestClock.adjust("5 seconds");
+
+        expect(closedFiber.pollUnsafe()).toBeUndefined();
+        expect(yield* session.pingRoundTrip!).toBeUndefined();
+        expect(yield* session.responseTimeoutMs!(1_000)).toBe(1_000);
+
+        // Next normal 5s tick sees the fresh receivedAt from wake and keeps the socket alive.
+        yield* TestClock.adjust("5 seconds");
+        expect(closedFiber.pollUnsafe()).toBeUndefined();
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
+  it.effect.each([
+    { extraDelay: 0n, tick: "normal" },
+    { extraDelay: 60_000_000_000n, tick: "delayed" },
+  ])("closes a dead socket on the next $tick tick after OS suspension", ({ extraDelay }) =>
+    Effect.gen(function* () {
+      const baseClock = yield* Clock.Clock;
+      let suspensionOffsetNanos = 0n;
+      const suspendableClock: Clock.Clock = {
+        currentTimeMillisUnsafe: () =>
+          baseClock.currentTimeMillisUnsafe() + Number(suspensionOffsetNanos / 1_000_000n),
+        currentTimeMillis: Effect.sync(
+          () => baseClock.currentTimeMillisUnsafe() + Number(suspensionOffsetNanos / 1_000_000n),
+        ),
+        currentTimeNanosUnsafe: () => baseClock.currentTimeNanosUnsafe() + suspensionOffsetNanos,
+        currentTimeNanos: Effect.sync(
+          () => baseClock.currentTimeNanosUnsafe() + suspensionOffsetNanos,
+        ),
+        monotonicTimeNanosUnsafe: () =>
+          baseClock.monotonicTimeNanosUnsafe() + suspensionOffsetNanos,
+        monotonicTimeNanos: Effect.sync(
+          () => baseClock.monotonicTimeNanosUnsafe() + suspensionOffsetNanos,
+        ),
+        sleep: (duration) => baseClock.sleep(duration),
+      };
+
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory
+        .connect(PREPARED)
+        .pipe(Effect.provideService(Clock.Clock, suspendableClock));
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
+      const socket = yield* awaitSocket(sockets);
+
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+
+      // Simulate 60s OS suspension: first wake tick gives a grace interval.
+      suspensionOffsetNanos += 60_000_000_000n;
+      yield* TestClock.adjust("5 seconds");
+      expect(closedFiber.pollUnsafe()).toBeUndefined();
+
+      // With no frames arriving during the grace interval, the next 5s tick closes it.
+      suspensionOffsetNanos += extraDelay;
+      yield* TestClock.adjust("5 seconds");
+      expect(closedFiber.pollUnsafe()).toBeDefined();
+      const error = yield* Fiber.join(closedFiber);
+      expect(error).toBeInstanceOf(ConnectionTransientError);
+      expect(error).toMatchObject({
+        reason: "transport",
+        detail: "Test environment stopped responding.",
+      });
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
   it.effect("keeps reading replies after closing a stream with a full buffer", () =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();

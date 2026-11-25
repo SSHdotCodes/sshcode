@@ -8,7 +8,7 @@ import { PullRequestMarkdown } from "../PullRequestMarkdown";
 /** Where the guide's prose renders from: the pull request's environment and checkout. */
 export const GuideProseContext = createContext<{
   readonly environmentId: EnvironmentId;
-  readonly cwd: string;
+  readonly cwd: string | undefined;
 } | null>(null);
 
 /**

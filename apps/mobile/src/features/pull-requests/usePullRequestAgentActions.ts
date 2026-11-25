@@ -37,7 +37,7 @@ export function usePullRequestAgentActions(
       image: "bubble.left.and.bubble.right",
       attributes: { disabled: task !== "ask" && Boolean(thread.archivedAt) },
     })),
-    ...(links.canAsk ? [{ id: `${task}:new`, title: "Start a new chat", image: "plus" }] : []),
+    ...(links.canStart ? [{ id: `${task}:new`, title: "Start a new chat", image: "plus" }] : []),
   ];
   const menuAction = (task: PullRequestAgentTask) => {
     const action = actions.find((action) => action.task === task);

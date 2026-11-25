@@ -396,7 +396,8 @@ export interface ComposerDraftWorkspaceSelection {
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
   /** Resolve and check out this PR when the queued task is sent. */
-  readonly pullRequestReference?: string;
+  readonly pullRequestReference?: string | undefined;
+  readonly pullRequestCheckoutRoot?: string | undefined;
 }
 
 export type ComposerDraftSettingsUpdate = Pick<
@@ -415,6 +416,7 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
   pullRequestReference: Schema.optional(Schema.String),
+  pullRequestCheckoutRoot: Schema.optional(Schema.String),
 });
 
 const ComposerDraftProjectSchema = Schema.Struct({
@@ -1290,6 +1292,8 @@ export async function removeDeliveredCloudQueuedMessage(
             editor.workspaceSelection.worktreePath !== message.creation?.worktreePath ||
             editor.workspaceSelection.pullRequestReference !==
               message.creation?.pullRequestReference ||
+            editor.workspaceSelection.pullRequestCheckoutRoot !==
+              message.creation?.pullRequestCheckoutRoot ||
             (editor.workspaceSelection.startFromOrigin ?? false) !==
               (message.creation?.startFromOrigin ?? false))))
     )

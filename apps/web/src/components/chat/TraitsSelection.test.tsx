@@ -33,6 +33,7 @@ const models = [
             { id: "low", label: "Low" },
             { id: "medium", label: "Medium" },
             { id: "high", label: "High" },
+            { id: "ultracode", label: "Ultracode" },
           ],
         },
         { id: "fastMode", label: "Fast", type: "boolean" as const, currentValue: true },
@@ -60,8 +61,10 @@ function render(options: ReadonlyArray<ProviderOptionSelection>, isNew = false) 
     ),
   );
 }
-function pickHigh() {
-  act(() => host.querySelectorAll<HTMLButtonElement>("[role=radio]")[2]!.click());
+// End moves to the slider's last stop, Ultracode.
+function pickTop() {
+  const slider = host.querySelector<HTMLInputElement>("input[type=range]")!;
+  act(() => slider.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
 }
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -81,29 +84,41 @@ it("saves effort to the shared thread, follows a remote option change, and keeps
     { id: "reasoningEffort", value: "medium" },
     { id: "fastMode", value: true },
   ]);
-  pickHigh();
+  pickTop();
   expect(updateModel).toHaveBeenCalledWith([
-    { id: "reasoningEffort", value: "high" },
+    { id: "reasoningEffort", value: "ultracode" },
     { id: "fastMode", value: true },
   ]);
   expect(useComposerDraftStore.getState().getComposerDraft(threadRef)?.activeProvider).toBeNull();
   render([{ id: "reasoningEffort", value: "low" }]);
-  expect(host.querySelector("[role=radio][aria-checked=true]")?.textContent).toContain("Low");
+  expect(host.querySelector("input[type=range]")?.getAttribute("aria-valuetext")).toBe("Low");
   expect(useComposerDraftStore.getState().getComposerDraft(threadRef)?.prompt).toBe(
     "text being typed",
   );
 });
 
+it("puts Ultracode on the slider as its last stop", () => {
+  render([{ id: "reasoningEffort", value: "medium" }]);
+  expect(host.querySelector("[role=radio]")).toBeNull();
+  const slider = host.querySelector<HTMLInputElement>("input[type=range]")!;
+  expect(slider.getAttribute("aria-valuetext")).toBe("Medium");
+  expect(slider.getAttribute("max")).toBe("3");
+  pickTop();
+  expect(updateModel).toHaveBeenCalledWith(
+    expect.arrayContaining([{ id: "reasoningEffort", value: "ultracode" }]),
+  );
+});
+
 it("keeps new chat effort local and remembers its sticky default", () => {
   render([], true);
-  pickHigh();
+  pickTop();
   expect(updateModel).not.toHaveBeenCalled();
   const draft = useComposerDraftStore.getState().getComposerDraft(draftId);
   expect(draft?.modelSelectionByProvider[instanceId]?.options).toContainEqual({
     id: "reasoningEffort",
-    value: "high",
+    value: "ultracode",
   });
   expect(
     useComposerDraftStore.getState().stickyOptionsByModelByProvider[instanceId]?.["gpt-5.4"],
-  ).toContainEqual({ id: "reasoningEffort", value: "high" });
+  ).toContainEqual({ id: "reasoningEffort", value: "ultracode" });
 });

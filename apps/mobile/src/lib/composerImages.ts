@@ -16,6 +16,7 @@ import {
 } from "@t3tools/contracts";
 import { originalImageMimeType } from "@t3tools/client-runtime/image-attachment-size";
 import type { DocumentPickerResult } from "expo-document-picker";
+import { downloadFileName } from "./attachmentDownload";
 import { estimateBase64ByteSize } from "./base64";
 import {
   COMPOSER_ATTACHMENT_DIRECTORY,
@@ -155,7 +156,7 @@ export async function persistComposerAttachmentFile(
     Array.from(name, (character) =>
       character === "/" || character === "\\" || character.charCodeAt(0) < 32 ? "-" : character,
     ).join("") || "file";
-  const destination = new File(directory, `${uuidv4()}-${safeName}`);
+  const destination = new File(directory, downloadFileName(`${uuidv4()}-${safeName}`));
   const source = new File(uri);
   const sourceSize = source.size;
   if (

@@ -3,6 +3,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { splitPullRequestBody } from "./pullRequestMarkdown.ts";
 
 describe("pull request body segmentation", () => {
+  it("rejects an invalid fence with a long marker run without rescanning it", () => {
+    const body = `${"`".repeat(100_000)}\u2028x`;
+    expect(splitPullRequestBody(body)).toEqual([
+      { id: "markdown:0", kind: "markdown", text: body },
+    ]);
+  });
+
   it("keeps a plain body as a single markdown run", () => {
     expect(splitPullRequestBody("## What changed\n\nSome prose.")).toEqual([
       { id: "markdown:0", kind: "markdown", text: "## What changed\n\nSome prose." },
@@ -137,6 +144,15 @@ describe("pull request body segmentation", () => {
     );
     expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: body },
+    ]);
+  });
+
+  it("keeps prose and later embeds after a captioned video", () => {
+    const captioned = '<video src="https://example.com/a.mp4"></video> Before the fix\n\nIt opens.';
+    const body = captioned + '\n\n<video src="https://example.com/b.mp4"></video>';
+    expect(splitPullRequestBody(body)).toEqual([
+      { id: "markdown:0", kind: "markdown", text: captioned },
+      { id: "attachment:1", kind: "attachment", url: "https://example.com/b.mp4", media: "video" },
     ]);
   });
 

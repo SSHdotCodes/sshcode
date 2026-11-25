@@ -3,6 +3,8 @@ import { formatTranscriptTimestamp } from "../../lib/time";
 import { createDiscordThreadFeedProjector } from "../../lib/threadFeedProjection";
 import { useModelMentions } from "../../state/model-mentions";
 import { UserMessageBubble } from "./UserMessageBubble";
+import type { UserMessageDisclosureProps } from "../../native/UserMessageDisclosure";
+import { editingQueuedMessageIdsAtom } from "../../state/use-thread-outbox";
 import {
   matchesTimelineJump,
   type TimelineJumpTarget,
@@ -86,7 +88,10 @@ import {
   classifyMarkdownImageSource,
   markdownImageSourceFragment,
 } from "@t3tools/client-runtime/markdown-images";
-import { resolveViewedImageAsset } from "@t3tools/client-runtime/work-log/presentation";
+import {
+  resolveViewedImageAsset,
+  viewedImageMarkdownSource,
+} from "@t3tools/client-runtime/work-log/presentation";
 import {
   renderCodexInlineDirectivesAsMarkdown,
   splitCodexArtifactTemplateMarkdown,
@@ -150,7 +155,7 @@ import {
 import { ThreadWorkImageStrip } from "./ThreadWorkImages";
 import { workGroupImageNotices, workGroupImageSources } from "./workLogImages";
 import { isPdfFile } from "../../lib/filePreview";
-import { flattenThemeColor } from "../../lib/mobileTheme";
+import { flattenThemeColor, userBubbleLinkColor } from "../../lib/mobileTheme";
 import { PresentationSource } from "../../components/NativePresentation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reanimated";
@@ -250,6 +255,7 @@ import { resolveThreadFeedFixedItemSize } from "./thread-feed-item-size";
 import {
   createThreadFeedRowStore,
   useThreadFeedRowVolatileSlice,
+  userMessageExpansionKey,
   type ThreadFeedRowStore,
   type ThreadFeedRowStoreState,
 } from "./thread-feed-row-store";
@@ -341,6 +347,7 @@ export interface ThreadFeedProps {
   readonly setupWorkingStartedAt?: string | null;
   readonly queuedMessages: ReadonlyArray<QueuedThreadMessage>;
   readonly dispatchingMessageId: MessageId | null;
+  readonly editingMessageId: MessageId | null;
   readonly steerWait?: SteerWait | null;
   readonly onSendSteerNow?: (toolItemIds: ReadonlyArray<TurnItemId>) => Promise<void>;
   /** Null where a pending message cannot be edited (no composer to edit it in). */
@@ -1068,6 +1075,7 @@ function useMarkdownStyles(): MarkdownStyleSets {
     theme["--color-user-bubble"],
   );
   const markdownUserBodyColor = theme["--color-user-bubble-foreground"];
+  const markdownUserLinkColor = userBubbleLinkColor(theme);
   const markdownUserCodeBg = theme["--color-md-user-code-bg"];
   const markdownUserCodeText = theme["--color-md-user-code-text"];
   const markdownUserInlineCodeText = theme["--color-user-bubble-foreground-muted"];
@@ -1084,7 +1092,7 @@ function useMarkdownStyles(): MarkdownStyleSets {
           color: markdownUserBodyColor,
           strongColor: markdownUserBodyColor,
           mutedColor: markdownUserBodyColor,
-          linkColor: markdownUserBodyColor,
+          linkColor: markdownUserLinkColor,
           inlineCodeColor: markdownUserInlineCodeText,
           codeColor: markdownUserCodeText,
           codeBackgroundColor: markdownUserCodeBg,
@@ -1142,6 +1150,7 @@ function useMarkdownStyles(): MarkdownStyleSets {
     markdownStrongColor,
     markdownUserBodyColor,
     markdownUserCodeBg,
+    markdownUserLinkColor,
     markdownUserCodeText,
     markdownUserFenceBg,
     markdownUserInlineCodeText,
@@ -1205,7 +1214,7 @@ function FoldedMessageRow(props: {
         <WorkLogLabel>
           <Text className="font-t3-medium text-foreground-muted">{props.label}</Text>
           {props.preview ? (
-            <Text className="text-foreground-subtle">{`  ${props.preview}`}</Text>
+            <Text className="text-foreground-muted">{`  ${props.preview}`}</Text>
           ) : null}
         </WorkLogLabel>
         {props.status ? (
@@ -1220,7 +1229,7 @@ function FoldedMessageRow(props: {
             {props.status}
           </Text>
         ) : null}
-        <Text className="text-2xs tabular-nums text-foreground-subtle">{props.timestampLabel}</Text>
+        <Text className="text-2xs tabular-nums text-foreground-muted">{props.timestampLabel}</Text>
         <ThreadDisclosureChevron
           expanded={expanded}
           collapsedDirection="down"
@@ -1439,6 +1448,9 @@ function renderFeedEntry(
   > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
+    readonly userMessageExpanded: boolean;
+    readonly isEditingUserMessage: boolean;
+    readonly userBubbleFadeColor: string;
     readonly workRowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
     readonly workGroupScrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
@@ -1865,6 +1877,17 @@ function renderFeedEntry(
                   skills={props.skills}
                   linkHandlers={props.markdownLinkHandlers}
                   renderImage={props.renderMarkdownImage}
+                  disclosure={
+                    props.isEditingUserMessage
+                      ? undefined
+                      : {
+                          expanded: props.userMessageExpanded,
+                          onToggle: () =>
+                            props.onToggleWorkRow(userMessageExpansionKey(message.id), entry.id),
+                          fadeColor: props.discord ? props.screenColor : props.userBubbleFadeColor,
+                          linkColor: styles.nativeTextStyle.linkColor,
+                        }
+                  }
                 />
               </MarkdownImageAvailableWidthContext>
             ) : null}
@@ -2145,6 +2168,7 @@ type UserMessageContentProps = {
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly linkHandlers: MarkdownLinkHandlers;
   readonly renderImage: MarkdownImageRenderer;
+  readonly disclosure?: UserMessageDisclosureProps | undefined;
 };
 
 function UserMessageContent(props: UserMessageContentProps) {
@@ -2282,6 +2306,7 @@ function UserMessageMarkdownContent(props: UserMessageContentProps) {
         models={models}
         textStyle={props.markdownStyles.nativeTextStyle}
         preserveSoftBreaks
+        userMessageDisclosure={props.disclosure}
         {...props.linkHandlers}
         renderImage={props.renderImage}
       />
@@ -2440,6 +2465,8 @@ type ThreadFeedSharedRowContextValue = Omit<
   Parameters<typeof renderFeedEntry>[1],
   | "copiedRowId"
   | "expandedWorkRows"
+  | "userMessageExpanded"
+  | "isEditingUserMessage"
   | "dispatchingMessageId"
   | "steerWait"
   | "unsettledTurnId"
@@ -2490,6 +2517,8 @@ const ThreadFeedRowContent = memo(function ThreadFeedRowContent(props: {
       copiedRowId: slice.copiedRowId,
       expandedWorkRows:
         item.type === "activity-group" ? snapshot.expandedWorkRows : EMPTY_EXPANDED_WORK_ROWS,
+      userMessageExpanded: slice.userMessageExpanded,
+      isEditingUserMessage: slice.isEditingUserMessage,
       dispatchingMessageId:
         slice.isDispatching && item.type === "message" && item.pendingMessage
           ? item.pendingMessage.messageId
@@ -2746,6 +2775,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const iconSubtleColor = theme["--color-icon-subtle"];
   const screenColor = theme["--color-screen"];
   const userBubbleColor = theme["--color-user-bubble"];
+  const userBubbleFadeColor = flattenThemeColor(userBubbleColor, screenColor);
+  const editingQueuedMessageIds = useAtomValue(editingQueuedMessageIdsAtom);
   const onMarkdownLinkPress = useCallback(
     (pressedHref: string, imageEmbed = false) => {
       const href = resolveHomeRelativeHref(pressedHref, props.workspaceRoot);
@@ -2966,7 +2997,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         workspaceRoot: props.workspaceRoot,
       });
       const media = viewedImage
-        ? resolveMarkdownMediaPreview(image.href, {
+        ? resolveMarkdownMediaPreview(viewedImageMarkdownSource(image.href), {
             environmentId: props.environmentId,
             threadId: props.threadId,
             workspaceRoot: props.workspaceRoot,
@@ -3613,6 +3644,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       iconSubtleColor,
       screenColor,
       userBubbleColor,
+      userBubbleFadeColor,
       markdownStyles,
       reviewCommentColors,
       reviewCommentBubbleWidth,
@@ -3660,6 +3692,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       iconSubtleColor,
       screenColor,
       userBubbleColor,
+      userBubbleFadeColor,
       markdownStyles,
       reviewCommentColors,
       reviewCommentBubbleWidth,
@@ -3687,6 +3720,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const rowStoreState: ThreadFeedRowStoreState = {
     copiedRowId,
     expandedWorkRows,
+    editingMessageId: props.editingMessageId,
+    editingQueuedMessageIds,
     dispatchingMessageId: props.dispatchingMessageId,
     steerWait: props.steerWait ?? null,
     unsettledTurnId,

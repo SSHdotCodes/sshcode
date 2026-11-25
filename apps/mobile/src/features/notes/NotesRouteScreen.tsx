@@ -269,7 +269,7 @@ function EnvironmentNotes({
             onSubmitEditing={() => void capture()}
           />
           {error || query.error ? (
-            <Text accessibilityRole="alert" className="text-sm text-danger">
+            <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
               {error ?? query.error}
             </Text>
           ) : null}

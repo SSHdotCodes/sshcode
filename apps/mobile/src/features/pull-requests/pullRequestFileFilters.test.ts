@@ -1,11 +1,28 @@
 import { describe, expect, it } from "vite-plus/test";
 import { buildNativeReviewDiffData } from "../review/nativeReviewDiffAdapter";
 import { buildReviewParsedDiff } from "../review/reviewModel";
-import { filterPullRequestTestFiles, isPullRequestTestFile } from "./pullRequestFileFilters";
+import {
+  filterPullRequestTestFiles,
+  isPullRequestTestFile,
+  visibleReviewPatchIndices,
+} from "./pullRequestFileFilters";
 
 function patch(path: string) {
   return `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+new\n`;
 }
+
+describe("thread review patch prefetch", () => {
+  const files = ["a.test.ts", "b.ts", "c.test.ts", "d.ts", "e.ts", "f.ts"].map((path) => ({
+    path,
+  }));
+
+  it("starts at the first visible file and keeps source indices across hidden files", () => {
+    expect(visibleReviewPatchIndices(files, true)).toEqual([1, 3, 4]);
+    expect(visibleReviewPatchIndices(files, true, 3)).toEqual([3, 4, 5]);
+    expect(visibleReviewPatchIndices(files, false)).toEqual([0, 1, 2]);
+    expect(visibleReviewPatchIndices(files.slice(0, 1), true)).toEqual([]);
+  });
+});
 
 describe("mobile PR test file filter", () => {
   it("recognizes test names, test directories and snapshots across common languages", () => {

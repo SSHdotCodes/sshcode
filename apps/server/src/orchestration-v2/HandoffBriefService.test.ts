@@ -101,6 +101,10 @@ const setup = (options: {
   readonly answer?: Effect.Effect<string, Overloaded>;
   readonly synthetic?: boolean;
   readonly accountFailure?: { readonly kind: "usage_limit"; readonly resetAt?: string };
+  readonly geminiAccountFailure?: { readonly kind: "usage_limit"; readonly resetAt?: string };
+  readonly geminiSupportsTextGeneration?: boolean;
+  readonly geminiEnabled?: boolean;
+  readonly geminiAvailability?: "unavailable";
   /** The brief settings; absent, the service runs with none (the model being left). */
   readonly settings?: Ref.Ref<BriefSettings>;
   readonly transcriptAnswer?: Effect.Effect<string>;
@@ -165,6 +169,7 @@ const setup = (options: {
               getProviders: Effect.succeed([
                 {
                   instanceId: claude,
+                  enabled: true,
                   ...(options.accountFailure === undefined
                     ? {}
                     : {
@@ -175,7 +180,23 @@ const setup = (options: {
                         },
                       }),
                 },
-                { instanceId: gemini },
+                {
+                  instanceId: gemini,
+                  enabled: options.geminiEnabled ?? true,
+                  availability: options.geminiAvailability,
+                  ...(options.geminiSupportsTextGeneration === undefined
+                    ? {}
+                    : { supportsTextGeneration: options.geminiSupportsTextGeneration }),
+                  ...(options.geminiAccountFailure === undefined
+                    ? {}
+                    : {
+                        recentFailure: {
+                          ...options.geminiAccountFailure,
+                          message: "You've hit your limit.",
+                          occurredAt: "2026-11-21T07:00:00.000Z",
+                        },
+                      }),
+                },
               ] as never),
             }),
           ),
@@ -452,5 +473,69 @@ describe("handoff brief", () => {
         text: briefText,
       });
     }).pipe(Effect.scoped),
+  );
+
+  it.effect("skips a chosen brief writer that cannot generate text", () =>
+    Effect.gen(function* () {
+      for (const providerState of [
+        {
+          geminiAccountFailure: {
+            kind: "usage_limit" as const,
+            resetAt: "2999-01-01T00:00:00.000Z",
+          },
+        },
+        { geminiSupportsTextGeneration: false },
+        { geminiEnabled: false },
+        { geminiAvailability: "unavailable" as const },
+      ]) {
+        const settings = yield* Ref.make<BriefSettings>({
+          handoffBriefEnabled: true,
+          handoffBriefModelSelection: flash,
+        });
+        const { briefs, detached, deadline, prompts } = yield* setup({
+          settings,
+          ...providerState,
+        });
+        assert.isTrue(yield* Deferred.isDone(detached));
+        assert.lengthOf(yield* Ref.get(prompts), 0);
+        const brief = yield* briefs.take({
+          threadId,
+          targetInstanceId: gemini,
+          deadlineMs: deadline,
+        });
+        assert.isTrue(Option.isNone(brief));
+        assert.lengthOf(yield* Ref.get(prompts), 0);
+      }
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "detaches the outgoing session immediately while falling back to a transcript brief",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>();
+        const settings = yield* Ref.make<BriefSettings>({
+          handoffBriefEnabled: true,
+          handoffBriefModelSelection: null,
+          textGenerationModelSelection: flash,
+        });
+        const { briefs, detached, deadline } = yield* setup({
+          accountFailure: { kind: "usage_limit" },
+          settings,
+          transcriptAnswer: Deferred.await(gate).pipe(Effect.as(briefText)),
+        });
+        // Transcript writing does not need the leaving session, so detach must not wait for it.
+        assert.isTrue(yield* Deferred.isDone(detached));
+        const take = yield* briefs
+          .take({ threadId, targetInstanceId: gemini, deadlineMs: deadline })
+          .pipe(Effect.forkChild);
+        yield* Deferred.succeed(gate, undefined);
+        const brief = yield* Fiber.join(take);
+        assert.deepEqual(Option.getOrUndefined(brief), {
+          providerInstanceId: gemini,
+          model: "gemini-3.8-flash",
+          text: briefText.trim(),
+        });
+      }).pipe(Effect.scoped),
   );
 });

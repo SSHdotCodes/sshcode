@@ -1438,6 +1438,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               setupWorkingStartedAt={props.setupWorkingStartedAt}
               queuedMessages={props.queuedMessages}
               dispatchingMessageId={props.dispatchingMessageId}
+              editingMessageId={props.queuedRunEdit?.messageId ?? null}
               steerWait={props.steerWait ?? null}
               onSendSteerNow={props.onSendSteerNow}
               // A native subagent has no composer to edit a pending message in;

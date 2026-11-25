@@ -671,6 +671,8 @@ describe("ssh tunnel scripts", () => {
         assert.include(firstTunnelArgs, "ControlMaster=no");
         assert.include(firstTunnelArgs, "ControlPath=none");
         assert.include(firstTunnelArgs, "ControlPersist=no");
+        assert.include(firstTunnelArgs, "ServerAliveInterval=5");
+        assert.include(firstTunnelArgs, "ServerAliveCountMax=3");
         assert.deepEqual(firstTunnelArgs?.slice(-2), ["--", "julius@devbox"]);
 
         const disconnected = yield* Effect.result(manager.disconnectEnvironment(target));
@@ -813,6 +815,169 @@ describe("ssh tunnel scripts", () => {
           Effect.scoped,
         );
       }),
+  );
+
+  it.effect(
+    "evicts an unexpectedly exited SSH forward immediately without waiting 5s or stopping remote",
+    () =>
+      Effect.gen(function* () {
+        let forwards = 0;
+        let stops = 0;
+        let crashFirstTunnel: (() => void) | null = null;
+        let firstTunnelAlive = true;
+        let probeAttemptedOnDeadTunnel = false;
+        const spawner = ChildProcessSpawner.make((command) =>
+          Effect.sync(() => {
+            const args = commandArgs(command);
+            if (args.includes("-N")) {
+              forwards += 1;
+              if (forwards === 1) {
+                let resolveExit: ((code: ChildProcessSpawner.ExitCode) => void) | null = null;
+                return ChildProcessSpawner.makeHandle({
+                  pid: ChildProcessSpawner.ProcessId(101),
+                  stdout: Stream.empty,
+                  stderr: Stream.empty,
+                  all: Stream.empty,
+                  exitCode: Effect.callback<ChildProcessSpawner.ExitCode>((resume) => {
+                    resolveExit = (code) => resume(Effect.succeed(code));
+                    crashFirstTunnel = () => {
+                      firstTunnelAlive = false;
+                      resolveExit?.(ChildProcessSpawner.ExitCode(255));
+                    };
+                    return Effect.sync(() => {
+                      resolveExit = null;
+                    });
+                  }),
+                  isRunning: Effect.sync(() => firstTunnelAlive),
+                  kill: () =>
+                    Effect.sync(() => {
+                      firstTunnelAlive = false;
+                      resolveExit?.(ChildProcessSpawner.ExitCode(143));
+                    }),
+                  stdin: Sink.drain,
+                  getInputFd: () => Sink.drain,
+                  getOutputFd: () => Stream.empty,
+                  unref: Effect.succeed(Effect.void),
+                });
+              }
+              return makeRunningProcess(() => undefined);
+            }
+            if (args.some((arg, index) => arg === "-s" && args[index + 1] === "--")) {
+              return makeSuccessfulProcess('{"remotePort":3773}\n');
+            }
+            if (args.includes("sh")) stops += 1;
+            return makeSuccessfulProcess("");
+          }),
+        );
+        const httpClient = HttpClient.make((request) =>
+          !firstTunnelAlive && forwards === 1
+            ? Effect.sync(() => {
+                probeAttemptedOnDeadTunnel = true;
+              }).pipe(Effect.andThen(Effect.never))
+            : Effect.succeed(
+                HttpClientResponse.fromWeb(request, new Response("", { status: 200 })),
+              ),
+        );
+        const layer = Layer.mergeAll(
+          NodeServices.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Layer.succeed(HttpClient.HttpClient, httpClient),
+          Layer.succeed(NetService.NetService, testNetService),
+          SshAuth.SshPasswordPrompt.disabledLayer,
+          SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
+        );
+        yield* Effect.gen(function* () {
+          const manager = yield* SshTunnel.SshEnvironmentManager;
+          const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+          yield* manager.ensureEnvironment(target);
+          // Simulate ssh forward dying after sleep/keepalive failure.
+          crashFirstTunnel?.();
+          yield* Effect.yieldNow;
+          // Reconnect succeeds immediately (0ms TestClock advance, no 5s probe hang).
+          yield* manager.ensureEnvironment(target);
+          assert.equal(forwards, 2);
+          assert.equal(stops, 0);
+          assert.isFalse(probeAttemptedOnDeadTunnel);
+        }).pipe(Effect.provide(layer), Effect.scoped);
+      }),
+  );
+
+  it.effect.each([
+    { exits: false, scenario: "runs SSH forward startup and pairing concurrently" },
+    { exits: true, scenario: "rejects a ready SSH forward that exits during pairing" },
+  ])("$scenario", ({ exits }) =>
+    Effect.gen(function* () {
+      const tunnelStarted = yield* Deferred.make<void>();
+      const pairingStarted = yield* Deferred.make<void>();
+      const releaseForward = yield* Deferred.make<void>();
+      const releasePairing = yield* Deferred.make<void>();
+      const forwardExited = yield* Deferred.make<void>();
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.gen(function* () {
+          const args = commandArgs(command);
+          if (args.includes("-N")) {
+            yield* Deferred.succeed(tunnelStarted, undefined);
+            return {
+              ...makeRunningProcess(() => undefined),
+              exitCode: Deferred.await(forwardExited).pipe(
+                Effect.as(ChildProcessSpawner.ExitCode(255)),
+              ),
+              isRunning: Deferred.isDone(forwardExited).pipe(Effect.map((done) => !done)),
+            };
+          }
+          if (args.some((arg, index) => arg === "-s" && args[index + 1] === "--")) {
+            return makeSuccessfulProcess('{"remotePort":3773}\n');
+          }
+          if (args.includes("sh")) {
+            yield* Deferred.succeed(pairingStarted, undefined);
+            const proc = makeSuccessfulProcess('{"credential":"parallel-token"}\n');
+            return {
+              ...proc,
+              exitCode: Deferred.await(releasePairing).pipe(
+                Effect.as(ChildProcessSpawner.ExitCode(0)),
+              ),
+            };
+          }
+          return makeSuccessfulProcess("");
+        }),
+      );
+      const httpClient = HttpClient.make((request) =>
+        Deferred.await(releaseForward).pipe(
+          Effect.as(HttpClientResponse.fromWeb(request, new Response("", { status: 200 }))),
+        ),
+      );
+      const layer = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Layer.succeed(HttpClient.HttpClient, httpClient),
+        Layer.succeed(NetService.NetService, testNetService),
+        SshAuth.SshPasswordPrompt.disabledLayer,
+        SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
+      );
+      yield* Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+        const fiber = yield* Effect.forkChild(
+          manager.ensureEnvironment(target, { issuePairingToken: true }).pipe(Effect.result),
+        );
+        // Both SSH operations must reach started state before either is released.
+        yield* Deferred.await(tunnelStarted);
+        yield* Deferred.await(pairingStarted);
+        yield* Deferred.succeed(releaseForward, undefined);
+        yield* TestClock.adjust("1 millis");
+        if (exits) yield* Deferred.succeed(forwardExited, undefined);
+        yield* Deferred.succeed(releasePairing, undefined);
+        const result = yield* Fiber.join(fiber);
+        if (exits) {
+          assert.strictEqual(Result.isFailure(result) && result.failure._tag, "SshReadinessError");
+        } else {
+          assert.strictEqual(
+            Result.isSuccess(result) && result.success.pairingToken,
+            "parallel-token",
+          );
+        }
+      }).pipe(Effect.provide(layer), Effect.scoped);
+    }),
   );
 });
 

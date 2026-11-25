@@ -59,7 +59,7 @@ const make = Effect.gen(function* () {
     const state = request.responseCapability.type === "message" ? "still working" : "blocked";
     const situation = `Subagent ${taskReference(task.id)}: question (${task.providerInstanceId}/${task.model ?? "default"}), ${state}.`;
     const { item } = yield* projections.getRuntimeResponseContext(task.childThreadId, request.id);
-    const target = `{threadId:"${task.childThreadId}",requestId:"${request.id}"}`;
+    const target = `{threadId:"${taskReference(task.id)}",requestId:"${request.id}"}`;
     const question =
       item?.type === "user_input_request" && item.questions.length > 0
         ? encodeQuestions(item.questions)

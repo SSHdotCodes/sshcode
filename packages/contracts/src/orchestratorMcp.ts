@@ -161,6 +161,10 @@ export const OrchestratorMcpInteractionMode = Schema.Union([
 ]);
 export type OrchestratorMcpInteractionMode = typeof OrchestratorMcpInteractionMode.Type;
 
+/** Wire input: a thread id or the short taskId of a child this thread owns. */
+export const OrchestratorMcpThreadReference = TrimmedNonEmptyString;
+export type OrchestratorMcpThreadReference = typeof OrchestratorMcpThreadReference.Type;
+
 export const OrchestratorMcpTaskRole = Schema.Literals([
   "implementation",
   "research",
@@ -291,12 +295,10 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   childThreadLink: Schema.optional(Schema.String),
   /** Stable short handle. Canonical ids remain valid inputs. */
   taskId: NodeId,
-  childThreadId: ThreadId,
-  childRunId: Schema.NullOr(RunId),
   status: OrchestratorMcpDelegatedTaskStatus,
   workState: Schema.Literals(["working", "waiting_for_children", "result_available"]),
   hasPendingChildRuns: Schema.Boolean,
-  /** Omitted while it is childRunId or there is none. */
+  /** Omitted while it is the task's current run or there is none. */
   latestTerminalRunId: Schema.optional(RunId),
   latestTerminalStatus: Schema.NullOr(OrchestratorMcpTerminalDelegatedTaskStatus),
   latestTerminalSummary: Schema.NullOr(Schema.String),
@@ -322,7 +324,7 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
         threadId: Schema.optionalKey(ThreadId),
       }),
     ),
-  ).annotate({ description: "Pending handles; threadId defaults to childThreadId." }),
+  ).annotate({ description: "Pending handles; an omitted threadId is the task's child thread." }),
   hasPendingQuestion: Schema.Boolean.annotate({
     description:
       "Blocking question ends mode=wait. Read/respond to user_input with t3_pending_request_* and its id/threadId; completion still wakes this thread.",
@@ -524,7 +526,7 @@ export const OrchestratorMcpThreadListResult = Schema.Struct({
 export type OrchestratorMcpThreadListResult = typeof OrchestratorMcpThreadListResult.Type;
 
 export const OrchestratorMcpThreadReadInput = Schema.Struct({
-  threadId: ThreadId,
+  threadId: OrchestratorMcpThreadReference,
   itemId: Schema.optional(TurnItemId),
   textOffset: Schema.optional(NonNegativeInt),
   view: Schema.optional(Schema.Literals(["messages", "activity"])),
@@ -630,7 +632,7 @@ export const OrchestratorMcpThreadReadResult = Schema.Struct({
 export type OrchestratorMcpThreadReadResult = typeof OrchestratorMcpThreadReadResult.Type;
 
 export const OrchestratorMcpThreadSendInput = Schema.Struct({
-  threadId: ThreadId,
+  threadId: OrchestratorMcpThreadReference,
   message: OrchestratorMcpPrompt,
   mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
@@ -642,8 +644,8 @@ export const OrchestratorMcpThreadSendResult = Schema.Struct({
   grades: Schema.optional(OrchestratorMcpGradesResult),
   threadId: ThreadId,
   messageId: MessageId,
-  /** Null while `held`: the message has no run until the parent's next turn takes it or it wakes the parent. */
-  runId: Schema.NullOr(RunId),
+  /** Omitted when taskId names the run; null while `held` before the message has one. */
+  runId: Schema.optionalKey(Schema.NullOr(RunId)),
   /** Short handle for a follow-up to an app-owned child; the previous task stays terminal. */
   taskId: Schema.optional(NodeId),
   status: Schema.NullOr(OrchestrationV2RunStatus),
@@ -652,7 +654,7 @@ export const OrchestratorMcpThreadSendResult = Schema.Struct({
 export type OrchestratorMcpThreadSendResult = typeof OrchestratorMcpThreadSendResult.Type;
 
 export const OrchestratorMcpThreadWaitInput = Schema.Struct({
-  threadId: ThreadId,
+  threadId: OrchestratorMcpThreadReference,
   runId: Schema.optional(RunId),
   timeoutMs: Schema.optional(Schema.Number),
 });
@@ -668,7 +670,7 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
 export type OrchestratorMcpThreadWaitResult = typeof OrchestratorMcpThreadWaitResult.Type;
 
 export const OrchestratorMcpThreadInterruptInput = Schema.Struct({
-  threadId: ThreadId,
+  threadId: OrchestratorMcpThreadReference,
   runId: Schema.optional(RunId),
   reason: Schema.optional(Schema.String.check(Schema.isMaxLength(2_000))),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),

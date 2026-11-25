@@ -82,7 +82,9 @@ function GuideRunWatcher({ runKey, watch }: { runKey: string; watch: GuideRunWat
           ...readPullRequestListPreferences(),
           repository: watch.reference.repository,
           number: watch.reference.number,
-          selectedProjectId: watch.reference.projectId,
+          ...(watch.reference.projectId === undefined
+            ? {}
+            : { selectedProjectId: watch.reference.projectId }),
           selectedEnvironmentId: watch.environmentId,
           ...(watch.reference.host === undefined ? {} : { selectedHost: watch.reference.host }),
         },

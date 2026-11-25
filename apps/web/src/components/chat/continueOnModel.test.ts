@@ -7,7 +7,11 @@ import {
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { describe, expect, it } from "vite-plus/test";
 
-import { canContinueOnAnotherModel, continueOnModelCandidates } from "./continueOnModel";
+import {
+  canContinueOnAnotherModel,
+  continueOnModelCandidates,
+  resolveContinueOnModelDispatch,
+} from "./continueOnModel";
 
 function provider(
   instanceId: string,
@@ -24,7 +28,7 @@ function provider(
     status: "ready",
     auth: { status: "authenticated" },
     checkedAt: "2026-11-04T00:00:00.000Z",
-    models: models.map((model) => ({ ...model, isCustom: false, capabilities: {} })),
+    models: models.map((model) => ({ isCustom: false, capabilities: {}, ...model })),
     slashCommands: [],
     skills: [],
     ...extra,
@@ -299,4 +303,98 @@ it("keeps unaffected models available after a scoped refusal", () => {
     })),
   });
   expect(result.map((candidate) => candidate.model)).toEqual(["opus"]);
+});
+
+describe("resolveContinueOnModelDispatch", () => {
+  it("freezes target default options and resets plan mode for providers without plan mode", () => {
+    const target = provider(
+      "antigravity",
+      "antigravity",
+      [
+        {
+          slug: "gemini-4-neon",
+          name: "Gemini 4 Neon",
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "thought_level",
+                label: "Thought level",
+                type: "select",
+                options: [
+                  { id: "medium", label: "Medium" },
+                  { id: "high", label: "High", isDefault: true },
+                ],
+                currentValue: "high",
+              },
+              { id: "fastMode", label: "Fast Mode", type: "boolean", currentValue: true },
+            ],
+          },
+        } as never,
+      ],
+      { showInteractionModeToggle: false },
+    );
+    const dispatch = resolveContinueOnModelDispatch({
+      providers: [codex, target],
+      candidate: {
+        instanceId: target.instanceId,
+        model: "gemini-4-neon",
+        label: "Gemini 4 Neon",
+        providerLabel: "Antigravity",
+      },
+      rememberedOptions: undefined,
+      interactionMode: "plan",
+      planModeEnabled: true,
+    });
+    expect(dispatch.interactionMode).toBe("default");
+    expect(dispatch.modelSelection).toEqual({
+      instanceId: target.instanceId,
+      model: "gemini-4-neon",
+      options: [
+        { id: "thought_level", value: "high" },
+        { id: "fastMode", value: false },
+      ],
+    });
+  });
+
+  it("keeps plan mode when the target provider supports it and preserves other-plan options", () => {
+    const target = provider("claudeAgent_max2", "claudeAgent", [
+      {
+        slug: "claude-opus-5-5",
+        name: "Opus 5.5",
+        capabilities: {
+          optionDescriptors: [
+            {
+              id: "effort",
+              label: "Reasoning",
+              type: "select",
+              options: [
+                { id: "medium", label: "Medium", isDefault: true },
+                { id: "max", label: "Max" },
+              ],
+            },
+          ],
+        },
+      } as never,
+    ]);
+    const dispatch = resolveContinueOnModelDispatch({
+      providers: [target],
+      candidate: {
+        instanceId: target.instanceId,
+        model: "claude-opus-5-5",
+        label: "Max 2",
+        providerLabel: "Max 2",
+        otherPlan: true,
+        options: [{ id: "effort", value: "max" }],
+      },
+      rememberedOptions: [{ id: "effort", value: "medium" }],
+      interactionMode: "plan",
+      planModeEnabled: true,
+    });
+    expect(dispatch.interactionMode).toBe("plan");
+    expect(dispatch.modelSelection).toEqual({
+      instanceId: target.instanceId,
+      model: "claude-opus-5-5",
+      options: [{ id: "effort", value: "max" }],
+    });
+  });
 });

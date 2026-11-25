@@ -498,30 +498,34 @@ function markdownLinkDestinationScanner(markdown: string) {
       }
     }
     const hrefEnd = bareEnd(hrefStart);
-    if (hrefEnd === hrefStart) return null;
     const end = bareTail(hrefEnd);
     return end === null ? null : { hrefStart, hrefEnd, end };
   };
 }
 
+/** Scans balanced labels once, including escaped brackets and paragraph boundaries. */
 export function extractMarkdownLinkHrefs(markdown: string): string[] {
   const hrefs: string[] = [];
   const scanDestination = markdownLinkDestinationScanner(markdown);
-  let cursor = 0;
-  while (cursor < markdown.length) {
-    const labelStart = markdown.indexOf("[", cursor);
-    if (labelStart === -1) break;
-    const labelEnd = markdown.indexOf("]", labelStart + 1);
-    if (labelEnd === -1) break;
-
-    // Nested opening brackets share this closing bracket. On failure, skip the
-    // whole label instead of rescanning its suffix from each opening bracket.
-    cursor = labelEnd + 1;
-    const destination = scanDestination(cursor);
-    if (!destination) continue;
-    cursor = destination.end;
-    const href = markdown.slice(destination.hrefStart, destination.hrefEnd).trim();
-    if (href) hrefs.push(href);
+  const bracket = /[[\]\\]|\n[ \t\r]*\n/g;
+  let openBrackets = 0;
+  for (let match = bracket.exec(markdown); match; match = bracket.exec(markdown)) {
+    if (match[0] === "\\") {
+      bracket.lastIndex = match.index + 2;
+    } else if (match[0].startsWith("\n")) {
+      openBrackets = 0;
+    } else if (match[0] === "[") {
+      openBrackets += 1;
+    } else if (openBrackets > 0) {
+      openBrackets -= 1;
+      const destination = scanDestination(match.index + 1);
+      if (!destination) continue;
+      // A link cannot contain a link, so any still-open brackets become text.
+      openBrackets = 0;
+      bracket.lastIndex = destination.end;
+      const href = markdown.slice(destination.hrefStart, destination.hrefEnd).trim();
+      if (href) hrefs.push(href);
+    }
   }
   return hrefs;
 }

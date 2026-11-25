@@ -36,3 +36,16 @@ export function filterPullRequestTestFiles(
     deletions: files.reduce((total, file) => total + file.deletions, 0),
   };
 }
+
+/** Keep source indices for patch queries while prefetching only files the reader can see. */
+export function visibleReviewPatchIndices(
+  files: ReadonlyArray<{ readonly path: string }>,
+  hideTestFiles: boolean,
+  startIndex = 0,
+): number[] {
+  const indices = [];
+  for (let index = startIndex; index < files.length && indices.length < 3; index += 1) {
+    if (!hideTestFiles || !isPullRequestTestFile(files[index]!.path)) indices.push(index);
+  }
+  return indices;
+}

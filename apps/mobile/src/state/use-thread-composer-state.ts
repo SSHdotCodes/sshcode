@@ -117,7 +117,7 @@ import {
 import { useThreadSelection } from "../state/use-thread-selection";
 import type { QueuedThreadMessage } from "./thread-outbox-model";
 import { enqueueThreadOutboxMessage } from "./thread-outbox";
-import { dispatchingQueuedMessageIdAtom, useThreadOutboxMessages } from "./use-thread-outbox";
+import { dispatchingMessageByThreadAtom, useThreadOutboxMessages } from "./use-thread-outbox";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 
@@ -207,7 +207,12 @@ export function useThreadComposerState() {
       : NO_WINDOW_SEQUENCE,
   );
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
-  const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
+  const dispatchingQueuedMessageId = useAtomValue(dispatchingMessageByThreadAtom, (byThread) =>
+    selectedThreadShell
+      ? (byThread[scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id)] ??
+        null)
+      : null,
+  );
   const [feedbackSubmissionsByThreadKey, setFeedbackSubmissionsByThreadKey] = useState<
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
   >({});
@@ -215,6 +220,9 @@ export function useThreadComposerState() {
   const pickThreadRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode);
   const pickThreadInteractionMode = useAtomCommand(threadEnvironment.setInteractionMode);
   const uploadThreadFeedback = useAtomCommand(threadEnvironment.uploadFeedback, {
+    reportFailure: false,
+  });
+  const waitForSendConnection = useAtomCommand(threadEnvironment.waitForSendConnection, {
     reportFailure: false,
   });
   const editQueuedRun = useAtomCommand(threadEnvironment.editQueuedRun, {
@@ -512,7 +520,8 @@ export function useThreadComposerState() {
     const threadKey = scopedThreadKey(thread.environmentId, thread.id);
     const edit = getQueuedRunEdit(threadKey);
     if (edit === null) return;
-    const draft = getComposerDraftSnapshot(queuedEditDraftKey(threadKey, edit.runId));
+    const draftKey = queuedEditDraftKey(threadKey, edit.runId);
+    let draft = getComposerDraftSnapshot(draftKey);
     const text = draft.text.trim();
     if (text.length === 0) {
       // The server rejects an empty queued message, attachments or not.
@@ -533,6 +542,31 @@ export function useThreadComposerState() {
     if (releaseSave === null) return;
     savingQueuedEditRef.current = true;
     try {
+      if (selectedEnvironmentRuntime?.connectionState !== "connected") {
+        const ready = await waitForSendConnection({
+          environmentId: thread.environmentId,
+          input: undefined,
+        });
+        if (
+          ready._tag !== "Success" ||
+          !readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope)
+        ) {
+          Alert.alert("Could not send the edit", "Your edit is still in the composer.");
+          return;
+        }
+        const latest = getComposerDraftSnapshot(draftKey);
+        if (getQueuedRunEdit(threadKey) !== edit) return;
+        if (
+          latest.text !== draft.text ||
+          latest.context !== draft.context ||
+          latest.attachments.length !== draft.attachments.length ||
+          latest.attachments.some((item, index) => item.id !== draft.attachments[index]?.id)
+        ) {
+          Alert.alert("The edit changed while reconnecting", "Review it before sending.");
+          return;
+        }
+        draft = latest;
+      }
       const capabilities = selectedEnvironmentRuntime?.serverConfig?.environment.capabilities;
       const prepared = await prepareTurnAttachments({
         environmentId: thread.environmentId,
@@ -578,7 +612,7 @@ export function useThreadComposerState() {
       releaseSave();
       savingQueuedEditRef.current = false;
     }
-  }, [editQueuedRun, selectedEnvironmentRuntime?.serverConfig, selectedThreadShell]);
+  }, [editQueuedRun, selectedEnvironmentRuntime, selectedThreadShell, waitForSendConnection]);
 
   const onSendMessage = useCallback(
     async (followUpOverride?: ActiveTurnComposerAction) => {

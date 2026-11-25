@@ -199,10 +199,14 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
         }),
     ),
   );
+  const isResolveOnly = (input.preHostArgs ?? []).includes("-G");
   const args = [
     ...baseSshArgs(target, {
       batchMode: input.batchMode ?? (input.interactiveAuth ? "no" : "yes"),
     }),
+    // Abort stalled remote commands within 15s of a silent network drop
+    // instead of hanging until the 60s–900s overall command timeout.
+    ...(isResolveOnly ? [] : ["-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=3"]),
     ...(input.preHostArgs ?? []),
     // An alias starting with `-` would otherwise be parsed as an ssh option.
     "--",

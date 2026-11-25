@@ -3,6 +3,7 @@ import type { VcsStatusRemoteResult, VcsStatusResult } from "@t3tools/contracts"
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  deriveLocalBranchNameFromRemoteRef,
   applyGitStatusStreamEvent,
   formatGeneratedBranchName,
   buildTemporaryWorktreeBranchName,
@@ -16,7 +17,24 @@ import {
   WORKTREE_BRANCH_PREFIX,
 } from "./git.ts";
 
+describe("deriveLocalBranchNameFromRemoteRef", () => {
+  it("uses the whole remote name when it is known", () => {
+    expect(deriveLocalBranchNameFromRemoteRef("team/origin/feature/topic", "team/origin")).toBe(
+      "feature/topic",
+    );
+  });
+});
+
 describe("normalizeGitRemoteUrl", () => {
+  it.each([
+    ["https://deploy:example-only@git.example.com/Repo.git", "https://git.example.com/repo"],
+    ["https://deploy@git.example.com/repo.git?q=x#top", "https://git.example.com/repo"],
+    ["ftp://deploy:example-only@git.example.com/team/repo.git", "ftp://git.example.com/team/repo"],
+    ["ssh://git:example-only@git.example.com:2222/repo.git", "ssh://git@git.example.com:2222/repo"],
+  ])("uses only repository identity in URL-shaped fallback keys", (remote, key) => {
+    expect(normalizeGitRemoteUrl(remote)).toBe(key);
+  });
+
   it("canonicalizes equivalent GitHub remotes across protocol variants", () => {
     expect(normalizeGitRemoteUrl("git@github.com:T3Tools/T3Code.git")).toBe(
       "github.com/t3tools/t3code",

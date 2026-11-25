@@ -5,6 +5,7 @@ import {
   type OrchestrationV2ThreadProjection,
   type RunId,
   OrchestratorMcpFailure,
+  type OrchestratorMcpThreadReference,
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -39,7 +40,7 @@ function queueEntry(
   };
 }
 const dispatch = Effect.fn("mcp.dispatchThreadCommand")(function* (
-  threadId: ThreadId | undefined,
+  threadId: OrchestratorMcpThreadReference | undefined,
   command: (common: { commandId: CommandId; threadId: ThreadId }) => OrchestrationV2Command,
 ) {
   const { threads, projection } = yield* readThread(threadId);
@@ -50,7 +51,7 @@ const dispatch = Effect.fn("mcp.dispatchThreadCommand")(function* (
 });
 
 const readQuestion = Effect.fn("mcp.readQuestion")(function* (input: {
-  threadId?: ThreadId | undefined;
+  threadId?: OrchestratorMcpThreadReference | undefined;
   requestId: RuntimeRequestId;
 }) {
   const context = yield* readThread(input.threadId, ["runtimeRequests", "turnItems"], {
@@ -89,7 +90,12 @@ const required = <A>(value: A | undefined, name: string) =>
       )
     : Effect.succeed(value);
 /** A tool that changes `threadId`, or the caller's own thread when it is omitted. */
-const writesThread = <P extends { readonly threadId?: ThreadId | undefined }, A, E, R>(
+const writesThread = <
+  P extends { readonly threadId?: OrchestratorMcpThreadReference | undefined },
+  A,
+  E,
+  R,
+>(
   handle: (params: P) => Effect.Effect<A, E, R>,
 ) => McpToolAccess.writesThreads((params: P) => [params.threadId], handle);
 
@@ -204,8 +210,9 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           const { threads, projection } = yield* readThread(input.threadId);
           const commandId = yield* newCommandId();
           if (input.action === "merge_back") {
-            const targetThreadId = yield* required(input.targetThreadId, "targetThreadId");
-            yield* readThread(targetThreadId);
+            const targetReference = yield* required(input.targetThreadId, "targetThreadId");
+            const { projection: targetProjection } = yield* readThread(targetReference);
+            const targetThreadId = targetProjection.thread.id;
             const result = yield* threads
               .dispatch({
                 type: "thread.merge_back",

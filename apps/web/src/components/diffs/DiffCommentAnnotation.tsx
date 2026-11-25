@@ -102,6 +102,10 @@ export function DiffCommentAnnotation({
           event.currentTarget.setSelectionRange(end, end);
         }}
         onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing || event.keyCode === 229) {
+            event.stopPropagation();
+            return;
+          }
           if (event.key === "Escape") {
             event.preventDefault();
             onCancel();

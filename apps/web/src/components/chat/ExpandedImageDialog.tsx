@@ -251,13 +251,14 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
         <Button
           type="button"
           ref={closeButtonRef}
-          size="icon-sm"
+          size="icon"
           variant="media-close"
-          className="absolute right-0 top-0 z-20"
+          className="absolute end-0 top-0 z-20"
           onClick={onClose}
           aria-label={`Close ${mediaLabel} preview`}
+          title={`Close ${mediaLabel} preview`}
         >
-          <XIcon />
+          <XIcon aria-hidden="true" />
         </Button>
         {!markup && (preview.images.length > 1 || onRequestOlder) && (
           <Button

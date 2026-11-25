@@ -28,6 +28,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
+import { taskReference } from "./taskReference.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const instanceId = ProviderInstanceId.make("codex");
@@ -146,7 +147,7 @@ const setup = Effect.fnUntraced(function* (
     occurredAt: now,
     payload: { ...parentRun, status: "completed", completedAt: now },
   } satisfies OrchestrationV2DomainEvent;
-  return { question, notices, noticeCommandId, parentCompleted };
+  return { question, notices, noticeCommandId, parentCompleted, parentThreadId, task };
 });
 
 /**
@@ -209,7 +210,7 @@ const makeReactor = Effect.fnUntraced(function* (
 it.live("relays a question its child asked before the reactor started exactly once", () =>
   Effect.gen(function* () {
     const eventSink = yield* EventSink.EventSinkV2;
-    const { question, notices, noticeCommandId } = yield* setup("startup-question");
+    const { question, notices, noticeCommandId, task } = yield* setup("startup-question");
     const asked = question("startup-asked");
     // Committed before the reactor runs, as when the server exits before the parent is told.
     const questions = [
@@ -264,6 +265,14 @@ it.live("relays a question its child asked before the reactor started exactly on
     );
     const [notice] = yield* notices;
     assert.include(notice?.text, `requestId:"${asked.payload.id}"`);
+    assert.include(
+      notice?.text,
+      `{threadId:"${taskReference(task.id)}",requestId:"${asked.payload.id}"}`,
+    );
+    assert.notInclude(
+      notice?.text,
+      `{threadId:"${task.childThreadId}",requestId:"${asked.payload.id}"}`,
+    );
     assert.include(notice?.text, "question (codex/gpt-5.1-codex), still working");
     assert.include(notice?.text, JSON.stringify(questions));
     assert.include(notice?.text, "t3_pending_request_respond");

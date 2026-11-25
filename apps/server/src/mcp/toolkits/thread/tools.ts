@@ -15,6 +15,7 @@ import {
   IsoDateTime,
   OrchestratorMcpFailure,
   OrchestrationV2DispatchCommandResult,
+  OrchestratorMcpThreadReference,
   ThreadId,
   RunId,
   NonNegativeInt,
@@ -33,7 +34,7 @@ const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
     "Pin, snooze, settle, archive, or mark a thread unread. Omit threadId for this thread. snooze requires snoozedUntil. Existing thread lifecycle rules apply. Settling this thread takes effect when your turn completes, returning settlesWhenTurnEnds=true; a turn that fails or is interrupted, or a queued message, leaves it active.",
   parameters: Schema.Struct({
-    threadId: Schema.optional(ThreadId),
+    threadId: Schema.optional(OrchestratorMcpThreadReference),
     action: Schema.Literals([
       "pin",
       "unpin",
@@ -90,7 +91,7 @@ const QueueTool = Tool.make("t3_queue", {
       "reorder",
       "promote_to_steer",
     ]),
-    threadId: Schema.optional(ThreadId),
+    threadId: Schema.optional(OrchestratorMcpThreadReference),
     queuedRunId: Schema.optional(RunId),
     text: Schema.optional(Schema.String.check(Schema.isMaxLength(100000))),
     beforeRunId: Schema.optional(Schema.NullOr(RunId)),
@@ -105,7 +106,10 @@ const QueueTool = Tool.make("t3_queue", {
   ]),
 }).annotate(Tool.Destructive, true);
 
-const requestTarget = { threadId: Schema.optional(ThreadId), requestId: RuntimeRequestId };
+const requestTarget = {
+  threadId: Schema.optional(OrchestratorMcpThreadReference),
+  requestId: RuntimeRequestId,
+};
 const question = Schema.Struct({
   id: Schema.String,
   header: Schema.String,
@@ -130,7 +134,7 @@ const PendingRequestListTool = Tool.make("t3_pending_request_list", {
   ...commandTool,
   description:
     "List pending user questions in a thread. Omit threadId for this thread. Approval requests are not included.",
-  parameters: Schema.Struct({ threadId: Schema.optional(ThreadId) }),
+  parameters: Schema.Struct({ threadId: Schema.optional(OrchestratorMcpThreadReference) }),
   success: Schema.Struct({ requestIds: Schema.Array(RuntimeRequestId) }),
 })
   .annotate(Tool.Readonly, true)
@@ -164,7 +168,7 @@ const ThreadConfigureTool = Tool.make("t3_thread_configure", {
   description:
     "Read a thread's provider, model, and modes, or set its provider, model, and options with `modelSelection`. Omit `threadId` for this thread. Permission modes stay. Values from `orchestrator_capabilities`.",
   parameters: Schema.Struct({
-    threadId: Schema.optional(ThreadId),
+    threadId: Schema.optional(OrchestratorMcpThreadReference),
     modelSelection: Schema.optional(ModelSelection),
   }),
   success: Schema.Union([threadConfiguration, OrchestrationV2DispatchCommandResult]),
@@ -176,9 +180,9 @@ const ThreadTransferTool = Tool.make("t3_thread_transfer", {
     "Move context between threads. Omit `threadId` for this thread. fork: copy it from `sourcePoint` (default latest stable run) into a new thread with the same setup; no turn runs yet. merge_back: merge it from `sourcePoint` into a related `targetThreadId` in the same project. status: its context transfers.",
   parameters: Schema.Struct({
     action: Schema.Literals(["fork", "merge_back", "status"]),
-    threadId: Schema.optional(ThreadId),
+    threadId: Schema.optional(OrchestratorMcpThreadReference),
     sourcePoint: Schema.optional(OrchestrationV2ThreadForkSourcePoint),
-    targetThreadId: Schema.optional(ThreadId),
+    targetThreadId: Schema.optional(OrchestratorMcpThreadReference),
     title: Schema.optional(TrimmedNonEmptyString),
   }),
   success: Schema.Union([

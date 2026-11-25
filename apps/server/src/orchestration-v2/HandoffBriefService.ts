@@ -1,5 +1,7 @@
 import {
   activeProviderFailure,
+  isProviderAvailable,
+  isProviderTextGenerationCapable,
   rememberedAccountFailure,
   type ModelSelection,
   type OrchestrationV2ContextHandoff,
@@ -299,7 +301,12 @@ export const layer: Layer.Layer<
         const provider = providers.find(
           (candidate) => candidate.instanceId === selection.instanceId,
         );
-        return provider !== undefined && provider.supportsTextGeneration !== false;
+        return (
+          provider !== undefined &&
+          provider.enabled &&
+          isProviderAvailable(provider) &&
+          isProviderTextGenerationCapable(provider)
+        );
       });
 
     /**
@@ -440,6 +447,21 @@ export const layer: Layer.Layer<
         Effect.orElseSucceed(() => Option.none<HandoffBrief>()),
       );
 
+    const chosenWrite = (threadId: ThreadId, selection: ModelSelection) =>
+      Effect.gen(function* () {
+        if (!(yield* canWriteFromTranscript(selection))) {
+          yield* Effect.logInfo("orchestration-v2.handoff-brief.skipped", {
+            threadId,
+            reason: "chosen-unavailable",
+          });
+          return undefined;
+        }
+        return {
+          write: fromTranscript(threadId, selection),
+          transcript: true,
+        } satisfies BriefWrite;
+      });
+
     const requestThenDetach: HandoffBriefServiceShape["requestThenDetach"] = (input) =>
       Effect.gen(function* () {
         yield* prune;
@@ -449,17 +471,31 @@ export const layer: Layer.Layer<
         if (setting.model !== null) {
           // A chosen model reads the transcript; the session being left is not needed.
           yield* input.detach;
+          const write = yield* chosenWrite(input.threadId, setting.model);
+          if (write === undefined) return;
           yield* start({
             threadId: input.threadId,
             targetInstanceId: input.targetInstanceId,
             writer: writerKey(setting.model),
-            write: { write: fromTranscript(input.threadId, setting.model), transcript: true },
+            write,
             release: Effect.void,
           });
           return;
         }
         const write = yield* outgoing({ ...input, textGeneration: setting.textGeneration });
         if (write === undefined) return yield* input.detach;
+        if (write.transcript) {
+          // Transcript-based fallback does not need the session being left.
+          yield* input.detach;
+          yield* start({
+            threadId: input.threadId,
+            targetInstanceId: input.targetInstanceId,
+            writer: "outgoing",
+            write,
+            release: Effect.void,
+          });
+          return;
+        }
         const release = yield* Effect.cached(
           input.detach.pipe(
             Effect.catchCause((cause) =>
@@ -502,7 +538,7 @@ export const layer: Layer.Layer<
           // Nothing asked at the switch, or a writer chosen since: ask now.
           const write: BriefWrite | undefined =
             setting.model !== null
-              ? { write: fromTranscript(input.threadId, setting.model), transcript: true }
+              ? yield* chosenWrite(input.threadId, setting.model)
               : yield* outgoing({ ...input, textGeneration: setting.textGeneration });
           if (write === undefined) return Option.none();
           entry = yield* start({

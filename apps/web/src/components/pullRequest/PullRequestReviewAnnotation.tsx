@@ -135,7 +135,7 @@ export function ReviewThreadCard({
   onReacted,
 }: {
   thread: PullRequestReviewThread;
-  workspaceRoot: string;
+  workspaceRoot: string | undefined;
   canReply: boolean;
   canResolve: boolean;
   canReact: boolean;

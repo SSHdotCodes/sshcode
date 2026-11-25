@@ -176,7 +176,6 @@ const TERMINAL_SHELL_PROGRAMS = new Set([
   "else",
   "end",
   "esac",
-  "eval",
   "exec",
   "exit",
   "false",

@@ -13,12 +13,16 @@ import {
   probeTailscaleHttpsEndpoint,
   readTailscaleStatus,
 } from "@t3tools/tailscale";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import { HttpClient } from "effect/http";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeNet from "node:net";
@@ -41,11 +45,20 @@ const TAILSCALE_ENDPOINT_TIMEOUT = Duration.seconds(3);
 /**
  * Every client connect reads these endpoints for its config snapshot. Finding
  * the Serve name spawns the `tailscale` CLI and probes the name over HTTPS, so
- * connects share one answer for a while. A missing name is retried sooner:
+ * connects share one answer for a while and refresh stale values in the
+ * background instead of blocking reconnects. A missing name is retried sooner:
  * Serve may still be starting.
  */
-const SERVED_URL_CACHE_TTL = Duration.seconds(60);
-const MISSING_SERVED_URL_CACHE_TTL = Duration.seconds(5);
+const SERVED_URL_CACHE_TTL_NANOS = 60_000_000_000n;
+const MISSING_SERVED_URL_CACHE_TTL_NANOS = 5_000_000_000n;
+
+interface ServedUrlCacheEntry {
+  readonly scan: Deferred.Deferred<Option.Option<string>>;
+  /** Undefined while a refresh is still running. */
+  readonly expiresAtNanos: bigint | undefined;
+  /** Last resolved result for stale-while-revalidate reconnects. */
+  readonly value: Option.Option<string> | undefined;
+}
 
 export class DirectEndpoints extends Context.Service<
   DirectEndpoints,
@@ -125,13 +138,14 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
+  const scope = yield* Scope.Scope;
 
   // Tailscale Serve terminates HTTPS on the tailnet name and forwards to
   // loopback, so it works even for a loopback-only server. The name is only
   // listed once it answers as this server: Serve setup can fail without
   // stopping startup. Anything slower than the probe leaves it out rather
   // than holding back the addresses already found.
-  const servedUrl = yield* readTailscaleStatus.pipe(
+  const probeServedUrl = readTailscaleStatus.pipe(
     Effect.map((status) => status.magicDnsName),
     Effect.flatMap((magicDnsName) => {
       if (magicDnsName === null) return Effect.succeed(null);
@@ -148,11 +162,89 @@ export const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => Option.none<string>()),
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     Effect.provideService(HttpClient.HttpClient, httpClient),
-    // One shared read per window; a connect that gives up does not cancel it for the others.
-    Effect.cachedWithTTL((exit) =>
-      Exit.isSuccess(exit) && Option.isSome(exit.value)
-        ? SERVED_URL_CACHE_TTL
-        : MISSING_SERVED_URL_CACHE_TTL,
+  );
+
+  const servedUrlCache = yield* Ref.make<Option.Option<ServedUrlCacheEntry>>(Option.none());
+  const runServedUrlProbe = (scan: Deferred.Deferred<Option.Option<string>>) =>
+    probeServedUrl.pipe(
+      Effect.onExit((exit) =>
+        Effect.gen(function* () {
+          const ttlNanos =
+            Exit.isSuccess(exit) && Option.isSome(exit.value)
+              ? SERVED_URL_CACHE_TTL_NANOS
+              : MISSING_SERVED_URL_CACHE_TTL_NANOS;
+          const expiresAtNanos = (yield* Clock.monotonicTimeNanos) + ttlNanos;
+          yield* Ref.update(servedUrlCache, (current) =>
+            Option.isNone(current) || current.value.scan !== scan
+              ? current
+              : Exit.isSuccess(exit)
+                ? Option.some({ scan, expiresAtNanos, value: exit.value })
+                : Option.none(),
+          );
+          yield* Deferred.done(scan, exit);
+        }),
+      ),
+      Effect.interruptible,
+      Effect.forkIn(scope, { startImmediately: true }),
+    );
+
+  // One shared read per window. Once a probe has completed, expired reconnects
+  // return the last known Serve endpoint immediately and refresh in the
+  // background so `subscribeServerConfig` never stalls on `tailscale status`.
+  const servedUrl = Effect.gen(function* () {
+    const nowNanos = yield* Clock.monotonicTimeNanos;
+    const action = yield* Ref.modify(
+      servedUrlCache,
+      (
+        current,
+      ): [
+        (
+          | {
+              readonly _tag: "return";
+              readonly value: Option.Option<string>;
+              readonly start?: Deferred.Deferred<Option.Option<string>>;
+            }
+          | {
+              readonly _tag: "await";
+              readonly scan: Deferred.Deferred<Option.Option<string>>;
+              readonly start?: Deferred.Deferred<Option.Option<string>>;
+            }
+        ),
+        Option.Option<ServedUrlCacheEntry>,
+      ] => {
+        if (Option.isSome(current)) {
+          const entry = current.value;
+          if (entry.expiresAtNanos === undefined || entry.expiresAtNanos > nowNanos) {
+            return [
+              entry.value !== undefined
+                ? { _tag: "return", value: entry.value }
+                : { _tag: "await", scan: entry.scan },
+              current,
+            ];
+          }
+          if (entry.value !== undefined) {
+            const scan = Deferred.makeUnsafe<Option.Option<string>>();
+            return [
+              { _tag: "return", value: entry.value, start: scan },
+              Option.some({ scan, expiresAtNanos: undefined, value: entry.value }),
+            ];
+          }
+        }
+        const scan = Deferred.makeUnsafe<Option.Option<string>>();
+        return [
+          { _tag: "await", scan, start: scan },
+          Option.some({ scan, expiresAtNanos: undefined, value: undefined }),
+        ];
+      },
+    );
+    if (action.start !== undefined) {
+      yield* runServedUrlProbe(action.start);
+    }
+    return action;
+  }).pipe(
+    Effect.uninterruptible,
+    Effect.flatMap((action) =>
+      action._tag === "return" ? Effect.succeed(action.value) : Deferred.await(action.scan),
     ),
   );
 

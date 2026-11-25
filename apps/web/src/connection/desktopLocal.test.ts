@@ -15,6 +15,7 @@ import {
   desktopLocalConnectionId,
   isDesktopLocalConnectionTarget,
   isWslConnectionTarget,
+  supportsDesktopSecondaryBootstraps,
 } from "./desktopLocal";
 
 describe("desktop local connection identity", () => {
@@ -177,5 +178,25 @@ describe("desktop local topology reads", () => {
       throw new Error("IPC unavailable again");
     };
     expect(reader.readSnapshot()).toBe(removedSnapshot);
+  });
+
+  it("skips secondary bridge reads on macOS and Linux", () => {
+    let calls = 0;
+    const reader = createDesktopSecondaryBootstrapsReader(() => ({
+      getClientPlatform: () => "darwin",
+      getLocalEnvironmentBootstraps: () => {
+        calls += 1;
+        return [];
+      },
+    }));
+
+    expect(supportsDesktopSecondaryBootstraps({ getClientPlatform: () => "darwin" })).toBe(false);
+    expect(supportsDesktopSecondaryBootstraps({ getClientPlatform: () => "linux" })).toBe(false);
+    expect(supportsDesktopSecondaryBootstraps({ getClientPlatform: () => "win32" })).toBe(true);
+    expect(supportsDesktopSecondaryBootstraps({})).toBe(true);
+    expect(supportsDesktopSecondaryBootstraps(undefined)).toBe(false);
+
+    expect(reader.readResult()).toEqual({ _tag: "Success", bootstraps: [] });
+    expect(calls).toBe(0);
   });
 });

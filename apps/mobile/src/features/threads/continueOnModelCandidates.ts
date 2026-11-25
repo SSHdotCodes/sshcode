@@ -1,4 +1,9 @@
-import { activeProviderFailure, type ModelSelection } from "@t3tools/contracts";
+import {
+  activeProviderFailure,
+  type ModelSelection,
+  type ProviderInteractionMode,
+  type ServerConfig as T3ServerConfig,
+} from "@t3tools/contracts";
 import {
   CONTINUE_ON_CHOICES,
   type ContinueOnHistoryEntry,
@@ -6,7 +11,8 @@ import {
   usedModels,
 } from "@t3tools/shared/continueOnModel";
 
-import type { ProviderGroup } from "../../lib/modelOptions";
+import { modelSelectionForDispatch, type ProviderGroup } from "../../lib/modelOptions";
+import { resolveProviderInteractionMode } from "../../state/legacy-plan-mode";
 
 export interface PhoneContinueCandidate {
   /** Provider and model: two choices can share a provider. */
@@ -127,4 +133,22 @@ export function phoneContinueCandidates(
     }))
     .filter((candidate) => !isPlan(candidate.key));
   return [...plan, ...defaults].slice(0, 5);
+}
+
+/** Freeze target defaults and clamp interactionMode for the target provider before dispatching. */
+export function resolvePhoneContinueDispatch(input: {
+  readonly config: T3ServerConfig | null | undefined;
+  readonly selection: ModelSelection;
+  readonly interactionMode: ProviderInteractionMode;
+}): {
+  readonly modelSelection: ModelSelection;
+  readonly interactionMode: ProviderInteractionMode;
+} {
+  const targetProvider = input.config?.providers.find(
+    (provider) => provider.instanceId === input.selection.instanceId,
+  );
+  return {
+    modelSelection: modelSelectionForDispatch(input.config, input.selection),
+    interactionMode: resolveProviderInteractionMode(targetProvider, input.interactionMode),
+  };
 }

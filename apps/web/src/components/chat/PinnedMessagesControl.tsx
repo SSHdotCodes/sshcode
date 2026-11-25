@@ -2,6 +2,7 @@ import type { EnvironmentId, MessageId, ProjectId, ThreadId } from "@t3tools/con
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { pendingThreadSearchJumpAtom } from "@t3tools/client-runtime/state/thread-search";
+import { messagePreviewLine } from "@t3tools/shared/messagePreview";
 import { PinIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -115,44 +116,47 @@ function PinnedMessagesPopover({
             Pinned messages
           </p>
           <ul className="-mx-1 flex flex-col gap-0.5 overflow-y-auto">
-            {newestFirst.map((pin) => (
-              <li key={pin.messageId} className="group/pin relative">
-                <button
-                  type="button"
-                  onClick={() => jump(pin.messageId)}
-                  className="flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 pr-8 text-left transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-hidden"
-                >
-                  <span
-                    className={cn(
-                      "line-clamp-2 text-sm leading-snug",
-                      !pin.preview && "text-muted-foreground",
-                    )}
-                  >
-                    {pin.preview || "Agent message"}
-                  </span>
-                  <span className="text-muted-foreground text-xs tabular-nums">
-                    Pinned {formatDayAwareTimestamp(pin.pinnedAt, timestampFormat)}
-                  </span>
-                </button>
-                <span className="absolute top-1.5 right-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/pin:opacity-100 pointer-coarse:opacity-100">
-                  <Button
+            {newestFirst.map((pin) => {
+              const preview = pin.preview ? messagePreviewLine(pin.preview) : null;
+              return (
+                <li key={pin.messageId} className="group/pin relative">
+                  <button
                     type="button"
-                    size="icon-xs"
-                    variant="ghost"
-                    aria-label="Unpin message"
-                    title="Unpin"
-                    onClick={() =>
-                      void unpin({
-                        environmentId,
-                        input: { threadId, messageId: pin.messageId, pinned: false },
-                      })
-                    }
+                    onClick={() => jump(pin.messageId)}
+                    className="flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 pr-8 text-left transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-hidden"
                   >
-                    <XIcon />
-                  </Button>
-                </span>
-              </li>
-            ))}
+                    <span
+                      className={cn(
+                        "line-clamp-2 wrap-anywhere text-sm leading-snug",
+                        !preview && "text-muted-foreground",
+                      )}
+                    >
+                      {preview || "Agent message"}
+                    </span>
+                    <span className="text-muted-foreground text-xs tabular-nums">
+                      Pinned {formatDayAwareTimestamp(pin.pinnedAt, timestampFormat)}
+                    </span>
+                  </button>
+                  <span className="absolute top-1.5 right-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/pin:opacity-100 pointer-coarse:opacity-100">
+                    <Button
+                      type="button"
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label="Unpin message"
+                      title="Unpin"
+                      onClick={() =>
+                        void unpin({
+                          environmentId,
+                          input: { threadId, messageId: pin.messageId, pinned: false },
+                        })
+                      }
+                    >
+                      <XIcon />
+                    </Button>
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         </div>
       </PopoverPopup>

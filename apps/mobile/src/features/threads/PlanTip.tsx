@@ -91,7 +91,7 @@ export function PlanTip(props: {
     else dismiss();
   };
   return (
-    <View className="flex-row items-center gap-2 px-2 pb-2">
+    <View className="mb-2 flex-row items-center gap-2 rounded-2xl border border-border bg-card px-3 py-1">
       <Text className="min-w-0 flex-1 text-xs text-foreground-muted">{copy.message}</Text>
       <Pressable
         accessibilityRole="button"

@@ -117,11 +117,14 @@ const threadPreviewTabsAtom = Atom.family((threadKey: string) => {
     get.mount(listAtom);
     get.mount(eventsAtom);
     const cached = get.once(listAtom);
-    if (AsyncResult.isSuccess(cached)) state = applyList(cached.value) ?? state;
-    // The cached list can predate an agent-opened tab.
-    queueMicrotask(() => {
-      if (!disposed) get.refresh(listAtom);
-    });
+    if (AsyncResult.isSuccess(cached)) {
+      state = applyList(cached.value) ?? state;
+      // The cached list can predate an agent-opened tab. When listAtom is not
+      // cached yet, mounting it above already triggered the initial fetch.
+      queueMicrotask(() => {
+        if (!disposed) get.refresh(listAtom);
+      });
+    }
     return state;
   }).pipe(Atom.setIdleTTL(1_000), Atom.withLabel(`mobile-preview-tabs:${threadKey}`));
 });

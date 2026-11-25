@@ -529,6 +529,12 @@ describe("cached thread previews", () => {
               store(name).delete(key);
               succeed(transaction, "complete");
             },
+            openCursor: () => {
+              const request = Object.assign(new EventTarget(), { result: null, error: null });
+              succeed(request, "success");
+              succeed(transaction, "complete");
+              return request;
+            },
           }),
         });
       },
@@ -594,4 +600,20 @@ describe("cached thread previews", () => {
     ).toEqual({ role: "user", text: "latest" });
     expect(ConnectionStorage.lastMessagePreviewFromItems(undefined)).toBeNull();
   });
+
+  it.effect("persists and clears the last good route per environment", () =>
+    Effect.gen(function* () {
+      installMemoryIndexedDb();
+      vi.stubGlobal("IDBKeyRange", { bound: () => ({}) });
+      const environmentId = EnvironmentId.make("env-remote");
+      yield* Effect.gen(function* () {
+        const cache = yield* Persistence.EnvironmentCacheStore;
+        expect(Option.isNone(yield* cache.loadLastRoute!(environmentId))).toBe(true);
+        yield* cache.saveLastRoute!(environmentId, "relay:env-remote");
+        expect(yield* cache.loadLastRoute!(environmentId)).toEqual(Option.some("relay:env-remote"));
+        yield* cache.clear(environmentId);
+        expect(Option.isNone(yield* cache.loadLastRoute!(environmentId))).toBe(true);
+      }).pipe(Effect.provide(ConnectionStorage.layer));
+    }),
+  );
 });

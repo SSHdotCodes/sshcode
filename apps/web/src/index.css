@@ -3650,3 +3650,104 @@ html[data-ui-mode="discord"] [data-dc-members-dialog] {
     }
   }
 }
+
+/* The model picker's effort slider: the thumb glides with a small overshoot and the fill follows.
+   Effects build with the effort tier (data-effort-fx): 2 shimmers, 3 breathes and glows under the
+   fill, 4 (Ultracode) throws embers. Reduced motion keeps the colours and drops the motion. */
+@keyframes effort-shimmer {
+  from {
+    background-position: -40% 0;
+  }
+  to {
+    background-position: 140% 0;
+  }
+}
+
+@keyframes effort-breathe {
+  from {
+    box-shadow:
+      0 0 8px 2px color-mix(in srgb, var(--effort-tone) 55%, transparent),
+      0 1px 2px rgb(0 0 0 / 0.3);
+  }
+  to {
+    box-shadow:
+      0 0 16px 5px color-mix(in srgb, var(--effort-tone) 90%, transparent),
+      0 1px 2px rgb(0 0 0 / 0.3);
+  }
+}
+
+@keyframes effort-fill-glow {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 0.8;
+  }
+}
+
+@keyframes effort-ember {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 0) scale(1);
+  }
+  15% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--ember-drift)), -15px) scale(0.4);
+  }
+}
+
+.effort-fill-glow {
+  opacity: 0.5;
+  filter: blur(4px);
+}
+
+.effort-ember {
+  display: none;
+}
+
+[data-effort-fx="2"] {
+  --effort-shimmer: 2.8s;
+}
+[data-effort-fx="3"] {
+  --effort-shimmer: 2s;
+  --effort-breathe: 1.2s;
+}
+[data-effort-fx="4"] {
+  --effort-shimmer: 1.4s;
+  --effort-breathe: 0.8s;
+}
+
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  .effort-thumb {
+    transition:
+      left 280ms cubic-bezier(0.34, 1.56, 0.64, 1),
+      border-color 280ms ease,
+      box-shadow 280ms ease,
+      scale 120ms ease;
+  }
+  .effort-fill {
+    transition: clip-path 280ms cubic-bezier(0.34, 1.3, 0.64, 1);
+  }
+  :is([data-effort-fx="2"], [data-effort-fx="3"], [data-effort-fx="4"]) .effort-fill::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.65), transparent);
+    background-size: 40% 100%;
+    background-repeat: no-repeat;
+    animation: effort-shimmer var(--effort-shimmer) ease-in-out infinite;
+  }
+  :is([data-effort-fx="3"], [data-effort-fx="4"]) .effort-thumb {
+    animation: effort-breathe var(--effort-breathe) ease-in-out infinite alternate;
+  }
+  :is([data-effort-fx="3"], [data-effort-fx="4"]) .effort-fill-glow {
+    animation: effort-fill-glow var(--effort-breathe) ease-in-out infinite alternate;
+  }
+  .effort-ember {
+    display: block;
+    animation: effort-ember 1.3s ease-out infinite backwards;
+  }
+}

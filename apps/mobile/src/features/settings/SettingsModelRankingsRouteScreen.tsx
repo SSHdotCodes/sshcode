@@ -367,7 +367,7 @@ function RankingsEditor({ environment }: { environment: SettingsTarget }) {
             {saving ? "Saving…" : "Changes save automatically."}
           </Text>
           {error ? (
-            <Text accessibilityRole="alert" className="text-sm text-danger">
+            <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
               {error}
             </Text>
           ) : null}

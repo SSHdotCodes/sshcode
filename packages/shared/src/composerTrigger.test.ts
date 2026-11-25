@@ -1,3 +1,5 @@
+import remarkParse from "remark-parse";
+import { unified } from "unified";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -6,6 +8,7 @@ import {
   detectComposerTrigger,
   serializeComposerFileLink,
 } from "./composerTrigger.ts";
+import { resolveMarkdownFileLinkTarget } from "./markdownLinks.ts";
 
 describe("detectComposerTrigger", () => {
   it.each(["Use ", "Use\t", "Use\n  "])("detects inline slash skills after %j", (prefix) => {
@@ -58,6 +61,16 @@ describe("detectComposerTrigger", () => {
 });
 
 describe("serializeComposerFileLink", () => {
+  it("keeps character references literal in the rendered file label and target", () => {
+    const source = serializeComposerFileLink("docs/R&copy;.md");
+    const paragraph = unified().use(remarkParse).parse(source).children[0];
+    const link = paragraph?.type === "paragraph" ? paragraph.children[0] : undefined;
+    if (link?.type !== "link") throw new Error("Expected a Markdown link");
+    expect(link.children).toMatchObject([{ type: "text", value: "R&copy;.md" }]);
+    const target = resolveMarkdownFileLinkTarget(link.url, "/workspace");
+    expect(target?.replace("/./", "/")).toBe("/workspace/docs/R&copy;.md");
+  });
+
   it("uses the basename as the markdown label", () => {
     expect(serializeComposerFileLink("path/to/package.json")).toBe(
       "[package.json](path/to/package.json)",
@@ -66,7 +79,7 @@ describe("serializeComposerFileLink", () => {
 
   it("encodes markdown-sensitive destination characters", () => {
     expect(serializeComposerFileLink("docs/My File (draft).md")).toBe(
-      "[My File (draft).md](docs/My%20File%20%28draft%29.md)",
+      "[My File (draft).md](./docs/My%20File%20%28draft%29.md)",
     );
   });
 
@@ -78,7 +91,7 @@ describe("serializeComposerFileLink", () => {
 
   it("preserves paths that legitimately start with an at sign", () => {
     expect(serializeComposerFileLink("@scope/package.json")).toBe(
-      "[package.json](@scope/package.json)",
+      "[package.json](./@scope/package.json)",
     );
   });
 });

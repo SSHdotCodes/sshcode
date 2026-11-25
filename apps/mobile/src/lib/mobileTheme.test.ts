@@ -27,6 +27,7 @@ import {
   resolveMobileThemeIds,
   themeColorWithAlpha,
   themeColorToNativeColor,
+  userBubbleLinkColor,
 } from "./mobileTheme";
 
 function relativeLuminance(hex: string): number {
@@ -474,6 +475,29 @@ describe("mobile themes", () => {
         ).toBeGreaterThanOrEqual(4.5);
       }
     }
+  });
+
+  it("colours links in the user's bubble with the theme's link colour, readable on the bubble", () => {
+    for (const themeId of ["t3-code", ...BUILT_IN_THEME_IDS] as const) {
+      for (const appearance of ["light", "dark"] as const) {
+        const variables = getMobileThemeVariables(themeId, appearance);
+        const bubble = flattenThemeColor(
+          variables["--color-user-bubble"],
+          variables["--color-screen"],
+        );
+        const link = userBubbleLinkColor(variables);
+        expect(contrastRatio(link, bubble), `${themeId} ${appearance}`).toBeGreaterThanOrEqual(4.5);
+        // Body-coloured links were the bug: a link must not look like the text around it.
+        expect(link, `${themeId} ${appearance}`).not.toBe(
+          variables["--color-user-bubble-foreground"],
+        );
+      }
+    }
+    // The default dark theme keeps its blue rather than turning grey or white.
+    const link = userBubbleLinkColor(getMobileThemeVariables("t3-code", "dark"));
+    expect(Number.parseInt(link.slice(5, 7), 16)).toBeGreaterThan(
+      Number.parseInt(link.slice(1, 3), 16) + 80,
+    );
   });
 
   it("keeps the default user bubble readable in both appearances", () => {

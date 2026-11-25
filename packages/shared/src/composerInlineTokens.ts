@@ -1,3 +1,5 @@
+import { composerFileLinkPath } from "./composerTrigger.ts";
+
 export type ComposerInlineToken =
   | {
       readonly type: "mention";
@@ -75,6 +77,7 @@ function collectMentionTokens(text: string): ComposerInlineToken[] {
     } catch {
       // Preserve malformed source rather than dropping a user-authored token.
     }
+    path = composerFileLinkPath(encodedPath, path);
     const separatorIndex = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
     const basename = separatorIndex >= 0 ? path.slice(separatorIndex + 1) : path;
     const hasExternalScheme = URI_SCHEME_REGEX.test(path) && !WINDOWS_DRIVE_PATH_REGEX.test(path);

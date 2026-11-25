@@ -1429,7 +1429,7 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
     let interactiveRects = fileHeaderInteractiveRects(for: row, cardRect: rect)
     let fileId = resolvedFileId(for: row)
 
-    if interactiveRects.checkbox.contains(point) {
+    if reviewDiffViewedHitRect(header: rect, checkbox: interactiveRects.checkbox).contains(point) {
       onToggleViewedFile?(fileId)
       return
     }

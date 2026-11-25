@@ -22,7 +22,15 @@ import * as DesktopBackendPool from "./DesktopBackendPool.ts";
 // server error is final.
 // Each /oauth/token attempt may take 10 s, so a backend busy after ready needs several attempts.
 const BOOTSTRAP_TRANSIENT_RETRY_TIMEOUT = Duration.seconds(60);
-const BOOTSTRAP_TRANSIENT_RETRY_INTERVAL = Duration.millis(500);
+const BOOTSTRAP_TRANSIENT_RETRY_INITIAL_INTERVAL = Duration.millis(50);
+const BOOTSTRAP_TRANSIENT_RETRY_MAX_INTERVAL = Duration.millis(500);
+const BOOTSTRAP_TRANSIENT_RETRY_SCHEDULE = Schedule.exponential(
+  BOOTSTRAP_TRANSIENT_RETRY_INITIAL_INTERVAL,
+).pipe(
+  Schedule.modifyDelay(({ duration }) =>
+    Effect.succeed(Duration.min(duration, BOOTSTRAP_TRANSIENT_RETRY_MAX_INTERVAL)),
+  ),
+);
 const TRANSIENT_BOOTSTRAP_STATUS_CODES = new Set([502, 503, 504]);
 
 const isTransientBearerBootstrapError = (error: RemoteEnvironmentRequestError): boolean => {
@@ -112,7 +120,7 @@ export const make = Effect.gen(function* () {
           Effect.provideService(HttpClient.HttpClient, httpClient),
           Effect.retry({
             while: isTransientBearerBootstrapError,
-            schedule: Schedule.spaced(BOOTSTRAP_TRANSIENT_RETRY_INTERVAL),
+            schedule: BOOTSTRAP_TRANSIENT_RETRY_SCHEDULE,
           }),
           // Bounds the attempts and any request still in flight at the deadline.
           Effect.timeout(BOOTSTRAP_TRANSIENT_RETRY_TIMEOUT),

@@ -327,7 +327,41 @@ export interface ProviderRepositoryRef {
  * the neutral types above; anything a host cannot do is declared in `capabilities` rather than
  * failing at call time.
  */
+/** Involvement narrowing for repository listings. Mine is assembled across account searches. */
+export type RepositoryPullRequestInvolvement = Exclude<PullRequestInvolvement, "mine">;
+
+export type PersonalPullRequestScope = "author" | "review-requested" | "involves" | "owned";
+
+export type PersonalPullRequestSearch = {
+  readonly cwd: string;
+  readonly host: string;
+  readonly repositories?: ReadonlyArray<string> | undefined;
+  readonly state: PullRequestListState;
+  readonly viewer: string;
+  readonly limit: number;
+  readonly query?: string | undefined;
+  readonly after?: string | undefined;
+  readonly filters?: PullRequestListFilters | undefined;
+} & (
+  | { readonly scope: Exclude<PersonalPullRequestScope, "owned"> }
+  | { readonly scope: "owned"; readonly owners: ReadonlyArray<string> }
+);
+
+export interface PersonalPullRequestPage {
+  readonly items: ReadonlyArray<ProviderBatchedChangeRequest>;
+  readonly nextCursor: string | null;
+}
+
 export interface PullRequestProviderApi {
+  readonly listPersonalChangeRequests?: (
+    input: PersonalPullRequestSearch,
+  ) => Effect.Effect<PersonalPullRequestPage, PullRequestProviderError>;
+
+  readonly getViewerOrganizations?: (input: {
+    readonly cwd: string;
+    readonly host: string;
+  }) => Effect.Effect<ReadonlyArray<string>, PullRequestProviderError>;
+
   readonly withVerifiedCredential?: <A, E, R>(
     input: { readonly cwd: string; readonly host: string },
     use: (identity: {
@@ -375,7 +409,7 @@ export interface PullRequestProviderApi {
   readonly listChangeRequests: (
     input: ProviderRepositoryRef & {
       readonly state: PullRequestListState;
-      readonly involvement: PullRequestInvolvement;
+      readonly involvement: RepositoryPullRequestInvolvement;
       readonly viewer: string;
       readonly limit: number;
       /**
@@ -419,7 +453,7 @@ export interface PullRequestProviderApi {
     readonly host: string;
     readonly repositories: ReadonlyArray<string>;
     readonly state: PullRequestListState;
-    readonly involvement: PullRequestInvolvement;
+    readonly involvement: RepositoryPullRequestInvolvement;
     readonly viewer: string;
     readonly limit: number;
     readonly query?: string | undefined;

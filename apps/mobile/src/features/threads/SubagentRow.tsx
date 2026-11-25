@@ -162,7 +162,11 @@ export function SubagentMetadata(props: {
   const provider = config?.providers.find(
     (candidate) => candidate.instanceId === subagent.providerInstanceId,
   );
-  const { modelLabel } = resolveSubagentMetadata({ model: subagent.model, provider });
+  const { modelLabel } = resolveSubagentMetadata({
+    model: subagent.model,
+    modelOptions: subagent.modelSelection?.options,
+    provider,
+  });
   const speed = subagentSpeed(subagent.modelSelection);
   return (
     <Text className="text-2xs text-foreground-muted" numberOfLines={1}>

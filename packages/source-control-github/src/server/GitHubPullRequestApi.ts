@@ -1,3 +1,7 @@
+import type {
+  PersonalPullRequestPage,
+  PersonalPullRequestSearch,
+} from "@t3tools/source-control-core/server/PullRequestProvider";
 import { removeAgentCredits } from "@t3tools/source-control-core/server/mergeMessage";
 import { KnownWorkflowRuns, makeChecksRevalidator } from "./gitHubConditionalChecks.ts";
 import { runGitHubStackAction, type GitHubStackActionError } from "./githubStackActions.ts";
@@ -502,6 +506,10 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly cwd: string;
       readonly host: string;
     }) => Effect.Effect<string, GitHubPullRequestApiError>;
+    readonly getViewerOrganizations: (input: {
+      readonly cwd: string;
+      readonly host: string;
+    }) => Effect.Effect<ReadonlyArray<string>, GitHubPullRequestApiError>;
 
     readonly listPullRequests: (input: {
       readonly cwd: string;
@@ -524,6 +532,10 @@ export class GitHubPullRequestApi extends Context.Service<
      * all of the repositories rather than per repository, because that is what a search answers:
      * the newest rows of the lot, which is exactly the page.
      */
+    readonly searchPersonalPullRequests: (
+      input: PersonalPullRequestSearch,
+    ) => Effect.Effect<PersonalPullRequestPage, GitHubPullRequestApiError>;
+
     readonly searchPullRequests: (input: {
       /** Any checkout on the host; the search names its repositories itself. */
       readonly cwd: string;
@@ -963,6 +975,10 @@ function matchesUnsortedListing(
 
 /** What a repository selector may hold before it goes into a search as itself. */
 const SEARCH_REPOSITORY = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+const SEARCH_OWNER = /^[A-Za-z0-9._-]+$/;
+const decodeViewerOrganizations = Schema.decodeUnknownResult(
+  Schema.fromJsonString(Schema.Array(Schema.Struct({ login: Schema.String }))),
+);
 
 /**
  * A listing as one GitHub search, across one repository or several: the only way to read a
@@ -977,6 +993,7 @@ const SEARCH_REPOSITORY = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
  * GitHub might still read.
  */
 function searchQuery(input: {
+  readonly accountQualifiers?: ReadonlyArray<string>;
   readonly repositories: ReadonlyArray<string>;
   readonly state: PullRequestListState;
   readonly involvement: PullRequestInvolvement;
@@ -985,12 +1002,13 @@ function searchQuery(input: {
   readonly cursor?: ProviderListCursor | undefined;
   readonly filters?: PullRequestListFilters | undefined;
 }): string | null {
-  if (input.repositories.length === 0) return null;
+  if (input.repositories.length === 0 && !input.accountQualifiers?.length) return null;
   const repositories = input.repositories.map((repository) => repository.trim());
   if (!repositories.every((repository) => SEARCH_REPOSITORY.test(repository))) return null;
   const query = input.query?.trim() ?? "";
   return [
     "is:pr",
+    ...(input.accountQualifiers ?? []),
     // "all" is every state, which `is:pr` already is.
     ...(input.state === "open" ? ["is:open"] : []),
     ...(input.state === "closed" ? ["is:closed", "is:unmerged"] : []),
@@ -1968,6 +1986,13 @@ export const make = Effect.gen(function* () {
     getRoutingIdentity,
     getViewerLogin: (input) =>
       getRoutingIdentity(input).pipe(Effect.map((identity) => identity.viewer)),
+    getViewerOrganizations: (input) =>
+      restRead({
+        ...input,
+        operation: "getViewerOrganizations",
+        path: "user/orgs?per_page=100",
+        decode: decodeViewerOrganizations,
+      }).pipe(Effect.map((organizations) => organizations.map(({ login }) => login))),
 
     listPullRequests: (input) => {
       const fallbackMaxRows = Math.max(input.limit + 1, PULL_REQUEST_FALLBACK_MAX_ROWS);
@@ -2122,6 +2147,40 @@ export const make = Effect.gen(function* () {
           ).pipe(Effect.map((chunks) => ({ ...batch, items: chunks.flat() })));
         }),
       );
+    },
+
+    searchPersonalPullRequests: (input) => {
+      const accountQualifiers =
+        input.scope === "owned"
+          ? input.owners
+              .filter((owner) => SEARCH_OWNER.test(owner))
+              .map((owner) => (owner === input.viewer.toLowerCase() ? "user:@me" : `org:${owner}`))
+          : [`${input.scope}:@me`];
+      const query = searchQuery({
+        ...input,
+        accountQualifiers,
+        repositories: input.repositories ?? [],
+        involvement: "all",
+      });
+      if (query === null) {
+        return Effect.fail(
+          new GitHubRepositorySelectorError({
+            cwd: input.cwd,
+            operation: "searchPersonalPullRequests",
+          }),
+        );
+      }
+      return graphqlRead({
+        cwd: input.cwd,
+        host: input.host,
+        operation: "searchPersonalPullRequests",
+        variables: { q: query, after: input.after ?? null },
+        query: pullRequestSearchGraphQlQuery(
+          Math.min(input.limit, PULL_REQUEST_SEARCH_MAX_ROWS),
+          input.host === "github.com",
+        ),
+        decode: decodePullRequestSearchJson,
+      }).pipe(Effect.map((page) => ({ items: page.items, nextCursor: page.endCursor })));
     },
 
     searchPullRequests: (input) => {

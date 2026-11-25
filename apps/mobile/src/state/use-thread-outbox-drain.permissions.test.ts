@@ -1,5 +1,6 @@
 import {
   AuthOrchestrationOperateScope,
+  ChatControlsError,
   CommandId,
   EnvironmentId,
   MessageId,
@@ -20,6 +21,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 const state = vi.hoisted(() => ({
   grantedEnvironments: new Set<string>(),
   threadPresent: true,
+  shellStatus: "live",
   connected: true,
   modelUnavailable: false,
   unavailableModel: null as string | null,
@@ -34,6 +36,7 @@ const state = vi.hoisted(() => ({
   interaction: vi.fn(),
   prepare: vi.fn(),
   checkout: vi.fn(),
+  controls: vi.fn(),
   manager: null as unknown as ReturnType<
     typeof import("./thread-outbox-manager").createThreadOutboxManager
   >,
@@ -60,7 +63,7 @@ vi.mock("react", () => ({
     if (cleanup) state.cleanups.push(cleanup);
   },
   useRef: <A>(value: A) => ({ current: value }),
-  useState: <A>(initial: A) => [initial, vi.fn()],
+  useState: <A>(initial: A) => [typeof initial === "function" ? initial() : initial, vi.fn()],
 }));
 vi.mock("react-native", () => ({ Alert: { alert: state.alert } }));
 vi.mock("@effect/atom-react", async () => {
@@ -80,7 +83,10 @@ vi.mock("./entities", () => ({
 vi.mock("./server", async () => {
   const { Atom } = await import("effect/reactivity");
   return {
-    serverEnvironment: { configValueAtom: Atom.family((_id: string) => Atom.make(state.config)) },
+    serverEnvironment: {
+      chatControlsCommand: state.controls,
+      configValueAtom: Atom.family((_id: string) => Atom.make(state.config)),
+    },
   };
 });
 vi.mock("./threads", async () => {
@@ -146,9 +152,9 @@ vi.mock("./use-thread-outbox", async () => {
   await import("./thread-outbox");
   return {
     editingQueuedMessageIdsAtom: Atom.make({}).pipe(Atom.keepAlive),
-    dispatchingQueuedMessageIdAtom: Atom.make<MessageId | null>(null).pipe(Atom.keepAlive),
+    dispatchingMessageByThreadAtom: Atom.make<Record<string, MessageId>>({}).pipe(Atom.keepAlive),
     useThreadOutboxMessages: () => appAtomRegistry.get(state.manager.queuedMessagesByThreadKeyAtom),
-    useThreadOutboxShellStatuses: () => new Map([["secondary", "live"]]),
+    useThreadOutboxShellStatuses: () => new Map([["secondary", state.shellStatus]]),
   };
 });
 vi.mock("./use-composer-drafts", async () => {
@@ -170,7 +176,7 @@ vi.mock("./use-composer-drafts", async () => {
 });
 
 import { appAtomRegistry } from "./atom-registry";
-import { dispatchingQueuedMessageIdAtom } from "./use-thread-outbox";
+import { dispatchingMessageByThreadAtom } from "./use-thread-outbox";
 import { environmentThreadShells } from "./threads";
 import { useThreadOutboxDrain } from "./use-thread-outbox-drain";
 
@@ -193,8 +199,8 @@ const remaining = () =>
 
 function runDrain() {
   const settled = Promise.withResolvers<void>();
-  const release = appAtomRegistry.subscribe(dispatchingQueuedMessageIdAtom, (id) => {
-    if (id === null) settled.resolve();
+  const release = appAtomRegistry.subscribe(dispatchingMessageByThreadAtom, (byThread) => {
+    if (Object.keys(byThread).length === 0) settled.resolve();
   });
   useThreadOutboxDrain();
   return settled.promise.finally(release);
@@ -203,6 +209,7 @@ function runDrain() {
 beforeEach(() => {
   state.grantedEnvironments = new Set(["primary"]);
   state.threadPresent = true;
+  state.shellStatus = "live";
   state.connected = true;
   state.modelUnavailable = false;
   state.unavailableModel = null;
@@ -211,13 +218,14 @@ beforeEach(() => {
   appAtomRegistry.set(writableShells, [state.thread] as never);
   state.draftText = "Keep this draft separate";
   appAtomRegistry.set(state.manager.queuedMessagesByThreadKeyAtom, {});
-  appAtomRegistry.set(dispatchingQueuedMessageIdAtom, null);
+  appAtomRegistry.set(dispatchingMessageByThreadAtom, {});
   for (const command of [
     state.start,
     state.metadata,
     state.runtime,
     state.interaction,
     state.checkout,
+    state.controls,
   ]) {
     command.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   }
@@ -300,6 +308,83 @@ describe("queued PR checkout", () => {
     });
     expect(bootstrap.prepareWorktree).toBeUndefined();
     expect(remaining()).toEqual([]);
+  });
+
+  it("dispatches another chat at 0 ms while a PR checkout holds its own chat's queue", async () => {
+    vi.useFakeTimers();
+    const checkout =
+      Promise.withResolvers<AsyncResult.AsyncResult<typeof preparedCheckout, Error>>();
+    try {
+      state.grantedEnvironments.add("secondary");
+      const first = queuedPullRequest();
+      const next = message({
+        threadId: first.threadId,
+        commandId: CommandId.make("second-command"),
+        messageId: MessageId.make("second-message"),
+        createdAt: "2026-09-05T00:00:01.000Z",
+      });
+      const other = message({
+        commandId: CommandId.make("other-command"),
+        messageId: MessageId.make("other-message"),
+      });
+      await state.manager.enqueue(first);
+      await state.manager.enqueue(next);
+      await state.manager.enqueue(other);
+      state.checkout.mockReturnValueOnce(checkout.promise);
+      const drained = runDrain();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state.start.mock.calls.map(([call]) => call.input.commandId)).toEqual([
+        other.commandId,
+      ]);
+      expect(remaining()).toEqual([first, next]);
+      checkout.resolve(AsyncResult.success(preparedCheckout));
+      await drained;
+      expect(state.start.mock.calls.map(([call]) => call.input.commandId)).toEqual([
+        other.commandId,
+        first.commandId,
+      ]);
+      expect(remaining()).toEqual([next]);
+    } finally {
+      checkout.resolve(AsyncResult.success(preparedCheckout));
+      vi.useRealTimers();
+    }
+  });
+
+  it("launches a fresh task before the shell snapshot, while a restored task waits", async () => {
+    state.grantedEnvironments.add("secondary");
+    state.shellStatus = "empty";
+    const { freshThreadCreations } = await import("./pending-thread-creation");
+    const fresh = queuedPullRequest();
+    const restored = {
+      ...fresh,
+      threadId: ThreadId.make("restored"),
+      commandId: CommandId.make("restored"),
+      messageId: MessageId.make("restored"),
+    };
+    freshThreadCreations.add(fresh);
+    await state.manager.enqueue(restored);
+    await state.manager.enqueue(fresh);
+    state.checkout.mockResolvedValueOnce(AsyncResult.success(preparedCheckout));
+    await runDrain();
+    expect(state.start.mock.calls.map(([call]) => call.input.commandId)).toEqual([fresh.commandId]);
+    expect(remaining()).toEqual([restored]);
+  });
+
+  it("restores a new task when its required chat control is refused", async () => {
+    state.grantedEnvironments.add("secondary");
+    const queued = queuedPullRequest();
+    await state.manager.enqueue({
+      ...queued,
+      creation: { ...queued.creation!, subagentsOff: true },
+    });
+    state.checkout.mockResolvedValueOnce(AsyncResult.success(preparedCheckout));
+    state.controls.mockResolvedValueOnce(
+      AsyncResult.failure(Cause.fail(new ChatControlsError({ message: "Chat control refused" }))),
+    );
+    await runDrain();
+    expect(state.start).not.toHaveBeenCalled();
+    expect(remaining()).toEqual([]);
+    expect(state.draftText).toContain(queued.text);
   });
 
   it("keeps the PR source queued on a transport failure without starting the agent", async () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   HTML_RENDER_MAX_FIT_HEIGHT,
+  htmlRenderFileName,
   htmlRenderFrameHeight,
   htmlRenderReferencesEqual,
   htmlRenderTheme,
@@ -16,6 +17,15 @@ import {
 } from "./htmlRender.ts";
 import { T3_CODE_DARK_THEME_COLORS, T3_CODE_LIGHT_THEME_COLORS } from "./themePalettes.ts";
 import { htmlRenderFromToolItem } from "./toolOutput.ts";
+
+describe("htmlRenderFileName", () => {
+  it("keeps complete emoji at the filename limit", () => {
+    const fits = "a".repeat(118);
+    const crosses = "a".repeat(119);
+    expect(htmlRenderFileName(`${fits}🚀 report`)).toBe(`${fits}🚀.html`);
+    expect(htmlRenderFileName(`${crosses}🚀 report`)).toBe(`${crosses}.html`);
+  });
+});
 
 const reference = { attachmentId: "thread-abc-123.html", title: "Chart", height: 420 };
 

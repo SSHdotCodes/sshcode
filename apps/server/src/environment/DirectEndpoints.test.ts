@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import type * as NodeOS from "node:os";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
@@ -304,4 +305,91 @@ describe("DirectEndpoints Tailscale Serve", () => {
         }),
     );
   });
+
+  effectIt.effect("retries immediately after a Serve refresh dies", () => {
+    let probes = 0;
+    return withCountingServe(
+      () => {
+        probes++;
+        if (probes === 2) throw new Error("Serve probe defect");
+        return probes === 1 ? 200 : 502;
+      },
+      (resolve) =>
+        Effect.gen(function* () {
+          expect(yield* resolve).toBe(1);
+          yield* TestClock.adjust("61 seconds");
+          expect(yield* resolve).toBe(2);
+          yield* TestClock.adjust("1 millis");
+          expect(yield* resolve).toBe(3);
+        }),
+    );
+  });
+
+  effectIt.effect(
+    "returns the cached Serve endpoint immediately while refreshing after TTL",
+    () => {
+      const releaseRefresh = Deferred.makeUnsafe<void>();
+      let phase = 1;
+      let refreshStarted = false;
+      let status = 200;
+      const layer = DirectEndpoints.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            layerServeConfig,
+            Layer.succeed(
+              ChildProcessSpawner.ChildProcessSpawner,
+              ChildProcessSpawner.make(() =>
+                Effect.gen(function* () {
+                  if (phase === 2) {
+                    refreshStarted = true;
+                    yield* Deferred.await(releaseRefresh);
+                  }
+                  return ChildProcessSpawner.makeHandle({
+                    pid: ChildProcessSpawner.ProcessId(1),
+                    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+                    isRunning: Effect.succeed(false),
+                    kill: () => Effect.void,
+                    unref: Effect.succeed(Effect.void),
+                    stdin: Sink.drain,
+                    stdout: Stream.make(new TextEncoder().encode(TAILSCALE_STATUS_JSON)),
+                    stderr: Stream.empty,
+                    all: Stream.empty,
+                    getInputFd: () => Sink.drain,
+                    getOutputFd: () => Stream.empty,
+                  });
+                }),
+              ),
+            ),
+            Layer.succeed(
+              HttpClient.HttpClient,
+              HttpClient.make((request) =>
+                Effect.sync(() =>
+                  HttpClientResponse.fromWeb(request, new Response(null, { status })),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      return Effect.gen(function* () {
+        const service = yield* DirectEndpoints.DirectEndpoints;
+        const first = yield* service.resolve();
+        expect(first).toEqual([{ kind: "tailnet", httpBaseUrl: "https://bb-1.tail1234.ts.net/" }]);
+
+        phase = 2;
+        status = 502;
+        yield* TestClock.adjust("61 seconds");
+
+        // Must return cached endpoint immediately without waiting on releaseRefresh.
+        const stale = yield* service.resolve();
+        expect(stale).toEqual(first);
+        expect(refreshStarted).toBe(true);
+
+        yield* Deferred.succeed(releaseRefresh, undefined);
+        yield* Effect.yieldNow;
+        expect(yield* service.resolve()).toEqual([]);
+      }).pipe(Effect.provide(layer));
+    },
+  );
 });

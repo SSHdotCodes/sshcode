@@ -35,8 +35,17 @@ export const EMPTY_AUTO_MODEL_DRAFT: AutoModelDraftState = {
 };
 
 /**
- * Only an untouched first prompt is judged: a model the user picked (or a
- * suggestion they took or waved off) settles the draft's model for good.
+ * A model picked by hand in a new chat ends Auto there only once Auto has judged the prompt.
+ * Picked before that (a harness or effort chosen before typing), it is simply the model the
+ * prompt is judged against, so Auto still suggests when the task wants the other kind.
+ */
+export function autoModelAfterManualPick(state: AutoModelDraftState): AutoModelDraftState {
+  return state.difficulty === null || state.dismissed ? state : { ...state, dismissed: true };
+}
+
+/**
+ * Only an untouched first prompt is judged: a model picked after Auto judged
+ * the prompt (or a suggestion taken or waved off) settles the draft's model.
  */
 export function autoModelCanEvaluate(input: {
   readonly enabled: boolean;

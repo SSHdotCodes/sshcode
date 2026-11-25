@@ -1,7 +1,7 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import ChatMarkdown from "~/components/ChatMarkdown";
-import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
+import { resolveFileMarkdownBaseDir } from "./FileMarkdownPreview.logic";
 
 export function FileMarkdownPreview(props: {
   readonly cwd: string;
@@ -12,20 +12,11 @@ export function FileMarkdownPreview(props: {
     | ((input: { readonly markerOffset: number; readonly checked: boolean }) => void)
     | undefined;
 }) {
-  const lastSeparator = Math.max(
-    props.relativePath.lastIndexOf("/"),
-    props.relativePath.lastIndexOf("\\"),
-  );
-  const imageBaseDir =
-    lastSeparator >= 0
-      ? resolvePathLinkTarget(props.relativePath.slice(0, lastSeparator), props.cwd)
-      : props.cwd;
-
   return (
     <ChatMarkdown
       text={props.text}
       cwd={props.cwd}
-      imageBaseDir={imageBaseDir}
+      imageBaseDir={resolveFileMarkdownBaseDir(props.relativePath, props.cwd)}
       threadRef={props.threadRef}
       className="mx-auto max-w-4xl px-6 py-5"
       onTaskListChange={props.onTaskListChange}

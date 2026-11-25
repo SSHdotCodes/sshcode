@@ -78,7 +78,7 @@ export type RightPanelSurface =
        * takes the environment from its own ref.
        */
       environmentId?: string;
-      projectId: string;
+      projectId?: string | undefined;
       host?: string;
       repository: string;
       number: number;
@@ -157,7 +157,7 @@ interface RightPanelStoreState {
     ref: ScopedThreadRef,
     target: {
       environmentId?: string;
-      projectId: string;
+      projectId?: string | undefined;
       host?: string;
       repository: string;
       number: number;
@@ -268,7 +268,7 @@ export type PullRequestSurface = Extract<RightPanelSurface, { kind: "pull-reques
 
 export function pullRequestSurfaceId(target: {
   environmentId?: string;
-  projectId: string;
+  projectId?: string | undefined;
   host?: string;
   repository: string;
   number: number;
@@ -278,12 +278,12 @@ export function pullRequestSurfaceId(target: {
   const scope =
     target.environmentId === undefined ? "" : `${encodeURIComponent(target.environmentId)}:`;
   const host = target.host === undefined ? "" : `${encodeURIComponent(target.host.toLowerCase())}:`;
-  return `pull-request:${scope}${encodeURIComponent(target.projectId)}:${host}${encodeURIComponent(target.repository)}:${target.number}`;
+  return `pull-request:${scope}${encodeURIComponent(target.projectId ?? "")}:${host}${encodeURIComponent(target.repository)}:${target.number}`;
 }
 
 export function pullRequestSurface(target: {
   environmentId?: string;
-  projectId: string;
+  projectId?: string | undefined;
   host?: string;
   repository: string;
   number: number;
@@ -484,7 +484,8 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                     }
                     if (surface.kind === "pull-request") {
                       if (
-                        typeof surface.projectId !== "string" ||
+                        (typeof surface.projectId !== "string" &&
+                          typeof surface.host !== "string") ||
                         typeof surface.repository !== "string" ||
                         typeof surface.number !== "number" ||
                         !Number.isSafeInteger(surface.number) ||

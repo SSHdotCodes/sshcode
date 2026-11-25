@@ -68,7 +68,11 @@ export function usePullRequestThreads(
   const connected = usePullRequestConnected(params.environmentId);
   const canOperate = useEnvironmentScope(target.environmentId, AuthOrchestrationOperateScope);
   // Composing offline only writes a local draft. The outbox checks grants on delivery.
-  const canAsk = !connected || canOperate;
+  const projectId = pr?.projectId;
+  const checkoutRoot = pr?.workspaceRoot;
+  const canStart =
+    projectId !== undefined && checkoutRoot !== undefined && (!connected || canOperate);
+  const canAsk = canStart || (threads.length > 0 && (!connected || canOperate));
   const canCheckout = useEnvironmentScope(target.environmentId, AuthSourceControlWriteScope);
   const navigation = useNavigation();
   const selectAndroidWorkspace = useAndroidWorkspaceSelection();
@@ -81,7 +85,7 @@ export function usePullRequestThreads(
   };
   const [busy, setBusy] = useState(false);
   const ask = async (thread?: LinkedThread, task: PullRequestAgentTask = "ask") => {
-    if (!pr || !canAsk || pending.current) return;
+    if (!pr || !canAsk || pending.current || (!thread && !canStart)) return;
     pending.current = true;
     setBusy(true);
     try {
@@ -92,7 +96,7 @@ export function usePullRequestThreads(
         ? scopedThreadKey(target.environmentId, ThreadId.make(thread.id))
         : createNewTaskDraft({
             environmentId: target.environmentId,
-            projectId: target.input.projectId,
+            projectId: projectId!,
           });
       if (!thread)
         updateComposerDraftSettings(draftKey, {
@@ -102,6 +106,7 @@ export function usePullRequestThreads(
             worktreePath: null,
             startFromOrigin: false,
             pullRequestReference: pr.url,
+            pullRequestCheckoutRoot: checkoutRoot,
           },
         });
       const context = pullRequestComposerContext(
@@ -160,6 +165,7 @@ export function usePullRequestThreads(
     ...relations,
     threads,
     canAsk,
+    canStart,
     canWatch: config?.environment.capabilities.threadPullRequestWatch === true,
     busy,
     ask,

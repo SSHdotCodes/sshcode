@@ -1,6 +1,7 @@
 import { DESKTOP_MEDIA_MAX_BYTES } from "./desktopMediaLimits.ts";
 import type {
   DesktopBridge,
+  DesktopConnectionWakeupReason,
   DesktopNotificationResponse,
   DesktopPreviewOpenLinkEvent,
   DesktopPreviewPointerEvent,
@@ -135,6 +136,15 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     const handler = () => listener();
     ipcRenderer.on(IpcChannels.TRACKPAD_SCROLL_END_CHANNEL, handler);
     return () => ipcRenderer.removeListener(IpcChannels.TRACKPAD_SCROLL_END_CHANNEL, handler);
+  },
+  onConnectionWakeup: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, reason: unknown) => {
+      if (reason === "resume" || reason === "unlock-screen" || reason === "network-changed") {
+        listener(reason as DesktopConnectionWakeupReason);
+      }
+    };
+    ipcRenderer.on(IpcChannels.CONNECTION_WAKEUP_CHANNEL, handler);
+    return () => ipcRenderer.removeListener(IpcChannels.CONNECTION_WAKEUP_CHANNEL, handler);
   },
   getSystemLocale: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_SYSTEM_LOCALE_CHANNEL);

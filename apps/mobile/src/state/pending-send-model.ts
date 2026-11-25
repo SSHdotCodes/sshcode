@@ -50,7 +50,8 @@ export function isClosedRuntimeRequestError(error: unknown): boolean {
     typeof error === "object" &&
     error !== null &&
     "_tag" in error &&
-    error._tag === "OrchestrationDispatchCommandError" &&
+    (error._tag === "OrchestrationV2DispatchCommandError" ||
+      error._tag === "OrchestrationDispatchCommandError") &&
     "message" in error &&
     typeof error.message === "string" &&
     isClosedRuntimeRequestMessage(error.message)

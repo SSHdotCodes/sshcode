@@ -8,6 +8,7 @@ import * as NetAddress from "effect/net/NetAddress";
 import * as Option from "effect/Option";
 import * as Effect from "effect/Effect";
 
+import { compactDelegateTaskResult } from "../../delegateTaskDetails.ts";
 import { readCaller } from "../../threadAccess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -55,7 +56,7 @@ const handlers = {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       const feedback = yield* service.gradeTasks(scope, grades);
-      const result = yield* service.delegateTask(scope, input);
+      const result = compactDelegateTaskResult(yield* service.delegateTask(scope, input));
       return feedback.skipped.length ? { ...result, grades: feedback } : result;
     }),
   ),
@@ -71,7 +72,7 @@ const handlers = {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       const feedback = yield* service.gradeTasks(scope, grades);
-      const status = yield* service.taskStatus(scope, taskId);
+      const status = compactDelegateTaskResult(yield* service.taskStatus(scope, taskId));
       const rated =
         Array.isArray(grades) &&
         grades.some(

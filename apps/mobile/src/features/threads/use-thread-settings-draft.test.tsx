@@ -18,18 +18,33 @@ const selection = { instanceId: ProviderInstanceId.make("codex"), model: "curren
 const onSelectModel = vi.fn();
 const onUpdateOptionSelections = vi.fn();
 const onUpdateRuntimeMode = vi.fn();
+const onPromptChange = vi.fn();
+const effort: ProviderOptionDescriptor = {
+  id: "effort",
+  label: "Reasoning",
+  type: "select",
+  currentValue: "medium",
+  options: [
+    { id: "medium", label: "Medium" },
+    { id: "high", label: "High" },
+    { id: "ultrathink", label: "Ultrathink" },
+  ],
+  promptInjectedValues: ["ultrathink"],
+};
 let root: Root;
 let draft: ReturnType<typeof useThreadSettingsDraft>;
 let threadSelection = selection;
 let threadRuntimeMode: "full-access" | "approval-required" = "full-access";
-function Probe() {
+function Probe({ prompt }: { prompt?: string } = {}) {
   const state = useThreadSettingsDraft({
     selectedModel: threadSelection,
-    optionDescriptors: descriptors,
+    optionDescriptors: prompt === undefined ? descriptors : [effort],
     runtimeMode: threadRuntimeMode,
     onSelectModel,
     onUpdateOptionSelections,
     onUpdateRuntimeMode,
+    prompt,
+    onPromptChange,
   });
   useLayoutEffect(() => {
     draft = state;
@@ -43,6 +58,22 @@ beforeEach(() => {
   threadSelection = selection;
   root = createRoot(document.createElement("div"));
   act(() => root.render(<Probe />));
+});
+
+it("stages Ultrathink in the prompt and keeps effort IDs for ordinary choices", () => {
+  act(() => root.render(<Probe prompt="Investigate the bug" />));
+  act(() => draft.applyOptionChange("effort", "ultrathink"));
+  expect(draft.displayedPrompt).toBe("Ultrathink:\nInvestigate the bug");
+  expect(onPromptChange).not.toHaveBeenCalled();
+  act(() => draft.save(draft.runtimeMode));
+  expect(onPromptChange).toHaveBeenLastCalledWith("Ultrathink:\nInvestigate the bug");
+  expect(onUpdateOptionSelections).not.toHaveBeenCalled();
+
+  act(() => root.render(<Probe prompt={"Ultrathink:\nInvestigate the bug"} />));
+  act(() => draft.applyOptionChange("effort", "high"));
+  act(() => draft.save(draft.runtimeMode));
+  expect(onPromptChange).toHaveBeenLastCalledWith("Investigate the bug");
+  expect(onUpdateOptionSelections).toHaveBeenLastCalledWith([{ id: "effort", value: "high" }]);
 });
 afterEach(() => {
   act(() => root.unmount());

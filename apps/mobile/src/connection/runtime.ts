@@ -15,6 +15,7 @@ import * as Runtime from "../lib/runtime";
 import { appAtomRegistry } from "../state/atom-registry";
 import * as BackgroundActivity from "./background-activity";
 import * as ConnectionPlatform from "./platform";
+import { MOBILE_SERVER_CONFIG_SUBSCRIPTION_OPTIONS } from "./server-config-options";
 
 declare const module: { readonly hot?: FoundationHotModule } | undefined;
 
@@ -39,9 +40,7 @@ type ConnectionLayerSource =
 const layerProvidedClientConnection = layerSnapshotLoader.pipe(
   Layer.provideMerge(
     Connection.layerWithOptions({
-      usageLimitSources: true,
-      usageLimitsCommand: true,
-      compactProviders: true,
+      ...MOBILE_SERVER_CONFIG_SUBSCRIPTION_OPTIONS,
       heldCatalogs: true,
       // The iOS WebSocket cannot negotiate permessage-deflate, and cellular
       // links stall: have the server compress, and wait longer before giving up.

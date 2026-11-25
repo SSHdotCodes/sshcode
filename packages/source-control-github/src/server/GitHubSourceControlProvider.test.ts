@@ -681,6 +681,29 @@ describe("GitHubSourceControlProvider.checkoutChangeRequest", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("refuses to check out a pull request URL from another repository", () => {
+    const { layer, git } = harness({
+      remotes: remotesOutput(["origin", "git@github.com:acme/web.git"]),
+      api: {
+        graphql: () =>
+          Effect.succeed(
+            encodeJson({ data: { repository: { pullRequest: node(5, "feature/x") } } }),
+          ),
+      },
+    });
+    return Effect.gen(function* () {
+      const gh = yield* GitHubSourceControlProvider.make;
+      const error = yield* gh
+        .checkoutChangeRequest({
+          cwd: "/repo",
+          reference: "https://github.com/other/api/pull/5",
+        })
+        .pipe(Effect.flip);
+      assert.include(error.detail.toLowerCase(), "repository");
+      assert.deepStrictEqual(git, []);
+    }).pipe(Effect.provide(layer));
+  });
+
   it("names the local branch the way gh pr checkout does", () => {
     const name = (headRefName: string, isCrossRepository: boolean) =>
       GitHubSourceControlProvider.pullRequestCheckoutBranchName({
@@ -886,6 +909,44 @@ it("reports an update hint instead of unauthenticated when gh predates --json", 
     Option.getOrElse(auth.detail, () => ""),
     /2\.81\.0/,
   );
+});
+
+it("reads every signed-in host from legacy gh auth status", () => {
+  const auth = GitHubSourceControlProvider.discovery.parseAuth(
+    processResult("", {
+      stderr: [
+        "github.com",
+        "  ✓ Logged in to github.com account octocat (keyring)",
+        "  - Active account: true",
+        "github.example",
+        "  ✓ Logged in to github.example account example-user (GH_ENTERPRISE_TOKEN)",
+        "  - Active account: true",
+        "unsigned.example",
+        "  X Failed to log in to unsigned.example account other (keyring)",
+      ].join("\n"),
+      exitCode: ChildProcessSpawner.ExitCode(1),
+    }),
+  );
+  assert.strictEqual(auth.status, "authenticated");
+  assert.deepStrictEqual(
+    auth.accounts?.map(({ host }) => host),
+    ["github.com", "github.example"],
+  );
+  assert.strictEqual(auth.accounts?.[1]?.environmentVariable, "GH_ENTERPRISE_TOKEN");
+});
+
+it("reads EMU usernames containing underscores from legacy gh auth status", () => {
+  const auth = GitHubSourceControlProvider.discovery.parseAuth(
+    processResult("", {
+      stderr: [
+        "github.com",
+        "  ✓ Logged in to github.com account alice_corp (keyring)",
+        "  - Active account: true",
+      ].join("\n"),
+    }),
+  );
+  assert.strictEqual(auth.status, "authenticated");
+  assert.strictEqual(auth.accounts?.[0]?.account, "alice_corp");
 });
 
 it.effect.each(["pull", "issues"])(

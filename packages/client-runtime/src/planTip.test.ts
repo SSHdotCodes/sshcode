@@ -7,7 +7,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
-import { runningChatAccountTip } from "./planTip.ts";
+import { continueOnOtherPlan, runningChatAccountTip } from "./planTip.ts";
 
 const NOW = Date.parse("2026-11-17T08:00:00.000Z");
 const model = "claude-fable-5-2";
@@ -71,6 +71,39 @@ describe("runningChatAccountTip", () => {
         NOW,
         (provider) => provider.instanceId !== "claudeAgent_work",
       ),
+    ).toBeNull();
+  });
+});
+
+describe("continueOnOtherPlan", () => {
+  it("treats a sibling account whose quota window already reset as having room", () => {
+    const ownLow = account("claudeAgent", "Max 1", 95);
+    const resetOther: ServerProvider = {
+      ...account("claudeAgent_max2", "Max 2", 100),
+      usageLimits: {
+        checkedAt: "2026-11-17T06:00:00.000Z",
+        windows: [{ ...weekly(100, -1), limited: true }],
+      },
+    };
+    expect(
+      continueOnOtherPlan(true, [ownLow, resetOther], { instanceId: "claudeAgent", model }, NOW),
+    ).toEqual({
+      instanceId: "claudeAgent_max2",
+      label: "Max 2",
+    });
+  });
+
+  it("does not suggest switching away when the current account's quota window already reset", () => {
+    const resetOwn: ServerProvider = {
+      ...account("claudeAgent", "Max 1", 100),
+      usageLimits: {
+        checkedAt: "2026-11-17T06:00:00.000Z",
+        windows: [{ ...weekly(100, -1), limited: true }],
+      },
+    };
+    const other = account("claudeAgent_max2", "Max 2", 10);
+    expect(
+      continueOnOtherPlan(true, [resetOwn, other], { instanceId: "claudeAgent", model }, NOW),
     ).toBeNull();
   });
 });

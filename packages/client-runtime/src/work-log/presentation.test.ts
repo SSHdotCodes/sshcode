@@ -958,6 +958,18 @@ describe("toolGroupAction", () => {
 describe("resolveViewedImageAsset", () => {
   const threadId = ThreadId.make("thread-1");
 
+  it("preserves literal percent escapes, hashes and question marks in tool paths", () => {
+    const path = "/workspace/sessions/%2FUsers%2Fme/shot #1?/1.jpg";
+    expect(resolveViewedImageAsset(path, { threadId, workspaceRoot: "/workspace" })).toEqual({
+      resource: { _tag: "media-file", threadId, path },
+      alt: "1.jpg",
+      srcFragment: "",
+    });
+    expect(
+      resolveViewedImageAsset("file:///workspace/some%20shot.png", { threadId })?.resource.path,
+    ).toBe("/workspace/some shot.png");
+  });
+
   it("serves t3 attachment paths in place like any other host path", () => {
     const path = "/Users/demo/.t3/dev/attachments/11111111-1111-4111-8111-111111111111.png";
     expect(resolveViewedImageAsset(path, { threadId, workspaceRoot: "/workspace" })).toEqual({

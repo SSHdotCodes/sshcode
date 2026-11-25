@@ -273,7 +273,11 @@ export function ComposerActionButton(props: {
           size={smallIconSize}
           weight="semibold"
           tintColorClassName={
-            props.variant === "danger" ? "accent-danger-foreground" : "accent-primary-foreground"
+            props.variant === "danger"
+              ? "accent-danger-foreground"
+              : props.disabled
+                ? "accent-icon-subtle"
+                : "accent-primary-foreground"
           }
           type="monochrome"
         />
@@ -300,8 +304,9 @@ export function ComposerToolbarButton(props: {
 }) {
   const variant = props.variant ?? "default";
   const isCircle = !props.label && props.showChevron === false;
+  const active = variant === "default" && props.active;
   const iconTintClassName =
-    variant === "primary"
+    variant === "primary" || active
       ? props.disabled
         ? "accent-icon-subtle"
         : "accent-primary-foreground"
@@ -313,80 +318,84 @@ export function ComposerToolbarButton(props: {
     <Pressable
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityRole="button"
+      accessibilityState={props.active === undefined ? undefined : { selected: props.active }}
       disabled={props.disabled}
       onPress={props.onPress}
       className={cn(
-        // Default width cap lives in the class chain (not the inline style)
-        // so callers can lift it with max-w-full — flex-filling pills in the
-        // thread composer stretch to the row's edge. The numeric maxWidth
-        // prop still wins via the inline style below.
-        "h-11 max-w-[172px] flex-row items-center justify-center rounded-full border active:opacity-70",
-        variant === "primary" && "shadow-lg shadow-adaptive-black-a10-a25 disabled:shadow-none",
-        isCircle ? "w-11" : "gap-2 px-3.5",
-        variant === "primary"
-          ? props.disabled
-            ? "bg-subtle-strong"
-            : "bg-primary"
-          : variant === "danger"
-            ? "bg-danger"
-            : props.active
-              ? "bg-subtle-strong"
-              : "bg-subtle",
-        variant === "default"
-          ? props.active
-            ? "border-border"
-            : "border-border-subtle"
-          : variant === "danger"
-            ? "border-danger-border"
-            : props.disabled
-              ? "border-border-subtle"
-              : "border-primary-foreground/20",
+        "h-[44px] max-w-[172px] justify-center active:opacity-70",
+        isCircle && "w-[44px]",
         props.className,
       )}
       style={({ pressed }) => [
         {
           maxWidth: props.maxWidth,
-          minWidth: props.minWidth,
+          minWidth: Math.max(44, props.minWidth ?? 0),
           opacity: props.disabled ? 0.55 : pressed ? 0.72 : 1,
         },
         props.style,
       ]}
     >
-      {props.iconNode ? (
-        <View className="h-4 w-4 items-center justify-center">{props.iconNode}</View>
-      ) : props.icon ? (
-        <SymbolView
-          name={props.icon}
-          size={16}
-          tintColorClassName={iconTintClassName}
-          type="monochrome"
-        />
-      ) : null}
-      {props.label ? (
-        <Text
-          className={cn(
-            "shrink text-center text-sm font-t3-bold",
-            variant === "primary"
-              ? props.disabled
-                ? "text-foreground-muted"
-                : "text-primary-foreground"
-              : "text-foreground",
-          )}
-          ellipsizeMode="tail"
-          numberOfLines={1}
-          style={{ textTransform: props.textTransform ?? "none" }}
-        >
-          {props.label}
-        </Text>
-      ) : null}
-      {props.showChevron === false ? null : (
-        <SymbolView
-          name="chevron.down"
-          size={11}
-          tintColorClassName={iconTintClassName}
-          type="monochrome"
-        />
-      )}
+      <View
+        className={cn(
+          "h-11 flex-row items-center justify-center rounded-full border",
+          variant === "primary" && "shadow-lg shadow-adaptive-black-a10-a25",
+          isCircle ? "w-11 self-center" : "gap-2 px-3.5",
+          variant === "primary"
+            ? props.disabled
+              ? "bg-subtle-strong"
+              : "bg-primary"
+            : variant === "danger"
+              ? "bg-danger"
+              : active
+                ? "bg-primary"
+                : "bg-subtle",
+          variant === "default"
+            ? active
+              ? "border-primary"
+              : "border-border-subtle"
+            : variant === "danger"
+              ? "border-danger-border"
+              : props.disabled
+                ? "border-border-subtle"
+                : "border-primary-foreground/20",
+        )}
+      >
+        {props.iconNode ? (
+          <View className="h-4 w-4 items-center justify-center">{props.iconNode}</View>
+        ) : props.icon ? (
+          <SymbolView
+            name={props.icon}
+            size={16}
+            tintColorClassName={iconTintClassName}
+            type="monochrome"
+          />
+        ) : null}
+        {props.label ? (
+          <Text
+            className={cn(
+              "shrink text-center text-sm font-t3-bold",
+              variant === "primary" || active
+                ? props.disabled
+                  ? "text-foreground-muted"
+                  : "text-primary-foreground"
+                : "text-foreground",
+            )}
+            ellipsizeMode="tail"
+            numberOfLines={1}
+            style={{ textTransform: props.textTransform ?? "none" }}
+          >
+            {props.label}
+          </Text>
+        ) : null}
+        {props.showChevron === false ? null : (
+          <SymbolView
+            name="chevron.down"
+            size={11}
+            tintColorClassName={iconTintClassName}
+            type="monochrome"
+          />
+        )}
+      </View>
     </Pressable>
   );
 }

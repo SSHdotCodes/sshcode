@@ -1,3 +1,4 @@
+import { resolveRemotePairingTarget } from "@t3tools/shared/remote";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -25,6 +26,20 @@ describe("buildPairingUrl", () => {
     expect(buildPairingUrl("https://192.168.1.100:3773", "pairing-token")).toBe(
       "https://192.168.1.100:3773/#token=pairing-token",
     );
+  });
+
+  it("pairs with the displayed address even when its query names another host", () => {
+    const pairingUrl = buildPairingUrl(
+      "https://remote.example.com/?host=https%3A%2F%2Fother.example.com",
+      "pairing-token",
+    );
+
+    expect(pairingUrl).toBe("https://remote.example.com/#token=pairing-token");
+    expect(resolveRemotePairingTarget({ pairingUrl })).toEqual({
+      credential: "pairing-token",
+      httpBaseUrl: "https://remote.example.com/",
+      wsBaseUrl: "wss://remote.example.com/",
+    });
   });
 });
 

@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { assert, it, describe } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -12,6 +13,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
@@ -4149,6 +4151,159 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           assert.isFalse(yield* fileSystem.exists(inside.worktree.path));
           assert.lengthOf(yield* parkedEntries(parkDir), 0);
         }).pipe(TestClock.withLive),
+      );
+
+      it.effect(
+        "records parked worktree mtime in seconds, evicts oldest first, and expires stale spares",
+        () =>
+          Effect.gen(function* () {
+            const fileSystem = yield* FileSystem.FileSystem;
+            const pathService = yield* Path.Path;
+            const driver = yield* GitVcsDriver.GitVcsDriver;
+            const { cwd, initialBranch, parkDir } = yield* repoWithIgnores(SETUP_T3_JSON);
+            if (!(yield* roomToPark)) return;
+
+            const t0 = 1_700_000_000_000;
+            yield* TestClock.setTime(t0);
+            const first = yield* driver.createWorktree({
+              cwd,
+              path: null,
+              refName: initialBranch,
+              newRefName: "feature/oldest",
+            });
+            yield* writeTextFile(first.worktree.path, "node_modules/pkg/id.txt", "oldest\n");
+            yield* driver.removeWorktree({ cwd, path: first.worktree.path, force: true });
+
+            const [firstParkedName] = yield* parkedEntries(parkDir);
+            assert.isDefined(firstParkedName);
+            const firstStat = yield* fileSystem.stat(pathService.join(parkDir, firstParkedName!));
+            const firstMtimeMs = Option.getOrThrow(firstStat.mtime).getTime();
+            assert.isBelow(Math.abs(firstMtimeMs - t0), 2_000);
+
+            yield* TestClock.adjust("10 seconds");
+            const second = yield* driver.createWorktree({
+              cwd,
+              path: null,
+              refName: initialBranch,
+              newRefName: "feature/middle",
+            });
+            // Wait: second reused first; create two fresh ones after clearing `.parked`.
+            yield* writeTextFile(second.worktree.path, "node_modules/pkg/id.txt", "middle\n");
+            const third = yield* driver.createWorktree({
+              cwd,
+              path: null,
+              refName: initialBranch,
+              newRefName: "feature/newest",
+            });
+            yield* writeTextFile(third.worktree.path, "node_modules/pkg/id.txt", "newest\n");
+            const fourth = yield* driver.createWorktree({
+              cwd,
+              path: null,
+              refName: initialBranch,
+              newRefName: "feature/extra",
+            });
+            yield* writeTextFile(fourth.worktree.path, "node_modules/pkg/id.txt", "extra\n");
+
+            yield* TestClock.adjust("10 seconds");
+            yield* driver.removeWorktree({ cwd, path: second.worktree.path, force: true });
+            yield* TestClock.adjust("10 seconds");
+            yield* driver.removeWorktree({ cwd, path: third.worktree.path, force: true });
+            yield* TestClock.adjust("10 seconds");
+            yield* driver.removeWorktree({ cwd, path: fourth.worktree.path, force: true });
+
+            const kept = yield* parkedEntries(parkDir);
+            assert.lengthOf(kept, 2);
+            const keptIds = (yield* Effect.forEach(kept, (name) =>
+              fileSystem.readFileString(pathService.join(parkDir, name, "node_modules/pkg/id.txt")),
+            )).toSorted();
+            assert.deepEqual(keptIds, ["extra\n", "newest\n"]);
+
+            // Past the 7-day expiry window, parked spares are not reused.
+            yield* TestClock.adjust("8 days");
+            const afterExpiry = yield* driver.createWorktree({
+              cwd,
+              path: null,
+              refName: initialBranch,
+              newRefName: "feature/after-expiry",
+            });
+            assert.isFalse(
+              yield* fileSystem.exists(
+                pathService.join(afterExpiry.worktree.path, "node_modules/pkg/id.txt"),
+              ),
+            );
+            // Parking a fresh worktree evicts the expired spares instead of keeping them.
+            yield* driver.removeWorktree({ cwd, path: afterExpiry.worktree.path, force: true });
+            const remaining = yield* parkedEntries(parkDir);
+            assert.lengthOf(remaining, 1);
+            const remainingMtime = Option.getOrThrow(
+              (yield* fileSystem.stat(pathService.join(parkDir, remaining[0]!))).mtime,
+            ).getTime();
+            const now = yield* Clock.currentTimeMillis;
+            assert.isBelow(Math.abs(remainingMtime - now), 2_000);
+          }),
+      );
+
+      it.effect(
+        "reuses and evicts parked worktrees when worktreesDir passes through a symlink",
+        () =>
+          Effect.gen(function* () {
+            const fileSystem = yield* FileSystem.FileSystem;
+            const pathService = yield* Path.Path;
+            if (!(yield* roomToPark)) return;
+
+            const realWorktrees = yield* makeTmpDir("git-worktrees-real-");
+            const linkHost = yield* makeTmpDir("git-worktrees-link-");
+            const symlinkWorktrees = pathService.join(linkHost, "linked-worktrees");
+            yield* fileSystem.symlink(realWorktrees, symlinkWorktrees);
+
+            const baseConfig = yield* ServerConfig.ServerConfig;
+            const symlinkDriver = yield* makeGitVcsDriverCore().pipe(
+              Effect.provideService(ServerConfig.ServerConfig, {
+                ...baseConfig,
+                worktreesDir: symlinkWorktrees,
+              }),
+            );
+
+            const cwd = yield* makeTmpDir();
+            const { initialBranch } = yield* initRepoWithCommit(cwd);
+            yield* writeTextFile(cwd, ".gitignore", "node_modules/\n");
+            yield* writeTextFile(cwd, "t3.json", SETUP_T3_JSON);
+            yield* git(cwd, ["add", "."]);
+            yield* git(cwd, ["commit", "-m", "ignores"]);
+            const parkDir = pathService.join(
+              symlinkWorktrees,
+              pathService.basename(cwd),
+              PARKED_WORKTREES_DIRECTORY,
+            );
+
+            const first = yield* symlinkDriver.createWorktree({
+              cwd,
+              path: null,
+              refName: initialBranch,
+              newRefName: "feature/symlink-first",
+            });
+            yield* writeTextFile(
+              first.worktree.path,
+              "node_modules/pkg/index.js",
+              "from-symlink\n",
+            );
+            yield* symlinkDriver.removeWorktree({ cwd, path: first.worktree.path, force: true });
+            assert.lengthOf(yield* parkedEntries(parkDir), 1);
+
+            const second = yield* symlinkDriver.createWorktree({
+              cwd,
+              path: null,
+              refName: initialBranch,
+              newRefName: "feature/symlink-second",
+            });
+            assert.lengthOf(yield* parkedEntries(parkDir), 0);
+            assert.equal(
+              yield* fileSystem.readFileString(
+                pathService.join(second.worktree.path, "node_modules/pkg/index.js"),
+              ),
+              "from-symlink\n",
+            );
+          }).pipe(TestClock.withLive),
       );
     });
 

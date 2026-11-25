@@ -101,6 +101,7 @@ import {
 } from "../operations/commands.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import { awaitSendSession } from "../rpc/pendingSend.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
 
 export type LoadEarlierThreadHistoryInput = {
@@ -289,6 +290,10 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
+    waitForSendConnection: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:wait-for-send-connection",
+      execute: (_input: void) => Effect.asVoid(awaitSendSession()),
+    }),
     prepareTurn: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:prepare-turn",
       execute: (input: StartThreadTurnInput) => prepareThreadTurn(input),
@@ -426,10 +431,13 @@ export function createThreadEnvironmentAtoms<R, E>(
             input.throughEntryId,
           );
         }),
+      // Paginating a transcript may await two HTTP pages. Serialize pagination
+      // requests with each other, independently of this thread's mutations.
       scheduler,
       concurrency: {
         mode: "serial",
-        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.threadId]),
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.threadId, "history"]),
       },
     }),
     uploadFeedback: createEnvironmentRpcCommand(runtime, {

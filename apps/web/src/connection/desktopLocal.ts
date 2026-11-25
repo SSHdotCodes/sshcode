@@ -58,24 +58,44 @@ export interface DesktopSecondaryBootstrapsReader {
 }
 
 /**
+ * Secondary local backends (currently WSL) only exist on Windows. Skipping
+ * periodic synchronous bridge reads on macOS and Linux avoids tens of
+ * thousands of blocking IPC round trips over a session.
+ */
+export function supportsDesktopSecondaryBootstraps(
+  bridge: Pick<DesktopBridge, "getClientPlatform"> | undefined = typeof window === "undefined"
+    ? undefined
+    : window.desktopBridge,
+): boolean {
+  if (bridge === undefined) {
+    return false;
+  }
+  const platform = bridge.getClientPlatform?.();
+  return platform === undefined || platform === "win32";
+}
+
+/**
  * Build a topology reader whose snapshot advances only after successful bridge
  * reads. A successful empty read is authoritative; a thrown read preserves the
  * previous snapshot so UI consumers cannot temporarily disagree with the
  * platform's retained registrations.
  */
 export function createDesktopSecondaryBootstrapsReader(
-  resolveBridge: () => Pick<DesktopBridge, "getLocalEnvironmentBootstraps"> | undefined,
+  resolveBridge: () =>
+    | (Pick<DesktopBridge, "getLocalEnvironmentBootstraps"> &
+        Partial<Pick<DesktopBridge, "getClientPlatform">>)
+    | undefined,
 ): DesktopSecondaryBootstrapsReader {
   let snapshot: ReadonlyArray<DesktopEnvironmentBootstrap> = [];
 
   const readResult = (): DesktopSecondaryBootstrapsRead => {
     const bridge = resolveBridge();
-    if (bridge === undefined) {
+    if (!supportsDesktopSecondaryBootstraps(bridge)) {
       if (snapshot.length > 0) snapshot = [];
       return { _tag: "Success", bootstraps: snapshot };
     }
     try {
-      const next = bridge
+      const next = bridge!
         .getLocalEnvironmentBootstraps()
         .filter((entry) => entry.id !== PRIMARY_LOCAL_ENVIRONMENT_ID);
       if (

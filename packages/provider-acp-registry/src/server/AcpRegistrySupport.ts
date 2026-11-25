@@ -1853,11 +1853,15 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       }
       const agentId = settings.agentId.trim();
       if (agentId.length === 0) return { status: "unconfigured" } as const;
-      const registry = yield* loadCachedRegistry();
+      const commandOverride = settings.commandPath.trim();
       const active = yield* readActiveAgent(agentId);
+      // A CLI already on disk can be used without preparing the managed agent.
+      // Load its registry arguments when this environment has no cached index yet.
       const agent = Option.isSome(active)
         ? active.value
-        : registry.agents.find((candidate) => candidate.id === agentId);
+        : (yield* commandOverride ? loadRegistry() : loadCachedRegistry()).agents.find(
+            (candidate) => candidate.id === agentId,
+          );
       if (agent === undefined) return { status: "not_found", agentId } as const;
       const documentationUrl = agent.website ?? agent.repository;
       const distribution = resolveAcpRegistryDistribution({
@@ -1869,7 +1873,6 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         return { status: "unsupported", agentId, version: agent.version } as const;
       }
 
-      const commandOverride = settings.commandPath.trim();
       if (commandOverride.length > 0) {
         const available =
           resolveExecutable(commandOverride, platform, environment ?? hostEnvironment) !==

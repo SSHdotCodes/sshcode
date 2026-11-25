@@ -6,7 +6,6 @@ import * as Schema from "effect/Schema";
 import type {
   PullRequestAction,
   PullRequestComment,
-  PullRequestInvolvement,
   PullRequestListState,
   PullRequestMergeMethod,
 } from "@t3tools/contracts";
@@ -26,7 +25,10 @@ import {
   type AzureDevOpsPullRequest,
   type AzureDevOpsRepositoryLocation,
 } from "./azureDevOpsPullRequestJson.ts";
-import type { ProviderListCursor } from "@t3tools/source-control-core/server/PullRequestProvider";
+import type {
+  ProviderListCursor,
+  RepositoryPullRequestInvolvement,
+} from "@t3tools/source-control-core/server/PullRequestProvider";
 
 /**
  * Names the read that produced unusable output, so a failure reports the call it came from
@@ -169,7 +171,7 @@ export class AzureDevOpsPullRequestCli extends Context.Service<
       readonly cwd: string;
       readonly repository: string;
       readonly state: PullRequestListState;
-      readonly involvement: PullRequestInvolvement;
+      readonly involvement: RepositoryPullRequestInvolvement;
       readonly viewer: string;
       readonly limit: number;
       /**
@@ -274,7 +276,7 @@ function statusArgs(state: PullRequestListState): ReadonlyArray<string> {
 }
 
 function involvementArgs(input: {
-  readonly involvement: PullRequestInvolvement;
+  readonly involvement: RepositoryPullRequestInvolvement;
   readonly viewer: string;
 }): ReadonlyArray<string> {
   switch (input.involvement) {
@@ -439,7 +441,7 @@ export const make = Effect.gen(function* () {
     readonly cwd: string;
     readonly repository: string;
     readonly state: PullRequestListState;
-    readonly involvement: PullRequestInvolvement;
+    readonly involvement: RepositoryPullRequestInvolvement;
     readonly viewer: string;
     readonly limit: number;
     readonly skip: number;

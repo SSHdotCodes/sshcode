@@ -12,7 +12,7 @@ import {
 } from "./baseSchemas.ts";
 import { SourceControlProviderKind } from "./sourceControl.ts";
 
-export const PullRequestInvolvement = Schema.Literals(["all", "reviewing", "authored"]);
+export const PullRequestInvolvement = Schema.Literals(["all", "mine", "reviewing", "authored"]);
 export type PullRequestInvolvement = typeof PullRequestInvolvement.Type;
 
 export const PullRequestState = Schema.Literals(["open", "closed", "merged"]);
@@ -532,7 +532,7 @@ export const PullRequestListEntry = Schema.Struct({
    * than one account — github.com and a GitHub Enterprise install are different identities.
    */
   host: TrimmedNonEmptyString,
-  projectId: ProjectId,
+  projectId: Schema.optional(ProjectId),
   projectTitle: TrimmedNonEmptyString,
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
@@ -557,6 +557,7 @@ export const PullRequestListEntry = Schema.Struct({
   /** Server epoch milliseconds when the provider read started; preserved on cache hits. */
   observedAt: Schema.optional(Schema.Finite),
   viewerReviewRequested: Schema.Boolean,
+  viewerInvolved: Schema.optional(Schema.Boolean),
   labels: Schema.Array(PullRequestLabel),
   /** Absent where the host does not summarise its reviews, which is every host but GitHub. */
   reviewDecision: Schema.optional(PullRequestReviewDecision),
@@ -641,7 +642,7 @@ export const PullRequestProviderSummary = Schema.Struct({
    * Absent from servers older than this field; clients then offer what they always did.
    */
   actions: Schema.optional(Schema.Array(PullRequestAction)),
-  projectCount: PositiveInt,
+  projectCount: NonNegativeInt,
   /** False when the provider's CLI or credentials are missing, with `detail` saying which. */
   configured: Schema.Boolean,
   detail: Schema.NullOr(TrimmedNonEmptyString),
@@ -650,7 +651,7 @@ export type PullRequestProviderSummary = typeof PullRequestProviderSummary.Type;
 
 /** One project whose repository could not be read; healthy projects still return entries. */
 export const PullRequestListProjectError = Schema.Struct({
-  projectId: ProjectId,
+  projectId: Schema.optional(ProjectId),
   projectTitle: TrimmedNonEmptyString,
   message: TrimmedNonEmptyString,
 });
@@ -685,14 +686,11 @@ export const PullRequestListResult = Schema.Struct({
 export type PullRequestListResult = typeof PullRequestListResult.Type;
 
 /**
- * Addresses one pull request for reads and writes. `projectId` picks the checkout the host
- * CLI runs in and, when its repository matches, the credentials; `host` lets the server
- * route a pull request from another repository through any project on the same host
- * (a frontend project's thread linking a backend PR). Absent `host` means "the project's
- * own host", which is every reference from before thread links became host-level.
+ * Addresses a pull request by host, repository and number. A project supplies its checkout
+ * and the default host for older references. A hosted reference can omit the project.
  */
 export const PullRequestRef = Schema.Struct({
-  projectId: ProjectId,
+  projectId: Schema.optional(ProjectId),
   host: Schema.optional(TrimmedNonEmptyString),
   /** Refuse a routed operation unless this GitHub account still owns the active credential. */
   expectedAccountId: Schema.optional(TrimmedNonEmptyString),
@@ -723,7 +721,7 @@ export const PullRequestRoutingResult = Schema.Struct({
   provider: SourceControlProviderKind,
   viewer: TrimmedNonEmptyString,
   projectTitle: TrimmedNonEmptyString,
-  workspaceRoot: TrimmedNonEmptyString,
+  workspaceRoot: Schema.optional(TrimmedNonEmptyString),
 });
 export type PullRequestRoutingResult = typeof PullRequestRoutingResult.Type;
 
@@ -741,7 +739,7 @@ export type PullRequestLinkedThreadsResult = typeof PullRequestLinkedThreadsResu
 
 /** The complete hover card, without checks, permissions, or branch comparisons. */
 export const PullRequestPreview = Schema.Struct({
-  projectId: ProjectId,
+  projectId: Schema.optional(ProjectId),
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   title: TrimmedNonEmptyString,
@@ -759,7 +757,7 @@ export type PullRequestPreview = typeof PullRequestPreview.Type;
  */
 export const PullRequestSummary = Schema.Struct({
   provider: SourceControlProviderKind,
-  projectId: ProjectId,
+  projectId: Schema.optional(ProjectId),
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   title: TrimmedNonEmptyString,
@@ -814,7 +812,7 @@ export type PullRequestStack = typeof PullRequestStack.Type;
  * rows on screen at the speed of everything else on them.
  */
 export const PullRequestDiffStat = Schema.Struct({
-  projectId: ProjectId,
+  projectId: Schema.optional(ProjectId),
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   additions: NonNegativeInt,
@@ -872,9 +870,9 @@ export const PullRequestDetail = Schema.Struct({
   capabilities: PullRequestCapabilities,
   /** What this viewer may do, which `capabilities` says nothing about. Both narrow the page. */
   viewerPermissions: PullRequestViewerPermissions,
-  projectId: ProjectId,
+  projectId: Schema.optional(ProjectId),
   projectTitle: TrimmedNonEmptyString,
-  workspaceRoot: TrimmedNonEmptyString,
+  workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   title: TrimmedNonEmptyString,

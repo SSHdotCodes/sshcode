@@ -675,6 +675,30 @@ describe("MuseAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("marks post-turn session/contextUsage thread updates as sessionScoped", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeMuse();
+      const harness = yield* makeHarness(fake);
+      const { nativeId } = yield* startConversation(harness, fake);
+      yield* fake.emit("session/contextUsage", { usedTokens: 12_000, windowTokens: 200_000 });
+      const inTurnThread = yield* harness.takeEvent(
+        "provider_thread.updated",
+        (event) => event.providerThread.contextUsage?.usedTokens === 12_000,
+      );
+      assert.notStrictEqual(inTurnThread.sessionScoped, true);
+
+      yield* fake.emit("turn/completed", { turnId: nativeId, terminal: "completed" });
+      yield* harness.takeEvent("turn.terminal");
+
+      yield* fake.emit("session/contextUsage", { usedTokens: 42_000, windowTokens: 200_000 });
+      const postTurnThread = yield* harness.takeEvent(
+        "provider_thread.updated",
+        (event) => event.providerThread.contextUsage?.usedTokens === 42_000,
+      );
+      assert.strictEqual(postTurnThread.sessionScoped, true);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("moves a resumed session on another model back to the catalog default", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakeMuse();

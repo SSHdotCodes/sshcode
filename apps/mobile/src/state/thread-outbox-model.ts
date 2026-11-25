@@ -47,6 +47,7 @@ const QueuedThreadCreationSchema = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
   pullRequestReference: Schema.optional(Schema.String),
+  pullRequestCheckoutRoot: Schema.optional(Schema.String),
   // Turned off from the New chat + menu; applied before the chat's first turn.
   subagentsOff: Schema.optional(Schema.Boolean),
 });
@@ -100,7 +101,8 @@ export interface QueuedThreadCreation {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
-  readonly pullRequestReference?: string;
+  readonly pullRequestReference?: string | undefined;
+  readonly pullRequestCheckoutRoot?: string | undefined;
   readonly subagentsOff?: boolean;
 }
 
@@ -242,6 +244,7 @@ export type ThreadOutboxDeliveryAction = "wait" | "remove" | "missing" | "send";
 
 export function resolveThreadOutboxDeliveryAction(input: {
   readonly isCreation: boolean;
+  readonly freshCreation?: boolean;
   readonly threadExists: boolean;
   readonly shellStatus: EnvironmentShellStatus;
   readonly environmentConnected: boolean;
@@ -252,6 +255,8 @@ export function resolveThreadOutboxDeliveryAction(input: {
    */
   readonly familyRead?: ThreadFamilyRead;
 }): ThreadOutboxDeliveryAction {
+  if (input.isCreation && input.freshCreation && !input.threadExists)
+    return input.environmentConnected ? "send" : "wait";
   if (input.shellStatus === "empty") return "wait";
   if (input.isCreation) {
     // A pending task creates its thread on delivery. If the thread already
@@ -277,7 +282,6 @@ export type ThreadOutboxDispatchStep =
   | { readonly step: "wait" }
   | { readonly step: "remove" }
   | { readonly step: "missing" }
-  | { readonly step: "retry" }
   | { readonly step: "restore"; readonly reason: string }
   | { readonly step: "send" };
 
@@ -296,7 +300,7 @@ export function resolveThreadOutboxDispatchStep(input: {
     return { step: input.deliveryAction };
   }
   if (input.serverConfig === null) {
-    return { step: "retry" };
+    return { step: "wait" };
   }
   if (input.fileAttachments.length === 0) {
     return { step: "send" };

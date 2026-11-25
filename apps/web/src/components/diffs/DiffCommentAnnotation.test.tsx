@@ -1,3 +1,7 @@
+// @vitest-environment jsdom
+
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -82,4 +86,63 @@ describe("DiffCommentAnnotation", () => {
 
     expect(markup).toContain("Keep this unsaved draft");
   });
+});
+
+it("keeps Escape and send shortcuts in the IME until composition ends", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const onCancel = vi.fn();
+  const onComment = vi.fn();
+  const onOuterKey = vi.fn();
+  document.body.addEventListener("keydown", onOuterKey);
+
+  try {
+    await act(() =>
+      root.render(
+        <DiffCommentAnnotation
+          kind="draft"
+          rangeLabel="3"
+          text="Draft"
+          onTextChange={() => undefined}
+          onCancel={onCancel}
+          onComment={onComment}
+          focusOnMount={false}
+        />,
+      ),
+    );
+    const textarea = container.querySelector("textarea")!;
+    for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
+      for (const shortcut of [{ key: "Escape" }, { key: "Enter", metaKey: true }]) {
+        const event = new KeyboardEvent("keydown", {
+          ...composition,
+          ...shortcut,
+          bubbles: true,
+          cancelable: true,
+        });
+        await act(() => {
+          textarea.dispatchEvent(event);
+        });
+        expect(event.defaultPrevented).toBe(false);
+      }
+    }
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(onComment).not.toHaveBeenCalled();
+    expect(onOuterKey).not.toHaveBeenCalled();
+
+    await act(() => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
+      );
+    });
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onComment).toHaveBeenCalledExactlyOnceWith("Draft");
+  } finally {
+    await act(() => root.unmount());
+    document.body.removeEventListener("keydown", onOuterKey);
+    container.remove();
+    vi.unstubAllGlobals();
+  }
 });

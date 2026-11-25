@@ -47,7 +47,7 @@ it("stops secondary decisions in an already open menu when the provider goes awa
   await render(true);
   await act(async () => more().click());
   const allow = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
-    (item) => item.textContent === "Always allow this session",
+    (item) => item.textContent === "Allow until the agent restarts",
   )!;
   expect(allow).toBeDefined();
   await render(false);

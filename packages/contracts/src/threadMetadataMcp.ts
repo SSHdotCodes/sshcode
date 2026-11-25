@@ -9,6 +9,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { OrchestratorMcpThreadReference } from "./orchestratorMcp.ts";
 import { ThreadLinkedPullRequest } from "./threadPullRequest.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
 
@@ -80,7 +81,7 @@ export const ThreadMetadataMcpPullRequest = Schema.Struct({
 export type ThreadMetadataMcpPullRequest = typeof ThreadMetadataMcpPullRequest.Type;
 
 export const ThreadMetadataMcpUpdateInput = Schema.Struct({
-  threadId: Schema.optional(ThreadId).annotate({
+  threadId: Schema.optional(OrchestratorMcpThreadReference).annotate({
     description: "Thread to update. Omit to update the calling thread.",
   }),
   action: ThreadMetadataMcpAction,
@@ -122,7 +123,7 @@ export const ThreadMetadataMcpUpdateInput = Schema.Struct({
 );
 export type ThreadMetadataMcpUpdateInput = typeof ThreadMetadataMcpUpdateInput.Type;
 
-export const ThreadMetadataMcpUpdateResult = Schema.Struct({
+export const ThreadMetadataMcpUpdateMetadataResult = Schema.Struct({
   threadId: ThreadId,
   action: ThreadMetadataMcpAction,
   commandId: CommandId,
@@ -134,4 +135,11 @@ export const ThreadMetadataMcpUpdateResult = Schema.Struct({
   settled: Schema.Boolean,
   updatedAt: IsoDateTime,
 });
+export type ThreadMetadataMcpUpdateMetadataResult =
+  typeof ThreadMetadataMcpUpdateMetadataResult.Type;
+
+export const ThreadMetadataMcpUpdateResult = Schema.Union([
+  ThreadMetadataMcpUpdateMetadataResult,
+  Schema.Struct({ settlesWhenTurnEnds: Schema.Literal(true) }),
+]);
 export type ThreadMetadataMcpUpdateResult = typeof ThreadMetadataMcpUpdateResult.Type;

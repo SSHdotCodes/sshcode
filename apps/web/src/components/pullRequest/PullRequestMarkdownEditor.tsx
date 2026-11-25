@@ -35,7 +35,7 @@ export function PullRequestMarkdownEditor({
   onCancel,
 }: {
   readonly value: string;
-  readonly cwd: string;
+  readonly cwd: string | undefined;
   readonly environmentId: EnvironmentId;
   /** Thread the editor sits beside, so links in its preview follow the link target setting. */
   readonly threadRef?: ScopedThreadRef | null;

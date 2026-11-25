@@ -4,10 +4,10 @@ import * as NodeFSP from "node:fs/promises";
 import type { UsageRecord } from "@t3tools/provider-core/server/usage";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 
 type FieldValue = number | bigint | Uint8Array;
@@ -505,65 +505,109 @@ export const readAntigravityUsage = Effect.fn("readAntigravityUsage")(function* 
     }
   };
   const visited = new Set<string>();
-  const readFile = Effect.fn("readAntigravityUsage.readFile")(function* (path: string) {
-    const canonical = yield* fileSystem.realPath(path);
-    if (visited.has(canonical)) return null;
-    visited.add(canonical);
-    const fingerprintOf = (file: string) =>
-      Effect.tryPromise(() => NodeFSP.stat(file)).pipe(
-        Effect.map((stat) => ({ stat, part: `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}` })),
-      );
-    const { stat, part } = yield* fingerprintOf(path);
-    const wal = yield* fingerprintOf(`${path}-wal`).pipe(Effect.option);
-    const fingerprint = `${part}/${wal._tag === "Some" ? wal.value.part : "-"}`;
-    const cached = cache?.get(canonical);
-    if (cached?.fingerprint === fingerprint) return cached.data;
-    const data = yield* readDatabase(path, pathService.basename(path, ".db"), stat.mtimeMs).pipe(
-      Effect.provide(NodeSqliteClient.layer({ filename: path, readonly: true })),
+  const discovered: Array<{
+    readonly root: string;
+    readonly path: string;
+    readonly canonical: string;
+  }> = [];
+  const readDbSemaphore = yield* Semaphore.make(4);
+  const fingerprintOf = (file: string) =>
+    Effect.tryPromise(() => NodeFSP.stat(file)).pipe(
+      Effect.map((stat) => ({ stat, part: `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}` })),
+    );
+  const readUncachedFile = Effect.fn("readAntigravityUsage.readFile")(function* (
+    path: string,
+    canonical: string,
+    fingerprint: string,
+    mtimeMs: number,
+  ) {
+    const data = yield* readDbSemaphore.withPermit(
+      readDatabase(path, pathService.basename(path, ".db"), mtimeMs).pipe(
+        Effect.provide(NodeSqliteClient.layer({ filename: path, readonly: true })),
+      ),
     );
     cache?.set(canonical, { fingerprint, data });
     return data;
   });
   const walk = (directory: string, root: string): Effect.Effect<void> =>
     Effect.gen(function* () {
-      const names = yield* fileSystem.readDirectory(directory).pipe(
-        Effect.catchTags({
-          PlatformError: (cause) => {
-            if (cause.reason._tag !== "NotFound") errors.push(directory);
-            return Effect.succeed(null);
-          },
+      const entries = yield* Effect.tryPromise(() =>
+        NodeFSP.readdir(directory, { withFileTypes: true }),
+      ).pipe(
+        Effect.catch((cause) => {
+          const error = cause.cause;
+          if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+            errors.push(directory);
+          }
+          return Effect.succeed(null);
         }),
       );
-      if (names === null) return;
-      names.sort((a, b) => a.localeCompare(b));
-      for (const name of names) {
-        const path = pathService.join(directory, name);
-        // Like a directory listing's entry types: symlinks are neither files nor directories.
-        const isLink = Exit.isSuccess(yield* Effect.exit(fileSystem.readLink(path)));
-        const type = isLink
-          ? "SymbolicLink"
-          : yield* fileSystem.stat(path).pipe(
-              Effect.map((info) => info.type),
-              Effect.orElseSucceed(() => null),
-            );
-        if (type === "Directory") {
-          yield* walk(path, root);
-        } else if ((type === "File" || type === null) && name.endsWith(".db")) {
-          const data = yield* readFile(path).pipe(
-            Effect.catch(() => {
-              errors.push(path);
-              return Effect.succeed(null);
-            }),
+      if (entries === null) return;
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      // Resolve the directory once instead of running realpath() on every .db file.
+      // Symlink entries are skipped below, so joining onto canonicalDir matches realpath(file).
+      let canonicalDir: string | undefined;
+      for (const entry of entries) {
+        if (entry.isSymbolicLink()) continue;
+        const path = pathService.join(directory, entry.name);
+        let isDir = entry.isDirectory();
+        let isFile = entry.isFile();
+        if (!isDir && !isFile) {
+          // Fallback for filesystems where dirent d_type is DT_UNKNOWN.
+          const info = yield* Effect.tryPromise(() => NodeFSP.lstat(path)).pipe(
+            Effect.orElseSucceed(() => null),
           );
-          if (data === null) continue;
-          for (const [id, model] of data.models) rememberModel(models, id, model);
-          const fileIndex = files.length;
-          files.push({ root, path, records: [] });
-          pending.push({ data, fileIndex });
+          if (info === null || info.isSymbolicLink()) continue;
+          isDir = info.isDirectory();
+          isFile = info.isFile();
+        }
+        if (isDir) {
+          yield* walk(path, root);
+        } else if (isFile && entry.name.endsWith(".db")) {
+          if (canonicalDir === undefined) {
+            canonicalDir = yield* fileSystem
+              .realPath(directory)
+              .pipe(Effect.orElseSucceed(() => directory));
+          }
+          const canonical = pathService.join(canonicalDir, entry.name);
+          if (visited.has(canonical)) continue;
+          visited.add(canonical);
+          discovered.push({ root, path, canonical });
         }
       }
     });
   for (const root of roots) yield* walk(root, root);
+  // Fingerprint and read discovered databases concurrently while preserving
+  // exact sorted discovery order for model learning and alias merging.
+  const loaded = yield* Effect.forEach(
+    discovered,
+    ({ root, path, canonical }) =>
+      Effect.gen(function* () {
+        const [{ stat, part }, wal] = yield* Effect.all(
+          [fingerprintOf(path), fingerprintOf(`${path}-wal`).pipe(Effect.option)],
+          { concurrency: 2 },
+        );
+        const fingerprint = `${part}/${wal._tag === "Some" ? wal.value.part : "-"}`;
+        const cached = cache?.get(canonical);
+        if (cached?.fingerprint === fingerprint) {
+          return { root, path, data: cached.data, error: null };
+        }
+        const data = yield* readUncachedFile(path, canonical, fingerprint, stat.mtimeMs);
+        return { root, path, data, error: null };
+      }).pipe(Effect.catch(() => Effect.succeed({ root, path, data: null, error: path }))),
+    { concurrency: 16 },
+  );
+  for (const item of loaded) {
+    if (item.error !== null) {
+      errors.push(item.error);
+      continue;
+    }
+    if (item.data === null) continue;
+    for (const [id, model] of item.data.models) rememberModel(models, id, model);
+    const fileIndex = files.length;
+    files.push({ root: item.root, path: item.path, records: [] });
+    pending.push({ data: item.data, fileIndex });
+  }
   if (cache !== undefined) {
     for (const key of cache.keys()) if (!visited.has(key)) cache.delete(key);
   }

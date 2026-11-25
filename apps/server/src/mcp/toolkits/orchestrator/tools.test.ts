@@ -87,7 +87,7 @@ describe("orchestrator MCP tool guidance", () => {
       "waitTimedOut",
       "new clientRequestId",
       "independent review round",
-      "t3_thread_send to childThreadId",
+      "t3_thread_send with its taskId",
     ])
       assert.include(DelegateTaskTool.description ?? "", guidance);
     assert.include(CreateThreadsTool.description ?? "", "only when the user asks");
@@ -215,6 +215,6 @@ describe("orchestrator MCP tool guidance", () => {
       "runId",
       "clientRequestId",
     ]);
-    assert.include(ThreadUpdateTool.description ?? "", "Workspace and branch changes");
+    assert.include(ThreadUpdateTool.description ?? "", "Workspace and branch unsupported");
   });
 });

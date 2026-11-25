@@ -199,6 +199,12 @@ function workflowMembersToRuntime(
 /**
  * Projects subagents and workflow members into the runtime roster.
  */
+export function subagentPromptTitle(prompt: string): string {
+  if (prompt.length <= 80) return prompt;
+  const prefix = prompt.slice(0, 77).replace(/[\uD800-\uDBFF]$/u, "");
+  return `${prefix}...`;
+}
+
 export function projectedSubagentsToRuntime(
   subagents: ReadonlyArray<{
     readonly id: string;
@@ -224,9 +230,7 @@ export function projectedSubagentsToRuntime(
     const coordinator = {
       id: subagent.id,
       kind: workflow === undefined ? "subagent" : "workflow",
-      title:
-        subagent.title ??
-        (subagent.prompt.length > 80 ? `${subagent.prompt.slice(0, 77)}...` : subagent.prompt),
+      title: subagent.title ?? subagentPromptTitle(subagent.prompt),
       role: null,
       model: subagent.model,
       effort: null,

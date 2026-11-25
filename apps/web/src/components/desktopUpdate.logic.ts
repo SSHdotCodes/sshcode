@@ -6,6 +6,7 @@ import type {
 
 export type DesktopUpdateButtonAction = "download" | "install" | "none";
 
+// SSHCode's public releases (the one-click updater installs these).
 const DESKTOP_RELEASE_HISTORY_URL = "https://github.com/SSHdotCodes/sshcode/releases";
 const DESKTOP_RELEASE_TAG_URL = `${DESKTOP_RELEASE_HISTORY_URL}/tag`;
 

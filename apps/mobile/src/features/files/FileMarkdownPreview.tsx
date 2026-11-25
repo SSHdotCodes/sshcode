@@ -7,6 +7,7 @@ import { RefreshControl, ScrollView, View } from "react-native";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { useFontFamily } from "../../lib/useFontFamily";
 import { resolveNativeMarkdownTypography } from "../../lib/appearancePreferences";
+import { userBubbleLinkColor } from "../../lib/mobileTheme";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import {
   ThreadMarkdownImage,
@@ -42,7 +43,7 @@ export function useMarkdownPreviewStyles(
   const theme = useUniwindTheme();
   const body = theme[tone === "user" ? "--color-user-bubble-foreground" : "--color-md-body"];
   const strong = tone === "user" ? body : theme["--color-md-strong"];
-  const link = tone === "user" ? body : theme["--color-md-link"];
+  const link = tone === "user" ? userBubbleLinkColor(theme) : theme["--color-md-link"];
   const blockquoteBorder = theme["--color-md-blockquote-border"];
   const codeBackground = theme["--color-md-code-bg"];
   const codeText = theme["--color-md-code-text"];

@@ -19,7 +19,8 @@ import { appAtomRegistry } from "./atom-registry";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "./session";
 import { serverEnvironment } from "./server";
 import { threadEnvironment } from "./threads";
-import { shouldRetryThreadOutboxDelivery, threadOutboxRetryDelayMs } from "./thread-outbox-model";
+import { createPendingDeliveryRetries } from "./pending-delivery-retries";
+import { shouldRetryThreadOutboxDelivery } from "./thread-outbox-model";
 import { useAtomCommand } from "./use-atom-command";
 import { useRemoteConnectionStatus } from "./use-remote-environment-registry";
 
@@ -32,18 +33,22 @@ export function usePendingSendDrain(): void {
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const allowed = useEnvironmentsWithScope(connectedEnvironments, AuthOrchestrationOperateScope);
   const active = useRef(new Set<string>());
-  const acknowledged = useRef(new Set<string>());
-  const retries = useRef(new Map<string, { attempt: number; after: number }>());
+  const acknowledged = useAtomValue(pendingSends.acknowledgedIdsAtom);
   const [tick, setTick] = useState(0);
   const mounted = useRef(true);
+  const [retries] = useState(() =>
+    createPendingDeliveryRetries(() => setTick((value) => value + 1)),
+  );
   const wake = useCallback(() => {
-    retries.current.clear();
+    retries.reset();
     if (mounted.current) setTick((value) => value + 1);
-  }, []);
+  }, [retries]);
   useEffect(() => {
     mounted.current = true;
-    const load = () =>
-      pendingSends.load().catch(() => {
+    let loaded: Promise<void> | undefined;
+    const load = (): Promise<void> =>
+      (loaded ??= pendingSends.load().catch(() => {
+        loaded = undefined;
         if (!mounted.current) return;
         Alert.alert(
           "Some pending sends could not be loaded",
@@ -53,7 +58,7 @@ export function usePendingSendDrain(): void {
             { text: "Retry", onPress: () => void load() },
           ],
         );
-      });
+      }));
     void load();
     const unsubscribe = subscribeNetworkRecovery(() => {
       wake();
@@ -62,40 +67,34 @@ export function usePendingSendDrain(): void {
     return () => {
       mounted.current = false;
       unsubscribe();
+      retries.reset();
     };
-  }, [wake]);
-  const connectedKey = connectedEnvironments
-    .filter((env) => env.connectionState === "connected")
-    .map((env) => env.environmentId)
-    .sort()
-    .join(",");
-  useEffect(wake, [connectedKey, wake]);
+  }, [retries, wake]);
   useEffect(() => {
-    let nextRetry = Number.POSITIVE_INFINITY;
+    retries.observeConnections(connectedEnvironments);
+  }, [connectedEnvironments, retries]);
+  useEffect(() => {
+    retries.prune(new Set(sends.map((send) => send.id)));
     for (const send of sends) {
-      // Saved before this check existed: an answer to a card that is already closed.
-      if (send.error && send.kind === "user-input" && isClosedRuntimeRequestMessage(send.error)) {
-        void pendingSends.remove(send).catch(() => undefined);
-        continue;
-      }
+      if (active.current.has(send.id) || retries.waiting(send.id)) continue;
+      const cleanupOnly =
+        acknowledged.has(send.id) ||
+        (send.kind === "user-input" && send.error && isClosedRuntimeRequestMessage(send.error));
       if (
-        send.error ||
-        active.current.has(send.id) ||
-        !allowed.has(send.environmentId) ||
-        !connectedEnvironments.some(
-          (env) => env.environmentId === send.environmentId && env.connectionState === "connected",
-        )
+        !cleanupOnly &&
+        (send.error ||
+          !allowed.has(send.environmentId) ||
+          !connectedEnvironments.some(
+            (env) =>
+              env.environmentId === send.environmentId && env.connectionState === "connected",
+          ))
       )
         continue;
-      const after = retries.current.get(send.id)?.after ?? 0;
-      if (after > Date.now()) {
-        nextRetry = Math.min(nextRetry, after);
-        continue;
-      }
+      const retry = retries.onFailure(send.id, send.environmentId);
       active.current.add(send.id);
       const deliver = async () => {
-        if (!readEnvironmentScope(send.environmentId, AuthOrchestrationOperateScope)) return;
-        if (!acknowledged.current.has(send.id)) {
+        if (!cleanupOnly) {
+          if (!readEnvironmentScope(send.environmentId, AuthOrchestrationOperateScope)) return;
           const result =
             send.kind === "side-question"
               ? await openSideChat({
@@ -132,9 +131,9 @@ export function usePendingSendDrain(): void {
               throw error;
             }
             if (send.kind === "user-input" && isClosedRuntimeRequestError(error)) {
+              pendingSends.acknowledge(send);
               await pendingSends.remove(send);
-              acknowledged.current.delete(send.id);
-              retries.current.delete(send.id);
+              retries.clear(send.id);
               return;
             }
             await pendingSends.fail(
@@ -143,7 +142,7 @@ export function usePendingSendDrain(): void {
             );
             return;
           }
-          acknowledged.current.add(send.id);
+          pendingSends.acknowledge(send);
           if (send.kind === "user-input") {
             appAtomRegistry.set(
               acknowledgedUserInputKeysAtom,
@@ -162,27 +161,23 @@ export function usePendingSendDrain(): void {
           }
         }
         await pendingSends.remove(send);
-        acknowledged.current.delete(send.id);
-        retries.current.delete(send.id);
+        retries.clear(send.id);
       };
       void deliver()
-        .catch(() => {
-          const attempt = (retries.current.get(send.id)?.attempt ?? 0) + 1;
-          retries.current.set(send.id, {
-            attempt,
-            after: Date.now() + threadOutboxRetryDelayMs(attempt),
-          });
-        })
+        .catch(retry)
         .finally(() => {
           active.current.delete(send.id);
           if (mounted.current) setTick((value) => value + 1);
         });
     }
-    if (!Number.isFinite(nextRetry)) return;
-    const timer = setTimeout(
-      () => setTick((value) => value + 1),
-      Math.max(0, nextRetry - Date.now()),
-    );
-    return () => clearTimeout(timer);
-  }, [allowed, connectedEnvironments, openSideChat, respondToUserInput, sends, tick]);
+  }, [
+    acknowledged,
+    allowed,
+    connectedEnvironments,
+    openSideChat,
+    respondToUserInput,
+    retries,
+    sends,
+    tick,
+  ]);
 }

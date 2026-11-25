@@ -9,6 +9,7 @@ import {
   remapFileCommentAnnotations,
 } from "./fileCommentAnnotations";
 import {
+  copyableFilePreviewContents,
   filePreviewReadErrorMessage,
   isMarkdownPreviewFile,
   resolveFilePreviewPath,
@@ -18,6 +19,22 @@ import {
 } from "./filePreviewMode";
 
 const decodeReadError = Schema.decodeSync(ProjectReadFileError);
+
+describe("copyable file preview contents", () => {
+  it("copies the complete original source with whitespace intact", () => {
+    const contents = "  # Design\n\n- Preview\n";
+    expect(copyableFilePreviewContents({ contents, truncated: false }, true)).toBe(contents);
+  });
+
+  it("omits empty, unavailable, incomplete, and non-text previews", () => {
+    expect(copyableFilePreviewContents({ contents: "", truncated: false }, true)).toBeNull();
+    expect(copyableFilePreviewContents(null, true)).toBeNull();
+    expect(copyableFilePreviewContents({ contents: "Partial", truncated: true }, true)).toBeNull();
+    expect(
+      copyableFilePreviewContents({ contents: "Raw data", truncated: false }, false),
+    ).toBeNull();
+  });
+});
 
 describe("file preview read errors", () => {
   it.each([

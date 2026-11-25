@@ -534,16 +534,19 @@ describe("UsageService", () => {
               },
             },
           },
-          ...["one", "two"].map((suffix) => ({
+          ...[
+            { suffix: "one", agentId: "main" },
+            { suffix: "two", agentId: "tasks" },
+          ].map(({ suffix, agentId }) => ({
             id: `kimi-${suffix}`,
             agentId: "kimi",
             name: `Kimi ${suffix}`,
             variable: "KIMI_SHARE_DIR",
             directory: `kimi-${suffix}`,
-            file: `sessions/project/session-${suffix}/agents/main/wire.jsonl`,
+            file: `sessions/project/session-${suffix}/agents/${agentId}/wire.jsonl`,
             entry: {
               type: "usage.record",
-              agentId: "main",
+              agentId,
               model: "kimi-model",
               time: Date.parse("2026-08-01T11:00:00Z"),
               usage: { inputOther: 10, inputCacheRead: 20, output: 5 },

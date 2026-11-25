@@ -75,6 +75,11 @@ describe("resolveSubagentRowPresentation", () => {
     expect(titled.title).toBe("My Worker");
   });
 
+  it("keeps a complete character at the fallback title limit", () => {
+    const prompt = `${"x".repeat(76)}😀 and more`;
+    expect(resolveSubagentRowPresentation({ ...base, prompt }).title).toBe(`${"x".repeat(76)}...`);
+  });
+
   it("only offers a thread to open when the agent has one", () => {
     expect(resolveSubagentRowPresentation(base).canOpenThread).toBe(true);
     expect(resolveSubagentRowPresentation({ ...base, childThreadId: null }).canOpenThread).toBe(

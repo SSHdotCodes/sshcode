@@ -329,6 +329,9 @@ export function filterPullRequestsByInvolvement<Entry extends ScopedEntry>(
   viewers: PullRequestViewers,
   involvement: PullRequestInvolvement,
 ): ReadonlyArray<Entry> {
+  if (involvement === "mine") {
+    return entries.filter((entry) => entry.viewerInvolved === true);
+  }
   if (involvement === "reviewing") {
     return entries.filter((entry) => entry.viewerReviewRequested);
   }
@@ -432,14 +435,37 @@ export function groupPullRequestsByInvolvement<Entry extends ScopedEntry>(
  */
 export function pullRequestEntryKey(entry: ScopedEntry): string {
   const scope = entry.environmentId === undefined ? "" : `${entry.environmentId}:`;
-  return `${scope}${entry.host}:${entry.repository}#${entry.number}`;
+  return `${scope}${hostedEntryKey(entry)}`;
+}
+
+const hostedEntryKey = (entry: PullRequestListEntry) =>
+  `${entry.host.toLowerCase()}:${entry.repository.toLowerCase()}#${entry.number}`;
+
+/** Keep one environment per PR, favoring a checkout within the same involvement group. */
+export function deduplicatePullRequestGroups<Entry extends PullRequestListEntry>(
+  groups: ReadonlyArray<PullRequestGroup<Entry>>,
+): ReadonlyArray<PullRequestGroup<Entry>> {
+  const seen = new Set<string>();
+  return groups.flatMap((group) => {
+    const entries = new Map<string, Entry>();
+    for (const entry of group.entries) {
+      const key = hostedEntryKey(entry);
+      if (seen.has(key)) continue;
+      const held = entries.get(key);
+      if (held === undefined || (held.projectId === undefined && entry.projectId !== undefined)) {
+        entries.set(key, entry);
+      }
+    }
+    for (const key of entries.keys()) seen.add(key);
+    return entries.size === 0 ? [] : [{ ...group, entries: [...entries.values()] }];
+  });
 }
 
 export interface PullRequestStatsTarget {
   readonly environmentId: EnvironmentId;
   readonly input: {
     readonly refs: ReadonlyArray<{
-      readonly projectId: ProjectId;
+      readonly projectId?: ProjectId | undefined;
       readonly repository: string;
       readonly number: number;
     }>;
@@ -471,7 +497,7 @@ export function pullRequestStatsKeysToRequest(
     [...enteredKeys].filter((key) => {
       const entry = entriesByKey.get(key);
       return (
-        entry !== undefined &&
+        entry?.projectId !== undefined &&
         entry.additions === 0 &&
         entry.deletions === 0 &&
         !requested.has(key) &&
@@ -495,7 +521,7 @@ export function pullRequestStatsBatches(
   >();
   for (const key of keys) {
     const entry = entriesByKey.get(key);
-    if (entry === undefined) continue;
+    if (entry?.projectId === undefined) continue;
     const rows = byEnvironment.get(entry.environmentId) ?? [];
     rows.push({
       key,
@@ -648,7 +674,8 @@ export function mergePullRequestDiffStats(
   previous: PullRequestDiffStats,
   stats: ReadonlyArray<{
     readonly environmentId: string;
-    readonly projectId: string;
+    readonly projectId?: string | undefined;
+    readonly repository: string;
     readonly number: number;
     readonly additions: number;
     readonly deletions: number;
@@ -665,12 +692,13 @@ export function mergePullRequestDiffStats(
   return next;
 }
 
-/** A project id only names a project within its own environment, so the key carries both. */
+/** A project can back multiple recent-chat repositories, so the key carries environment, project, repository and number. */
 export const pullRequestDiffStatKey = (row: {
   readonly environmentId: string;
-  readonly projectId: string;
+  readonly projectId?: string | undefined;
+  readonly repository: string;
   readonly number: number;
-}) => `${row.environmentId} ${row.projectId} ${row.number}`;
+}) => `${row.environmentId} ${row.projectId ?? ""} ${row.repository.toLowerCase()} ${row.number}`;
 
 /**
  * Every connected environment's listing, read as one list.

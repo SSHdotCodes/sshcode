@@ -64,7 +64,7 @@ import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpRegistryAuth from "./auth.ts";
 import * as AcpRegistryAuthenticationState from "./authenticationState.ts";
-import { withDevinLightningSpeed } from "./devinAcp.ts";
+import { withDevinLightningSpeed, withoutDevinEffortSuffix } from "./devinAcp.ts";
 import { makeDevinUsageLimitsProbe } from "./devinUsageLimits.ts";
 import { makeAcpRegistryLearnedModelOptions } from "./learnedModelOptions.ts";
 
@@ -709,7 +709,12 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       const withLiveRuntimeState = (input: ServerProvider) =>
         withLiveRuntimeStateUndecorated(input).pipe(
           Effect.map((provider) =>
-            isDevin ? { ...provider, models: withDevinLightningSpeed(provider.models) } : provider,
+            isDevin
+              ? {
+                  ...provider,
+                  models: withoutDevinEffortSuffix(withDevinLightningSpeed(provider.models)),
+                }
+              : provider,
           ),
         );
       const withLiveRuntimeStateUndecorated = (input: ServerProvider) =>

@@ -23,6 +23,7 @@ import { resolveProviderOptionDescriptors } from "./providerOptions";
 export type ModelOption = {
   readonly key: string;
   readonly label: string;
+  readonly shortName?: string | undefined;
   readonly subtitle: string;
   /** The catalog's model family, which names its maker (`ServerProviderModel.family`). */
   readonly family?: string;
@@ -380,6 +381,7 @@ export function buildModelOptions(
       options.set(key, {
         key,
         label: model.name,
+        ...(model.shortName ? { shortName: model.shortName } : {}),
         subtitle: model.subProvider ?? "",
         ...(model.family ? { family: model.family } : {}),
         providerKey: provider.instanceId,
@@ -444,6 +446,7 @@ export function buildModelOptions(
       options.set(key, {
         key,
         label: model?.name ?? fallbackModelSelection.model,
+        ...(model?.shortName ? { shortName: model.shortName } : {}),
         subtitle: model?.subProvider ?? "",
         providerKey: fallbackModelSelection.instanceId,
         providerLabel,

@@ -147,6 +147,7 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
           if (config?.threadSearchProgressive !== true)
             return yield* request(ORCHESTRATION_V2_WS_METHODS.searchThreads, input);
           return yield* subscribe(ORCHESTRATION_V2_WS_METHODS.searchThreadsStream, input).pipe(
+            Stream.takeUntil((result) => result.complete !== false),
             Stream.tap(emit),
             Stream.runFold(
               () =>

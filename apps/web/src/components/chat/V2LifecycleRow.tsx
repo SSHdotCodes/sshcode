@@ -333,6 +333,7 @@ function SubagentTimelineLink(props: {
   };
   const { modelLabel } = resolveSubagentMetadata({
     model: agent?.model ?? null,
+    modelOptions: agent?.modelSelection?.options,
     provider: props.provider,
   });
   const speed = subagentSpeed(agent?.modelSelection);

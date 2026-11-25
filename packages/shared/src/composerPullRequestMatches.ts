@@ -4,7 +4,7 @@ import { visibleThreadPullRequests } from "./threadPullRequests.ts";
 
 export interface ComposerPullRequestMatch {
   readonly number: number;
-  readonly projectId: string;
+  readonly projectId?: string | undefined;
   readonly repository: string;
   readonly updatedAt: string;
 }

@@ -2,7 +2,7 @@ import type { ProviderApprovalOption, ProviderRequestKind } from "@t3tools/contr
 
 const DEFAULT_APPROVAL_OPTIONS = [
   { decision: "accept", label: "Allow" },
-  { decision: "acceptForSession", label: "Allow for this session" },
+  { decision: "acceptForSession", label: "Allow until the agent restarts" },
   { decision: "decline", label: "Deny" },
 ] as const satisfies ReadonlyArray<ProviderApprovalOption>;
 

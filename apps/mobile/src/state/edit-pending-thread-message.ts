@@ -16,7 +16,7 @@ import {
   waitForComposerDraftsLoaded,
 } from "./use-composer-drafts";
 import {
-  dispatchingQueuedMessageIdAtom,
+  dispatchingMessageByThreadAtom,
   editingQueuedMessageIdsAtom,
   holdEditingQueuedMessage,
   releaseEditingQueuedMessage,
@@ -24,15 +24,15 @@ import {
 
 /** Take delivery ownership before any await; the durable draft then takes ownership of the files. */
 export async function editPendingThreadMessage(message: QueuedThreadMessage): Promise<boolean> {
+  const draftKey = scopedThreadKey(message.environmentId, message.threadId);
   if (
     message.creation ||
-    appAtomRegistry.get(dispatchingQueuedMessageIdAtom) === message.messageId ||
+    appAtomRegistry.get(dispatchingMessageByThreadAtom)[draftKey] === message.messageId ||
     appAtomRegistry.get(editingQueuedMessageIdsAtom)[message.messageId]
   ) {
     return false;
   }
   holdEditingQueuedMessage(message.messageId);
-  const draftKey = scopedThreadKey(message.environmentId, message.threadId);
   let rollback: {
     snapshot: ReturnType<typeof getComposerDraftSnapshot>;
     merged: ReturnType<typeof getComposerDraftSnapshot>;

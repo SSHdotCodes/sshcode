@@ -4,6 +4,7 @@ import { receiveProviderAuthCallback, cancelProviderAuthCallback } from "./metho
 import * as DesktopIpc from "./DesktopIpc.ts";
 import { installMediaIpc } from "./methods/media.ts";
 import { installKeepAwake } from "./methods/keepAwake.ts";
+import { installConnectionWakeups } from "./methods/connectionWakeups.ts";
 import { installMenuBarStatus } from "./methods/menuBarStatus.ts";
 import { installNotificationBadge } from "./methods/notificationBadge.ts";
 import { installNotifications } from "./methods/notifications.ts";
@@ -94,6 +95,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* installNotifications();
   yield* installMenuBarStatus();
   yield* installKeepAwake();
+  yield* installConnectionWakeups();
   yield* installMediaIpc();
   yield* PreviewIpc.installPreviewEventForwarding();
 

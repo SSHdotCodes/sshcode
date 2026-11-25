@@ -73,9 +73,14 @@ export function continueOnOtherPlan(
   balanceAccounts: boolean,
   providers: ReadonlyArray<ServerProvider>,
   selection: { readonly instanceId: string; readonly model: string },
+  now?: number,
 ): { readonly instanceId: string; readonly label: string } | null {
   if (!balanceAccounts) return null;
-  const tip = betterPlanTip(providers, selection);
+  const tip = betterPlanTip(
+    providers,
+    selection,
+    now === undefined ? undefined : { now, newSession: false },
+  );
   if (tip === null) return null;
   return { instanceId: tip.toInstanceId, label: planTipCopy(providers, selection.model, tip).to };
 }

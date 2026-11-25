@@ -1,5 +1,10 @@
 import { useUpdateClientSettings } from "../../hooks/useSettings";
 import {
+  composerModelName,
+  effortGauge,
+  type EffortDisplay,
+} from "@t3tools/client-runtime/composer-model-display";
+import {
   ANTIGRAVITY_DEFAULT_MODEL,
   type ProviderInstanceId,
   type EnvironmentId,
@@ -79,8 +84,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   autoModelEnabled?: boolean;
   /** Receives the trigger, for the suggestion the composer anchors to it. Keep it stable. */
   onAutoModelAnchor?: (anchor: HTMLButtonElement | null) => void;
-  /** The effort word after the model name on the trigger, such as "High". */
-  triggerSuffix?: string | null;
+  /** The effort shown after the model name on the trigger. */
+  triggerEffort?: EffortDisplay | null;
   /** Keyboard shortcut commands that open this picker, such as `composer.effort`. */
   triggerShortcut?: string;
   onInstanceModelChange: (
@@ -115,6 +120,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   }, [props.activeInstanceId, props.instanceEntries]);
 
   const activeInstanceId = props.activeInstanceId;
+  const modelTriggerName = props.isComposerOwned ? composerModelName : getTriggerDisplayModelName;
   const selectedInstanceOptions = props.modelOptionsByInstance.get(activeInstanceId) ?? [];
   // Account-specific catalogs must keep the selected model label while unavailable.
   const selectedModel =
@@ -127,12 +133,12 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       ? undefined
       : selectedInstanceOptions[0]);
   const triggerTitle = selectedModel
-    ? getTriggerDisplayModelName(selectedModel)
+    ? modelTriggerName(selectedModel)
     : props.model === ANTIGRAVITY_DEFAULT_MODEL
       ? "Choose model"
       : props.model || "Choose model";
   const triggerLabel = selectedModel
-    ? `${getTriggerDisplayModelLabel(selectedModel)}${selectedModel.isUnavailable ? " (Unavailable)" : ""}`
+    ? `${props.isComposerOwned ? selectedModel.name : getTriggerDisplayModelLabel(selectedModel)}${selectedModel.isUnavailable ? " (Unavailable)" : ""}`
     : triggerTitle;
   const showInstanceBadge =
     activeEntry !== null && shouldShowInstanceBadge(activeEntry, props.instanceEntries);
@@ -142,9 +148,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     props.reasoningColumn !== undefined &&
     props.reasoningColumn !== null &&
     props.selectedModels === undefined;
-  const triggerSuffix =
-    props.triggerSuffix && props.triggerLabel === undefined && props.selectedModels === undefined
-      ? props.triggerSuffix
+  const effort =
+    props.triggerLabel === undefined && props.selectedModels === undefined
+      ? props.triggerEffort
       : null;
 
   const setIsMenuOpen = (open: boolean) => {
@@ -233,7 +239,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       ...selection,
       entry,
       label: model
-        ? `${getTriggerDisplayModelName(model)}${model.isUnavailable ? " (Unavailable)" : ""}`
+        ? `${modelTriggerName(model)}${model.isUnavailable ? " (Unavailable)" : ""}`
         : selection.model,
     };
   });
@@ -248,7 +254,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const allModelNames = selectedEntries
     ? `Compare: ${selectedEntries.map((selection) => selection.label).join(", ") || "choose models"}`
     : undefined;
-  const fullTriggerLabel = triggerSuffix ? `${triggerLabel} ${triggerSuffix}` : triggerLabel;
+  const effortLabel = effort ? `Effort: ${effort.label}` : null;
+  const fullTriggerLabel = effortLabel ? `${triggerLabel} · ${effortLabel}` : triggerLabel;
   const triggerTooltipContent = shortcutLabel
     ? `${props.triggerLabel ?? allModelNames ?? fullTriggerLabel} · ${shortcutLabel}`
     : (props.triggerLabel ?? allModelNames ?? fullTriggerLabel);
@@ -268,7 +275,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         render={
           <ComposerControl
             ref={onAutoModelAnchor}
-            aria-label={props.triggerAriaLabel ?? allModelNames}
+            aria-label={
+              props.triggerAriaLabel ??
+              allModelNames ??
+              (effortLabel ? `${triggerTitle}, ${effortLabel}` : undefined)
+            }
             size={size}
             data-chat-provider-model-picker="true"
             data-composer-shortcut={props.triggerShortcut}
@@ -339,10 +350,21 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             </TooltipTrigger>
             <TooltipPopup side="top">{triggerTooltipContent}</TooltipPopup>
           </Tooltip>
-          {triggerSuffix ? (
-            <span className="shrink-0" data-chat-provider-model-picker-effort="true">
-              {triggerSuffix}
-            </span>
+          {effort ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    aria-hidden="true"
+                    className="shrink-0"
+                    data-chat-provider-model-picker-effort="true"
+                  />
+                }
+              >
+                {effort.barCount === 0 ? effort.label : <EffortGaugeIcon effort={effort} />}
+              </TooltipTrigger>
+              <TooltipPopup side="top">{effortLabel}</TooltipPopup>
+            </Tooltip>
           ) : null}
           {selectedModel?.isUnavailable && !selectedEntries && props.triggerLabel === undefined ? (
             <Badge variant="outline" size="sm">
@@ -415,3 +437,31 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     </Popover>
   );
 });
+
+/**
+ * The composer's effort dial, in the slider's colours: the theme colour sweeping a half ring,
+ * glowing from Max up and burning coral at Ultracode. Scales with the trigger's cap height.
+ */
+function EffortGaugeIcon(props: { readonly effort: EffortDisplay }) {
+  const gauge = effortGauge(props.effort);
+  const tone = props.effort.accent ?? "var(--primary)";
+  return (
+    <svg
+      viewBox={`0 0 ${gauge.width} ${gauge.height}`}
+      className="h-[1.15cap] w-auto overflow-visible"
+      fill="none"
+      strokeLinecap="round"
+      strokeWidth={gauge.stroke}
+      style={
+        props.effort.fx >= 3
+          ? {
+              filter: `drop-shadow(0 0 ${props.effort.fx >= 4 ? 2.5 : 1.5}px color-mix(in srgb, ${tone} 80%, transparent))`,
+            }
+          : undefined
+      }
+    >
+      <path d={gauge.track} stroke="currentColor" strokeOpacity={0.3} />
+      {gauge.fill ? <path d={gauge.fill} stroke={tone} /> : null}
+    </svg>
+  );
+}

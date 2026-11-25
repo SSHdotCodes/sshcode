@@ -7,14 +7,12 @@ import { createEnvironmentServerConfigsAtom } from "@t3tools/client-runtime/stat
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { MOBILE_SERVER_CONFIG_SUBSCRIPTION_OPTIONS } from "../connection/server-config-options";
 import { environmentSession } from "./session";
 
 export const serverEnvironment = createServerEnvironmentAtoms(connectionAtomRuntime, {
   initialConfigValueAtom: environmentSession.initialConfigValueAtom,
-  chatTabs: true,
-  usageLimitSources: true,
-  usageLimitsCommand: true,
-  compactProviders: true,
+  ...MOBILE_SERVER_CONFIG_SUBSCRIPTION_OPTIONS,
 });
 export const agentToolsEnvironment = createAgentToolsAtoms(connectionAtomRuntime, {
   settingsValueAtom: serverEnvironment.settingsValueAtom,

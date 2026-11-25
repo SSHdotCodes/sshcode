@@ -121,6 +121,24 @@ export const THREAD_RECORDS_MAX_STALE_MS = 30 * 60_000;
 
 /** Transcripts parsed at once. More gains little once the disk stays busy. */
 const TRANSCRIPT_READ_CONCURRENCY = 4;
+/** Transcript directories walked at once; file parses still share `TRANSCRIPT_READ_CONCURRENCY`. */
+const TRANSCRIPT_DIR_CONCURRENCY = 4;
+/**
+ * Kimi stores transcripts only in `<workspace>/<session>/wire.jsonl` and
+ * `<workspace>/<session>/agents/<agent>/wire.jsonl`. Skipping its auxiliary
+ * session subdirectories avoids thousands of empty `readdir` calls per scan.
+ */
+const KIMI_SKIP_DIR_NAMES: ReadonlySet<string> = new Set([
+  ".index-cache",
+  ".index-dirty",
+  "blobs",
+  "file-history",
+  "logs",
+  "notifications",
+  "notify",
+  "tasks",
+  "tool-results",
+]);
 
 /** The transcript readers, in driver order. */
 const transcriptReaders = BUILT_IN_USAGE_DRIVERS.flatMap((driver) =>
@@ -870,6 +888,7 @@ export const make = Effect.gen(function* () {
     source: TranscriptSource,
     windowStartMs: number,
     retentionCutoffMs: number,
+    readSemaphore: Semaphore.Semaphore,
   ) {
     const { provider, format, dir, volumeId, fileName, instanceId, displayName } = source;
     const identity = {
@@ -888,6 +907,9 @@ export const make = Effect.gen(function* () {
       listTranscriptFiles(dir, windowStartMs, {
         compressedSinceMs: retentionCutoffMs,
         ...(fileName === undefined ? {} : { fileName }),
+        ...(provider === "kimi"
+          ? { skipDirectory: (name, depth) => depth === 3 && KIMI_SKIP_DIR_NAMES.has(name) }
+          : {}),
       }),
     );
     let identities: Map<string, string[]> | undefined;
@@ -911,13 +933,16 @@ export const make = Effect.gen(function* () {
       return found;
     });
     // A cold parse waits on disk reads, so a few files in flight read
-    // close to twice as fast. Results keep walk order.
+    // close to twice as fast. Results keep walk order while sharing the read
+    // permit pool across concurrent transcript directories.
     const read = yield* Effect.forEach(
       files,
       (file) =>
         findMovedFrom(file.path).pipe(
           Effect.flatMap((movedFrom) =>
-            readFileRecords(file.path, file.size, file.mtimeMs, provider, format, movedFrom),
+            readSemaphore.withPermit(
+              readFileRecords(file.path, file.size, file.mtimeMs, provider, format, movedFrom),
+            ),
           ),
           Effect.map((result) => ({ path: file.path, ...result })),
         ),
@@ -1002,12 +1027,18 @@ export const make = Effect.gen(function* () {
       { concurrency: "unbounded" },
     );
 
-    // Independent sources scan together. Transcript directories go one at a
-    // time, so open files stay at `TRANSCRIPT_READ_CONCURRENCY`. The result
-    // keeps this order, since aggregation keeps the first copy of a duplicate.
+    // Independent sources scan together. Transcript directories walk
+    // concurrently while sharing one read semaphore so open transcript parses
+    // stay at `TRANSCRIPT_READ_CONCURRENCY`. `Effect.forEach` preserves `dirs`
+    // order, which aggregation relies on for first-seen deduplication.
+    const readSemaphore = yield* Semaphore.make(TRANSCRIPT_READ_CONCURRENCY);
     const [transcripts, scanDirs] = yield* Effect.all(
       [
-        Effect.forEach(dirs, (dir) => scanTranscriptDir(dir, windowStartMs, retentionCutoffMs)),
+        Effect.forEach(
+          dirs,
+          (dir) => scanTranscriptDir(dir, windowStartMs, retentionCutoffMs, readSemaphore),
+          { concurrency: TRANSCRIPT_DIR_CONCURRENCY },
+        ),
         scans,
       ],
       { concurrency: "unbounded" },

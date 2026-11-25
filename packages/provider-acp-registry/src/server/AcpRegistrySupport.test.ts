@@ -1711,6 +1711,83 @@ describe("AcpRegistrySupport", () => {
     );
   });
 
+  it.effect(
+    "discovers an executable override on a cold registry cache without installing it",
+    () => {
+      const agent = makeAgent({ npx: { package: "@example/acp@1.2.3", args: ["acp"] } });
+      const requests: string[] = [];
+      return Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-acp-registry-cold-override-",
+        });
+        const commandPath = `${cacheDir}/example-agent`;
+        yield* fileSystem.writeFileString(commandPath, "#!/bin/sh\n");
+        yield* fileSystem.chmod(commandPath, 0o755);
+        const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+          cacheDir,
+          toolsDir: `${cacheDir}/tools`,
+          registryUrl,
+        });
+        const override = settings({ commandPath });
+
+        expect(yield* resolver.inspect(override)).toMatchObject({
+          status: "ready",
+          agentId: agent.id,
+          version: null,
+        });
+        expect((yield* resolver.resolve(override, "/workspace")).spawn).toMatchObject({
+          command: commandPath,
+          args: ["acp"],
+        });
+        expect(requests).toEqual([registryUrl]);
+        expect(yield* fileSystem.exists(`${cacheDir}/tools/${agent.id}`)).toBe(false);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          layerResolver((request) => {
+            requests.push(request.url);
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(request, new Response(makeRegistry(agent))),
+            );
+          }),
+        ),
+      );
+    },
+  );
+
+  it.effect("inspects an active ACP agent override offline without fetching the registry", () => {
+    const agent = makeAgent({ npx: { package: "@example/acp@1.2.3", args: ["acp"] } });
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-active-override-",
+      });
+      const commandPath = `${cacheDir}/example-agent`;
+      yield* fileSystem.writeFileString(commandPath, "#!/bin/sh\n");
+      yield* fileSystem.chmod(commandPath, 0o755);
+      yield* fileSystem.makeDirectory(`${cacheDir}/acp-registry/active-agents`, {
+        recursive: true,
+      });
+      yield* fileSystem.writeFileString(
+        `${cacheDir}/acp-registry/active-agents/${agent.id}.json`,
+        JSON.stringify(agent),
+      );
+      const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+        cacheDir,
+        toolsDir: `${cacheDir}/tools`,
+        registryUrl,
+      });
+
+      expect(yield* resolver.inspect(settings({ commandPath }))).toMatchObject({
+        status: "ready",
+        agentId: agent.id,
+        version: null,
+        distribution: "npx",
+      });
+    }).pipe(Effect.scoped, Effect.provide(layerResolver(() => Effect.die("unexpected network"))));
+  });
+
   it.effect("uses the effective provider environment for inspection and resolution", () => {
     const agent = makeAgent({ npx: { package: "@example/acp@1.2.3" } });
     return Effect.gen(function* () {

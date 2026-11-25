@@ -28,6 +28,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert } from "react-native";
 
 import { createDebugLogger } from "../lib/debugLog";
+import { createPendingDeliveryRetries } from "./pending-delivery-retries";
 import { subscribeNetworkRecovery } from "../connection/network-recovery";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn";
@@ -47,6 +48,7 @@ import { restoredNewTaskDraftKey } from "./new-task-draft-key";
 import { useProjects, useServerConfigs, useThreadShells } from "./entities";
 import {
   clearPendingThreadCreationOutcome,
+  freshThreadCreations,
   pendingThreadCreationOutcomesAtom,
   recordPendingThreadCreationOutcome,
 } from "./pending-thread-creation";
@@ -68,7 +70,6 @@ import {
   resolveThreadOutboxFailureAction,
   resolveQueuedThreadSettings,
   shouldRetryThreadOutboxDelivery,
-  threadOutboxRetryDelayMs,
   type QueuedThreadCreation,
   type QueuedThreadMessage,
   type ThreadOutboxCommandStage,
@@ -90,7 +91,7 @@ import {
 } from "./use-composer-drafts";
 import { useAtomCommand } from "./use-atom-command";
 import {
-  dispatchingQueuedMessageIdAtom,
+  dispatchingMessageByThreadAtom,
   editingQueuedMessageIdsAtom,
   useThreadOutboxMessages,
   useThreadOutboxShellStatuses,
@@ -184,13 +185,17 @@ function logThreadOutboxUploadFailure(queuedMessage: QueuedThreadMessage, error:
   }
 }
 
-function beginDispatchingQueuedMessage(queuedMessageId: MessageId): void {
-  appAtomRegistry.set(dispatchingQueuedMessageIdAtom, queuedMessageId);
+function beginDispatchingQueuedMessage(threadKey: string, messageId: MessageId): void {
+  const current = appAtomRegistry.get(dispatchingMessageByThreadAtom);
+  appAtomRegistry.set(dispatchingMessageByThreadAtom, { ...current, [threadKey]: messageId });
 }
 
-function finishDispatchingQueuedMessage(queuedMessageId: MessageId): void {
-  const current = appAtomRegistry.get(dispatchingQueuedMessageIdAtom);
-  appAtomRegistry.set(dispatchingQueuedMessageIdAtom, current === queuedMessageId ? null : current);
+function finishDispatchingQueuedMessage(threadKey: string, messageId: MessageId): void {
+  const current = appAtomRegistry.get(dispatchingMessageByThreadAtom);
+  if (current[threadKey] !== messageId) return;
+  const next = { ...current };
+  delete next[threadKey];
+  appAtomRegistry.set(dispatchingMessageByThreadAtom, next);
 }
 
 function findThread(
@@ -541,6 +546,7 @@ export async function restoreRejectedQueuedMessage(
               branch: queuedMessage.creation.branch,
               worktreePath: queuedMessage.creation.worktreePath,
               pullRequestReference: queuedMessage.creation.pullRequestReference,
+              pullRequestCheckoutRoot: queuedMessage.creation.pullRequestCheckoutRoot,
               ...(queuedMessage.creation.startFromOrigin !== undefined
                 ? { startFromOrigin: queuedMessage.creation.startFromOrigin }
                 : {}),
@@ -681,7 +687,7 @@ export function useThreadOutboxDrain(): void {
   const preparePullRequest = useAtomCommand(gitEnvironment.preparePullRequestThread, {
     reportFailure: false,
   });
-  const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
+  const dispatchingByThread = useAtomValue(dispatchingMessageByThreadAtom);
   const editingQueuedMessageIds = useAtomValue(editingQueuedMessageIdsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
   const shellStatuses = useThreadOutboxShellStatuses();
@@ -695,9 +701,9 @@ export function useThreadOutboxDrain(): void {
     AuthOrchestrationOperateScope,
   );
   const [retryTick, setRetryTick] = useState(0);
-  const retryAttemptRef = useRef(new Map<MessageId, number>());
-  const retryNotBeforeRef = useRef(new Map<MessageId, number>());
-  const retryTimersRef = useRef(new Map<MessageId, ReturnType<typeof setTimeout>>());
+  const [retries] = useState(() =>
+    createPendingDeliveryRetries(() => setRetryTick((tick) => tick + 1)),
+  );
   const acknowledgedExistingThreadMessageIdsRef = useRef(new Set<MessageId>());
   // Targets the shell may have left out hold their thread family until they leave the queue, so
   // the row stays readable through dispatch.
@@ -716,32 +722,17 @@ export function useThreadOutboxDrain(): void {
     >(),
   );
 
-  const scheduleQueuedMessageRetry = useCallback((messageId: MessageId) => {
-    const retryAttempt = (retryAttemptRef.current.get(messageId) ?? 0) + 1;
-    retryAttemptRef.current.set(messageId, retryAttempt);
-    const retryDelayMs = threadOutboxRetryDelayMs(retryAttempt);
-    retryNotBeforeRef.current.set(messageId, Date.now() + retryDelayMs);
-    const pendingTimer = retryTimersRef.current.get(messageId);
-    if (pendingTimer !== undefined) {
-      clearTimeout(pendingTimer);
-    }
-    const retryTimer = setTimeout(() => {
-      retryTimersRef.current.delete(messageId);
-      setRetryTick((current) => current + 1);
-    }, retryDelayMs);
-    retryTimersRef.current.set(messageId, retryTimer);
-  }, []);
+  useEffect(() => {
+    retries.observeConnections(connectedEnvironments);
+  }, [connectedEnvironments, retries]);
 
   useEffect(
     () =>
       subscribeNetworkRecovery(() => {
-        retryAttemptRef.current.clear();
-        retryNotBeforeRef.current.clear();
-        for (const timer of retryTimersRef.current.values()) clearTimeout(timer);
-        retryTimersRef.current.clear();
-        setRetryTick((current) => current + 1);
+        retries.reset();
+        setRetryTick((tick) => tick + 1);
       }),
-    [],
+    [retries],
   );
 
   const restoreQueuedMessage = useCallback(
@@ -801,16 +792,13 @@ export function useThreadOutboxDrain(): void {
     void load();
     return () => {
       mounted = false;
-      for (const timer of retryTimersRef.current.values()) {
-        clearTimeout(timer);
-      }
-      retryTimersRef.current.clear();
+      retries.reset();
       for (const blocked of blockedRecoverySubscriptionsRef.current.values()) {
         blocked.unsubscribe();
       }
       blockedRecoverySubscriptionsRef.current.clear();
     };
-  }, []);
+  }, [retries]);
 
   const makeDeliveryHelpers = useCallback((queuedMessage: QueuedThreadMessage) => {
     const reportFailure = (
@@ -1127,7 +1115,11 @@ export function useThreadOutboxDrain(): void {
         // resolves the provider's actual PR head, including forks, in a worktree.
         const checkout = await preparePullRequest({
           environmentId: queuedMessage.environmentId,
-          input: { cwd: projectCwd, reference: creation.pullRequestReference, mode: "worktree" },
+          input: {
+            cwd: creation.pullRequestCheckoutRoot ?? projectCwd,
+            reference: creation.pullRequestReference,
+            mode: "worktree",
+          },
         });
         if (!isQueuedMessagePayloadCurrent(persistedMessage, deliveryRevision) || !hasAccess())
           return true;
@@ -1157,7 +1149,12 @@ export function useThreadOutboxDrain(): void {
         });
         if (!isQueuedMessagePayloadCurrent(persistedMessage, deliveryRevision) || !hasAccess())
           return true;
-        if (!AsyncResult.isSuccess(subagentsOff)) return false;
+        if (!AsyncResult.isSuccess(subagentsOff)) {
+          const failure = reportFailure(subagentsOff, "start-turn");
+          return failure?.action === "restore"
+            ? restoreQueuedMessage(persistedMessage, failure.message)
+            : false;
+        }
       }
       return dispatchQueuedTurn(
         persistedMessage,
@@ -1224,15 +1221,12 @@ export function useThreadOutboxDrain(): void {
   }, [creationOutcomes, threads]);
 
   useEffect(() => {
-    if (dispatchingQueuedMessageId !== null) {
-      return;
-    }
-
     const queuedMessageIds = new Set(
       Object.values(queuedMessagesByThreadKey)
         .flat()
         .map((message) => message.messageId),
     );
+    retries.prune(queuedMessageIds);
     for (const messageId of acknowledgedExistingThreadMessageIdsRef.current) {
       if (!queuedMessageIds.has(messageId)) {
         acknowledgedExistingThreadMessageIdsRef.current.delete(messageId);
@@ -1246,39 +1240,41 @@ export function useThreadOutboxDrain(): void {
     }
 
     for (const [threadKey, queuedMessages] of Object.entries(queuedMessagesByThreadKey)) {
+      if (
+        dispatchingByThread[threadKey] ||
+        appAtomRegistry.get(dispatchingMessageByThreadAtom)[threadKey]
+      )
+        continue;
       const nextQueuedMessage = queuedMessages.find((message) => !message.recoveryReason);
       if (!nextQueuedMessage) {
         continue;
       }
+      // Capture this connection's retry before starting any asynchronous work.
+      const retry = retries.onFailure(nextQueuedMessage.messageId, nextQueuedMessage.environmentId);
       if (
         nextQueuedMessage.creation === undefined &&
         acknowledgedExistingThreadMessageIdsRef.current.has(nextQueuedMessage.messageId)
       ) {
-        if ((retryNotBeforeRef.current.get(nextQueuedMessage.messageId) ?? 0) > Date.now()) {
+        if (retries.waiting(nextQueuedMessage.messageId)) {
           continue;
         }
-        beginDispatchingQueuedMessage(nextQueuedMessage.messageId);
+        beginDispatchingQueuedMessage(threadKey, nextQueuedMessage.messageId);
         void removeAcknowledgedExistingThreadMessage(
           nextQueuedMessage,
           acknowledgedExistingThreadMessageIdsRef.current,
         )
           .then((removed) => {
             if (!removed) {
-              scheduleQueuedMessageRetry(nextQueuedMessage.messageId);
+              retry();
               return;
             }
-            retryAttemptRef.current.delete(nextQueuedMessage.messageId);
-            retryNotBeforeRef.current.delete(nextQueuedMessage.messageId);
-            const pendingTimer = retryTimersRef.current.get(nextQueuedMessage.messageId);
-            if (pendingTimer !== undefined) {
-              clearTimeout(pendingTimer);
-              retryTimersRef.current.delete(nextQueuedMessage.messageId);
-            }
+            retries.clear(nextQueuedMessage.messageId);
           })
-          .finally(() => finishDispatchingQueuedMessage(nextQueuedMessage.messageId));
-        return;
+          .finally(() => finishDispatchingQueuedMessage(threadKey, nextQueuedMessage.messageId));
+        continue;
       }
       if (editingQueuedMessageIds[nextQueuedMessage.messageId]) {
+        retries.clear(nextQueuedMessage.messageId);
         continue;
       }
       const blockedRecovery = blockedRecoverySubscriptionsRef.current.get(
@@ -1291,7 +1287,7 @@ export function useThreadOutboxDrain(): void {
         blockedRecoverySubscriptionsRef.current.delete(nextQueuedMessage.messageId);
         blockedRecovery.unsubscribe();
       }
-      if ((retryNotBeforeRef.current.get(nextQueuedMessage.messageId) ?? 0) > Date.now()) {
+      if (retries.waiting(nextQueuedMessage.messageId)) {
         continue;
       }
 
@@ -1309,7 +1305,6 @@ export function useThreadOutboxDrain(): void {
       // A restart loses the in-memory acknowledgement. Only a capable server can settle
       // the exact saved request without consulting expired uploads or the current project model.
       if (nextQueuedMessage.attempted && !nextQueuedMessage.refusal && !serverConfig) {
-        scheduleQueuedMessageRetry(nextQueuedMessage.messageId);
         continue;
       }
       const replay =
@@ -1321,7 +1316,7 @@ export function useThreadOutboxDrain(): void {
             !operableEnvironments.has(nextQueuedMessage.environmentId))
         )
           continue;
-        beginDispatchingQueuedMessage(nextQueuedMessage.messageId);
+        beginDispatchingQueuedMessage(threadKey, nextQueuedMessage.messageId);
         const delivery = confirmThreadOutboxMessageQueued(nextQueuedMessage).then((current) => {
           if (!current) return true;
           return nextQueuedMessage.refusal
@@ -1337,10 +1332,10 @@ export function useThreadOutboxDrain(): void {
             return false;
           })
           .then((done) => {
-            if (!done) scheduleQueuedMessageRetry(nextQueuedMessage.messageId);
+            if (!done) retry();
           })
-          .finally(() => finishDispatchingQueuedMessage(nextQueuedMessage.messageId));
-        return;
+          .finally(() => finishDispatchingQueuedMessage(threadKey, nextQueuedMessage.messageId));
+        continue;
       }
       let familyRead: ThreadFamilyRead | undefined;
       if (
@@ -1350,21 +1345,28 @@ export function useThreadOutboxDrain(): void {
       ) {
         // The family keeps the row readable through dispatch once it loads; the current shell
         // generation's read decides whether the thread is gone.
-        if (!familyMountsRef.current.has(nextQueuedMessage.messageId)) {
-          familyMountsRef.current.set(
-            nextQueuedMessage.messageId,
-            threadFamilies.mount(
-              appAtomRegistry,
-              nextQueuedMessage.environmentId,
-              nextQueuedMessage.threadId,
-            ),
-          );
-        }
-        familyRead = threadFamilyRead(
-          appAtomRegistry.get(
-            threadFamilies.familyAtom(nextQueuedMessage.environmentId, nextQueuedMessage.threadId),
-          ),
+        const family = threadFamilies.familyAtom(
+          nextQueuedMessage.environmentId,
+          nextQueuedMessage.threadId,
         );
+        if (!familyMountsRef.current.has(nextQueuedMessage.messageId)) {
+          const unmountFamily = threadFamilies.mount(
+            appAtomRegistry,
+            nextQueuedMessage.environmentId,
+            nextQueuedMessage.threadId,
+          );
+          // An empty result changes no merged shell row. Observe completion directly.
+          const unsubscribe = appAtomRegistry.subscribe(family, (result) => {
+            const status = threadFamilyRead(result);
+            if (status === "settled") retries.clear(nextQueuedMessage.messageId);
+            if (status !== "pending") setRetryTick((tick) => tick + 1);
+          });
+          familyMountsRef.current.set(nextQueuedMessage.messageId, () => {
+            unsubscribe();
+            unmountFamily();
+          });
+        }
+        familyRead = threadFamilyRead(appAtomRegistry.get(family));
         if (familyRead === "settled") {
           // The rows from this render can lag the family that just settled; decide from the
           // merged rows as they are now.
@@ -1372,7 +1374,8 @@ export function useThreadOutboxDrain(): void {
             appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
             nextQueuedMessage,
           );
-        } else if (familyRead === "failed") {
+        } else if (familyRead === "failed" && shellStatus === "live") {
+          retry();
           threadFamilies.refresh(
             appAtomRegistry,
             nextQueuedMessage.environmentId,
@@ -1380,7 +1383,9 @@ export function useThreadOutboxDrain(): void {
           );
         }
       }
+      const freshCreation = freshThreadCreations.has(nextQueuedMessage);
       const deliveryAction = resolveThreadOutboxDeliveryAction({
+        freshCreation,
         isCreation: creation !== undefined,
         threadExists: thread !== undefined,
         shellStatus,
@@ -1388,16 +1393,6 @@ export function useThreadOutboxDrain(): void {
         threadBusy: threadRuntimeIsActive(thread?.runtime),
         ...(familyRead === undefined ? {} : { familyRead }),
       });
-      if (
-        deliveryAction === "wait" &&
-        shellStatus === "live" &&
-        familyRead !== undefined &&
-        familyRead !== "settled"
-      ) {
-        // An empty family read changes no merged row, so nothing else would wake the drain.
-        scheduleQueuedMessageRetry(nextQueuedMessage.messageId);
-        continue;
-      }
       if (deliveryAction === "send" && !operableEnvironments.has(nextQueuedMessage.environmentId)) {
         continue;
       }
@@ -1421,7 +1416,7 @@ export function useThreadOutboxDrain(): void {
         continue;
       }
       if (dispatchStep.step === "missing") {
-        beginDispatchingQueuedMessage(nextQueuedMessage.messageId);
+        beginDispatchingQueuedMessage(threadKey, nextQueuedMessage.messageId);
         const revision = threadOutboxRevision(nextQueuedMessage.messageId);
         void confirmThreadOutboxMessageQueued(nextQueuedMessage)
           .then(async (queued) => {
@@ -1441,20 +1436,14 @@ export function useThreadOutboxDrain(): void {
           })
           .catch((error) => {
             console.warn("[thread-outbox] could not save message recovery state", error);
-            scheduleQueuedMessageRetry(nextQueuedMessage.messageId);
+            retry();
           })
-          .finally(() => finishDispatchingQueuedMessage(nextQueuedMessage.messageId));
-        return;
-      }
-      if (dispatchStep.step === "retry") {
-        // The environment is connected but its config has not synced yet.
-        // Back off and retry instead of parking the message forever.
-        scheduleQueuedMessageRetry(nextQueuedMessage.messageId);
+          .finally(() => finishDispatchingQueuedMessage(threadKey, nextQueuedMessage.messageId));
         continue;
       }
       if (dispatchStep.step === "restore") {
         const attachmentError = dispatchStep.reason;
-        beginDispatchingQueuedMessage(nextQueuedMessage.messageId);
+        beginDispatchingQueuedMessage(threadKey, nextQueuedMessage.messageId);
         void confirmThreadOutboxMessageQueued(nextQueuedMessage)
           .then((queued) => {
             if (
@@ -1467,11 +1456,11 @@ export function useThreadOutboxDrain(): void {
           })
           .then((restored) => {
             if (!restored) {
-              scheduleQueuedMessageRetry(nextQueuedMessage.messageId);
+              retry();
             }
           })
-          .finally(() => finishDispatchingQueuedMessage(nextQueuedMessage.messageId));
-        return;
+          .finally(() => finishDispatchingQueuedMessage(threadKey, nextQueuedMessage.messageId));
+        continue;
       }
       // The live project shell is preferred for the workspace path, with the
       // snapshot taken at enqueue time as the fallback so a task never dies
@@ -1493,7 +1482,7 @@ export function useThreadOutboxDrain(): void {
         }
       }
 
-      beginDispatchingQueuedMessage(nextQueuedMessage.messageId);
+      beginDispatchingQueuedMessage(threadKey, nextQueuedMessage.messageId);
       // Enqueues publish optimistically before their durable write settles.
       // Confirm the write landed (and the message wasn't rolled back) before
       // sending, so a failed write can never chase an already-delivered turn.
@@ -1519,6 +1508,7 @@ export function useThreadOutboxDrain(): void {
           );
           const liveThreadBusy = threadRuntimeIsActive(liveThread?.runtime);
           const liveDeliveryAction = resolveThreadOutboxDeliveryAction({
+            freshCreation,
             isCreation: creation !== undefined,
             threadExists: liveThread !== undefined,
             shellStatus,
@@ -1557,34 +1547,27 @@ export function useThreadOutboxDrain(): void {
         })
         .then((sent) => {
           if (sent) {
-            retryAttemptRef.current.delete(nextQueuedMessage.messageId);
-            retryNotBeforeRef.current.delete(nextQueuedMessage.messageId);
-            const pendingTimer = retryTimersRef.current.get(nextQueuedMessage.messageId);
-            if (pendingTimer !== undefined) {
-              clearTimeout(pendingTimer);
-              retryTimersRef.current.delete(nextQueuedMessage.messageId);
-            }
+            retries.clear(nextQueuedMessage.messageId);
             return;
           }
 
-          scheduleQueuedMessageRetry(nextQueuedMessage.messageId);
+          retry();
         })
         .finally(() => {
-          finishDispatchingQueuedMessage(nextQueuedMessage.messageId);
+          finishDispatchingQueuedMessage(threadKey, nextQueuedMessage.messageId);
         });
-      return;
     }
   }, [
     connectedEnvironments,
     dispatchQueuedTurn,
-    dispatchingQueuedMessageId,
+    dispatchingByThread,
     editingQueuedMessageIds,
     operableEnvironments,
     projects,
     queuedMessagesByThreadKey,
     retryTick,
     restoreQueuedMessage,
-    scheduleQueuedMessageRetry,
+    retries,
     sendQueuedCreation,
     sendQueuedMessage,
     serverConfigs,

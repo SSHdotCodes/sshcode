@@ -18,12 +18,14 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { RpcSession } from "../rpc/session.ts";
+import { ThreadHistoryController } from "./threadHistoryController.ts";
 import { createThreadEnvironmentAtoms } from "./threadCommands.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("remote");
@@ -81,7 +83,10 @@ const SNAPSHOT: OrchestrationV2ShellSnapshot = {
   ],
 };
 
-const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* () {
+const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* (
+  loadEarlier: ThreadHistoryController["Service"]["loadEarlier"] = () =>
+    Effect.succeed({ _tag: "noop" }),
+) {
   const requests = yield* Queue.unbounded<{
     command: OrchestrationV2Command;
     reply: Deferred.Deferred<{ sequence: number }, Error>;
@@ -106,6 +111,12 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* () {
   } as EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
   const runtime = Atom.runtime(
     Layer.mergeAll(
+      Layer.succeed(ThreadHistoryController, {
+        register: (environmentId, threadId, handler) =>
+          Effect.succeed({ environmentId, threadId, handler }),
+        unregister: () => Effect.void,
+        loadEarlier,
+      }),
       Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, {
         run: (_environmentId, effect) =>
           Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
@@ -129,6 +140,70 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* () {
 });
 
 describe("remote thread lifecycle commands", () => {
+  it.effect("dispatches an answer while the same chat is still fetching older history", () =>
+    Effect.gen(function* () {
+      const reading = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const h = yield* makeHarness(() =>
+        Deferred.succeed(reading, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as({ _tag: "loaded" as const }),
+        ),
+      );
+      const page = h.commands.loadEarlierHistory.run(h.registry, {
+        environmentId: ENVIRONMENT_ID,
+        input: { threadId: THREAD_ID },
+      });
+      yield* Deferred.await(reading);
+      const answer = h.commands.respondToUserInput.run(h.registry, {
+        environmentId: ENVIRONMENT_ID,
+        input: { threadId: THREAD_ID, requestId: USER_INPUT.id, answers: { choice: "yes" } },
+      });
+      const request = yield* Queue.take(h.requests);
+      expect(request.command.type).toBe("runtime-request.respond");
+      yield* Deferred.succeed(request.reply, { sequence: 1 });
+      expect((yield* Effect.promise(() => answer))._tag).toBe("Success");
+      yield* Deferred.succeed(release, undefined);
+      expect((yield* Effect.promise(() => page))._tag).toBe("Success");
+    }),
+  );
+
+  it.effect("serializes older-history pages independently of thread writes", () =>
+    Effect.gen(function* () {
+      const firstReading = yield* Deferred.make<void>();
+      const releaseFirst = yield* Deferred.make<void>();
+      const calls = yield* Ref.make(0);
+      const secondStarted = yield* Ref.make(false);
+      const h = yield* makeHarness(() =>
+        Effect.gen(function* () {
+          const call = yield* Ref.updateAndGet(calls, (count) => count + 1);
+          if (call === 1) {
+            yield* Deferred.succeed(firstReading, undefined);
+            yield* Deferred.await(releaseFirst);
+          } else {
+            yield* Ref.set(secondStarted, true);
+          }
+          return { _tag: "loaded" as const };
+        }),
+      );
+      const first = h.commands.loadEarlierHistory.run(h.registry, {
+        environmentId: ENVIRONMENT_ID,
+        input: { threadId: THREAD_ID },
+      });
+      yield* Deferred.await(firstReading);
+      const second = h.commands.loadEarlierHistory.run(h.registry, {
+        environmentId: ENVIRONMENT_ID,
+        input: { threadId: THREAD_ID },
+      });
+      yield* Effect.sleep(0);
+      expect(yield* Ref.get(secondStarted)).toBe(false);
+      yield* Deferred.succeed(releaseFirst, undefined);
+      expect((yield* Effect.promise(() => first))._tag).toBe("Success");
+      expect((yield* Effect.promise(() => second))._tag).toBe("Success");
+      expect(yield* Ref.get(secondStarted)).toBe(true);
+    }),
+  );
+
   const actions = [
     ["settle", {}, { settledOverride: "settled", pinnedAt: null, snoozedUntil: null }],
     ["unsettle", { reason: "user" }, { settledOverride: "active", settledAt: null }],

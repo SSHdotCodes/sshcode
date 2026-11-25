@@ -25,6 +25,13 @@ describe("resolveMarkdownLinkIcon", () => {
 });
 
 describe("resolveMarkdownLinkPresentation", () => {
+  it("shows CommonJS sources with the JavaScript icon", () => {
+    expect(resolveMarkdownLinkPresentation("scripts/build.cjs")).toMatchObject({
+      kind: "file",
+      icon: "javascript",
+    });
+  });
+
   it("keeps thread-link hrefs for in-app navigation", () => {
     const href = "t3-thread://v1/thread-1";
     expect(resolveMarkdownLinkPresentation(href)).toEqual({ kind: "link", href });

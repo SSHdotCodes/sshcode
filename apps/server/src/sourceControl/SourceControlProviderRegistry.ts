@@ -67,6 +67,9 @@ export class SourceControlProviderRegistry extends Context.Service<
       SourceControlProviderError
     >;
     readonly discover: Effect.Effect<ReadonlyArray<SourceControlProviderDiscoveryItem>>;
+    readonly discoverProvider?: (
+      kind: SourceControlProviderKind,
+    ) => Effect.Effect<SourceControlProviderDiscoveryItem | undefined>;
   }
 >()("t3/sourceControl/SourceControlProviderRegistry") {}
 
@@ -334,6 +337,9 @@ export const makeWithProviders = Effect.fn("makeSourceControlProviderRegistryWit
         }),
       );
 
+    const probe = (spec: SourceControlProviderDiscoverySpec) =>
+      probeSourceControlProvider({ spec, process, cwd: config.cwd });
+
     return SourceControlProviderRegistry.of({
       resolveLink: (input) => {
         if (input.url.protocol !== "https:" || input.url.username || input.url.password) {
@@ -345,16 +351,11 @@ export const makeWithProviders = Effect.fn("makeSourceControlProviderRegistryWit
       get,
       resolveHandle,
       resolve: (input) => resolveHandle(input).pipe(Effect.map((handle) => handle.provider)),
-      discover: Effect.forEach(
-        discoverySpecs,
-        (spec) =>
-          probeSourceControlProvider({
-            spec,
-            process,
-            cwd: config.cwd,
-          }),
-        { concurrency: "unbounded" },
-      ),
+      discover: Effect.forEach(discoverySpecs, probe, { concurrency: "unbounded" }),
+      discoverProvider: (kind) => {
+        const spec = discoverySpecs.find((candidate) => candidate.kind === kind);
+        return spec === undefined ? Effect.succeed(undefined) : probe(spec);
+      },
     });
   },
 );

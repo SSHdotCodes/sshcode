@@ -14,7 +14,10 @@ import {
   type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import { createQuestionHistoryProjector } from "@t3tools/client-runtime/state/thread-requests";
-import { applyOrchestrationV2ProjectionEvent } from "@t3tools/client-runtime/state/orchestration-v2-projection";
+import {
+  applyOrchestrationV2ProjectionEvent,
+  isSingleRowReplacement,
+} from "@t3tools/client-runtime/state/orchestration-v2-projection";
 import { describe, expect, it, vi } from "vite-plus/test";
 import * as DateTime from "effect/DateTime";
 import {
@@ -23,6 +26,7 @@ import {
   v2ThreadId,
 } from "../../../../../packages/client-runtime/src/state/orchestrationV2TestFixtures";
 import {
+  applyContinuedWorkLogRows,
   buildThreadFeed,
   deriveThreadFeedPresentation,
   filterDiscordThreadFeed,
@@ -33,6 +37,7 @@ import {
   createStableThreadFeedProjector,
   createThreadFeedProjector,
   createThreadFeedPresentationProjector,
+  threadFeedRevision,
   threadFeedSummary,
   threadFeedFailedRunIds,
 } from "../../lib/threadFeedProjection";
@@ -147,6 +152,57 @@ function running(projection: OrchestrationV2ThreadProjection): ThreadFeedLatestR
     startedAt: "2026-06-20T00:00:00.000Z",
     completedAt: null,
   };
+}
+
+/** Replaces the final reply with a running command whose output streams in place. */
+function withStreamingTool(projection: OrchestrationV2ThreadProjection) {
+  const last = projection.turnItems.at(-1)!;
+  const tool = {
+    id: last.id,
+    threadId: last.threadId,
+    runId: last.runId,
+    nodeId: null,
+    parentItemId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    ordinal: last.ordinal,
+    status: "running" as const,
+    title: null,
+    startedAt: v2Now,
+    updatedAt: v2Now,
+    completedAt: null,
+    type: "command_execution" as const,
+    input: "npm test",
+    output: "running",
+  };
+  const item = tool as unknown as OrchestrationV2TurnItem;
+  const turnItems = [...projection.turnItems.slice(0, -1), item];
+  const visibleTurnItems = [
+    ...projection.visibleTurnItems.slice(0, -1),
+    { ...projection.visibleTurnItems.at(-1)!, item },
+  ];
+  return {
+    projection: {
+      ...projection,
+      turnItems,
+      visibleTurnItems,
+    } as OrchestrationV2ThreadProjection,
+    tool: tool as Extract<OrchestrationV2TurnItem, { type: "command_execution" }>,
+  };
+}
+
+/** Rows compare without function identity: memoized detail closures are recreated per build. */
+function normalizeFunctions(value: unknown): unknown {
+  if (typeof value === "function") return "<fn>";
+  if (Array.isArray(value)) return value.map(normalizeFunctions);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>))
+      out[key] = normalizeFunctions(entry);
+    return out;
+  }
+  return value;
 }
 
 function pipeline() {
@@ -380,6 +436,470 @@ describe("streaming feed projection", () => {
       `11,004 items, 30 chunks: full ${fullMs.toFixed(1)}ms, incremental ${incrementalMs.toFixed(1)}ms; decorations full ${fullDecorationsMs.toFixed(1)}ms, incremental ${incrementalDecorationsMs.toFixed(1)}ms`,
     );
     // Work-count assertions above enforce scaling without flaky clock thresholds.
+  });
+
+  it.each([1, 3])(
+    "does not revisit 11,000 historical items for %s coalesced tool output chunks",
+    (chunks) => {
+      let historyReads = 0;
+      const base = withStreamingTool(
+        syntheticThread(11_004, () => {
+          historyReads++;
+        }),
+      );
+      let projection = base.projection;
+      const toolRun = (p: OrchestrationV2ThreadProjection): ThreadFeedLatestRun => ({
+        runId: p.turnItems.at(-1)!.runId!,
+        status: "running",
+        startedAt: "2026-06-20T00:00:00.000Z",
+        completedAt: null,
+      });
+      const project = pipeline();
+      project(projection, toolRun(projection));
+      // Warm the incremental indices on the first output chunk.
+      projection = updateItem(projection, { ...base.tool, output: "first chunk" });
+      const before = project(projection, toolRun(projection));
+      historyReads = 0;
+      for (let index = 0; index < chunks; index++) {
+        const current = projection.turnItems.at(-1) as typeof base.tool;
+        projection = updateItem(projection, {
+          ...current,
+          output: `first chunk and chunk ${index}`,
+        });
+      }
+      const next = project(projection, toolRun(projection));
+      // The tail group's few rows are re-read to patch it; history is not.
+      expect(historyReads).toBeLessThan(100);
+      expect(next.feed[0]).toBe(before.feed[0]);
+      expect(next.feed.length).toBe(before.feed.length);
+      const freshFeed = buildThreadFeed(projection.visibleTurnItems);
+      expect(normalizeFunctions(next.feed)).toEqual(normalizeFunctions(freshFeed));
+      expect(normalizeFunctions(next.rows)).toEqual(
+        normalizeFunctions(
+          deriveThreadFeedPresentation(
+            freshFeed,
+            toolRun(projection),
+            expandedRuns,
+            expandedGroups,
+            toolRun(projection).startedAt,
+          ),
+        ),
+      );
+    },
+  );
+
+  it("measures tool output streaming against full shaping on 11,004 items", () => {
+    const base = withStreamingTool(syntheticThread(11_004));
+    let projection = base.projection;
+    const toolRun = (p: OrchestrationV2ThreadProjection): ThreadFeedLatestRun => ({
+      runId: p.turnItems.at(-1)!.runId!,
+      status: "running",
+      startedAt: "2026-06-20T00:00:00.000Z",
+      completedAt: null,
+    });
+    const project = pipeline();
+    project(projection, toolRun(projection));
+    projection = updateItem(projection, { ...base.tool, output: "warm" });
+    project(projection, toolRun(projection));
+    let fullMs = 0;
+    let incrementalMs = 0;
+    for (let index = 0; index < 30; index++) {
+      const current = projection.turnItems.at(-1) as typeof base.tool;
+      projection = updateItem(projection, { ...current, output: `chunk ${index}` });
+      const run = toolRun(projection);
+      let start = performance.now();
+      const feed = buildThreadFeed(projection.visibleTurnItems);
+      const rows = deriveThreadFeedPresentation(
+        feed,
+        run,
+        expandedRuns,
+        expandedGroups,
+        run.startedAt,
+      );
+      threadFeedSummary(feed);
+      threadImageGallery(rows, context);
+      fullMs += performance.now() - start;
+      start = performance.now();
+      project(projection, run);
+      incrementalMs += performance.now() - start;
+    }
+    console.info(
+      `11,004 items, 30 tool output chunks: full ${fullMs.toFixed(1)}ms, incremental ${incrementalMs.toFixed(1)}ms`,
+    );
+  });
+
+  it("reuses the whole feed for updates to rows that never draw", () => {
+    const project = pipeline();
+    for (const replacement of [
+      {
+        type: "todo_list",
+        todos: [{ title: "a", status: "pending" }],
+      },
+      {
+        type: "reasoning",
+        text: "thinking",
+        streaming: true,
+      },
+    ] as const) {
+      const last = { ...syntheticThread(12).turnItems.at(-1)! } as Record<string, unknown>;
+      for (const key of Object.keys(last)) {
+        if (
+          ![
+            "id",
+            "threadId",
+            "runId",
+            "nodeId",
+            "parentItemId",
+            "providerThreadId",
+            "providerTurnId",
+            "nativeItemRef",
+            "ordinal",
+            "status",
+            "title",
+            "startedAt",
+            "updatedAt",
+            "completedAt",
+          ].includes(key)
+        )
+          delete last[key];
+      }
+      const item = { ...last, ...replacement } as unknown as OrchestrationV2TurnItem;
+      const thread = syntheticThread(12);
+      let projection = {
+        ...thread,
+        turnItems: [...thread.turnItems.slice(0, -1), item],
+        visibleTurnItems: [
+          ...thread.visibleTurnItems.slice(0, -1),
+          { ...thread.visibleTurnItems.at(-1)!, item },
+        ],
+      } as OrchestrationV2ThreadProjection;
+      const run: ThreadFeedLatestRun = {
+        runId: item.runId!,
+        status: "running",
+        startedAt: "2026-06-20T00:00:00.000Z",
+        completedAt: null,
+      };
+      project(projection, run);
+      projection = updateItem(projection, { ...item });
+      const before = project(projection, run);
+      const updated = {
+        ...projection.turnItems.at(-1)!,
+        updatedAt: DateTime.makeUnsafe("2026-06-20T00:00:03Z"),
+      } as unknown as OrchestrationV2TurnItem;
+      projection = updateItem(projection, updated);
+      const after = project(projection, run);
+      expect(after.feed).toBe(before.feed);
+      expect(after.rows).toBe(before.rows);
+    }
+  });
+
+  it("matches full rebuild when an in-place tool update changes feed structure", () => {
+    const base = syntheticThread(8);
+    const last = base.turnItems.at(-1)!;
+    const common = {
+      id: last.id,
+      threadId: last.threadId,
+      runId: last.runId,
+      nodeId: null,
+      parentItemId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      ordinal: last.ordinal,
+      title: null,
+      startedAt: v2Now,
+      updatedAt: v2Now,
+      completedAt: v2Now,
+    };
+
+    const replaceTail = (item: OrchestrationV2TurnItem): OrchestrationV2ThreadProjection =>
+      ({
+        ...base,
+        turnItems: [...base.turnItems.slice(0, -1), item],
+        visibleTurnItems: [
+          ...base.visibleTurnItems.slice(0, -1),
+          { ...base.visibleTurnItems.at(-1)!, item },
+        ],
+      }) as OrchestrationV2ThreadProjection;
+
+    // 1. Completed dynamic_tool hydrated in place with an html-render reference
+    {
+      const build = createThreadFeedProjector();
+      const initialTool = {
+        ...common,
+        type: "dynamic_tool" as const,
+        status: "completed" as const,
+        toolName: "html_render",
+        input: {},
+        output: { text: "pending detail" },
+      } as unknown as OrchestrationV2TurnItem;
+      let projection = replaceTail(initialTool);
+      build(projection.visibleTurnItems);
+      const hydrated = {
+        ...initialTool,
+        output: {
+          htmlRender: {
+            attachmentId: "att-1",
+            title: "Chart",
+            height: 240,
+          },
+        },
+      } as unknown as OrchestrationV2TurnItem;
+      projection = updateItem(projection, hydrated);
+      expect(normalizeFunctions(build(projection.visibleTurnItems))).toEqual(
+        normalizeFunctions(buildThreadFeed(projection.visibleTurnItems)),
+      );
+    }
+
+    // 2. Completed dynamic_tool hydrated in place with an MCP App reference
+    {
+      const build = createThreadFeedProjector();
+      const initialTool = {
+        ...common,
+        type: "dynamic_tool" as const,
+        status: "completed" as const,
+        toolName: "demo.widget",
+        input: {},
+        output: { text: "plain" },
+      } as unknown as OrchestrationV2TurnItem;
+      let projection = replaceTail(initialTool);
+      build(projection.visibleTurnItems);
+      const hydrated = {
+        ...initialTool,
+        output: {
+          t3McpApp: {
+            attachmentId: "att-app-1",
+            server: "demo",
+            tool: "widget",
+            resourceUri: "ui://demo/widget",
+          },
+        },
+      } as unknown as OrchestrationV2TurnItem;
+      projection = updateItem(projection, hydrated);
+      expect(normalizeFunctions(build(projection.visibleTurnItems))).toEqual(
+        normalizeFunctions(buildThreadFeed(projection.visibleTurnItems)),
+      );
+    }
+
+    // 3. Visible command_execution updated in place to workspace preparation
+    {
+      const build = createThreadFeedProjector();
+      const initialCommand = {
+        ...common,
+        type: "command_execution" as const,
+        status: "running" as const,
+        completedAt: null,
+        input: "git status",
+        output: "",
+      } as unknown as OrchestrationV2TurnItem;
+      let projection = replaceTail(initialCommand);
+      build(projection.visibleTurnItems);
+      const workspacePrep = {
+        ...initialCommand,
+        input: "Preparing workspace",
+      } as unknown as OrchestrationV2TurnItem;
+      projection = updateItem(projection, workspacePrep);
+      expect(normalizeFunctions(build(projection.visibleTurnItems))).toEqual(
+        normalizeFunctions(buildThreadFeed(projection.visibleTurnItems)),
+      );
+    }
+
+    // 4. Tool with startedAt: null whose updatedAt crosses an anchored message timestamp
+    {
+      const build = createThreadFeedProjector();
+      const initialCommand = {
+        ...common,
+        type: "command_execution" as const,
+        status: "running" as const,
+        startedAt: null,
+        updatedAt: DateTime.makeUnsafe("2026-06-20T00:00:00.000Z"),
+        completedAt: null,
+        input: "npm test",
+        output: "starting",
+      } as unknown as OrchestrationV2TurnItem;
+      let projection = replaceTail(initialCommand);
+      const anchoredMessages = [
+        {
+          id: MessageId.make("local-1"),
+          role: "user" as const,
+          text: "Anchored note",
+          attachments: [],
+          createdAt: "2026-06-20T00:00:05.000Z",
+          updatedAt: "2026-06-20T00:00:05.000Z",
+          streaming: false,
+        },
+      ];
+      build(projection.visibleTurnItems, { anchoredMessages });
+      projection = updateItem(projection, {
+        ...initialCommand,
+        updatedAt: DateTime.makeUnsafe("2026-06-20T00:00:10.000Z"),
+        output: "still running",
+      } as unknown as OrchestrationV2TurnItem);
+      expect(normalizeFunctions(build(projection.visibleTurnItems, { anchoredMessages }))).toEqual(
+        normalizeFunctions(buildThreadFeed(projection.visibleTurnItems, { anchoredMessages })),
+      );
+    }
+  });
+
+  it("matches full rebuild for tool streams across reorder, removal, chat switch, and turn end", () => {
+    const project = pipeline();
+    const { projection: initialProjection, tool } = withStreamingTool(syntheticThread(12));
+    const activeRun: ThreadFeedLatestRun = {
+      runId: tool.runId!,
+      status: "running",
+      startedAt: "2026-06-20T00:00:00.000Z",
+      completedAt: null,
+    };
+
+    const assertMatchesFull = (
+      projection: OrchestrationV2ThreadProjection,
+      run: ThreadFeedLatestRun,
+    ) => {
+      const next = project(projection, run);
+      const freshFeed = buildThreadFeed(projection.visibleTurnItems, {
+        attempts: projection.attempts,
+        nodes: projection.nodes,
+      });
+      expect(normalizeFunctions(next.feed)).toEqual(normalizeFunctions(freshFeed));
+      expect(normalizeFunctions(next.rows)).toEqual(
+        normalizeFunctions(
+          deriveThreadFeedPresentation(
+            freshFeed,
+            run,
+            expandedRuns,
+            expandedGroups,
+            run.completedAt ? null : run.startedAt,
+          ),
+        ),
+      );
+    };
+
+    let projection = initialProjection;
+    assertMatchesFull(projection, activeRun);
+    projection = updateItem(projection, { ...tool, output: "chunk 1" });
+    assertMatchesFull(projection, activeRun);
+
+    // Reorder: move the streaming tool earlier in the timeline
+    const reordered = updateItem(projection, { ...tool, output: "chunk 2", ordinal: 1 });
+    assertMatchesFull(reordered, activeRun);
+
+    // Removal: drop the streaming tool item as on rollback or snapshot resync
+    const removed: OrchestrationV2ThreadProjection = {
+      ...projection,
+      turnItems: projection.turnItems.slice(0, -1),
+      visibleTurnItems: projection.visibleTurnItems.slice(0, -1),
+    };
+    assertMatchesFull(removed, activeRun);
+
+    // Chat switch: switch to an unrelated thread projection
+    const otherThread = withStreamingTool(syntheticThread(8));
+    const otherRun: ThreadFeedLatestRun = {
+      runId: otherThread.tool.runId!,
+      status: "running",
+      startedAt: "2026-06-20T00:00:00.000Z",
+      completedAt: null,
+    };
+    assertMatchesFull(otherThread.projection, otherRun);
+
+    // Turn end: complete the streaming tool and settle the run
+    const settledProjection = updateItem(otherThread.projection, {
+      ...otherThread.tool,
+      status: "completed",
+      completedAt: v2Now,
+      output: "done",
+    });
+    const settledRun: ThreadFeedLatestRun = {
+      ...otherRun,
+      status: "completed",
+      completedAt: "2026-06-20T00:00:10.000Z",
+    };
+    assertMatchesFull(settledProjection, settledRun);
+  });
+
+  it("preserves continued work-log row references and single-row revision chain across tool chunks", () => {
+    const base = syntheticThread(8);
+    // Replace item-7 (assistant_message in run-1) with a running command in run-2 so
+    // run-1's expanded work-toggle (continuesWorkLog: true) immediately precedes the active tail.
+    const activeRunId = RunId.make("run-2");
+    const last = base.turnItems.at(-1)!;
+    const streamingTool = {
+      id: last.id,
+      threadId: last.threadId,
+      runId: activeRunId,
+      nodeId: null,
+      parentItemId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      ordinal: last.ordinal,
+      status: "running" as const,
+      title: null,
+      startedAt: v2Now,
+      updatedAt: v2Now,
+      completedAt: null,
+      type: "command_execution" as const,
+      input: "npm test",
+      output: "running",
+    } as unknown as Extract<OrchestrationV2TurnItem, { type: "command_execution" }>;
+    let projection: OrchestrationV2ThreadProjection = {
+      ...base,
+      turnItems: [...base.turnItems.slice(0, -1), streamingTool],
+      visibleTurnItems: [
+        ...base.visibleTurnItems.slice(0, -1),
+        { ...base.visibleTurnItems.at(-1)!, item: streamingTool },
+      ],
+    };
+    const activeRun: ThreadFeedLatestRun = {
+      runId: activeRunId,
+      status: "running",
+      startedAt: "2026-06-20T00:00:00.000Z",
+      completedAt: null,
+    };
+    const openRuns = new Set<RunId>([RunId.make("run-1")]);
+    const build = createThreadFeedProjector();
+    const present = createThreadFeedPresentationProjector();
+    const project = (p: OrchestrationV2ThreadProjection) => {
+      const feed = build(p.visibleTurnItems, { attempts: p.attempts, nodes: p.nodes });
+      return {
+        feed,
+        rows: present(feed, activeRun, openRuns, expandedGroups, activeRun.startedAt),
+      };
+    };
+
+    const initial = project(projection);
+    const boundaryIndex = initial.rows.length - 2;
+    expect(initial.rows[boundaryIndex]?.continuesWorkLog).toBe(true);
+    // applyContinuedWorkLogRows itself must be idempotent on already-continued rows.
+    expect(applyContinuedWorkLogRows(initial.rows)[boundaryIndex]).toBe(
+      initial.rows[boundaryIndex],
+    );
+
+    // Warm single-row revision lineage, then stream another chunk.
+    projection = updateItem(projection, { ...streamingTool, output: "chunk 1" });
+    const before = project(projection);
+    projection = updateItem(projection, { ...streamingTool, output: "chunk 2" });
+    const after = project(projection);
+
+    // The preceding continued work-log row must keep referential identity (not be re-cloned)
+    // and the tail patch must keep a single-row revision link for downstream projectors.
+    expect(after.rows[boundaryIndex]).toBe(before.rows[boundaryIndex]);
+    expect(
+      isSingleRowReplacement(threadFeedRevision(before.rows), threadFeedRevision(after.rows)),
+    ).toBe(true);
+    expect(normalizeFunctions(after.rows)).toEqual(
+      normalizeFunctions(
+        deriveThreadFeedPresentation(
+          buildThreadFeed(projection.visibleTurnItems, {
+            attempts: projection.attempts,
+            nodes: projection.nodes,
+          }),
+          activeRun,
+          openRuns,
+          expandedGroups,
+          activeRun.startedAt,
+        ),
+      ),
+    );
   });
 });
 

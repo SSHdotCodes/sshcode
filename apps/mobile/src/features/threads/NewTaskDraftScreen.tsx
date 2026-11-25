@@ -158,6 +158,7 @@ import {
   isModelSelectionUnavailable,
 } from "../../lib/modelOptions";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
+import { freshThreadCreations } from "../../state/pending-thread-creation";
 import { enqueueThreadOutboxMessage } from "../../state/thread-outbox";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { useWorkspaceState } from "../../state/workspace";
@@ -474,10 +475,9 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
   const [scheduleOpen, setScheduleOpen] = useState(false);
   /** The resting composer's top in this screen, so the horizon's crown sits on it. */
   const [composerTop, setComposerTop] = useState<number | null>(null);
-  // The New chat + menu's Subagents switch; an edited pending task keeps its choice.
-  const [subagentsOffChoice, setSubagentsOff] = useState<boolean | null>(null);
-  const subagentsOff =
-    subagentsOffChoice ?? flow.editingPendingTask?.creation?.subagentsOff === true;
+  // Subagents stay on for a new chat; the chat's Agents sheet has the rarely used switch.
+  // An edited pending task keeps the choice it was queued with.
+  const subagentsOff = flow.editingPendingTask?.creation?.subagentsOff === true;
   // The delete is awaited; by then the picker may point somewhere else, and
   // only the removed project's draft should leave the screen.
   const selectedProjectRef = useRef(selectedProject);
@@ -1890,6 +1890,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
     // for the local outbox write; server and worktree setup run on the thread.
     flow.setSubmitting(true);
     try {
+      if (!editingPendingTask) freshThreadCreations.add(message);
       await enqueueThreadOutboxMessage(message);
     } catch (error) {
       Alert.alert(
@@ -2342,11 +2343,13 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
       {modelUnavailable ? (
         <Pressable
           accessibilityRole="button"
-          className="px-3 py-2"
+          className="mb-2 rounded-2xl border border-warning-border bg-warning px-3.5 py-2 active:opacity-70"
           disabled={isComposerInteractionLocked}
           onPress={settingsSheetPresentation.open}
         >
-          <Text className="text-xs text-foreground">Model unavailable. Open model settings.</Text>
+          <Text className="text-xs font-t3-medium text-warning-foreground">
+            Model unavailable. Open model settings.
+          </Text>
         </Pressable>
       ) : null}
 
@@ -2435,7 +2438,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
             currentSelection={flow.selectedModel}
             modelOptions={flow.modelOptions}
             providers={selectedEnvironmentServerConfig.providers}
-            eligible={autoModelEnabled && !flow.editingPendingTask && !flow.hasDraftModelSelection}
+            eligible={autoModelEnabled && !flow.editingPendingTask}
             busy={isComposerInteractionLocked || isImportingShare || isVoiceInputPresented}
             pickerOpen={settingsSheetPresentation.isVisible}
             anchorX={modelButtonX}
@@ -2484,8 +2487,6 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
                     onPickMedia={handlePickMedia}
                     onPickCamera={() => handlePickMedia("camera")}
                     onPickFiles={handlePickFiles}
-                    subagentsEnabled={!subagentsOff}
-                    onSubagentsChange={(enabled) => setSubagentsOff(!enabled)}
                   />
                   <View
                     className="min-w-0 flex-1 flex-row items-center justify-end gap-2"
@@ -2504,11 +2505,10 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
                             size={size}
                           />
                         )}
-                        label={
-                          draftAcpInstanceName
-                            ? `${draftAcpInstanceName} · ${draftModelLabel}`
-                            : draftModelLabel
-                        }
+                        label={draftModelLabel}
+                        shortName={flow.selectedModelOption?.shortName}
+                        instanceLabel={draftAcpInstanceName}
+                        prompt={flow.prompt}
                         maxWidth="100%"
                         onPress={settingsSheetPresentation.open}
                       />

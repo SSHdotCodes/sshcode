@@ -21,10 +21,16 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as SqlError from "effect/sql/SqlError";
-import * as Tracer from "effect/Tracer";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import {
+  hotReads,
+  layerHotReads,
+  observeReads,
+  type HotReadSample,
+} from "../persistence/testkit/HotReads.ts";
+import { readSearchBackfillBatch } from "./ThreadSearch.ts";
+import { encodeThreadHistoryCursor } from "./threadHistoryPaging.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
-import * as EffectOutbox from "./EffectOutbox.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
@@ -45,8 +51,7 @@ const adapter = {
 const layerDatabase = SqlitePersistence.layerMemory;
 const layerTest = Layer.mergeAll(
   layerDatabase,
-  EffectOutbox.layer.pipe(Layer.provide(layerDatabase)),
-  ProjectionStore.layer.pipe(Layer.provide(layerDatabase)),
+  layerHotReads.pipe(Layer.provide(layerDatabase)),
   ProviderReplayHarness.layerWithRegistry(
     { name: "query-plan-guards" },
     ProviderAdapterRegistry.layerFromAdapters([adapter]),
@@ -170,7 +175,7 @@ const HOT_READ_PLAN_GUARDS: ReadonlyArray<QueryPlanGuard> = [
     capture: ({ store }) => store.getChatVisitSnapshot(),
     selectStatement: (q) =>
       q.includes("WITH RECURSIVE pending_secret AS MATERIALIZED") &&
-      q.includes("'$.lineage.relationshipToParent') IS NOT 'subagent'"),
+      q.includes("AS latest_user_authored_message_at"),
     requiredPlans: [
       /SEARCH orchestration_v2_projection_turn_items USING INDEX sqlite_autoindex_orchestration_v2_projection_turn_items_1 \(turn_item_id>\? AND turn_item_id<\?\)/,
       /SEARCH r USING INDEX orchestration_v2_projection_runs_thread_status_idx \(thread_id=\? AND status=\?\)/,
@@ -394,7 +399,7 @@ const HOT_READ_PLAN_GUARDS: ReadonlyArray<QueryPlanGuard> = [
   {
     name: "recovery: getRecoveryThreadIds uses partial recovery indexes",
     capture: ({ store }) => store.getRecoveryThreadIds("runtime"),
-    selectStatement: (q) => q.includes("FROM orchestration_v2_projection_threads"),
+    selectStatement: (q) => q.includes("WITH pending_provider_threads AS MATERIALIZED"),
     requiredPlans: [
       /orchestration_v2_projection_runs_(?:recovery|thread_status)_idx/,
       /orchestration_v2_projection_requests_recovery_idx/,
@@ -529,17 +534,29 @@ const HOT_READ_PLAN_GUARDS: ReadonlyArray<QueryPlanGuard> = [
     ],
   },
 
+  {
+    name: "older history: seek covering item keys, then read metadata by rowid",
+    capture: ({ store, busyThreadId, targetItemId }) =>
+      store.getThreadHistoryPage(
+        busyThreadId,
+        encodeThreadHistoryCursor({
+          snapshotSequence: 0,
+          sourceThreadId: busyThreadId,
+          sourceItemId: targetItemId,
+          position: 1_000,
+        }),
+      ),
+    selectStatement: (q) => q.includes("WITH identities AS MATERIALIZED"),
+    requiredPlans: [
+      /SEARCH orchestration_v2_projection_turn_items USING COVERING INDEX orchestration_v2_projection_turn_items_thread_ordinal_idx \(thread_id=\?\)/,
+      /SEARCH item USING INTEGER PRIMARY KEY \(rowid=\?\)/,
+    ],
+  },
+
   // --- Search backfill query ---
   {
     name: "search backfill: CROSS JOIN walks messages in rowid order without temp B-tree sort",
-    capture: ({ sql }) =>
-      sql`SELECT m.rowid AS "rowId", m.message_id AS "messageId"
-        FROM orchestration_v2_projection_messages m
-        CROSS JOIN orchestration_v2_projection_threads t ON t.thread_id = m.thread_id
-        CROSS JOIN projection_projects p ON p.project_id = t.project_id
-        WHERE m.rowid > 0 AND m.streaming = 0 AND m.role IN ('user', 'assistant')
-          AND t.deleted_at IS NULL AND p.deleted_at IS NULL
-        ORDER BY m.rowid LIMIT 100`,
+    capture: ({ sql }) => readSearchBackfillBatch(sql, 0),
     selectStatement: (q) => q.includes("FROM orchestration_v2_projection_messages m"),
     requiredPlans: [/SEARCH m USING INTEGER PRIMARY KEY \(rowid>\?\)/],
     forbiddenPlans: [/USE TEMP B-TREE FOR ORDER BY/],
@@ -548,22 +565,128 @@ const HOT_READ_PLAN_GUARDS: ReadonlyArray<QueryPlanGuard> = [
 
 const captureSqlStatements = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
-    const statements: Array<string> = [];
-    const tracer = Tracer.make({
-      span(options) {
-        const span = new Tracer.NativeSpan(options);
-        const end = span.end.bind(span);
-        span.end = (time, exit) => {
-          end(time, exit);
-          const query = span.attributes.get("db.query.text");
-          if (typeof query === "string") statements.push(query);
-        };
-        return span;
-      },
-    });
-    const result = yield* effect.pipe(Effect.withTracer(tracer));
-    return { result, statements };
+    const statements = new Map<string, ReadonlyArray<unknown>>();
+    yield* observeReads(effect, (query, params) => statements.set(query, params));
+    return statements;
   });
+
+const largeTable =
+  /^(?:orchestration_events|orchestration_v2_events|orchestration_v2_effect_outbox|orchestration_v2_turn_item_positions|orchestration_v2_projection_.+|projection_thread_.+|projection_threads|projection_turns|scheduled_tasks)$/;
+
+// Each exception is a documented enumeration of a bounded slice or a list
+// whose result inherently spans threads. Index scans are still scans.
+const allowedScans = [
+  {
+    scenario: /^shell\.(?:active|archive|family|visits)$/,
+    scan: "orchestration_v2_projection_threads",
+    statement: /SELECT t\.thread_id FROM/,
+    reason: "The list discovers chat IDs by archive, lineage and work flags.",
+  },
+  {
+    scenario: /^shell\.visits$/,
+    scan: "orchestration_v2_projection_threads",
+    statement: /AS last_visited_at/,
+    reason: "The visit log needs read marks for all active and unsettled chats.",
+  },
+  {
+    scenario: /^pull-requests\.active$/,
+    scan: "orchestration_v2_projection_threads",
+    statement: /\$\.archivedAt/,
+    reason: "PR synchronization enumerates all eligible chats, including chats without linked PRs.",
+  },
+  {
+    scenario: /^settlement\.candidates$/,
+    scan: "orchestration_v2_projection_threads",
+    statement: /latest_user_authored_message_at/,
+    reason: "A settlement sweep checks every eligible chat for inactivity.",
+  },
+  {
+    scenario: /^recovery\.(?:limits|sign-in)$/,
+    scan: "sqlite_autoindex_orchestration_v2_projection_threads_1",
+    statement: /(?:AS failure_payload_json|r\.run_id, r\.completed_at)/,
+    reason: "Recovery enumerates eligible chats and seeks only each latest run and root error.",
+  },
+  {
+    scenario: /^recovery\.retry$/,
+    scan: "orchestration_v2_projection_threads",
+    statement: /SELECT r\.payload_json/,
+    reason: "Retry eligibility depends on each chat's persisted settings.",
+  },
+  {
+    scenario: /^recovery\.boot\.subagent-results$/,
+    scan: "orchestration_v2_projection_threads",
+    statement: /forkedFrom\.type/,
+    reason: "Startup must find legacy subagent lineages without a surviving assignment row.",
+  },
+  {
+    scenario: /^recovery\.boot\.delegated-completions$/,
+    scan: "orchestration_v2_projection_runs_thread_ordinal_idx",
+    statement: /delegatedCompletion\.delivery/,
+    reason: "Open completion deliveries can be attached to runs of any status.",
+  },
+  {
+    scenario: /^recovery\.boot\.(?:runtime|delegated-completions)$/,
+    scan: "orchestration_v2_projection_subagents_thread_idx",
+    statement: /(?:pending_provider_threads|delegatedCompletion\.delivery)/,
+    reason: "Startup inspects persisted assignment state and completion policy across owners.",
+  },
+  {
+    scenario: /^recovery\.boot\.runtime$/,
+    scan: "orchestration_v2_projection_provider_threads",
+    statement: /WITH pending_provider_threads/,
+    reason: "Persisted pending provider work may belong to provider threads of any status.",
+  },
+  {
+    scenario: /^recovery\.boot\.runtime$/,
+    scan: "sqlite_autoindex_orchestration_v2_projection_provider_sessions_1",
+    statement: /WITH pending_provider_threads/,
+    reason: "Startup enumerates provider sessions whose status survived process exit.",
+  },
+  {
+    scenario: /^recovery\.boot\.runtime$/,
+    scan: "orchestration_v2_projection_requests_recovery_idx",
+    statement: /WITH pending_provider_threads/,
+    reason: "The partial index contains only pending runtime requests.",
+  },
+  {
+    scenario: /^recovery\.boot\.(?:runtime|subagent-activity)$/,
+    scan: "orchestration_v2_projection_turn_items_recovery_idx",
+    statement: /status IN \('pending', 'running', 'waiting'\)/,
+    reason: "The partial index contains only unfinished background-work items.",
+  },
+  {
+    scenario: /^recovery\.runtime$/,
+    scan: "orchestration_v2_projection_provider_threads_owner_idx",
+    statement: /owner_node_id IS NOT NULL/,
+    reason: "Sparse provider owners are checked by node ID without walking historical nodes.",
+  },
+];
+
+const fullScans = (
+  query: string,
+  plans: ReadonlyArray<{ readonly detail: string }>,
+  tablesByIndex: ReadonlyMap<string, string>,
+) => {
+  const tableByAlias = new Map<string, string>();
+  // Planner output uses aliases when the query supplies one.
+  for (const [, table, alias] of query.matchAll(
+    /\b(?:FROM|JOIN)\s+([\w]+)(?:\s+(?:AS\s+)?([\w]+))?/gi,
+  )) {
+    if (table === undefined || !largeTable.test(table)) continue;
+    tableByAlias.set(table, table);
+    if (alias !== undefined) tableByAlias.set(alias, table);
+  }
+  return plans.flatMap(({ detail }) => {
+    const scan = /^SCAN (\w+)(?: USING (?:COVERING )?INDEX (\w+))?/.exec(detail);
+    if (!scan) return [];
+    const [, alias, index] = scan;
+    const table = (index && tablesByIndex.get(index)) ?? (alias && tableByAlias.get(alias));
+    return table && largeTable.test(table) ? [index ?? table] : [];
+  });
+};
+
+const explainRead = (sql: SqlClient.SqlClient, statement: string, params: ReadonlyArray<unknown>) =>
+  sql.unsafe<{ readonly detail: string }>(`EXPLAIN QUERY PLAN ${statement}`, params);
 
 const seedLargeFixture = Effect.gen(function* () {
   const store = yield* ProjectionStore.ProjectionStoreV2;
@@ -1395,21 +1518,19 @@ it.effect(
       assert.isAtLeast(fixture.totalSeededTurnItems, 2_000);
 
       for (const guard of HOT_READ_PLAN_GUARDS) {
-        const { statements } = yield* captureSqlStatements(
+        const statements = yield* captureSqlStatements(
           guard.capture({ ...fixture, store, orchestrator, sql }),
         );
-        const matched = [...new Set(statements.filter(guard.selectStatement))];
+        const matched = Array.from(statements).filter(([query]) => guard.selectStatement(query));
         assert.isAbove(
           matched.length,
           0,
-          `[${guard.name}] expected at least one matching SQL statement; captured ${statements.length} statements`,
+          `[${guard.name}] expected at least one matching SQL statement; captured ${statements.size} statements`,
         );
 
         const allPlans: Array<string> = [];
-        for (const statement of matched) {
-          const planRows = yield* sql.unsafe<{ readonly detail: string }>(
-            `EXPLAIN QUERY PLAN ${statement}`,
-          );
+        for (const [statement, params] of matched) {
+          const planRows = yield* explainRead(sql, statement, params);
           const planText = planRows.map((row) => row.detail).join("\n");
           allPlans.push(planText);
 
@@ -1429,6 +1550,60 @@ it.effect(
           );
         }
       }
+    }).pipe(Effect.provide(layerTest)),
+  { timeout: 30_000 },
+);
+
+it.effect(
+  "explains live timing scenarios against a freshly migrated database",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const fixture = yield* seedLargeFixture;
+      const sample: HotReadSample = {
+        threadId: fixture.busyThreadId,
+        runId: fixture.sampleRunId,
+        itemId: fixture.targetItemId,
+        messageId: MessageId.make("msg:busy:1:user"),
+        afterSequence: 0,
+        throughSequence: 50,
+        cursor: encodeThreadHistoryCursor({
+          snapshotSequence: 0,
+          sourceThreadId: fixture.busyThreadId,
+          sourceItemId: fixture.targetItemId,
+          position: 1_000,
+        }),
+      };
+      const indexes = yield* sql<{ readonly name: string; readonly tbl_name: string }>`
+      SELECT name, tbl_name FROM sqlite_schema WHERE type = 'index'
+    `;
+      const tablesByIndex = new Map(indexes.map((row) => [row.name, row.tbl_name]));
+      const violations: string[] = [];
+      for (const [name, run] of Object.entries(hotReads)) {
+        const statements = yield* captureSqlStatements(
+          Effect.gen(function* () {
+            yield* run(sample);
+          }),
+        );
+        assert.isAbove(statements.size, 0, `[${name}] expected production SQL`);
+        for (const [statement, params] of statements) {
+          const plans = yield* explainRead(sql, statement, params);
+          const exceptions = allowedScans.filter(
+            (entry) => entry.scenario.test(name) && entry.statement.test(statement),
+          );
+          for (const scan of fullScans(statement, plans, tablesByIndex)) {
+            const exception = exceptions.findIndex((entry) => entry.scan === scan);
+            if (exception < 0) {
+              violations.push(
+                `[${name}] ${scan}: ${statement.trim().replace(/\s+/g, " ").slice(0, 180)}`,
+              );
+            } else {
+              exceptions.splice(exception, 1);
+            }
+          }
+        }
+      }
+      assert.deepEqual(violations, []);
     }).pipe(Effect.provide(layerTest)),
   { timeout: 30_000 },
 );

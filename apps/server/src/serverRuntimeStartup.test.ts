@@ -12,6 +12,9 @@ import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
+import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
+import { layerMemory as SqlitePersistenceMemory } from "./persistence/Sqlite.ts";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "./config.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -193,4 +196,43 @@ it.effect("automatic pull only updates enabled, behind, clean default-branch che
     ).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, git));
     assert.deepStrictEqual(pulled, ["/inherited"]);
   }),
+);
+
+it.effect(
+  "countHeartbeatThreads counts active and archived threads via SQL without loading shell snapshot",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      let shellSnapshotCalls = 0;
+      const threads = {
+        getShellSnapshot: () =>
+          Effect.sync(() => {
+            shellSnapshotCalls += 1;
+            return {
+              schemaVersion: 1,
+              snapshotSequence: 0,
+              threads: [],
+              archivedThreads: [],
+            };
+          }),
+      } as unknown as ThreadManagement.ThreadManagementService["Service"];
+
+      const now = "2026-01-01T00:00:00.000Z";
+      yield* sql`
+      INSERT INTO orchestration_v2_projection_threads (
+        thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+        payload_json, created_at, updated_at, archived_at, deleted_at
+      ) VALUES
+        ('thread-active', 'project-1', 'Active', 'codex', 'full-access', 'default', '{}', ${now}, ${now}, NULL, NULL),
+        ('thread-archived', 'project-1', 'Archived', 'codex', 'full-access', 'default', '{}', ${now}, ${now}, ${now}, NULL),
+        ('thread-deleted', 'project-1', 'Deleted', 'codex', 'full-access', 'default', '{}', ${now}, ${now}, NULL, ${now})
+    `;
+
+      const count = yield* ServerRuntimeStartup.countHeartbeatThreads.pipe(
+        Effect.provideService(ThreadManagement.ThreadManagementService, threads),
+      );
+
+      assert.equal(count, 2);
+      assert.equal(shellSnapshotCalls, 0);
+    }).pipe(Effect.provide(SqlitePersistenceMemory)),
 );

@@ -177,7 +177,7 @@ vi.mock("./use-thread-outbox", async () => {
   const { Atom } = await import("effect/reactivity");
   return {
     editingQueuedMessageIdsAtom: Atom.make<Record<string, boolean>>({}).pipe(Atom.keepAlive),
-    dispatchingQueuedMessageIdAtom: Atom.make<Record<string, string>>({}).pipe(Atom.keepAlive),
+    dispatchingMessageByThreadAtom: Atom.make<Record<string, string>>({}).pipe(Atom.keepAlive),
     useThreadOutboxMessages: () =>
       appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
     useThreadOutboxShellStatuses: () => new Map(),

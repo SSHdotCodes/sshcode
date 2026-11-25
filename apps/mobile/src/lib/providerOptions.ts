@@ -4,11 +4,13 @@ import type {
   ProviderOptionDescriptor,
   ProviderOptionSelection,
 } from "@t3tools/contracts";
+import { effortDisplay } from "@t3tools/client-runtime/composer-model-display";
 import {
   buildProviderOptionSelectionsFromDescriptors,
   getProviderOptionDescriptors,
   getProviderOptionCurrentValue,
   getProviderOptionCurrentLabel,
+  isClaudeUltrathinkPrompt,
   isReasoningSelectDescriptor,
 } from "@t3tools/shared/model";
 
@@ -79,22 +81,49 @@ export function fastModeControl(descriptor: ProviderOptionDescriptor) {
 }
 
 /** One interpretation of effort and speed for composers and read-only model summaries. */
-export function modelTraits(input: {
+type ModelTraitInput = {
   readonly capabilities: ModelCapabilities | null | undefined;
   readonly selection: ModelSelection | null;
   readonly reportedSelection?: ModelSelection | null | undefined;
-}) {
+};
+
+function modelTraitDescriptors(input: ModelTraitInput) {
   const descriptors = resolveProviderOptionDescriptors({
     capabilities: input.capabilities,
     selections: input.selection?.options,
   });
   const effort = descriptors.find(isReasoningSelectDescriptor);
   const speed = descriptors.map(fastModeControl).find((control) => control?.enabled);
+  return { effort, speed: speed?.label ?? null };
+}
+
+export function modelTraits(input: ModelTraitInput) {
+  const { effort, speed } = modelTraitDescriptors(input);
   return {
     effort: effort
       ? getProviderOptionCurrentLabel(effort, input.selection, input.reportedSelection)
       : undefined,
-    speed: speed?.label ?? null,
+    speed,
+  };
+}
+
+export function composerModelTraits(input: ModelTraitInput & { prompt?: string | undefined }) {
+  const { effort, speed } = modelTraitDescriptors(input);
+  const promptMode =
+    effort?.promptInjectedValues?.includes("ultrathink") && isClaudeUltrathinkPrompt(input.prompt);
+  return {
+    effort: effort
+      ? effortDisplay(
+          effort.options,
+          promptMode
+            ? "ultrathink"
+            : getProviderOptionCurrentValue(effort, input.selection, input.reportedSelection),
+          promptMode
+            ? "Ultrathink"
+            : getProviderOptionCurrentLabel(effort, input.selection, input.reportedSelection),
+        )
+      : null,
+    speed,
   };
 }
 

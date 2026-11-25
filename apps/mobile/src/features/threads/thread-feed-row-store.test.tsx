@@ -30,6 +30,7 @@ import { createTimelineDecorationsProjector } from "../discord/timelinePresentat
 import {
   createThreadFeedRowStore,
   useThreadFeedRowVolatileSlice,
+  userMessageExpansionKey,
   type ThreadFeedRowStore,
   type ThreadFeedRowStoreState,
 } from "./thread-feed-row-store";
@@ -214,6 +215,7 @@ describe("ThreadFeed row memoization and volatile store isolation", () => {
       readonly latestRun: ThreadFeedLatestRun | null;
       readonly copiedRowId: string | null;
       readonly expandedWorkRows: Record<string, boolean>;
+      readonly editingMessageId?: MessageId;
       readonly setupWorkingStartedAt: string | null;
       readonly messageRunActive: boolean;
     }
@@ -259,6 +261,7 @@ describe("ThreadFeed row memoization and volatile store isolation", () => {
       const storeState: ThreadFeedRowStoreState = {
         copiedRowId: props.copiedRowId,
         expandedWorkRows: props.expandedWorkRows,
+        editingMessageId: props.editingMessageId ?? null,
         dispatchingMessageId: null,
         steerWait: null,
         unsettledTurnId,
@@ -387,6 +390,20 @@ describe("ThreadFeed row memoization and volatile store isolation", () => {
         expect(renderCounts.get(id) ?? 0).toBe(0);
       }
     }
+
+    renderCounts.clear();
+    const firstUserMessageId = MessageId.make(firstUserRowId);
+    renderHarness({
+      expandedWorkRows: {
+        [activeActivityId]: true,
+        [userMessageExpansionKey(firstUserMessageId)]: true,
+      },
+    });
+    expect(Array.from(renderCounts)).toEqual([[firstUserRowId, 1]]);
+
+    renderCounts.clear();
+    renderHarness({ editingMessageId: firstUserMessageId });
+    expect(Array.from(renderCounts)).toEqual([[firstUserRowId, 1]]);
 
     // 6. Worktree setup working header: ONLY the setup anchor (first user row) renders.
     renderCounts.clear();

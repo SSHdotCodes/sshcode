@@ -1,4 +1,9 @@
-import type { AssetResource, ProjectReadFileError, ScopedThreadRef } from "@t3tools/contracts";
+import type {
+  AssetResource,
+  ProjectReadFileError,
+  ProjectReadFileResult,
+  ScopedThreadRef,
+} from "@t3tools/contracts";
 import { isAbsolutePath, workspaceRelativeFilePath } from "@t3tools/shared/path";
 
 /** Resolve workspace links before choosing between the explorer and a file preview. */
@@ -8,6 +13,16 @@ export function resolveFilePreviewPath(path: string | null, cwd: string): string
 }
 
 export const isMarkdownPreviewFile = (path: string): boolean => /\.(?:md|mdx)$/i.test(path);
+
+/** Copy only complete text, including the source of a rendered Markdown, HTML, or CSV preview. */
+export function copyableFilePreviewContents(
+  file: Pick<ProjectReadFileResult, "contents" | "truncated"> | null,
+  canPreviewText: boolean,
+): string | null {
+  return canPreviewText && file && !file.truncated && file.contents.length > 0
+    ? file.contents
+    : null;
+}
 
 /** Describe existing failure codes without exposing the underlying platform cause. */
 export function filePreviewReadErrorMessage(error: ProjectReadFileError): string {

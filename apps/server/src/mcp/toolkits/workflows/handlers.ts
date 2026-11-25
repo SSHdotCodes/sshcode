@@ -33,23 +33,30 @@ const NOTE = { width: 200, height: 96 } as const;
 const fail = (message: string, code: "invalid_request" | "capability_denied" = "invalid_request") =>
   new OrchestratorMcpFailure({ code, message });
 
-/** "instance/model" or a bare slug; a bare slug prefers the provider's default instance. */
+/** "instance/model" or a bare slug (including slugs with "/"); bare slugs prefer the default instance. */
 export function resolveWorkflowModel(
   spec: string,
   providers: ReadonlyArray<ServerProvider>,
 ): { readonly instanceId: ProviderInstanceId; readonly model: string } | null {
+  const pick = (matches: ReadonlyArray<ServerProvider>, model: string) => {
+    const chosen =
+      matches.find((p) => p.instanceId === defaultInstanceIdForDriver(p.driver)) ?? matches[0];
+    return chosen ? { instanceId: ProviderInstanceId.make(chosen.instanceId), model } : null;
+  };
   const slash = spec.indexOf("/");
-  const instance = slash > 0 ? spec.slice(0, slash) : undefined;
-  const slug = slash > 0 ? spec.slice(slash + 1) : spec;
-  const matches = providers.filter(
-    (p) =>
-      (instance === undefined || p.instanceId === instance) &&
-      p.enabled !== false &&
-      p.models.some((m) => m.slug === slug),
+  if (slash > 0) {
+    const instance = spec.slice(0, slash);
+    const slug = spec.slice(slash + 1);
+    const explicit = providers.filter(
+      (p) =>
+        p.instanceId === instance && p.enabled !== false && p.models.some((m) => m.slug === slug),
+    );
+    if (explicit.length > 0) return pick(explicit, slug);
+  }
+  const bare = providers.filter(
+    (p) => p.enabled !== false && p.models.some((m) => m.slug === spec),
   );
-  const chosen =
-    matches.find((p) => p.instanceId === defaultInstanceIdForDriver(p.driver)) ?? matches[0];
-  return chosen ? { instanceId: ProviderInstanceId.make(chosen.instanceId), model: slug } : null;
+  return pick(bare, spec);
 }
 
 /** Build a workflow from an agent's boxes, keeping positions of boxes it already had. */

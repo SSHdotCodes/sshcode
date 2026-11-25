@@ -1504,6 +1504,60 @@ describe("ChatMarkdown fragment links across chats", () => {
   });
 });
 
+it.each([true, false])(
+  "copies HTML tables with Markdown as plain text (rich clipboard: %s)",
+  async (rich) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const writes: Array<Record<string, Blob>> = [];
+    const write = vi.fn(async (items: Array<{ data: Record<string, Blob> }>) => {
+      writes.push(items[0]!.data);
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: rich ? { write, writeText } : { writeText } });
+    vi.stubGlobal(
+      "ClipboardItem",
+      class {
+        constructor(readonly data: Record<string, Blob>) {}
+      },
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const readBlob = (blob: Blob) =>
+      new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.addEventListener("load", () => resolve(String(reader.result)), { once: true });
+        reader.addEventListener("error", () => reject(reader.error), { once: true });
+        reader.readAsText(blob);
+      });
+    const markdown = "| Check | Result |\n| --- | --- |\n| Focus | **Passed** |";
+    try {
+      await act(async () => root.render(<ChatMarkdown cwd="/repo" text={markdown} />));
+      await act(async () =>
+        container.querySelector<HTMLButtonElement>('button[aria-label="Copy table"]')!.click(),
+      );
+      const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+        (element) => element.textContent === "Copy table",
+      );
+      expect(item).toBeDefined();
+      await act(async () => item!.click());
+      if (rich) {
+        expect(writeText).not.toHaveBeenCalled();
+        expect(await readBlob(writes[0]!["text/plain"]!)).toBe(markdown);
+        const html = await readBlob(writes[0]!["text/html"]!);
+        const table = new DOMParser().parseFromString(html, "text/html").querySelector("table");
+        expect(table?.rows[1]?.cells[1]?.textContent).toBe("Passed");
+      } else {
+        expect(writeText).toHaveBeenCalledWith(markdown);
+      }
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    }
+  },
+);
+
 it.each(["Markdown", "CSV"])(
   "shows clipboard failures when copying a table as %s",
   async (format) => {

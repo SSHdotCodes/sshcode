@@ -4,6 +4,7 @@ import {
   createLinkedPullRequestSummaryAtomFamily,
   createPullRequestEnvironmentAtoms,
   createPullRequestStackAtomFamily,
+  isGitHubPullRequestCredentialError,
 } from "@t3tools/client-runtime/state/pull-requests";
 import type {
   EnvironmentId,
@@ -20,6 +21,7 @@ import {
   visibleThreadPullRequests,
 } from "@t3tools/shared/threadPullRequests";
 import * as Option from "effect/Option";
+import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useCallback, useLayoutEffect, useMemo } from "react";
 
@@ -272,26 +274,34 @@ function createMergedEnvironmentQuery<Input, A>(
   atomFor: (
     target: EnvironmentQueryTarget<Input>,
   ) => Atom.Atom<AsyncResult.AsyncResult<A, unknown>>,
+  selectError?: (
+    failures: ReadonlyArray<Cause.Cause<unknown>>,
+    observations: MergedEnvironmentQueryView<A>["observations"],
+  ) => string | null,
 ) {
   const family = Atom.family((key: string) =>
     Atom.make((get): MergedEnvironmentQueryView<A> => {
       const targets = JSON.parse(key) as ReadonlyArray<EnvironmentQueryTarget<Input>>;
       const values: Array<readonly [EnvironmentId, A]> = [];
       const observations: Array<readonly [EnvironmentId, A, number]> = [];
-      let error: string | null = null;
+      const failures: Cause.Cause<unknown>[] = [];
       let isPending = false;
       for (const target of targets) {
         const result = get(atomFor(target));
         isPending ||= result.waiting;
-        if (result._tag === "Failure" && error === null) {
-          error = formatEnvironmentQueryError(result.cause);
-        }
+        if (result._tag === "Failure") failures.push(result.cause);
         const value = Option.getOrNull(AsyncResult.value(result));
         if (value !== null) values.push([target.environmentId, value]);
         if (result._tag === "Success") {
           observations.push([target.environmentId, result.value, result.timestamp]);
         }
       }
+      const firstFailure = failures[0];
+      const error = selectError
+        ? selectError(failures, observations)
+        : firstFailure === undefined
+          ? null
+          : formatEnvironmentQueryError(firstFailure);
       return { values, error, isPending, observations };
     }).pipe(Atom.withLabel(`${label}:${key}`)),
   );
@@ -321,6 +331,11 @@ function createMergedEnvironmentQuery<Input, A>(
 const usePullRequestListsQuery = createMergedEnvironmentQuery(
   "web-pull-requests:list",
   pullRequestEnvironment.list,
+  (failures, observations) =>
+    formatPullRequestListError(
+      failures,
+      observations.some(([, answer]) => answer.entries.length > 0),
+    ),
 );
 
 const usePullRequestStatsQuery = createMergedEnvironmentQuery(
@@ -352,6 +367,16 @@ export interface MergedPullRequestListView {
   readonly error: string | null;
   readonly isPending: boolean;
   readonly refresh: (targets?: ReadonlyArray<EnvironmentQueryTarget<PullRequestListInput>>) => void;
+}
+
+export function formatPullRequestListError(
+  failures: ReadonlyArray<Cause.Cause<unknown>>,
+  hasLoadedPullRequests: boolean,
+): string | null {
+  const failure = failures.find(
+    (cause) => !hasLoadedPullRequests || !isGitHubPullRequestCredentialError(Cause.squash(cause)),
+  );
+  return failure === undefined ? null : formatEnvironmentQueryError(failure);
 }
 
 /** One listing per environment, merged into the single list the page renders. */

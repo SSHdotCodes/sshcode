@@ -44,6 +44,9 @@ import type { SidebarThreadSummary, Thread } from "../types";
 import { cn, normalizeSearchText } from "../lib/utils";
 import { isLatestRunSettled } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
+import { threadMessagePreview } from "./threadMessagePreview";
+
+export { threadMessagePreview as sidebarMessagePreview };
 
 export function shouldNavigateAfterThreadPark(input: {
   readonly threadKey: string;
@@ -123,20 +126,6 @@ export function focusSidebarRow(key: string, row: Element): boolean {
   return true;
 }
 
-export function sidebarMessagePreview(
-  message: Pick<
-    NonNullable<SidebarThreadSummary["source"]["latestVisibleMessage"]>,
-    "role" | "text"
-  > | null,
-): { readonly label: string; readonly text: string } | null {
-  const text = message?.text.trim().replace(/\s+/g, " ");
-  if (!message || !text) return null;
-  return {
-    label: message.role === "user" ? "You" : message.role === "assistant" ? "Agent" : "System",
-    text: text.length > 480 ? `${text.slice(0, 480).trimEnd()}…` : text,
-  };
-}
-
 export function sidebarPrefetchRevision(
   thread: Pick<SidebarThreadSummary, "latestRun" | "visibleItemCount">,
 ): string {
@@ -147,7 +136,7 @@ export function sidebarLastMessagePreview(items: readonly OrchestrationV2Project
   for (let index = items.length - 1; index >= 0; index--) {
     const item = items[index]!.item;
     if (item.type !== "assistant_message" && item.type !== "user_message") continue;
-    const preview = sidebarMessagePreview({
+    const preview = threadMessagePreview({
       role: item.type === "user_message" ? "user" : "assistant",
       text: item.text,
     });

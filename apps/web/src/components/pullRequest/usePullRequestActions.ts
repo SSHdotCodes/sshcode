@@ -41,11 +41,12 @@ import { pullRequestEntryKey, type EnvironmentPullRequestEntry } from "./pullReq
 /** Resolve on demand so hidden quick actions do not rebuild the legacy project grouping. */
 export function usePullRequestDefaultMergeMethodResolver(
   environmentId: EnvironmentId,
-  projectId: ProjectId,
+  projectId: ProjectId | undefined,
 ) {
   const projectDefault = useEnvironmentSettings(
     environmentId,
-    (settings) => resolveProjectSettings(settings, projectId).settings.pullRequestMergeMethod,
+    (settings) =>
+      resolveProjectSettings(settings, projectId ?? null).settings.pullRequestMergeMethod,
   );
   const legacyOverrides = useClientSettings((settings) => settings.pullRequestMergeMethodOverrides);
   const grouping = useClientSettings(selectProjectGroupingSettings);
@@ -271,6 +272,11 @@ export function usePullRequestHandoffs({
   detail: PullRequestHandoffDetail | null;
 }) {
   const newThread = useNewThreadHandler();
+  const project = useProjects().find(
+    (item) => item.id === detail?.projectId && item.environmentId === environmentId,
+  );
+  const localWorktree =
+    detail?.workspaceRoot !== project?.workspaceRoot ? (detail?.workspaceRoot ?? null) : null;
   const prepareThread = usePreparePullRequestThreadAction({
     environmentId,
     cwd: detail?.workspaceRoot ?? null,
@@ -293,7 +299,10 @@ export function usePullRequestHandoffs({
   ): Promise<{ draftId: DraftId } | null> => {
     const session =
       opened ??
-      (await newThread(projectRef).then(
+      (await newThread(
+        projectRef,
+        localWorktree === null ? undefined : { worktreePath: localWorktree, envMode: "local" },
+      ).then(
         (result) => result,
         () => null,
       ));
@@ -326,7 +335,8 @@ export function usePullRequestHandoffs({
 
   /** A question about the change, which needs a thread and nothing else. */
   const startAsk = async (kind: string, task: PullRequestThreadTask) => {
-    if (!detail || handoff !== null) return;
+    if (detail?.projectId === undefined || detail.workspaceRoot === undefined || handoff !== null)
+      return;
     setHandoff(kind);
     const projectRef = scopeProjectRef(environmentId, detail.projectId);
     const opened = await openThreadWithTask(projectRef, task);
@@ -362,7 +372,8 @@ export function usePullRequestHandoffs({
     // already work — and it moves the branch under everything else that is open there.
     mode: "worktree" | "local" = "worktree",
   ) => {
-    if (!detail || handoff !== null) return;
+    if (detail?.projectId === undefined || detail.workspaceRoot === undefined || handoff !== null)
+      return;
     setHandoff(kind);
     // The menu closes on the press and takes its "Preparing..." label with it, so this is the
     // only thing answering for the checkout. It carries no timeout of its own: a loading toast
@@ -413,7 +424,7 @@ export function usePullRequestHandoffs({
     // no worktree of its own, so the thread runs where the repository already is.
     const pointed = await newThread(projectRef, {
       branch: prepared.value.branch,
-      worktreePath: prepared.value.worktreePath,
+      worktreePath: prepared.value.worktreePath ?? localWorktree,
       envMode: prepared.value.worktreePath === null ? "local" : "worktree",
     }).then(
       (session) => session !== null,

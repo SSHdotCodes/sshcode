@@ -121,3 +121,8 @@ private final class ReviewDiffTextLayout {
     manager.ensureLayout(for: container)
   }
 }
+
+func reviewDiffViewedHitRect(header: CGRect, checkbox: CGRect) -> CGRect {
+  let left = max(header.minX, min(header.maxX - 44, checkbox.minX - 14))
+  return CGRect(x: left, y: header.minY, width: header.maxX - left, height: header.height)
+}

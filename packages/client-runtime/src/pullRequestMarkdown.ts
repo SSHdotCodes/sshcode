@@ -14,7 +14,8 @@ export type PullRequestBodySegment =
       readonly media: "video" | "image" | "unknown";
     };
 
-const FENCE_PATTERN = /^\s{0,3}((?:`{3,})|(?:~{3,}))(.*)$/u;
+// Match the whole marker run so a rejected line cannot rescan each shorter prefix.
+const FENCE_PATTERN = /^\s{0,3}(`{3,}(?!`)|~{3,}(?!~))(.*)$/u;
 /**
  * How far a `<video>` tag may reach for its closing tag. Real embeds are one to three lines,
  * and the bound keeps an unclosed tag from making each one rescan the rest of the body.
@@ -32,6 +33,7 @@ const VIDEO_TAG_SRC_PATTERN = /<(?:video|source)\b[^>]*\bsrc\s*=\s*["']([^"']+)[
 /** Only a tag that owns its line is an embed; inline, it is prose the renderer should keep. */
 const STANDALONE_VIDEO_TAG_PATTERN = /^\s*<video\b/iu;
 const VIDEO_TAG_END_PATTERN = /<\/video>\s*$/iu;
+const VIDEO_TAG_CLOSE_PATTERN = /<\/video>/iu;
 
 /** Anything else — `javascript:`, `data:`, a relative path — is not an upload to link out to. */
 function isWebUrl(url: string): boolean {
@@ -120,7 +122,7 @@ export function splitPullRequestBody(body: string): ReadonlyArray<PullRequestBod
     // joined text until one is actually found.
     const lastCandidate = Math.min(index + VIDEO_TAG_MAX_LINES, lines.length) - 1;
     let cursor = index;
-    while (cursor < lastCandidate && !VIDEO_TAG_END_PATTERN.test(lines[cursor]!)) {
+    while (cursor < lastCandidate && !VIDEO_TAG_CLOSE_PATTERN.test(lines[cursor]!)) {
       cursor += 1;
     }
     const source = VIDEO_TAG_END_PATTERN.test(lines[cursor]!)

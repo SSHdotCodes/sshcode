@@ -41,6 +41,7 @@ const state = vi.hoisted(() => ({
   alert: vi.fn(),
   prepareAttachments: vi.fn(),
   edit: null as QueuedRunEdit | null,
+  waitForSendConnection: vi.fn(),
   editQueuedRun: vi.fn(),
   releaseEditSave: vi.fn(),
   endEdit: vi.fn(),
@@ -76,8 +77,8 @@ vi.mock("react", () => ({
 vi.mock("expo-crypto", () => ({ randomUUID: () => "uuid" }));
 vi.mock("../lib/attachmentUpload", () => ({ prepareTurnAttachments: state.prepareAttachments }));
 vi.mock("../lib/uuid", () => ({ uuidv4: () => "uuid" }));
-vi.mock("./queued-run-edit", async () => ({
-  ...(await import("./queued-edit-draft-key")),
+vi.mock(import("./queued-run-edit"), async (importOriginal) => ({
+  ...(await importOriginal()),
   claimQueuedRunEditSave: () => state.releaseEditSave,
   endQueuedRunEdit: state.endEdit,
   useQueuedRunEdit: () => state.edit,
@@ -161,6 +162,7 @@ vi.mock("./threads", async () => {
   return {
     environmentThreadDetails: { queueWorkflowAtom: () => Atom.make(null) },
     threadEnvironment: {
+      waitForSendConnection: state.waitForSendConnection,
       editQueuedRun: state.editQueuedRun,
       uploadFeedback: state.feedback,
       updateMetadata: state.pickModel,
@@ -172,7 +174,7 @@ vi.mock("./threads", async () => {
 vi.mock("./use-thread-outbox", async () => {
   const { Atom } = await import("effect/reactivity");
   return {
-    dispatchingQueuedMessageIdAtom: Atom.make(null),
+    dispatchingMessageByThreadAtom: Atom.make({}),
     useThreadOutboxMessages: () => state.outbox,
   };
 });
@@ -190,7 +192,7 @@ vi.mock("./use-composer-drafts", async () => {
   return {
     composerDraftsAtom: Atom.make({}),
     composerContextImportsAtom: Atom.make({}),
-    getComposerDraftSnapshot: () => state.draft,
+    getComposerDraftSnapshot: () => ({ ...state.draft }),
     clearComposerDraftContent: state.clearDraft,
     clearComposerDraft: state.clearDraft,
     setComposerDraftText: (_key: string, text: string) => {
@@ -310,6 +312,7 @@ beforeEach(() => {
   state.draft.attachments = [];
   state.edit = null;
   state.alert.mockClear();
+  state.waitForSendConnection.mockReset();
   state.editQueuedRun.mockClear();
   state.prepareAttachments.mockReset();
   state.releaseEditSave.mockClear();
@@ -324,6 +327,28 @@ beforeEach(() => {
   state.connectionState = "connected";
   state.grantedEnvironments.clear();
   appAtomRegistry.set(acknowledgedThreadMessagesAtom, []);
+});
+
+it("holds attachment preparation for a queued edit until a session is ready", async () => {
+  state.connectionState = "reconnecting";
+  state.grantedEnvironments.add("secondary");
+  state.edit = {
+    runId,
+    messageId: MessageId.make("queued-message"),
+    originalText: "Original",
+    existingAttachments: [],
+  };
+  state.draft.text = "Edited";
+  const ready = Promise.withResolvers<{ _tag: "Success" }>();
+  state.waitForSendConnection.mockReturnValueOnce(ready.promise);
+  state.prepareAttachments.mockResolvedValueOnce({ status: "ready", attachments: [] });
+  state.editQueuedRun.mockResolvedValueOnce({ _tag: "Success" });
+  const sending = useThreadComposerState().onSendMessage();
+  expect(state.prepareAttachments).not.toHaveBeenCalled();
+  ready.resolve({ _tag: "Success" });
+  await sending;
+  expect(state.editQueuedRun).toHaveBeenCalledOnce();
+  expect(state.endEdit).toHaveBeenCalledOnce();
 });
 
 it("shows an upload failure and keeps the queued message edit available to retry", async () => {

@@ -61,6 +61,11 @@ for p in $PKGS; do
   fi
   echo "FAIL $p exit $rc$( [ $rc -eq 124 ] && echo ' (timed out)')" >> $LOG; failed=1
   print -r -- "$out" | grep -qE "Tests  " || print -r -- "$out" | tail -8 >> $LOG
+  # Every test passed but the run still failed (3570: an error outside any test): keep its cause.
+  if (( $#files == 0 )); then
+    print -r -- "$out" | grep -nE -A6 'Unhandled|Errors? +[0-9]|^ *(Error|TypeError|RangeError)\b|ELIFECYCLE|Segmentation|out of memory' |
+      head -40 >> $LOG
+  fi
 done
 [ $failed -eq 0 ] && echo "SUITES_OK" >> $LOG || echo "SUITES_FAILED" >> $LOG
 exit $failed

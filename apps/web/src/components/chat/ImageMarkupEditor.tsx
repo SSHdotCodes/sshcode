@@ -184,7 +184,7 @@ export function ImageMarkupEditor(props: {
               Keep editing
             </Button>
             <Button variant="overlay" onClick={props.onCancel}>
-              Close
+              Back to preview
             </Button>
           </>
         ) : (

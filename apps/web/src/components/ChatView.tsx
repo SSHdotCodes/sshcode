@@ -17,7 +17,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-search";
 import {
   matchesTimelineJump,
-  type TimelineJumpTarget,
+  type TimelineJumpRequest,
 } from "@t3tools/client-runtime/state/thread-search";
 import { useTerminalHandoff } from "../state/terminalHandoff";
 import { TerminalHandoffBanner } from "./chat/TerminalHandoffBanner";
@@ -1513,11 +1513,24 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
         "grid shrink-0 overflow-clip",
         active ? (visible ? "grid-rows-[1fr]" : "grid-rows-[0fr]") : "hidden",
         active &&
-          "[[data-panel-animations=true]_&]:transition-[grid-template-rows] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out",
-        active && visible && "[[data-panel-animations=true]_&]:starting:grid-rows-[0fr]!",
+          "[[data-panel-animations=true]_&]:motion-safe:transition-[grid-template-rows] has-[[data-terminal-resizing=true]]:transition-none!",
+        active &&
+          (visible
+            ? "[[data-panel-animations=true]_&]:motion-safe:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:motion-safe:ease-motion [[data-panel-animations=true]_&]:motion-safe:starting:grid-rows-[0fr]!"
+            : "[[data-panel-animations=true]_&]:motion-safe:duration-(--panel-exit-duration) [[data-panel-animations=true]_&]:motion-safe:ease-in pointer-events-none"),
       )}
     >
-      <div className="min-h-0 overflow-clip">
+      <div
+        className={cn(
+          "min-h-0 overflow-clip",
+          active &&
+            "[[data-panel-animations=true]_&]:motion-safe:transition-[opacity,transform] has-[[data-terminal-resizing=true]]:transition-none!",
+          active &&
+            (visible
+              ? "translate-y-0 opacity-100 [[data-panel-animations=true]_&]:motion-safe:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:motion-safe:ease-motion [[data-panel-animations=true]_&]:motion-safe:starting:translate-y-1.5 [[data-panel-animations=true]_&]:motion-safe:starting:opacity-0"
+              : "translate-y-1.5 opacity-0 [[data-panel-animations=true]_&]:motion-safe:duration-(--panel-exit-duration) [[data-panel-animations=true]_&]:motion-safe:ease-in"),
+        )}
+      >
         <ThreadTerminalDrawer
           threadRef={threadRef}
           threadId={threadId}
@@ -2043,12 +2056,6 @@ export default function ChatView(props: ChatViewProps) {
       serverProjection !== null && deriveThreadQueueWorkflowState(serverProjection).canSendSteer,
     [serverProjection],
   );
-  // Subagent rows, an open child's own row and its ancestors come from the family when the shell
-  // leaves idle children out. Every source agrees on the root, so the key never flips.
-  useThreadFamily(
-    routeKind === "server" ? environmentId : null,
-    serverThread?.lineage.rootThreadId ?? serverProjection?.thread.lineage.rootThreadId ?? null,
-  );
   const reportedModelSelection = serverProjection
     ? deriveReportedModelSelection(serverProjection)
     : null;
@@ -2156,6 +2163,15 @@ export default function ChatView(props: ChatViewProps) {
   }, [citationHref, citationKey]);
   const { resolvedTheme } = useTheme();
   const [uiMode] = useUiMode();
+  const routeLineage = serverThread?.lineage ?? serverProjection?.thread.lineage;
+  // The Agents panel mounts its own family. An ordinary parent transcript
+  // needs only live children from the shell and individual linked chats.
+  useThreadFamily(
+    routeKind === "server" ? environmentId : null,
+    routeLineage && (uiMode === "discord" || routeLineage.relationshipToParent === "subagent")
+      ? routeLineage.rootThreadId
+      : null,
+  );
   const discordMemberListFits = useMediaQuery("(min-width: 1200px)");
   const [discordMembersOpen] = useLocalStorage(
     "t3code:discord:members-open:v1",
@@ -2790,14 +2806,17 @@ export default function ChatView(props: ChatViewProps) {
     );
   const previewPanelOpen = activeRightPanelKind === "preview" && browserAvailable;
   const rightPanelOpen = paneFocused && rightPanelState.isOpen;
-  const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
-    usePanelAnimationSettings();
+  const {
+    active: panelAnimationsActive,
+    durationMs: panelAnimationDurationMs,
+    exitDurationMs: panelExitDurationMs,
+  } = usePanelAnimationSettings();
   const activeTerminalDrawerPresence = usePanelPresence(
     Boolean(activeThreadKey && terminalUiState.terminalOpen),
     true,
     panelAnimationsActive,
     activeThreadKey,
-    panelAnimationDurationMs,
+    panelExitDurationMs,
   );
   const rightPanelPresenceValue = useMemo(
     () => ({
@@ -2811,7 +2830,7 @@ export default function ChatView(props: ChatViewProps) {
     rightPanelPresenceValue,
     panelAnimationsActive,
     activeThreadKey,
-    panelAnimationDurationMs,
+    panelExitDurationMs,
   );
   const rightPanelPresent = paneFocused && rightPanelPresence.present;
   const rightPanelControlsInPanel =
@@ -3791,12 +3810,12 @@ export default function ChatView(props: ChatViewProps) {
     conversationProviderStatus.supportsConversationRollback !== false;
   const phase = derivePhase(activeRuntime);
   const waitingOnActiveRun = activeRuntime?.waitingOnBackgroundWork === true;
-  const pendingRequests =
-    useAtomValue(
-      routeThreadDetailRef === null
-        ? EMPTY_PENDING_REQUESTS_ATOM
-        : environmentThreadDetails.pendingRequestsAtom(routeThreadDetailRef),
-    ) ?? EMPTY_PENDING_REQUESTS;
+  const pendingRequestsSnapshot = useAtomValue(
+    routeThreadDetailRef === null
+      ? EMPTY_PENDING_REQUESTS_ATOM
+      : environmentThreadDetails.pendingRequestsAtom(routeThreadDetailRef),
+  );
+  const pendingRequests = pendingRequestsSnapshot ?? EMPTY_PENDING_REQUESTS;
   const pendingApprovals = useMemo(
     () => derivePendingApprovals(pendingRequests.approvals),
     [pendingRequests.approvals],
@@ -4868,11 +4887,9 @@ export default function ChatView(props: ChatViewProps) {
   }, [activeThreadKey]);
   const loadMediaPage = useAtomCommand(threadMediaPageCommand, { reportFailure: false });
   const mediaJumpSequence = useRef(0);
-  const [mediaJump, setMediaJump] = useState<{
-    item: TimelineJumpTarget;
-    sequence: number;
-    threadKey: string | null;
-  } | null>(null);
+  const [mediaJump, setMediaJump] = useState<
+    (TimelineJumpRequest & { readonly threadKey: string | null }) | null
+  >(null);
   useEffect(() => {
     setMediaGalleryOpen(false);
     setMediaSearch(false);
@@ -4950,7 +4967,12 @@ export default function ChatView(props: ChatViewProps) {
       return;
     const item = searchJumpTarget(pendingSearchJump);
     if (item)
-      setMediaJump({ item, sequence: ++mediaJumpSequence.current, threadKey: activeThreadKey });
+      setMediaJump({
+        item,
+        sequence: ++mediaJumpSequence.current,
+        threadKey: activeThreadKey,
+        highlight: true,
+      });
     appAtomRegistry.set(pendingThreadSearchJumpAtom, null);
   }, [pendingSearchJump, routeThreadDetailRef, activeThreadKey]);
   useEffect(() => {
@@ -12891,7 +12913,9 @@ export default function ChatView(props: ChatViewProps) {
           className={cn(
             "flex shrink-0",
             panelAnimationsActive &&
-              "motion-safe:transition-opacity motion-safe:duration-(--panel-animation-duration) motion-safe:ease-out",
+              (rightPanelOpen
+                ? "motion-safe:transition-opacity motion-safe:duration-(--panel-animation-duration) motion-safe:ease-motion"
+                : "motion-safe:transition-opacity motion-safe:duration-(--panel-exit-duration) motion-safe:ease-in"),
             // Closed, the control leaves the flex flow so the cluster is only as wide as the two
             // toggles the header reserves room for; anchored to the cluster's left edge, it fades
             // out where it stood rather than over the terminal toggle.
@@ -12953,7 +12977,7 @@ export default function ChatView(props: ChatViewProps) {
           ref={threadPanelPopoverAnchorRef}
           data-chat-header
           className={cn(
-            "relative bg-background [[data-panel-animations=true]_&]:motion-safe:transition-[padding-left] [[data-panel-animations=true]_&]:motion-safe:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:motion-safe:ease-out",
+            "relative bg-background [[data-panel-animations=true]_&]:motion-safe:transition-[padding-left] [[data-panel-animations=true]_&]:motion-safe:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:motion-safe:ease-motion",
             isElectron
               ? cn(
                   "drag-region flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center px-3 sm:px-5",
@@ -13207,6 +13231,9 @@ export default function ChatView(props: ChatViewProps) {
                 routeThreadKey={displayedTimelineKey}
                 displayThreadKey={displayedTimelineKey}
                 paintOnly={paintOnlyDisplayedTimeline}
+                suppressArrivals={
+                  isServerThread && (serverProjection === null || threadStatus !== "live")
+                }
                 onOpenTurnDiff={
                   paintOnlyDisplayedTimeline ? noopHeldTurnDiff : onOpenTurnDiffStable
                 }
@@ -13480,6 +13507,9 @@ export default function ChatView(props: ChatViewProps) {
                                   : undefined
                               }
                               environmentUnavailable={activeEnvironmentUnavailableState}
+                              pendingRequestsHydrated={
+                                pendingRequestsSnapshot !== null && threadStatus === "live"
+                              }
                               activePendingApproval={activePendingApproval}
                               pendingApprovals={pendingApprovals}
                               pendingUserInputs={pendingUserInputs}
@@ -13855,7 +13885,13 @@ export default function ChatView(props: ChatViewProps) {
         ) : null}
         {rightPanelPresent && shouldUsePlanSidebarSheet && activeThreadRef ? (
           <RightPanelSheet
-            animationDurationMs={panelAnimationsActive ? panelAnimationDurationMs : 0}
+            animationDurationMs={
+              panelAnimationsActive
+                ? rightPanelOpen
+                  ? panelAnimationDurationMs
+                  : panelExitDurationMs
+                : 0
+            }
             open={rightPanelOpen}
             onClose={closePreviewPanelStable}
           >

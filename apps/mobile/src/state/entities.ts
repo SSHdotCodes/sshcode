@@ -114,23 +114,41 @@ export function useChildThreadInputs(ref: ScopedThreadRef) {
   return useAtomValue(environmentThreadShells.childThreadInputsAtom(ref));
 }
 
+function linkedThreadTitle(
+  get: Atom.AtomContext,
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+) {
+  const title = get(threadTitlesAtom(environmentId)).get(threadId);
+  if (title !== undefined) return title;
+  const state = get(environmentShell.stateValueAtom(environmentId));
+  if (
+    state.snapshot._tag === "None" ||
+    (state.snapshot.value.idleAppOwnedSubagentsOmitted !== true &&
+      state.snapshot.value.idleSubagentsOmitted !== true)
+  )
+    return undefined;
+  const shell = get(createdChatShellAtom({ environmentId, threadId }));
+  return shell?.archivedAt === null && shell.deletedAt === null ? shell.title : undefined;
+}
+
+export function useLinkedThreadTitle(environmentId: EnvironmentId, threadId: ThreadId | undefined) {
+  const atom = useMemo(
+    () =>
+      Atom.make((get) =>
+        threadId === undefined ? undefined : linkedThreadTitle(get, environmentId, threadId),
+      ),
+    [environmentId, threadId],
+  );
+  return useAtomValue(atom);
+}
+
 /** `markdown` with each thread link labeled by the thread's current title in `environmentId`. */
 export function useLiveThreadLinkLabels(markdown: string, environmentId: EnvironmentId): string {
   const atom = useMemo(
     () =>
       Atom.make((get) =>
-        relabelThreadLinks(markdown, (threadId) => {
-          const title = get(threadTitlesAtom(environmentId)).get(threadId);
-          if (title !== undefined) return title;
-          const state = get(environmentShell.stateValueAtom(environmentId));
-          if (
-            state.snapshot._tag === "None" ||
-            state.snapshot.value.idleAppOwnedSubagentsOmitted !== true
-          )
-            return undefined;
-          const shell = get(createdChatShellAtom({ environmentId, threadId }));
-          return shell?.archivedAt === null && shell.deletedAt === null ? shell.title : undefined;
-        }),
+        relabelThreadLinks(markdown, (threadId) => linkedThreadTitle(get, environmentId, threadId)),
       ),
     [markdown, environmentId],
   );

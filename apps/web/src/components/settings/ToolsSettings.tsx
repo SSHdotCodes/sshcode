@@ -98,11 +98,17 @@ export function ToolsSettingsPanel() {
     return (
       <SettingsPageContainer>
         {skills}
-        <p className="px-3 py-6 text-sm text-muted-foreground sm:px-4">
-          {scope.kind === "environment"
-            ? `Reconnect ${scope.label} to manage its tools.`
-            : "Connect an environment to manage its tools."}
-        </p>
+        <SettingsSection title="Tools">
+          <ListState
+            size="compact"
+            title="No environment connected"
+            description={
+              scope.kind === "environment"
+                ? `Reconnect ${scope.label} to manage its tools.`
+                : "Connect an environment to manage its tools."
+            }
+          />
+        </SettingsSection>
       </SettingsPageContainer>
     );
   }
@@ -259,7 +265,7 @@ function ToolsEnvironmentSettings({
             onChange={(event) => setSearch(event.currentTarget.value)}
             placeholder="Search tools"
             aria-label="Search SSHCode tools"
-            className="min-w-48 max-w-md flex-1"
+            className="min-w-48 flex-1"
           />
         </div>
       </div>

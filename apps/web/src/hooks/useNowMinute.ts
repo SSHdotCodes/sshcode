@@ -68,3 +68,11 @@ export function useNowMinute(): string {
 export function useNowMinuteMs(): number {
   return Date.parse(`${useNowMinute()}:00.000Z`);
 }
+
+/** Subscribe to a display value that changes less often than the minute. */
+export function useNowMinuteValue<T extends string | number | boolean>(
+  select: (nowMs: number) => T,
+): T {
+  const snapshot = () => select(Date.parse(`${getSnapshot()}:00.000Z`));
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
+}

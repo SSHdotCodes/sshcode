@@ -199,6 +199,39 @@ describe("mobile maker catalog", () => {
     expect(catalog.groups.map((group) => group.maker.id)).toEqual(["openai", "anthropic"]);
   });
 
+  it("orders models within each maker by recent chat starts", () => {
+    const claude = {
+      ...provider("claudeAgent", "claudeAgent", "claude-sonnet-5-5"),
+      models: [
+        {
+          slug: "claude-sonnet-5-5",
+          name: "Claude Sonnet 5.5",
+          isCustom: false,
+          capabilities: null,
+        },
+        {
+          slug: "claude-opus-5-5",
+          name: "Claude Opus 5.5",
+          isCustom: false,
+          capabilities: null,
+        },
+      ],
+    };
+    const all = options([claude]);
+    const catalog = buildModelOptionMakerCatalog(all, { providers: [claude] });
+    const now = Date.parse("2026-11-13T07:00:00.000Z");
+    const ordered = orderMakerGroupsByUse(
+      catalog.groups,
+      [{ instanceId: "claudeAgent", slug: "claude-opus-5-5", at: now - 86_400_000 }],
+      all.map(modelOptionRoute),
+      now,
+    );
+    expect(ordered[0]!.models.map((entry) => entry.name)).toEqual([
+      "Claude Opus 5.5",
+      "Claude Sonnet 5.5",
+    ]);
+  });
+
   it("uses the shared native routing policy for rows and remapped favorites", () => {
     const providers = [
       provider("claudeAgent", "claudeAgent", model),

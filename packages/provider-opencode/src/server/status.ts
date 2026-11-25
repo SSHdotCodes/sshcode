@@ -731,16 +731,17 @@ const checkOpenCode2 = Effect.fn("checkOpenCode2")(function* (
     // Every session can compact; a workspace snapshot adds that directory's commands.
     slashCommands: [COMPACT_SLASH_COMMAND],
     probe: !result.value.fresh
-      ? listed.length > 0
-        ? // The earlier list still works, so the models stay usable. The message
-          // and the unknown sign-in keep it from reading as just checked, and
-          // the unknown sign-in keeps the timer checking again.
-          probe(
-            "ready",
-            `OpenCode was slow to answer, so these are the ${listed.length} model${listed.length === 1 ? "" : "s"} it listed before.`,
-            false,
-          )
-        : probe("warning", "OpenCode is still starting, so its models are not listed yet.")
+      ? {
+          // Keep checking when the current list would otherwise come from the last answer.
+          ...(listed.length > 0
+            ? probe(
+                "ready",
+                `OpenCode was slow to answer, so these are the ${listed.length} model${listed.length === 1 ? "" : "s"} it listed before.`,
+                false,
+              )
+            : probe("warning", "OpenCode is still starting, so its models are not listed yet.")),
+          refreshing: true,
+        }
       : listed.length > 0
         ? probe(
             "ready",

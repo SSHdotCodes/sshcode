@@ -39,6 +39,7 @@ import { observeVisibleAnimation } from "../../lib/visibleAnimation";
 import { useConnectedEnvironmentIds } from "../../state/environments";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { Button } from "../ui/button";
+import { PanelLoading } from "../ui/panel-loading";
 import { Spinner } from "../ui/spinner";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -96,9 +97,13 @@ export function WorkflowRunPage({
           </Button>
           <h1 className="text-sm font-medium">Run</h1>
         </WorkspacePageHeader>
-        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-          {view.loading ? <Spinner /> : (view.error ?? "This run is gone.")}
-        </div>
+        {view.loading ? (
+          <PanelLoading label="Loading run…" toolbar={false} />
+        ) : (
+          <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
+            {view.error ?? "This run is gone."}
+          </div>
+        )}
       </div>
     );
   }

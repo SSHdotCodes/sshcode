@@ -250,7 +250,7 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   runtimeMode: Schema.optional(
     OrchestratorMcpRuntimeMode.annotate({
       description:
-        "Defaults to inherit; omit unless the user asks for a supervised child. Not a read-only switch: on most providers approval-required and auto-accept-edits pause the child at each action needing approval until a person approves it in the child's thread, which this thread cannot do. To limit the child, say so in the task. A mode ranked above this thread's is rejected; a lower rank does not promise narrower provider permissions.",
+        "Defaults to inherit; omit unless the user asks for a supervised child. Not a read-only switch: approval-required/auto-accept-edits pause the child at each action needing approval until a person approves in the child's thread, which this thread cannot do — to limit the child, say so in the task. Modes above this thread's are rejected; lower rank doesn't promise narrower provider permissions.",
     }),
   ),
   interactionMode: Schema.optional(OrchestratorMcpInteractionMode),
@@ -297,16 +297,21 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   taskId: NodeId,
   status: OrchestratorMcpDelegatedTaskStatus,
   workState: Schema.Literals(["working", "waiting_for_children", "result_available"]),
-  hasPendingChildRuns: Schema.Boolean,
+  /** Present (true) only while later child runs are pending. */
+  hasPendingChildRuns: Schema.optionalKey(Schema.Literal(true)),
   /** Omitted while it is the task's current run or there is none. */
   latestTerminalRunId: Schema.optional(RunId),
-  latestTerminalStatus: Schema.NullOr(OrchestratorMcpTerminalDelegatedTaskStatus),
-  latestTerminalSummary: Schema.NullOr(Schema.String),
+  /** Omitted until a later run of the child ends. */
+  latestTerminalStatus: Schema.optionalKey(OrchestratorMcpTerminalDelegatedTaskStatus),
+  /** Omitted while it would repeat summary or there is none. */
+  latestTerminalSummary: Schema.optionalKey(Schema.String),
   /** Omitted while it is resultContextTransferId or there is none. */
   latestTerminalResultContextTransferId: Schema.optional(ContextTransferId),
   providerInstanceId: ProviderInstanceId,
-  model: Schema.NullOr(Schema.String),
-  summary: Schema.NullOr(Schema.String),
+  /** Omitted while no model is recorded yet. */
+  model: Schema.optionalKey(Schema.String),
+  /** The original run's result text; omitted until it produces one. */
+  summary: Schema.optionalKey(Schema.String),
   seen: Schema.optional(OrchestrationV2SubagentSeen),
   failure: Schema.optional(
     OrchestrationV2ProviderFailure.annotate({
@@ -314,7 +319,8 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
         "Structured provider failure for a failed task, when available. retryable indicates a transient provider failure; the task is still incomplete.",
     }),
   ),
-  resultContextTransferId: Schema.NullOr(ContextTransferId),
+  /** Omitted until the original run's result can transfer context. */
+  resultContextTransferId: Schema.optionalKey(ContextTransferId),
   pendingRequests: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
@@ -325,7 +331,8 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
       }),
     ),
   ).annotate({ description: "Pending handles; an omitted threadId is the task's child thread." }),
-  hasPendingQuestion: Schema.Boolean.annotate({
+  /** Present (true) only while a blocking question waits. */
+  hasPendingQuestion: Schema.optionalKey(Schema.Literal(true)).annotate({
     description:
       "Blocking question ends mode=wait. Read/respond to user_input with t3_pending_request_* and its id/threadId; completion still wakes this thread.",
   }),
@@ -335,9 +342,10 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   ),
   /** How the request was adjusted to run (for example, no worktree), or that a repeat check found no change. */
   notice: Schema.optional(Schema.String),
-  waitTimedOut: Schema.Boolean.annotate({
+  /** Present (true) only on the mode=wait call whose timeoutMs elapsed. */
+  waitTimedOut: Schema.optionalKey(Schema.Literal(true)).annotate({
     description:
-      "True only on that mode=wait call when timeoutMs elapsed. The timeout does not cancel the child. Later task_status reads return false and use status for liveness.",
+      "The timeout does not cancel the child. Later task_status reads omit it and use status for liveness.",
   }),
 });
 export type OrchestratorMcpDelegateTaskResult = typeof OrchestratorMcpDelegateTaskResult.Type;
@@ -551,27 +559,29 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   createdBy: OrchestrationV2Actor,
   creationSource: McpCreationSource,
   status: OrchestratorMcpThreadStatus,
-  latestRunId: Schema.NullOr(RunId),
-  activeRunId: Schema.NullOr(RunId),
+  /** Omitted until the thread has a run. */
+  latestRunId: Schema.optionalKey(RunId),
+  /** Omitted while no run is active. */
+  activeRunId: Schema.optionalKey(RunId),
   providerInstanceId: ProviderInstanceId,
   model: Schema.String,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
-  linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
-  titleRegeneration: Schema.NullOr(ThreadTitleRegeneration),
-  branch: Schema.NullOr(Schema.String),
-  worktreePath: Schema.NullOr(Schema.String),
-  parentThreadId: Schema.NullOr(ThreadId),
-  relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
+  linkedPullRequest: Schema.optionalKey(ThreadLinkedPullRequest),
+  titleRegeneration: Schema.optionalKey(ThreadTitleRegeneration),
+  branch: Schema.optionalKey(Schema.String),
+  worktreePath: Schema.optionalKey(Schema.String),
+  parentThreadId: Schema.optionalKey(ThreadId),
+  relationshipToParent: Schema.optionalKey(Schema.Literals(["fork", "subagent"])),
   runCount: NonNegativeInt,
   itemCount: NonNegativeInt,
   pendingRequestCount: NonNegativeInt,
   archived: Schema.Boolean,
   settled: Schema.Boolean,
-  settledAt: Schema.NullOr(IsoDateTime),
+  settledAt: Schema.optionalKey(IsoDateTime),
   snoozed: Schema.Boolean,
-  /** When a snoozed thread wakes; null when it is not snoozed. */
-  snoozedUntil: Schema.NullOr(IsoDateTime),
+  /** When a snoozed thread wakes; omitted when it is not snoozed. */
+  snoozedUntil: Schema.optionalKey(IsoDateTime),
   /** Present only for a pinned thread. */
   pinned: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
@@ -586,28 +596,33 @@ export const OrchestratorMcpThreadRun = Schema.Struct({
   providerInstanceId: ProviderInstanceId,
   model: Schema.String,
   requestedAt: IsoDateTime,
-  startedAt: Schema.NullOr(IsoDateTime),
-  completedAt: Schema.NullOr(IsoDateTime),
+  /** Omitted until the run starts. */
+  startedAt: Schema.optionalKey(IsoDateTime),
+  /** Omitted until the run ends. */
+  completedAt: Schema.optionalKey(IsoDateTime),
 });
 export type OrchestratorMcpThreadRun = typeof OrchestratorMcpThreadRun.Type;
 
 export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
   position: NonNegativeInt,
   visibility: Schema.Literals(["local", "inherited", "synthetic"]),
-  sourceThreadId: ThreadId,
+  /** Omitted when the item belongs to the thread being read. */
+  sourceThreadId: Schema.optionalKey(ThreadId),
   itemId: TurnItemId,
   subagentId: Schema.optional(NodeId),
-  runId: Schema.NullOr(RunId),
-  messageId: Schema.NullOr(MessageId),
-  createdBy: Schema.NullOr(OrchestrationV2Actor),
-  creationSource: Schema.NullOr(McpCreationSource),
+  runId: Schema.optionalKey(RunId),
+  messageId: Schema.optionalKey(MessageId),
+  createdBy: Schema.optionalKey(OrchestrationV2Actor),
+  creationSource: Schema.optionalKey(McpCreationSource),
   type: Schema.String,
   status: OrchestrationV2TurnItemStatus,
-  title: Schema.NullOr(Schema.String),
-  text: Schema.NullOr(Schema.String),
+  title: Schema.optionalKey(Schema.String),
+  /** Omitted when the item has no text. */
+  text: Schema.optionalKey(Schema.String),
   snippet: Schema.optional(Schema.String),
-  textTruncated: Schema.Boolean,
-  nextTextOffset: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  /** Present (true) only while more text remains at nextTextOffset. */
+  textTruncated: Schema.optionalKey(Schema.Literal(true)),
+  nextTextOffset: Schema.optional(NonNegativeInt),
   updatedAt: IsoDateTime,
 });
 export type OrchestratorMcpThreadTimelineItem = typeof OrchestratorMcpThreadTimelineItem.Type;

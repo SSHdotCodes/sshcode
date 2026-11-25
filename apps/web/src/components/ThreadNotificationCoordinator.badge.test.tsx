@@ -23,18 +23,28 @@ const state = vi.hoisted(() => ({
   nativeListeners: new Set<(response: DesktopNotificationResponse) => void>(),
   loadProjection: vi.fn(),
 }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: (id: string) => state.shells.get(id) }));
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: ([id, kind]: [string, "shell" | "snapshot"]) => {
+    const shell = state.shells.get(id);
+    return kind === "shell" ? shell : Option.getOrNull(shell.snapshot);
+  },
+}));
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => state.navigate,
   useParams: () => ({}),
 }));
 vi.mock("./ui/toast", () => ({ toastManager: { add: state.toast } }));
-vi.mock("../state/shell", () => ({ environmentShell: { stateValueAtom: (id: string) => id } }));
+vi.mock("../state/shell", () => ({
+  environmentShell: { stateValueAtom: (id: string) => [id, "shell"] },
+}));
 vi.mock("../state/environments", () => ({
   useEnvironmentIds: () => state.environmentIds,
 }));
 vi.mock("../state/notificationRequests", () => ({ notificationThreadProjection: "load" }));
-vi.mock("../state/threads", () => ({ threadEnvironment: {} }));
+vi.mock("../state/threads", () => ({
+  threadFamilies: { snapshotAtom: (id: string) => [id, "snapshot"] },
+  threadEnvironment: {},
+}));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => state.loadProjection }));
 vi.mock("../state/use-orchestration-command", () => ({ useOrchestrationCommand: () => vi.fn() }));
 vi.mock("../hooks/useSettings", () => ({

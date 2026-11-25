@@ -1655,8 +1655,8 @@ export const make = Effect.gen(function* () {
           ) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
-          // Reserve the whole file even if its read or parse fails.
-          transcriptsRemaining -= 1;
+          // Unusable transcripts still cost bytes, but charging a slot would block older
+          // sessions on every retry because those files are never recorded as imported.
           bytesRemaining -= identity.size;
           const snapshot = yield* readTranscript(
             transcript.filePath,
@@ -1698,6 +1698,7 @@ export const make = Effect.gen(function* () {
           if (parsedThread === null) {
             return Option.some<AgentSessionRecentThread>({ _tag: "Skipped" });
           }
+          transcriptsRemaining -= 1;
 
           const source: AgentSessionImportSource = {
             ...identity,

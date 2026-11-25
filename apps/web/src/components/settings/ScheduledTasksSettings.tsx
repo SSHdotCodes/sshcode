@@ -230,7 +230,7 @@ export function ScheduledTasksSettings(target: {
         headerAction={
           <Button
             size="xs"
-            variant="ghost-muted"
+            variant="outline"
             disabled={!defaultEnvironment || !canCreate}
             onClick={() =>
               defaultEnvironment &&
@@ -572,41 +572,51 @@ function ScheduledTaskHistoryDialog({
         </DialogHeader>
         <DialogPanel>
           {history.error ? <p className="text-sm text-destructive">{history.error}</p> : null}
-          {!history.data && !history.error ? <p role="status">Loading history…</p> : null}
-          {history.data?.runs.length === 0 ? <p>No runs yet.</p> : null}
-          <div className="space-y-3">
-            {history.data?.runs.map((run) => (
-              <div
-                key={run.id}
-                className="flex flex-wrap items-center justify-between gap-2 text-sm"
-              >
-                <div>
-                  <p>
-                    {relativeLabel(run.scheduledAt, nowMs)} · {run.trigger}
-                  </p>
-                  <p className="text-muted-foreground">
-                    {run.dispatchStatus === "dispatched" ? "Dispatched" : run.dispatchStatus} ·{" "}
-                    {run.runStatus?.replaceAll("_", " ") ?? "No agent outcome yet"}
-                  </p>
-                  {run.error ? <p className="text-destructive">{run.error}</p> : null}
+          {!history.data && !history.error ? (
+            <ListState loading size="compact" title="Loading history…" />
+          ) : null}
+          {history.data?.runs.length === 0 ? (
+            <ListState
+              size="compact"
+              title="No runs yet"
+              description="Dispatches will appear here once this task runs."
+            />
+          ) : null}
+          {history.data && history.data.runs.length > 0 ? (
+            <div className="divide-y divide-border/50">
+              {history.data.runs.map((run) => (
+                <div
+                  key={run.id}
+                  className="flex min-h-12 flex-wrap items-center justify-between gap-2 py-2.5 text-sm"
+                >
+                  <div>
+                    <p className="font-medium text-foreground">
+                      {relativeLabel(run.scheduledAt, nowMs)} · {run.trigger}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {run.dispatchStatus === "dispatched" ? "Dispatched" : run.dispatchStatus} ·{" "}
+                      {run.runStatus?.replaceAll("_", " ") ?? "No agent outcome yet"}
+                    </p>
+                    {run.error ? <p className="text-xs text-destructive">{run.error}</p> : null}
+                  </div>
+                  {run.threadId ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      render={
+                        <Link
+                          to="/$environmentId/$threadId"
+                          params={{ environmentId, threadId: run.threadId }}
+                        />
+                      }
+                    >
+                      Open chat
+                    </Button>
+                  ) : null}
                 </div>
-                {run.threadId ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    render={
-                      <Link
-                        to="/$environmentId/$threadId"
-                        params={{ environmentId, threadId: run.threadId }}
-                      />
-                    }
-                  >
-                    Open chat
-                  </Button>
-                ) : null}
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : null}
           <div className="mt-4 flex gap-2">
             {before ? (
               <Button variant="outline" size="sm" onClick={() => setBefore(undefined)}>
@@ -672,9 +682,7 @@ function WebhookDeliveriesDialog({
         <DialogPanel>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
           {selectedId !== null && selected === null && selectedQuery.error === null ? (
-            <p className="text-sm text-muted-foreground" role="status">
-              Loading delivery…
-            </p>
+            <ListState loading size="compact" title="Loading delivery…" />
           ) : selected ? (
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -710,18 +718,20 @@ function WebhookDeliveriesDialog({
               </DeliveryBlock>
             </div>
           ) : selectedId !== null ? null : deliveries === null ? (
-            <p className="text-sm text-muted-foreground" role="status">
-              Loading deliveries…
-            </p>
+            <ListState loading size="compact" title="Loading deliveries…" />
           ) : deliveries.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No requests yet.</p>
+            <ListState
+              size="compact"
+              title="No requests yet"
+              description="Requests sent to this task's webhook URL will appear here."
+            />
           ) : (
-            <ul className="divide-y divide-border">
+            <ul className="divide-y divide-border/50">
               {deliveries.map((delivery) => (
                 <li key={delivery.id}>
                   <button
                     type="button"
-                    className="flex w-full flex-wrap items-center gap-2 py-2 text-left text-sm hover:bg-accent/40"
+                    className="flex min-h-10 w-full cursor-pointer flex-wrap items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-accent/50"
                     onClick={() => setSelectedId(delivery.id)}
                   >
                     <Badge variant={deliveryOutcomeVariant(delivery.outcome)}>

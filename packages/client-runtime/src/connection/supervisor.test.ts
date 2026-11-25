@@ -1299,32 +1299,54 @@ describe("EnvironmentSupervisor", () => {
       releaseDefect: true,
       log: "Connection release failed with an unexpected defect.",
     },
-  ])("reconnects after a stable session $label", ({ closed, releaseDefect, log }) =>
+  ])(
+    "reconnects immediately when a stable direct session $label",
+    ({ closed, releaseDefect, log }) =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({
+          release: (session) =>
+            releaseDefect && session === 1
+              ? Effect.die(new Error("Session release defect."))
+              : Effect.void,
+        });
+        const logs: unknown[] = [];
+        const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+          initiallyDesired: true,
+        }).pipe(Effect.provide(Layer.merge(harness.dependencies, recordLogs(logs))));
+
+        yield* awaitState(
+          supervisor.state,
+          (state) => state.phase === "connected" && state.generation === 1,
+        );
+        yield* TestClock.adjust("1 minute");
+        yield* harness.closeLatestSession(closed);
+        const replaced = yield* awaitState(
+          supervisor.state,
+          (state) => state.phase === "connected" && state.generation === 2,
+        );
+        expect(logs).toEqual(log === null ? [] : [[log]]);
+        expect(replaced.attempt).toBe(1);
+      }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("keeps the first backoff delay when a stable relay session closes", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
-        release: (session) =>
-          releaseDefect && session === 1
-            ? Effect.die(new Error("Session release defect."))
-            : Effect.void,
+        prepare: () => Effect.succeed(preparedFor(RELAY_TARGET)),
       });
-      const logs: unknown[] = [];
-      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+      const supervisor = yield* EnvironmentSupervisor.make(RELAY_ENTRY, {
         initiallyDesired: true,
-      }).pipe(Effect.provide(Layer.merge(harness.dependencies, recordLogs(logs))));
-
+      }).pipe(Effect.provide(harness.dependencies));
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      yield* TestClock.adjust("1 minute");
+      yield* harness.closeLatestSession();
+      const waiting = yield* awaitState(supervisor.state, (state) => state.phase === "backoff");
+      expect(waiting.retryAt! - (yield* Clock.currentTimeMillis)).toBe(2_000);
+      yield* TestClock.adjust("2 seconds");
       yield* awaitState(
         supervisor.state,
-        (state) => state.phase === "connected" && state.generation === 1,
+        (state) => state.phase === "connected" && state.generation === 2,
       );
-      yield* TestClock.adjust("1 minute");
-      yield* harness.closeLatestSession(closed);
-      const lost = yield* awaitState(supervisor.state, (state) => state.phase !== "connected");
-      expect(logs).toEqual(log === null ? [] : [[log]]);
-      expect(lost).toMatchObject({ phase: "backoff", generation: 1 });
-
-      yield* TestClock.adjust("2 seconds");
-      const replaced = yield* awaitState(supervisor.state, (state) => state.phase === "connected");
-      expect(replaced.generation).toBe(2);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 

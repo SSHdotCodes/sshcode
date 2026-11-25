@@ -616,6 +616,93 @@ it.layer(layerTest)("ThreadSearch", (it) => {
     }),
   );
 
+  it.effect("emits matching chat names before completing message search", () =>
+    Effect.gen(function* () {
+      const search = yield* ThreadSearch.ThreadSearch;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const project = ProjectId.make("named-search");
+      const named = ThreadId.make("named-search-title");
+      const discussed = ThreadId.make("named-search-discussion");
+      yield* createProject(project);
+      for (const event of [
+        thread(named, project),
+        thread(discussed, project),
+        message(discussed, "named-search-message", "user", "Discuss search title relevance"),
+      ]) {
+        yield* projections.apply(event);
+        yield* search.handle(event);
+      }
+      const frames = yield* search
+        .searchStream({ query: "search title", mode: "keyword" })
+        .pipe(Stream.runCollect);
+      assert.isFalse(frames[0]?.complete);
+      assert.deepEqual(
+        frames[0]?.matches.map((match) => match.threadId),
+        [named],
+      );
+      assert.isTrue(frames[1]?.complete);
+      assert.deepEqual(
+        frames[1]?.matches.map((match) => match.threadId),
+        [named, discussed],
+      );
+      const modelResults = yield* search.search({ query: "gpt 5", mode: "keyword" });
+      assert.equal(
+        modelResults.matches.find((match) => match.threadId === named)?.matchedModel,
+        "gpt-5",
+      );
+      const harnessResults = yield* search.search({ query: "codex", mode: "keyword" });
+      assert.equal(
+        harnessResults.matches.find((match) => match.threadId === named)?.matchedHarness,
+        "Codex",
+      );
+    }),
+  );
+
+  it.effect("refreshes named search results on model and provider changes", () =>
+    Effect.gen(function* () {
+      const search = yield* ThreadSearch.ThreadSearch;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const project = ProjectId.make("live-search-metadata");
+      const threadId = ThreadId.make("live-metadata-thread");
+      yield* createProject(project);
+      const initial = thread(threadId, project);
+      yield* projections.apply(initial);
+      yield* search.handle(initial);
+
+      const model = {
+        ...initial,
+        id: EventId.make("search-model-change"),
+        type: "thread.model-selection-updated",
+        payload: {
+          ...initial.payload,
+          modelSelection: { instanceId: providerInstanceId, model: "gpt-9-live" },
+        },
+      } satisfies OrchestrationV2DomainEvent;
+      const claude = ProviderInstanceId.make("claudeAgent");
+      const provider = {
+        ...model,
+        id: EventId.make("search-provider-change"),
+        type: "thread.provider-switched",
+        payload: {
+          ...model.payload,
+          providerInstanceId: claude,
+          modelSelection: { instanceId: claude, model: "claude-opus" },
+        },
+      } satisfies OrchestrationV2DomainEvent;
+      for (const event of [model, provider]) {
+        yield* projections.apply(event);
+        if (ThreadSearch.tracksSearchEvent(event.type)) yield* search.handle(event);
+        const result = yield* search.search({
+          query: event.payload.modelSelection.model,
+          mode: "keyword",
+        });
+        assert.equal(result.matches[0]?.matchedModel, event.payload.modelSelection.model);
+      }
+      const old = yield* search.search({ query: "gpt-9-live", mode: "keyword" });
+      assert.lengthOf(old.matches, 0);
+    }),
+  );
+
   it.effect("reports an unreadable match as a decode failure", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;

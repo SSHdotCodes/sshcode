@@ -108,7 +108,7 @@ export function ListRowLayout({
       </View>
       {detail && !stackDetail ? (
         <AppText
-          className="max-w-[40%] shrink text-right text-sm text-foreground-muted"
+          className="max-w-[40%] shrink text-right text-sm tabular-nums text-foreground-muted"
           numberOfLines={1}
           ellipsizeMode="middle"
         >

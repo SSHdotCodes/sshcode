@@ -130,8 +130,8 @@ function PullRequestRowImpl({
       data-pull-request-key={statsKey}
       className={cn(
         // Keep the action buttons inside the same skipped row, but outside its selection button.
-        "flex items-center rounded-md [content-visibility:auto] [contain-intrinsic-block-size:56.5px]",
-        selected ? "bg-accent" : "hover:bg-accent/60",
+        "flex items-center rounded-lg transition-colors duration-100 ease-out motion-reduce:transition-none [content-visibility:auto] [contain-intrinsic-block-size:56.5px]",
+        selected ? "bg-accent ring-1 ring-inset ring-border/60" : "hover:bg-accent/55",
       )}
     >
       <button
@@ -141,7 +141,7 @@ function PullRequestRowImpl({
         className={cn(
           PULL_REQUEST_ROW_CLASS,
           PAGE_ROW_CLASS,
-          "min-w-0 flex-1 cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+          "min-w-0 flex-1 cursor-pointer transition-[background-color,color,scale] duration-100 ease-out motion-reduce:transition-none active:scale-[0.996] motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
         )}
       >
         <PullRequestRowGlyph

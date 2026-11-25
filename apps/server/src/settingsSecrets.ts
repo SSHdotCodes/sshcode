@@ -2,10 +2,15 @@ import {
   AntigravitySettings,
   ClaudeSettings,
   CodexSettings,
+  type ProviderInstanceConfig,
   type ServerSettings,
   UsageLimitSourceConfig,
   secretSettingsFields,
 } from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
+import * as Effect from "effect/Effect";
+import * as Hex from "effect/encoding/Hex";
+import * as Schema from "effect/Schema";
 import { acpRegistryClient } from "@t3tools/provider-acp-registry/client";
 import { cursorClient } from "@t3tools/provider-cursor/client";
 import { grokClient } from "@t3tools/provider-grok/client";
@@ -32,6 +37,62 @@ const providerSecretFields = new Map([
 ]);
 const usageLimitSecretFields = secretSettingsFields(UsageLimitSourceConfig);
 const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
+const encodeCredentialSettings = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+/** The provider cache can only reuse a snapshot under the same configured credentials. */
+export const providerCredentialSettings = Effect.fnUntraced(function* (
+  instance: ProviderInstanceConfig,
+) {
+  const config =
+    instance.config !== null && typeof instance.config === "object"
+      ? (instance.config as Readonly<Record<string, unknown>>)
+      : {};
+  const fields = (providerSecretFields.get(instance.driver) ?? []).toSorted().flatMap((field) =>
+    readSecretFieldValues(config[field])
+      .filter(([, value]) => value.length > 0)
+      .toSorted(([left], [right]) => (left ?? "").localeCompare(right ?? ""))
+      .map(([host, value]) => [field, host, value] as const),
+  );
+  // Environment overrides can select a different login, endpoint, or token.
+  const environment = new Map(instance.environment?.map(({ name, value }) => [name, value]));
+  const alwaysUseToken = instance.driver === "claudeAgent" && config.alwaysUseToken === true;
+  const loginSettings =
+    instance.driver === "claudeAgent" && typeof config.homePath === "string"
+      ? config.homePath.trim()
+      : instance.driver === "antigravity" &&
+          config.authMethod !== "oauth-personal" &&
+          typeof config.authMethod === "string"
+        ? config.authMethod
+        : "";
+  if (fields.length === 0 && environment.size === 0 && !alwaysUseToken && !loginSettings)
+    return undefined;
+  const crypto = yield* Crypto.Crypto;
+  const fingerprint = yield* crypto
+    .digest(
+      "SHA-256",
+      new TextEncoder().encode(
+        encodeCredentialSettings([
+          "provider-cache",
+          instance.driver,
+          fields,
+          [...environment].toSorted(([left], [right]) => left.localeCompare(right)),
+          alwaysUseToken,
+          loginSettings,
+        ]),
+      ),
+    )
+    .pipe(
+      Effect.map(Hex.encode),
+      Effect.catch(() => Effect.die(new Error("Could not fingerprint provider settings."))),
+    );
+  return {
+    fingerprint,
+    // When Claude is pinned to an explicit token, its cached reading can be attributed
+    // even though the driver deliberately omits the stored login's email and workspace.
+    identifiesAccount:
+      alwaysUseToken && Boolean(environment.get("CLAUDE_CODE_OAUTH_TOKEN")?.trim()),
+  };
+});
 
 export interface SettingsSecret {
   readonly secretName: string;

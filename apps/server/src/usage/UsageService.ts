@@ -28,7 +28,7 @@ import {
   type UsageProviderKind,
   type UsageSource,
   type UsagePricing,
-  type UsageSummary,
+  UsageSummary,
   type UsageSummaryInput,
   UsageReadError,
 } from "@t3tools/contracts";
@@ -36,6 +36,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
+import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -101,6 +102,13 @@ const RATES_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** An explicit refresh ignores the TTL, but not a table fetched this recently. */
 const RATES_REFRESH_FLOOR_MS = 60 * 1000;
+const USAGE_SUMMARY_FRESH_MS = 15_000;
+const USAGE_SUMMARY_CACHE_SIZE = 8;
+const StoredUsageSummary = Schema.fromJsonString(
+  Schema.Struct({ digest: Schema.String, summary: UsageSummary }),
+);
+const decodeStoredUsageSummary = Schema.decodeUnknownEffect(StoredUsageSummary);
+const encodeStoredUsageSummary = Schema.encodeEffect(StoredUsageSummary);
 
 /**
  * Files are filtered by mtime before opening. The slack covers a session whose
@@ -253,7 +261,10 @@ const decodeCachedSources = Schema.decodeUnknownOption(
 export class UsageService extends Context.Service<
   UsageService,
   {
-    readonly readSummary: (input: UsageSummaryInput) => Effect.Effect<UsageSummary, UsageReadError>;
+    readonly readSummary: (
+      input: UsageSummaryInput,
+      options?: { readonly preferCached?: boolean },
+    ) => Effect.Effect<UsageSummary, UsageReadError>;
     readonly readThreadRecords: Effect.Effect<
       {
         readonly sources: readonly ThreadUsageSource[];
@@ -310,6 +321,7 @@ export const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
   const sql = yield* SqlClient.SqlClient;
+  const crypto = yield* Crypto.Crypto;
   const hostEnvironment = yield* HostProcess.Environment;
   // The readers yield their own services; scans run them against this context.
   const readerContext = yield* Effect.context<BuiltInUsageReadersEnv>();
@@ -324,6 +336,19 @@ export const make = Effect.gen(function* () {
 
   const ratesCachePath = path.join(config.stateDir, "usage-model-rates.json");
   const scanCachePath = path.join(config.stateDir, SCAN_CACHE_FILE_NAME);
+  const summaryCachePath = path.join(config.stateDir, "usage-last-summary.json");
+  const summaryKeyEncoder = new TextEncoder();
+  const hashSummaryKey = (key: string) =>
+    crypto
+      .digest("SHA-256", summaryKeyEncoder.encode(key))
+      .pipe(Effect.map((digest) => Buffer.from(digest).toString("hex")));
+  // Usage is opened on demand. Read the previous summary only when the first
+  // matching dashboard request needs it, without adding server startup I/O.
+  const readStoredUsageSummary = yield* Effect.cached(
+    fileSystem
+      .readFileString(summaryCachePath)
+      .pipe(Effect.flatMap(decodeStoredUsageSummary), Effect.option),
+  );
   const legacyScanCachePaths = LEGACY_SCAN_CACHE_FILE_NAMES.map((name) =>
     path.join(config.stateDir, name),
   );
@@ -335,6 +360,14 @@ export const make = Effect.gen(function* () {
   let rates: RateTable = new Map();
   let ratesFetchedAtMs: number | null = null;
   let ratesStatus: UsagePricing["status"] = "unavailable";
+  const completedSummaries = new Map<
+    string,
+    { readonly summary: UsageSummary; readonly completedAt: number; readonly scanId: number }
+  >();
+  let summaryGeneration = 0;
+  let nextSummaryScanId = 0;
+  let latestCompleteScanId = 0;
+  let pendingUsageSummary: { readonly key: string; readonly summary: UsageSummary } | undefined;
   // One fetch at a time. A burst of refreshes from several clients waits on
   // the first fetch and then sees a table young enough to skip its own.
   const ratesLock = yield* Semaphore.make(1);
@@ -428,7 +461,13 @@ export const make = Effect.gen(function* () {
   });
 
   const refreshRates = ensureRates(true).pipe(
-    Effect.map(pricing),
+    Effect.map(() => {
+      // Pull-to-refresh and the Usage toolbar both refresh rates before they
+      // request a summary. A previous scan must not satisfy that request.
+      summaryGeneration++;
+      completedSummaries.clear();
+      return pricing();
+    }),
     Effect.withSpan("UsageService.refreshRates"),
   );
 
@@ -661,6 +700,15 @@ export const make = Effect.gen(function* () {
   // next persist retries instead of leaving disk stale. A cache we cannot
   // write is a slower next start, not a failed read.
   const persistCaches = Effect.gen(function* () {
+    const latest = pendingUsageSummary;
+    if (latest !== undefined) {
+      pendingUsageSummary = undefined;
+      yield* hashSummaryKey(latest.key).pipe(
+        Effect.flatMap((digest) => encodeStoredUsageSummary({ digest, summary: latest.summary })),
+        Effect.flatMap((contents) => writeCacheFile(summaryCachePath, contents)),
+        Effect.ignore,
+      );
+    }
     if (cacheDirty) {
       cacheDirty = false;
       let compromised = false;
@@ -1367,38 +1415,105 @@ export const make = Effect.gen(function* () {
       input.sinceTime ?? null,
       input.untilTime ?? null,
       settings,
-      // A waiting read must never share a scan that answers with `refreshing`.
-      input.awaitRefresh === true,
     ]);
 
-  const readSummary = Effect.fn("UsageService.readSummary")(function* (input: UsageSummaryInput) {
+  const startSummaryScan = Effect.fnUntraced(function* (
+    input: UsageSummaryInput,
+    settings: ServerSettingsValue,
+    summaryKey: string,
+  ) {
+    const generation = summaryGeneration;
+    // A waiting read must never share a scan that answers with `refreshing`.
+    const key = `${generation}:${input.awaitRefresh === true}:${summaryKey}`;
+    const existing = inflightScans.get(key);
+    if (existing !== undefined) return existing;
+
+    // Enrollment and detached-fiber creation must be atomic. Otherwise a
+    // canceled first caller can leave a Deferred with no scan to finish it.
+    const created = Deferred.makeUnsafe<UsageSummary, UsageReadError>();
+    inflightScans.set(key, created);
+    const scanId = ++nextSummaryScanId;
+    yield* scanSummary(input, settings).pipe(
+      Effect.onExit((exit) =>
+        Effect.gen(function* () {
+          if (Exit.isSuccess(exit)) {
+            const completedAt = yield* Clock.currentTimeMillis;
+            const previous = completedSummaries.get(summaryKey);
+            if (generation === summaryGeneration && (previous?.scanId ?? 0) < scanId) {
+              completedSummaries.delete(summaryKey);
+              completedSummaries.set(summaryKey, { summary: exit.value, completedAt, scanId });
+              if (completedSummaries.size > USAGE_SUMMARY_CACHE_SIZE) {
+                const oldest = completedSummaries.keys().next().value;
+                if (oldest !== undefined) completedSummaries.delete(oldest);
+              }
+              if (
+                scanId > latestCompleteScanId &&
+                exit.value.sources.length > 0 &&
+                !exit.value.sources.some((source) => source.refreshing === true)
+              ) {
+                latestCompleteScanId = scanId;
+                pendingUsageSummary = { key: summaryKey, summary: exit.value };
+              }
+            }
+            // Register the cache write before the waiters resume.
+            yield* schedulePersist;
+          }
+          inflightScans.delete(key);
+          yield* Deferred.done(created, exit);
+        }),
+      ),
+      Effect.forkDetach,
+    );
+    return created;
+  }, Effect.uninterruptible);
+
+  const readSummary = Effect.fn("UsageService.readSummary")(function* (
+    input: UsageSummaryInput,
+    options?: { readonly preferCached?: boolean },
+  ) {
     const settings = yield* readSettings;
     const key = scanKey(input, settings);
-    const deferred = yield* Effect.uninterruptible(
-      Effect.gen(function* () {
-        const existing = inflightScans.get(key);
-        if (existing !== undefined) return existing;
-
-        // Enrollment and detached-fiber creation must be atomic. Otherwise a
-        // canceled first caller can leave a Deferred with no scan to finish it.
-        const created = Deferred.makeUnsafe<UsageSummary, UsageReadError>();
-        inflightScans.set(key, created);
-        // Detached so one departing client cannot tear the scan out from under
-        // the fibers awaiting it; a finished scan warms the cache either way.
-        // The cache write is registered before the waiters resume, so they
-        // can await it, but its fiber starts after they have the summary.
-        yield* scanSummary(input, settings).pipe(
-          Effect.onExit((exit) =>
-            Effect.sync(() => inflightScans.delete(key)).pipe(
-              Effect.andThen(Exit.isSuccess(exit) ? schedulePersist : Effect.void),
-              Effect.andThen(Deferred.done(created, exit)),
-            ),
-          ),
-          Effect.forkDetach,
-        );
-        return created;
-      }),
-    );
+    if (options?.preferCached === true) {
+      let cached = completedSummaries.get(key);
+      if (cached === undefined && input.awaitRefresh !== true && summaryGeneration === 0) {
+        const stored = yield* readStoredUsageSummary;
+        if (
+          Option.isSome(stored) &&
+          stored.value.summary.contractVersion === USAGE_CONTRACT_VERSION
+        ) {
+          const digest = yield* hashSummaryKey(key).pipe(Effect.option);
+          if (summaryGeneration === 0 && Option.getOrUndefined(digest) === stored.value.digest) {
+            cached = completedSummaries.get(key) ?? {
+              summary: stored.value.summary,
+              completedAt: Number.NEGATIVE_INFINITY,
+              scanId: 0,
+            };
+          }
+        }
+      }
+      if (cached !== undefined) {
+        const age = (yield* Clock.currentTimeMillis) - cached.completedAt;
+        if (
+          age < USAGE_SUMMARY_FRESH_MS &&
+          (input.awaitRefresh !== true ||
+            !cached.summary.sources.some((source) => source.refreshing === true))
+        ) {
+          return cached.summary;
+        }
+        if (input.awaitRefresh !== true && cached.summary.sources.length > 0) {
+          // The follow-up sent by the client waits on this same scan.
+          yield* startSummaryScan({ ...input, awaitRefresh: true }, settings, key);
+          return {
+            ...cached.summary,
+            sources: cached.summary.sources.map((source) => ({
+              ...source,
+              refreshing: true as const,
+            })),
+          };
+        }
+      }
+    }
+    const deferred = yield* startSummaryScan(input, settings, key);
     // Waiting stays interruptible. The detached scan continues for other
     // callers and still warms the cache if this caller leaves.
     return yield* Deferred.await(deferred);

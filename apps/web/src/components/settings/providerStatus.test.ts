@@ -59,6 +59,16 @@ describe("a provider whose last run ended on its account", () => {
 });
 
 describe("getProviderSummary", () => {
+  it("shows a saved provider as refreshing while keeping its ready status", () => {
+    const saved = { ...provider, refreshing: true };
+    expect(getProviderSummary(saved).headline).toBe("Refreshing provider status");
+    expect(providerStatusKey(saved)).toBe("ready");
+    expect(providerStatusKey({ ...saved, status: "warning", installed: false })).toBe("neutral");
+    expect(getProviderSummary({ ...saved, auth: { status: "unauthenticated" } }).headline).toBe(
+      "Not authenticated",
+    );
+  });
+
   it("reports ready providers with unknown authentication as available", () => {
     expect(getProviderSummary({ ...provider, auth: { status: "unknown" } })).toEqual({
       headline: "Available",

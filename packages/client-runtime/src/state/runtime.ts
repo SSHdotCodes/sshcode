@@ -88,6 +88,7 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends Omit<
   ) => Effect.Effect<A, E, R>;
   readonly persistence?: QueryPersistence<A>;
   readonly staleTimeMs?: number;
+  readonly revalidateOnMount?: boolean;
   readonly idleTtlMs?: number;
   readonly refreshIntervalMs?: number;
   readonly refreshTrigger?: (target: {
@@ -669,7 +670,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
       .pipe(
         Atom.swr({
           staleTime: options.staleTimeMs ?? 30_000,
-          revalidateOnMount: true,
+          revalidateOnMount: options.revalidateOnMount ?? true,
         }),
         Atom.setIdleTTL(idleTtlMs),
       );

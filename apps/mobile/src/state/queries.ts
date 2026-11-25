@@ -19,6 +19,7 @@ import {
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
   type EnvironmentThreadSearchMatch,
+  type ThreadSearchResultsState,
 } from "@t3tools/client-runtime/state/thread-search";
 import { useAtomValue } from "@effect/atom-react";
 import * as Cause from "effect/Cause";
@@ -46,17 +47,17 @@ const VCS_REF_LIST_LIMIT = 100;
 const EMPTY_REFS: ReadonlyArray<VcsRef> = [];
 const INITIAL_BRANCH_CURSORS = [undefined] as const;
 const EMPTY_THREAD_SEARCH_MATCHES: ReadonlyArray<EnvironmentThreadSearchMatch> = Object.freeze([]);
-const EMPTY_THREAD_SEARCH_ATOM = Atom.make({
+const EMPTY_THREAD_SEARCH_ATOM = Atom.make<ThreadSearchResultsState>({
   matches: EMPTY_THREAD_SEARCH_MATCHES,
   isLoading: false,
   failed: false,
 }).pipe(Atom.withLabel("mobile:thread-search:empty"));
 
 const threadSearchResultsAtom = createThreadSearchResultsAtomFamily({
-  getSearchAtom: (environmentId, query) =>
+  getSearchAtom: (environmentId, query, cursor) =>
     orchestrationEnvironment.threadSearch({
       environmentId,
-      input: { query },
+      input: { query, ...(cursor ? { cursor } : {}) },
     }),
   labelPrefix: "mobile:thread-search",
 });
@@ -172,6 +173,7 @@ export function useThreadSearch(
   readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
   readonly failed: boolean;
   readonly isPending: boolean;
+  readonly pagination: ThreadSearchResultsState["pagination"];
 } {
   const normalizedQuery = query.trim();
   const debouncedQuery = useDebouncedValue(normalizedQuery, THREAD_SEARCH_DEBOUNCE_MS);
@@ -200,6 +202,7 @@ export function useThreadSearch(
   if (shownMatches !== lastMatches) setLastMatches(shownMatches);
   return {
     failed: settledQuery !== null && !result.isLoading && result.failed,
+    pagination: result.pagination,
     matches: shownMatches,
     isPending,
   };
@@ -358,7 +361,7 @@ export function useComposerPathSearch(target: ComposerPathSearchTarget) {
   const searchTarget =
     debouncedTarget.environmentId !== null &&
     debouncedTarget.cwd !== null &&
-    debouncedTarget.query.length > 0
+    debouncedTarget.query !== null
       ? {
           environmentId: debouncedTarget.environmentId,
           input: {
@@ -378,7 +381,7 @@ export function useComposerPathSearch(target: ComposerPathSearchTarget) {
 
   return {
     // Entries from another checkout must not be offered while the new one is debounced.
-    entries: isSameCheckout ? (result.data?.entries ?? []) : [],
+    entries: isSameCheckout && normalizedTarget.query !== null ? (result.data?.entries ?? []) : [],
     error:
       !hasTarget || fileAccess.isPending
         ? null

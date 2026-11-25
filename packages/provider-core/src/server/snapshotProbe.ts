@@ -94,6 +94,7 @@ export interface ProviderProbeResult {
   readonly version: string | null;
   readonly status: Exclude<ServerProviderState, "disabled">;
   readonly auth: ServerProviderAuth;
+  readonly refreshing?: boolean;
   readonly message?: string;
   readonly usageLimits?: ServerProviderUsageLimits;
 }
@@ -294,6 +295,7 @@ export function buildServerProvider(input: {
     status: input.enabled ? input.probe.status : "disabled",
     auth: input.probe.auth,
     checkedAt: input.checkedAt,
+    ...(input.enabled && input.probe.refreshing ? { refreshing: true } : {}),
     ...(input.probe.message ? { message: input.probe.message } : {}),
     models: input.models,
     ...(input.updateRequiredModels?.length

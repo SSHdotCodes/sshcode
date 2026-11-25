@@ -10,6 +10,7 @@ import {
   traitsEmptyTriggerLabel,
   buildUnavailableModelOptionDescriptors,
 } from "./TraitsPicker";
+import { speedToggleChoice } from "./TraitsSpeed";
 
 function selectDescriptor(
   id: string,
@@ -485,4 +486,38 @@ it("shows Unknown until a matching provider report provides Default", () => {
       reportedModelSelection: { ...selection, options: [{ id: "variant", value: "default" }] },
     }).label,
   ).toBe("Default");
+});
+
+describe("speedToggleChoice", () => {
+  const claude = ProviderDriverKind.make("claudeAgent");
+  it("flips Fast mode with one click", () => {
+    expect(speedToggleChoice(claude, fastModeDescriptor(false))).toEqual({
+      name: "Fast mode",
+      on: false,
+      next: true,
+    });
+    expect(speedToggleChoice(claude, fastModeDescriptor(true))).toMatchObject({
+      on: true,
+      next: false,
+    });
+  });
+
+  it("flips a two-way ACP speed and leaves larger menus alone", () => {
+    const speed = (options: ReadonlyArray<{ id: string; label: string }>, current: string) =>
+      speedToggleChoice(
+        ProviderDriverKind.make("acpRegistry"),
+        selectDescriptor("speed", options, current),
+      );
+    const twoWay = [
+      { id: "standard", label: "Standard" },
+      { id: "fast", label: "Lightning" },
+    ];
+    expect(speed(twoWay, "standard")).toEqual({ name: "Lightning", on: false, next: "fast" });
+    expect(speed(twoWay, "fast")).toMatchObject({ on: true, next: "standard" });
+    expect(speed([...twoWay, { id: "slow", label: "Slow" }], "fast")).toBeNull();
+  });
+
+  it("is not a switch for other settings", () => {
+    expect(speedToggleChoice(claude, EFFORT)).toBeNull();
+  });
 });

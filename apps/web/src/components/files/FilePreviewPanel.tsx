@@ -1,4 +1,3 @@
-import { Spinner } from "~/components/ui/spinner";
 import {
   AuthPreviewOperateScope,
   type EditorId,
@@ -207,9 +206,7 @@ function WorkspaceImagePreview(props: {
       </MediaActions>
     </div>
   ) : (
-    <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
-      <Spinner size="lg" />
-    </div>
+    <FileSurfaceLoading label="Loading image…" />
   );
 }
 
@@ -271,11 +268,7 @@ function WorkspaceBrowserPreview(props: {
     );
   }
   if (assetUrl._tag !== "Success") {
-    return (
-      <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
-        <Spinner size="lg" />
-      </div>
-    );
+    return <FileSurfaceLoading label="Loading file preview…" />;
   }
   return (
     <>
@@ -1295,15 +1288,10 @@ export default function FilePreviewPanel({
 
   if (attachment === undefined && !canReadFiles) {
     if (fileAccess.isPending) {
-      return (
-        <div className="flex min-h-0 flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-          <Spinner className="size-4" />
-          Checking file access...
-        </div>
-      );
+      return <FileSurfaceLoading label="Checking file access…" />;
     }
     return (
-      <div className="p-4 text-sm text-muted-foreground">
+      <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-muted-foreground">
         {fileAccess.error ?? "This connection cannot read host files."}
       </div>
     );
@@ -1397,7 +1385,7 @@ export default function FilePreviewPanel({
         </div>
       ) : null}
       {relativePath && !attachment && !isHostFile && !canWriteFiles && !fileAccess.isPending ? (
-        <div className="shrink-0 border-b px-3 py-1.5 text-2xs text-muted-foreground">
+        <div className="shrink-0 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-2xs text-muted-foreground">
           Read-only connection. Unsaved edits are kept until write access returns.
         </div>
       ) : null}
@@ -1497,9 +1485,7 @@ export default function FilePreviewPanel({
               </div>
             </div>
           ) : relativePath && file.data === null ? (
-            <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
-              <Spinner size="lg" />
-            </div>
+            <FileSurfaceLoading />
           ) : relativePath && file.data ? (
             isMarkdown && renderMarkdown ? (
               // Markdown reconciles in place across text updates, so a file

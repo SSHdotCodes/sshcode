@@ -1,3 +1,18 @@
+import Storage from "expo-sqlite/kv-store";
+import {
+  composerBuiltInSlashRecencyKey,
+  composerPathWorkspaceKey,
+  composerProviderSlashRecencyKey,
+  composerRecentRankMap,
+  composerRecentTieBreakerPrefix,
+  composerSkillRecencyKey,
+  orderByComposerRecentUse,
+  parseComposerRecentPaths,
+  parseComposerRecentUses,
+  recordComposerRecentPath,
+  recordComposerRecentUse,
+  type ComposerRecentPathsByWorkspace,
+} from "@t3tools/client-runtime/composer-command-recency";
 import { useThreadPickerShells } from "../../state/entities";
 import { formatModelLink } from "@t3tools/shared/modelLinks";
 import {
@@ -212,26 +227,153 @@ export function buildComposerSlashCommandItems(input: {
   return items;
 }
 
+const RECENT_COMMANDS_STORAGE_KEY = "t3code:composer-recent-commands:v1";
+const RECENT_PATHS_STORAGE_KEY = "t3code:composer-recent-paths:v2";
+
+let cachedMobileRecentCommands: ReadonlyArray<string> | null = null;
+let cachedMobileRecentPaths: ComposerRecentPathsByWorkspace | null = null;
+
+function readMobileRecentCommands(): ReadonlyArray<string> {
+  if (cachedMobileRecentCommands === null) {
+    try {
+      cachedMobileRecentCommands = parseComposerRecentUses(
+        Storage.getItemSync(RECENT_COMMANDS_STORAGE_KEY),
+      );
+    } catch {
+      cachedMobileRecentCommands = [];
+    }
+  }
+  return cachedMobileRecentCommands;
+}
+
+function recordMobileRecentCommand(key: string): ReadonlyArray<string> {
+  const current = readMobileRecentCommands();
+  const next = recordComposerRecentUse(current, key);
+  if (next === current) return current;
+  cachedMobileRecentCommands = next;
+  try {
+    Storage.setItemSync(RECENT_COMMANDS_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Keep the in-memory copy when kv-store is unavailable.
+  }
+  return next;
+}
+
+function readMobileRecentPaths(): ComposerRecentPathsByWorkspace {
+  if (cachedMobileRecentPaths === null) {
+    try {
+      cachedMobileRecentPaths = parseComposerRecentPaths(
+        Storage.getItemSync(RECENT_PATHS_STORAGE_KEY),
+      );
+    } catch {
+      cachedMobileRecentPaths = {};
+    }
+  }
+  return cachedMobileRecentPaths;
+}
+
+function recordMobileRecentPath(
+  workspaceKey: string,
+  path: string,
+): ComposerRecentPathsByWorkspace {
+  const current = readMobileRecentPaths();
+  const next = recordComposerRecentPath(current, workspaceKey, path);
+  if (next === current) return current;
+  cachedMobileRecentPaths = next;
+  try {
+    Storage.setItemSync(RECENT_PATHS_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Keep the in-memory copy when kv-store is unavailable.
+  }
+  return next;
+}
+
+function mobileSlashItemRecencyKey(item: ComposerCommandItem): string {
+  if (item.type === "slash-command") return composerBuiltInSlashRecencyKey(item.command);
+  if (item.type === "provider-slash-command") {
+    return composerProviderSlashRecencyKey(item.command.name);
+  }
+  if (item.type === "skill") return composerSkillRecencyKey(item.skill.name);
+  return item.id;
+}
+
 /**
  * Names that start with the query come first, then names containing it, then
- * description-only matches. Ties keep their order (built-ins, provider
- * commands, skills).
+ * description-only matches. Empty queries and equal-rank ties prefer recently
+ * used commands and skills, then default order (built-ins, provider commands,
+ * skills).
  */
 export function rankSlashMenuItems(
   items: ReadonlyArray<ComposerCommandItem>,
   query: string,
+  recentKeys: ReadonlyArray<string> = [],
 ): ComposerCommandItem[] {
   const normalized = query.trim().toLowerCase();
-  if (!normalized) return [...items];
+  if (!normalized) {
+    return orderByComposerRecentUse(items, recentKeys, mobileSlashItemRecencyKey);
+  }
+  const recentRanks = composerRecentRankMap(recentKeys);
   const rank = (item: ComposerCommandItem) => {
     const name = item.label.replace(/^\//u, "").toLowerCase();
     if (name.startsWith(normalized)) return 0;
     return name.includes(normalized) ? 1 : 2;
   };
   return items
-    .map((item, index) => ({ item, index, rank: rank(item) }))
-    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map((item, index) => ({
+      item,
+      index,
+      rank: rank(item),
+      recentRank: recentRanks.get(mobileSlashItemRecencyKey(item)) ?? Number.POSITIVE_INFINITY,
+    }))
+    .sort(
+      (left, right) =>
+        left.rank - right.rank || left.recentRank - right.recentRank || left.index - right.index,
+    )
     .map(({ item }) => item);
+}
+
+/** Keep the workspace search order between match tiers and prefer recent mentions within a tier. */
+export function rankComposerPathEntries<T extends { readonly path: string }>(
+  entries: ReadonlyArray<T>,
+  query: string,
+  recentPaths: ReadonlyArray<string>,
+): ReadonlyArray<T> {
+  if (recentPaths.length === 0 || entries.length < 2) return entries;
+
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return orderByComposerRecentUse(entries, recentPaths, (entry) => entry.path);
+
+  const positionsByScore = new Map<number, number[]>();
+  entries.forEach((entry, index) => {
+    const path = entry.path.toLowerCase();
+    const filename = path.slice(path.lastIndexOf("/") + 1);
+    const score = scoreQueryMatch({
+      value: normalized.includes("/") ? path : filename,
+      query: normalized,
+      exactBase: 0,
+      prefixBase: 1,
+      boundaryBase: 2,
+      includesBase: 3,
+      ignorePosition: true,
+    });
+    if (score === null) return;
+    const positions = positionsByScore.get(score);
+    if (positions) positions.push(index);
+    else positionsByScore.set(score, [index]);
+  });
+
+  const ordered = [...entries];
+  for (const positions of positionsByScore.values()) {
+    const ranked = orderByComposerRecentUse(
+      positions.map((position) => entries[position]!),
+      recentPaths,
+      (entry) => entry.path,
+    );
+    positions.forEach((position, index) => {
+      ordered[position] = ranked[index]!;
+    });
+  }
+  return ordered;
 }
 
 export function buildComposerModelItems(
@@ -437,6 +579,8 @@ export function useComposerCommandMenu({
     ownerKey,
     ...composerSelectionAtEnd(draftMessage),
   }));
+  const [recentCommands, setRecentCommands] = useState(readMobileRecentCommands);
+  const [recentPaths, setRecentPaths] = useState(readMobileRecentPaths);
   const inserted = useComposerDraftSelection(ownerKey, draftMessage);
   const selection = resolveComposerMenuSelection({
     draftMessage,
@@ -674,7 +818,7 @@ export function useComposerCommandMenu({
           description: skill.shortDescription ?? skill.description ?? "",
         }));
 
-      return rankSlashMenuItems([...commandItems, ...skillItems], q);
+      return rankSlashMenuItems([...commandItems, ...skillItems], q, recentCommands);
     }
 
     if (trigger.kind === "skill") {
@@ -684,15 +828,20 @@ export function useComposerCommandMenu({
       });
 
       if (!normalizedQuery) {
-        return enabledSkills.slice(0, 20).map((skill) => ({
-          id: `skill:${skill.name}`,
-          type: "skill" as const,
-          skill,
-          label: skill.displayName ?? skill.name,
-          description: skill.shortDescription ?? skill.description ?? "",
-        }));
+        return orderByComposerRecentUse(enabledSkills, recentCommands, (skill) =>
+          composerSkillRecencyKey(skill.name),
+        )
+          .slice(0, 20)
+          .map((skill) => ({
+            id: `skill:${skill.name}`,
+            type: "skill" as const,
+            skill,
+            label: skill.displayName ?? skill.name,
+            description: skill.shortDescription ?? skill.description ?? "",
+          }));
       }
 
+      const recentRanks = composerRecentRankMap(recentCommands);
       const ranked: Array<{
         item: (typeof enabledSkills)[number];
         score: number;
@@ -744,7 +893,9 @@ export function useComposerCommandMenu({
             {
               item: skill,
               score: Math.min(...scores),
-              tieBreaker: `${displayLabel}\u0000${skill.name}`,
+              tieBreaker: `${composerRecentTieBreakerPrefix(
+                recentRanks.get(composerSkillRecencyKey(skill.name)),
+              )}\u0000${displayLabel}\u0000${skill.name}`,
             },
             20,
           );
@@ -783,6 +934,14 @@ export function useComposerCommandMenu({
             otherEnvironmentLabel,
           })
         : [];
+      const recentPathWorkspaceKey = composerPathWorkspaceKey(environmentId, projectCwd);
+      const orderedPathEntries = recentPathWorkspaceKey
+        ? rankComposerPathEntries(
+            pathSearch.entries,
+            trigger.query,
+            recentPaths[recentPathWorkspaceKey] ?? [],
+          )
+        : pathSearch.entries;
       return [
         ...(modelOptions && modelProviders
           ? buildComposerModelItems(modelOptions, trigger.query, modelProviders, modelCatalogInput)
@@ -790,7 +949,7 @@ export function useComposerCommandMenu({
 
         ...buildComposerWorkflowItems(mentionWorkflows, workflowQuery),
         ...threadItems,
-        ...pathSearch.entries.map((entry) => {
+        ...orderedPathEntries.map((entry) => {
           const parts = entry.path.split("/");
           return {
             id: `path:${entry.path}`,
@@ -821,6 +980,8 @@ export function useComposerCommandMenu({
     pathSearch.entries,
     pullRequestSearch.entries,
     projectCwd,
+    recentCommands,
+    recentPaths,
     selectedProviderStatus,
     skills,
     trigger,
@@ -834,6 +995,7 @@ export function useComposerCommandMenu({
     (item: ComposerCommandItem) => {
       if (!trigger) return;
       if (item.type === "slash-command" && item.command === "workflow" && onWorkflow) {
+        setRecentCommands(recordMobileRecentCommand(composerBuiltInSlashRecencyKey(item.command)));
         const cleared = replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, "");
         setSelection({ start: cleared.cursor, end: cleared.cursor });
         onChangeDraftMessage(cleared.text);
@@ -956,11 +1118,27 @@ export function useComposerCommandMenu({
         item.command.name === USAGE_LIMITS_COMMAND.name &&
         onUsageLimits
       ) {
+        setRecentCommands(
+          recordMobileRecentCommand(composerProviderSlashRecencyKey(item.command.name)),
+        );
         const cleared = replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, "");
         setSelection({ start: cleared.cursor, end: cleared.cursor });
         onChangeDraftMessage(cleared.text);
         onUsageLimits();
         return;
+      }
+
+      if (item.type === "slash-command") {
+        setRecentCommands(recordMobileRecentCommand(composerBuiltInSlashRecencyKey(item.command)));
+      } else if (item.type === "provider-slash-command") {
+        setRecentCommands(
+          recordMobileRecentCommand(composerProviderSlashRecencyKey(item.command.name)),
+        );
+      } else if (item.type === "skill") {
+        setRecentCommands(recordMobileRecentCommand(composerSkillRecencyKey(item.skill.name)));
+      } else if (item.type === "path") {
+        const workspaceKey = composerPathWorkspaceKey(environmentId, projectCwd);
+        if (workspaceKey) setRecentPaths(recordMobileRecentPath(workspaceKey, item.path));
       }
 
       const result = resolveComposerCommandSelection({
@@ -988,6 +1166,7 @@ export function useComposerCommandMenu({
       onUsageLimits,
       onWorkflow,
       onPickWorkflow,
+      projectCwd,
       selectedProviderStatus?.showInteractionModeToggle,
       mentionShells,
       trigger,

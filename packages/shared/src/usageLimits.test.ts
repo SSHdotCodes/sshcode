@@ -1388,6 +1388,21 @@ describe("plans whose probe read nothing", () => {
     expect(pools.find((pool) => pool.label === "Google Pro")?.windows[0]?.pace).toBe("under");
   });
 
+  it("shows saved quota while refreshing and keeps it out of live forecasts", () => {
+    const saved = ultra({
+      checkedAt: readAt,
+      windows: older.usageLimits!.windows,
+      refreshing: true,
+    });
+    const [pool] = collectLimitPools(collectLimitAccounts(on(saved)), now);
+    expect(pool?.accounts[0]).toMatchObject({
+      asOf: Date.parse(readAt),
+      limits: { refreshing: true },
+    });
+    expect(pool?.windows[0]?.usedPercent).toBe(40);
+    expect(pool?.windows[0]?.pace).toBeNull();
+  });
+
   it("lists a plan with no numbers as its own row with its notice", () => {
     const unread = ultra({
       checkedAt: "2026-09-03T11:59:00.000Z",

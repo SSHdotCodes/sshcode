@@ -48,6 +48,13 @@ function isAntigravitySignInUnchecked(provider: ServerProvider): boolean {
 export function providerStatusKey(provider: ServerProvider | undefined): ProviderStatusKey {
   if (!provider) return "warning";
   if (!provider.enabled) return "disabled";
+  if (
+    provider.refreshing &&
+    provider.status !== "ready" &&
+    provider.auth.status !== "unauthenticated" &&
+    !rememberedAccountFailure(provider)
+  )
+    return "neutral";
   if (isAntigravitySignInUnchecked(provider) && !rememberedAccountFailure(provider))
     return "neutral";
   return provider.status === "ready" && rememberedAccountFailure(provider)
@@ -76,6 +83,13 @@ export function getProviderSummary(provider: ServerProvider | undefined, now = D
       detail:
         provider.message ?? "This provider is installed but disabled for new sessions in SSHCode.",
     };
+  }
+  if (
+    provider.refreshing &&
+    provider.auth.status !== "unauthenticated" &&
+    !rememberedAccountFailure(provider)
+  ) {
+    return { headline: "Refreshing provider status", detail: null };
   }
   if (!provider.installed) {
     return {

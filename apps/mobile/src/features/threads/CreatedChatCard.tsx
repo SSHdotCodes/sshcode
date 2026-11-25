@@ -11,7 +11,11 @@ import { getExplicitModelEffortLabel, resolveSelectableModel } from "@t3tools/sh
 import { Pressable, View } from "react-native";
 import { useEnvironmentServerConfig } from "../../state/entities";
 import { createdChatShellAtom } from "../../state/threads";
-import { SubagentCardRow, SubagentMetadata } from "./SubagentRow";
+import {
+  SUBAGENT_TRANSCRIPT_CARD_CLASS_NAME,
+  SubagentCardRow,
+  SubagentMetadata,
+} from "./SubagentRow";
 import { SubagentElapsed } from "./thread-subagent-group";
 
 export function CreatedChatCard(props: {
@@ -47,7 +51,7 @@ export function CreatedChatCard(props: {
             }),
           )
         }
-        className="min-h-[44px] rounded-md px-0.5 py-1.5 active:bg-subtle"
+        className={SUBAGENT_TRANSCRIPT_CARD_CLASS_NAME}
       >
         <SubagentCardRow
           presentation={chat}

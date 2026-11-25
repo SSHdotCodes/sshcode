@@ -230,8 +230,15 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         if (Option.isSome(next.snapshot)) {
           markLoad("shell.live");
           yield* Ref.set(synchronizedSnapshot, true);
+          const heldCursor = next.snapshot.value.decorationCursor;
+          const cursor = item.decorationCursor;
           next = {
             ...next,
+            snapshot:
+              cursor === undefined ||
+              (cursor.epoch === heldCursor?.epoch && cursor.revision === heldCursor.revision)
+                ? next.snapshot
+                : Option.some({ ...next.snapshot.value, decorationCursor: cursor }),
             status: "live",
             error: Option.none(),
             generation: next.generation === 0 ? ++lastShellGeneration : next.generation,
@@ -514,6 +521,9 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         }
         return {
           afterSequence: snapshot.snapshotSequence,
+          ...(snapshot.decorationCursor === undefined
+            ? {}
+            : { decorationCursor: snapshot.decorationCursor }),
           ...(refreshMonitorThreadIds.length > 0 ? { refreshMonitorThreadIds } : {}),
           ...omission,
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),

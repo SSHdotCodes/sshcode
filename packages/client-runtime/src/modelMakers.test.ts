@@ -9,6 +9,7 @@ import {
   modelVendorFamily,
   OTHER_MAKER_ID,
   makerUsesOf,
+  orderMakerModelsByUse,
   orderMakersByUse,
   ownHarnessRouteForRememberedModel,
   parseModelRouteMemory,
@@ -540,6 +541,66 @@ describe("orderMakersByUse", () => {
       "google",
       "other",
     ]);
+  });
+});
+
+describe("orderMakerModelsByUse", () => {
+  const now = Date.parse("2026-11-13T07:00:00.000Z");
+  const daysAgo = (days: number) => now - days * 86_400_000;
+
+  it("orders a maker's models by recent chat starts while keeping legacy models last", () => {
+    const allSources = [
+      source("claudeAgent", "claude-sonnet-5-5", "Claude Sonnet 5.5"),
+      source("claudeAgent", "claude-haiku-5-5", "Claude Haiku 5.5"),
+      source("claudeAgent", "claude-opus-5-5", "Claude Opus 5.5"),
+      source("claudeAgent", "claude-opus-4-8", "Claude Opus 4.8", { isLegacy: true }),
+    ];
+    const groups = groupModelsByMaker(allSources);
+    const ordered = orderMakerModelsByUse(
+      groups,
+      [
+        { instanceId: "claudeAgent", slug: "claude-opus-5-5", at: daysAgo(1) },
+        { instanceId: "claudeAgent", slug: "claude-opus-5-5", at: daysAgo(2) },
+        // A legacy model started frequently still stays after current non-legacy models.
+        { instanceId: "claudeAgent", slug: "claude-opus-4-8", at: daysAgo(1) },
+        { instanceId: "claudeAgent", slug: "claude-opus-4-8", at: daysAgo(1) },
+        { instanceId: "claudeAgent", slug: "claude-opus-4-8", at: daysAgo(1) },
+        { instanceId: "claudeAgent", slug: "claude-haiku-5-5", at: daysAgo(1) },
+      ],
+      allSources,
+      now,
+    );
+    expect(ordered[0]!.models.map((entry) => entry.name)).toEqual([
+      "Claude Opus 5.5",
+      "Claude Haiku 5.5",
+      "Claude Sonnet 5.5",
+      "Claude Opus 4.8",
+    ]);
+  });
+
+  it("matches chat starts across alternate routes and keeps unused makers untouched", () => {
+    const allSources = [
+      source("codex", "gpt-6.1-terra", "GPT-6.1 Terra"),
+      source("codex", "gpt-6.1-sol", "GPT-6.1 Sol"),
+    ];
+    const groups = groupModelsByMaker(allSources);
+    const ordered = orderMakerModelsByUse(
+      groups,
+      // Started on an added account instance id — still matches GPT-6.1 Sol canonically.
+      [{ instanceId: "codex-work", slug: "gpt-6.1-sol", at: daysAgo(1) }],
+      allSources,
+      now,
+    );
+    expect(ordered[0]!.models.map((entry) => entry.name)).toEqual(["GPT-6.1 Sol", "GPT-6.1 Terra"]);
+    // Without uses inside the window, catalog order is preserved verbatim.
+    expect(
+      orderMakerModelsByUse(
+        groups,
+        [{ instanceId: "codex", slug: "gpt-6.1-sol", at: daysAgo(200) }],
+        allSources,
+        now,
+      ),
+    ).toBe(groups);
   });
 });
 

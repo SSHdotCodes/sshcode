@@ -1052,8 +1052,9 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
       : null;
   // A thought collapses to its first sentence and expands to its full markdown.
   const reasoning = shownItem.type === "reasoning" ? shownItem : null;
+  const checklist = shownItem.type === "todo_list" ? shownItem : null;
   const fullDetail =
-    expanded && !call && !reasoning && !row.workEntry.questionAnswer
+    expanded && !call && !reasoning && !checklist && !row.workEntry.questionAnswer
       ? fetchedItem && !isRead
         ? formatItemFullDetail(row.projectedItem, fetchedItem)
         : row.getFullDetail()
@@ -1106,9 +1107,11 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
     !isSystemNotice && !isUsageLimit && (row.icon === "alert" || row.icon === "warning");
   const failed = row.status === "failure";
   const toolIcon = row.workEntry.toolIcon ?? row.workEntry.toolSource?.icon;
-  const icon = reasoning
-    ? toolGroupSummarySymbolName("reasoning")
-    : (toolPresentation?.icon ?? workRowSymbolName(row.icon));
+  const icon = checklist
+    ? "checklist"
+    : reasoning
+      ? toolGroupSummarySymbolName("reasoning")
+      : (toolPresentation?.icon ?? workRowSymbolName(row.icon));
 
   if (
     row.projectedItem.item.type === "system_notice" &&
@@ -1203,6 +1206,7 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
             <WorkLogLabel
               tone={isUsageLimit ? "warning" : iconIsDestructive ? "danger" : "default"}
               ellipsizeMode={reasoning?.streaming && !expanded ? "head" : "tail"}
+              emphasized={expanded}
             >
               {isSystemNotice ? row.summary : displayText}
               {answerPreview ? (
@@ -1255,6 +1259,7 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
 
       {expanded &&
       (reasoning ||
+        checklist ||
         fullDetail ||
         call ||
         fetchedOutput ||
@@ -1265,7 +1270,7 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
           entering={WORK_LOG_DETAIL_ENTER_TRANSITION}
           exiting={WORK_LOG_DETAIL_EXIT_TRANSITION}
           layout={WORK_LOG_LAYOUT_TRANSITION}
-          className={reasoning ? "ml-7 py-1" : "pb-1 pt-0.5"}
+          className={reasoning ? "ml-8 py-1" : "pb-1 pt-0.5"}
         >
           {reasoning ? props.renderReasoning(reasoning.text) : null}
           {row.workEntry.questionAnswer ? (
@@ -1301,10 +1306,41 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
             nestedScrollEnabled
             directionalLockEnabled
             showsVerticalScrollIndicator
-            className="max-h-60"
+            className={cn("max-h-60", !reasoning && "ml-8")}
             contentContainerStyle={{ paddingRight: 8 }}
           >
-            {call ? (
+            {checklist ? (
+              <View className="gap-1.5 py-1">
+                {checklist.explanation ? (
+                  <Text className="text-sm text-foreground-muted">{checklist.explanation}</Text>
+                ) : null}
+                {checklist.steps.map((step) => (
+                  <View
+                    key={step.id}
+                    accessible
+                    accessibilityLabel={`${step.text}, ${step.status === "running" ? "in progress" : step.status}`}
+                    className="flex-row items-start gap-2"
+                  >
+                    <View className="h-5 w-4 items-center justify-center">
+                      <SymbolView
+                        name={
+                          step.status === "completed"
+                            ? "checkmark.circle"
+                            : step.status === "running"
+                              ? "clock"
+                              : "circle"
+                        }
+                        size={13}
+                        tintColorClassName={
+                          step.status === "running" ? "accent-primary" : "accent-icon"
+                        }
+                      />
+                    </View>
+                    <Text className="min-w-0 flex-1 text-sm text-foreground">{step.text}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : call ? (
               [
                 call.command,
                 ...(call.args ?? []).map(([key, value]) =>
@@ -1356,7 +1392,7 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
             {streamsOutput ? null : exitLine}
           </ScrollView>
           {streamsOutput ? (
-            <>
+            <View className="ml-8">
               <ThreadCommandOutput
                 environmentId={props.environmentId}
                 threadId={row.projectedItem.sourceThreadId}
@@ -1364,7 +1400,7 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
                 themeAppearance={props.themeAppearance}
               />
               {exitLine}
-            </>
+            </View>
           ) : null}
         </Animated.View>
       ) : null}

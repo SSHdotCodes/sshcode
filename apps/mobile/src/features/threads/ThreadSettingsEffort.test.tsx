@@ -42,6 +42,8 @@ vi.mock("./ThreadSettingsRows", () => ({
     <button onClick={props.onPress}>{props.label}</button>
   ),
 }));
+// The shared rows load native symbol views this test doesn't need.
+vi.mock("./ThreadSettingsRows.shared", () => ({ ThreadSettingsRowDivider: () => <hr /> }));
 vi.mock("react-native-reanimated", () => {
   const value = (initial: number) => {
     let current = initial;

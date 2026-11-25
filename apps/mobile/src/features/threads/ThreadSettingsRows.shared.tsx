@@ -1,6 +1,6 @@
 import { formatOutOfCredit } from "@t3tools/client-runtime/providerHealth";
 import type { ReactNode } from "react";
-import { Pressable, View } from "react-native";
+import { Platform, Pressable, StyleSheet, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { cn } from "../../lib/cn";
@@ -38,6 +38,17 @@ type RowSelectionProps = {
   readonly minimumHeight?: number;
 };
 
+export function ThreadSettingsRowDivider() {
+  if (Platform.OS !== "ios") return null;
+  return (
+    <View
+      pointerEvents="none"
+      className="absolute inset-x-4 bottom-0 bg-border-subtle"
+      style={{ height: StyleSheet.hairlineWidth }}
+    />
+  );
+}
+
 export function ModelRowContent(
   props: ModelRowProps &
     RowSelectionProps & {
@@ -52,10 +63,12 @@ export function ModelRowContent(
     <View
       style={props.minimumHeight === undefined ? undefined : { minHeight: props.minimumHeight }}
       className={cn(
-        "mx-4 min-h-[44px] flex-row items-center gap-2 bg-grouped-card px-4",
+        "mx-4 min-h-[44px] flex-row items-center gap-2 bg-grouped-card px-4 ios:border-continuous",
         props.selectedClassName,
-        props.isFirst && "rounded-t-2xl",
-        props.isLast ? "rounded-b-2xl" : "border-b border-border-subtle",
+        props.isFirst && "rounded-t-2xl ios:rounded-t-[24px]",
+        props.isLast
+          ? "rounded-b-2xl ios:rounded-b-[24px]"
+          : "android:border-b android:border-border-subtle",
       )}
     >
       <Pressable
@@ -153,6 +166,7 @@ export function ModelRowContent(
           type="monochrome"
         />
       </Pressable>
+      {props.isLast ? null : <ThreadSettingsRowDivider />}
     </View>
   );
 }
@@ -170,7 +184,7 @@ export function ChoiceRowContent(props: ChoiceRowProps & RowSelectionProps) {
       style={props.minimumHeight === undefined ? undefined : { minHeight: props.minimumHeight }}
       className={cn(
         "min-h-14 flex-row items-center gap-3 bg-grouped-card px-4 py-3 active:bg-subtle",
-        !props.isLast && "border-b border-border-subtle",
+        !props.isLast && "android:border-b android:border-border-subtle",
       )}
     >
       {props.leadingSelection}
@@ -182,9 +196,16 @@ export function ChoiceRowContent(props: ChoiceRowProps & RowSelectionProps) {
         ) : null}
       </View>
       {props.trailingText ? (
-        <Text className="text-sm text-foreground-muted">{props.trailingText}</Text>
+        <Text
+          className="max-w-[44%] shrink text-right text-sm text-foreground-muted"
+          numberOfLines={1}
+          ellipsizeMode="middle"
+        >
+          {props.trailingText}
+        </Text>
       ) : null}
       {props.trailingSelection}
+      {props.isLast ? null : <ThreadSettingsRowDivider />}
     </Pressable>
   );
 }

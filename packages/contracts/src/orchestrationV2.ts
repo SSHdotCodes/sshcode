@@ -2466,10 +2466,18 @@ export const OrchestrationV2ThreadShellSnapshot = Schema.Struct({
 });
 export type OrchestrationV2ThreadShellSnapshot = typeof OrchestrationV2ThreadShellSnapshot.Type;
 
+const ShellDecorationCursor = Schema.Struct({
+  epoch: TrimmedNonEmptyString,
+  revision: NonNegativeInt,
+});
+export type ShellDecorationCursor = typeof ShellDecorationCursor.Type;
+
 export const OrchestrationV2ShellSnapshot = Schema.Struct({
   /** Retained in caches so a resume cannot reuse a different thread selection. */
   idleSubagentsOmitted: Schema.optionalKey(Schema.Literal(true)),
   idleAppOwnedSubagentsOmitted: Schema.optionalKey(Schema.Literal(true)),
+  /** Tracks shell fields that change outside the application event log. */
+  decorationCursor: Schema.optionalKey(ShellDecorationCursor),
   ...OrchestrationV2ThreadShellSnapshot.fields,
   projects: Schema.Array(OrchestrationProjectShell),
 });
@@ -2478,6 +2486,7 @@ export type OrchestrationV2ShellSnapshot = typeof OrchestrationV2ShellSnapshot.T
 export const OrchestrationV2ShellStreamItem = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("synchronized"),
+    decorationCursor: Schema.optionalKey(ShellDecorationCursor),
   }),
   Schema.Struct({
     kind: Schema.Literal("snapshot"),
@@ -3980,6 +3989,8 @@ export const OrchestrationV2SubscribeShellInput = Schema.Struct({
    * client).
    */
   afterSequence: Schema.optionalKey(NonNegativeInt),
+  /** Last synchronized revision of tab, schedule, and box changes. */
+  decorationCursor: Schema.optionalKey(ShellDecorationCursor),
   /** Chats the client last saw with monitors, including monitors that may have ended off-stream. */
   refreshMonitorThreadIds: Schema.optionalKey(
     Schema.Array(ThreadId).check(Schema.isMaxLength(SHELL_RESUME_MONITOR_THREAD_LIMIT)),

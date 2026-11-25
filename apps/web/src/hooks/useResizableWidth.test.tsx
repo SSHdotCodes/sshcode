@@ -8,12 +8,15 @@ let renderer: ReactTestRenderer;
 let result: ReturnType<typeof useResizableWidth>;
 let captured = false;
 const hostStyle = new Map<string, string>();
+const hostAttributes = new Map<string, string>();
 const target = {
   parentElement: {
     style: {
       setProperty: (property: string, value: string) => hostStyle.set(property, value),
       removeProperty: (property: string) => hostStyle.delete(property),
     },
+    setAttribute: (name: string, value: string) => hostAttributes.set(name, value),
+    removeAttribute: (name: string) => hostAttributes.delete(name),
   },
   setPointerCapture: () => {
     captured = true;
@@ -73,6 +76,7 @@ function Panel({
 beforeEach(async () => {
   savedWidths.clear();
   hostStyle.clear();
+  hostAttributes.clear();
   captured = false;
   frame = undefined;
   style.cursor = "";
@@ -112,6 +116,7 @@ describe("panel resize cleanup", () => {
       await act(() => frame?.(0));
       expect(hostStyle.get(RESIZABLE_WIDTH_PROPERTY)).toBe("450px");
       expect(hostStyle.get("transition-property")).toBe("none");
+      expect(hostAttributes.get("data-panel-resizing")).toBe("true");
       expect(result.width).toBe(400);
       // Queue another move to check that interruption cancels pending work too.
       await act(() => result.handlers.onPointerMove(pointer(25)));
@@ -124,6 +129,7 @@ describe("panel resize cleanup", () => {
         if (reason === "cancel") result.handlers.onPointerCancel(pointer());
       });
       expect(style.cursor).toBe("");
+      expect(hostAttributes.has("data-panel-resizing")).toBe(false);
       expect(style.userSelect).toBe("");
       expect(captured).toBe(false);
       expect(hostStyle.has("transition-property")).toBe(false);

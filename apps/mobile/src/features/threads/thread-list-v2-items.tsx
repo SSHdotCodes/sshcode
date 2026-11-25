@@ -64,6 +64,7 @@ import {
   type ThreadListV2Status,
 } from "./threadListV2";
 import { WorkingStatusIndicator } from "./WorkingStatusIndicator";
+import { ThreadRowStatusText } from "./ThreadRowStatusText";
 import { useVisibleSecondClock } from "./use-visible-second-clock";
 import {
   resolveThreadLastActivityAt,
@@ -72,7 +73,7 @@ import {
 import { longRunningStatusForShell, quietTurnLabel } from "@t3tools/shared/chatControls";
 
 import { QueuedMessageIcon } from "./queued-message-icon";
-import { ThreadSearchMatchExcerpt } from "./thread-search-match";
+import { ThreadSearchMatchExcerpt, ThreadSearchTitleText } from "./thread-search-match";
 import { threadReadMenuAction, useThreadReadAction } from "./threadReadActions";
 import {
   threadRowAccessibilityActions,
@@ -89,6 +90,9 @@ function WorkingThreadRowStatus(props: {
   readonly lastActivityAt: string | null;
   readonly active: boolean;
   readonly selected: boolean;
+  readonly detailLine: boolean;
+  readonly preview?: string | undefined;
+  readonly previewClassName: string;
 }) {
   const nowMs = useVisibleSecondClock(props.active);
   const quietLabel = quietTurnLabel(
@@ -97,7 +101,7 @@ function WorkingThreadRowStatus(props: {
   );
   const quiet = quietLabel !== null;
   return (
-    <View className="flex-row items-center gap-1">
+    <View className={cn("flex-row items-center gap-1", props.detailLine && "min-w-0 flex-1")}>
       <WorkingStatusIndicator
         active={props.active && !quiet}
         tintColorClassName={
@@ -108,24 +112,27 @@ function WorkingThreadRowStatus(props: {
               : "accent-primary"
         }
       />
-      <Text
+      <ThreadRowStatusText
         className={cn(
-          "text-xs tabular-nums",
+          "tabular-nums",
+          props.detailLine ? "min-w-0 flex-1 text-[13px] leading-[18px]" : "text-xs",
           props.selected
             ? selectedThreadRowColors.foregroundClassName
             : quiet
               ? "text-foreground-muted"
               : "text-primary",
         )}
-        numberOfLines={1}
-      >
-        {quietLabel ??
+        status={
+          quietLabel ??
           longRunningStatusForShell({
             runtimeStatus: "running",
             workingStartedAt: props.startedAt,
             nowMs,
-          })}
-      </Text>
+          })
+        }
+        preview={props.preview}
+        previewClassName={props.previewClassName}
+      />
     </View>
   );
 }
@@ -490,8 +497,18 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly simultaneousSwipeGesture?: ComponentProps<typeof ThreadSwipeable>["simultaneousWith"];
 }) {
   const privateLabel = usePrivacyLabel();
-  const displayTitle = privateLabel("Chat", props.thread.id, props.thread.title);
   const privacy = usePrivacyMode();
+  const displayTitle = privateLabel("Chat", props.thread.id, props.thread.title);
+  const searchTitle =
+    privacy || !props.searchQuery ? (
+      displayTitle
+    ) : (
+      <ThreadSearchTitleText
+        title={displayTitle}
+        query={props.searchQuery}
+        correction={props.searchMatch?.titleCorrection}
+      />
+    );
   const [uiMode] = useUiMode();
   const discord = uiMode === "discord";
   const { width: windowWidth } = useWindowDimensions();
@@ -901,6 +918,38 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const needsCount =
     Number(thread.hasPendingApprovals) + Number(thread.hasPendingUserInput) ||
     (thread.pendingSubagentRequest != null || status === "failed" || status === "limited" ? 1 : 0);
+  const statusOnDetailLine = !props.searchQuery?.trim() && !props.searchMatch;
+  const previewClassName = selected
+    ? selectedThreadRowColors.mutedForegroundClassName
+    : rowAppearance.mutedForegroundClassName;
+  const rowError = status === "failed" || status === "limited" ? thread.runtime?.lastError : null;
+  const statusClassName = cn(
+    needsYou
+      ? selected
+        ? selectedThreadRowColors.foregroundClassName
+        : (statusLabel?.className ?? "text-warning-foreground")
+      : trailingTextClassName,
+    statusOnDetailLine ? "min-w-0 flex-1 text-[13px] leading-[18px]" : "text-xs tabular-nums",
+  );
+  const rowStatus =
+    snoozeWakeLabelText !== undefined ? null : status === "working" ? (
+      <WorkingThreadRowStatus
+        startedAt={resolveThreadWorkingStartedAt(thread)}
+        lastActivityAt={resolveThreadLastActivityAt(thread)}
+        active={!dormant}
+        selected={selected}
+        detailLine={statusOnDetailLine}
+        preview={statusOnDetailLine ? preview?.text : undefined}
+        previewClassName={previewClassName}
+      />
+    ) : rowStatusText ? (
+      <ThreadRowStatusText
+        className={statusClassName}
+        status={rowStatusText}
+        preview={statusOnDetailLine ? preview?.text : undefined}
+        previewClassName={previewClassName}
+      />
+    ) : null;
   const rowBody = discord ? (
     <View
       style={{
@@ -962,7 +1011,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         )}
         style={{ fontSize: child ? 14 : 16, fontWeight: isUnread || needsCount ? "600" : "500" }}
       >
-        {displayTitle}
+        {searchTitle}
       </Text>
       {thread.source.comparison ? (
         <Text
@@ -1005,7 +1054,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     <View className="flex-row items-center gap-3">
       {paint ? <SessionBoxPainting box={paint} size={ROW_PAINTING_SIZE} /> : null}
       <View className="min-w-0 flex-1">
-        <View className="flex-row items-start gap-2">
+        <View className={cn("flex-row gap-2", statusOnDetailLine ? "items-center" : "items-start")}>
           <Text
             className={cn(
               "min-w-0 flex-1 text-base font-t3-medium",
@@ -1013,12 +1062,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                 ? selectedThreadRowColors.foregroundClassName
                 : rowAppearance.foregroundClassName,
             )}
-            numberOfLines={2}
+            numberOfLines={statusOnDetailLine ? 1 : 2}
           >
-            {displayTitle}
+            {searchTitle}
           </Text>
-          {/* Centered on the title's first line. */}
-          <View className="flex-row items-center gap-1.5 pt-[3px]">
+          <View className={cn("flex-row items-center gap-1.5", !statusOnDetailLine && "pt-[3px]")}>
             {thread.source.comparison ? (
               <Text
                 className="text-xs text-foreground-muted"
@@ -1053,38 +1101,25 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                   {snoozeWakeLabelText}
                 </Text>
               </View>
-            ) : status === "working" ? (
-              <WorkingThreadRowStatus
-                startedAt={resolveThreadWorkingStartedAt(thread)}
-                lastActivityAt={resolveThreadLastActivityAt(thread)}
-                active={!dormant}
-                selected={selected}
-              />
-            ) : rowStatusText ? (
-              <Text
-                className={cn(
-                  "text-xs tabular-nums",
-                  needsYou
-                    ? selected
-                      ? selectedThreadRowColors.foregroundClassName
-                      : (statusLabel?.className ?? "text-warning-foreground")
-                    : trailingTextClassName,
-                )}
-                numberOfLines={1}
-              >
-                {rowStatusText}
-              </Text>
+            ) : !statusOnDetailLine && rowStatus ? (
+              rowStatus
             ) : (
               <>
-                {isUnread ? <UnreadDot /> : null}
-                <Text className={cn("text-xs tabular-nums", trailingTextClassName)}>
-                  {timeLabel}
-                </Text>
+                {isUnread && !rowStatus ? <UnreadDot /> : null}
+                {timeLabel ? (
+                  <Text className={cn("text-xs tabular-nums", trailingTextClassName)}>
+                    {timeLabel}
+                  </Text>
+                ) : null}
               </>
             )}
           </View>
         </View>
-        {props.searchMatch && !privacy ? (
+        {props.searchMatch &&
+        !privacy &&
+        (props.searchMatch.messageId !== null ||
+          props.searchMatch.matchedModel ||
+          props.searchMatch.matchedHarness) ? (
           <View className="mt-1">
             <ThreadSearchMatchExcerpt
               sidebar={sidebarPane}
@@ -1094,28 +1129,35 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             />
           </View>
         ) : null}
-        <View className="mt-1 flex-row items-center gap-2">
-          {(status === "failed" || status === "limited") && thread.runtime?.lastError ? (
-            <Text
+        <View
+          className={cn(
+            "flex-row items-center gap-2",
+            statusOnDetailLine ? "mt-0.5 min-h-[18px]" : "mt-1",
+          )}
+        >
+          {rowError ? (
+            <ThreadRowStatusText
               className={cn(
-                "flex-1 text-xs",
+                "min-w-0 flex-1",
+                statusOnDetailLine ? "text-[13px] leading-[18px]" : "text-xs",
                 selected
                   ? selectedThreadRowColors.mutedForegroundClassName
                   : status === "limited"
                     ? "text-warning-foreground"
                     : "text-danger-foreground",
               )}
-              numberOfLines={1}
-            >
-              {thread.runtime.lastError}
-            </Text>
+              status={statusOnDetailLine ? rowStatusText : undefined}
+              preview={preview?.text}
+              error={rowError}
+            />
+          ) : statusOnDetailLine && rowStatus ? (
+            rowStatus
           ) : preview && !props.searchMatch ? (
             <Text
               className={cn(
                 "min-w-0 flex-1 text-[13px]",
-                selected
-                  ? selectedThreadRowColors.mutedForegroundClassName
-                  : rowAppearance.mutedForegroundClassName,
+                statusOnDetailLine && "leading-[18px]",
+                previewClassName,
               )}
               numberOfLines={1}
             >
@@ -1154,7 +1196,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           {providerInstance ? (
             // Only the provider the chat is on now: an earlier one drawn behind it read as
             // if both were running. The account badge keeps same-driver instances distinct.
-            <View className="flex-row items-center">
+            <View
+              className="min-w-0 flex-row items-center"
+              style={statusOnDetailLine ? { maxWidth: "35%" } : undefined}
+            >
               <ProviderInstanceIcon
                 iconUrl={providerIconUrl}
                 provider={providerInstance.driverKind}
@@ -1168,6 +1213,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                 <Text
                   className={cn(
                     "ml-1.5 min-w-0 text-xs",
+                    statusOnDetailLine && "shrink",
                     selected
                       ? selectedThreadRowColors.mutedForegroundClassName
                       : rowAppearance.tertiaryForegroundClassName,
@@ -1222,6 +1268,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         settled: props.settled === true,
         snoozed: snoozedRow,
         wakeLabel: snoozeWakeLabelText,
+        waitingLabel:
+          statusOnDetailLine && !discord && snoozeWakeLabelText === undefined
+            ? props.longRunningStatus
+            : undefined,
         pullRequestLabel: pr?.accessibilityLabel,
       })}
       accessibilityRole="button"

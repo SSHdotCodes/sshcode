@@ -31,8 +31,12 @@ import {
 } from "@t3tools/client-runtime/state/thread-search";
 import { sessionBoxFacesFor } from "@t3tools/client-runtime/state/session-boxes";
 import type { SessionBoxIconId } from "@t3tools/shared/sessionBoxes";
-import { createInboxReturnTracker } from "@t3tools/client-runtime/state/thread-inbox";
 import {
+  createInboxReturnTracker,
+  failureNeedsYou,
+} from "@t3tools/client-runtime/state/thread-inbox";
+import {
+  holdOrderedItems,
   resolveSettledThreadTimestamp,
   sortActiveThreadsByOrderKey,
   sortPinnedThreadsByOrderKey,
@@ -266,7 +270,12 @@ export function resolveThreadListV2ActivityAt(
  */
 const FINISHED_SETTLE_MS = 2 * 60_000;
 
-function finishedWithin(thread: EnvironmentThreadShell, nowMs: number): boolean {
+function finishedWithin(
+  thread: EnvironmentThreadShell,
+  status: ThreadListV2Status,
+  nowMs: number,
+): boolean {
+  if (status === "failed" || status === "limited") return false;
   const completedAt = thread.latestRun?.completedAt;
   if (completedAt == null) return false;
   const completedAtMs = Date.parse(completedAt);
@@ -274,22 +283,26 @@ function finishedWithin(thread: EnvironmentThreadShell, nowMs: number): boolean 
 }
 
 /**
- * Waiting on the user: an approval or answer, or a finished turn not opened
- * since that has had time to settle. These lead even the working chats, so a
- * long run can't bury them.
+ * Waiting on the user: an approval or answer, an unseen failure/limit, an
+ * actionable plan, or a finished turn not opened since that has had time to
+ * settle. These lead even the working chats, so a long run can't bury them.
  */
-function threadListV2WaitsOnYou(
+export function threadListV2WaitsOnYou(
   thread: EnvironmentThreadShell,
   status: ThreadListV2Status,
   nowMs: number,
-) {
+): boolean {
   if (status === "approval" || status === "input") return true;
-  return (
-    status !== "working" &&
-    status !== "waiting" &&
-    threadHasUnseenCompletion(thread) &&
-    !finishedWithin(thread, nowMs)
-  );
+  if (status === "failed" || status === "limited") {
+    // Pre-tracking servers omit lastVisitedAt and mobile does not record local
+    // visits for them, so skip the unopened-failure rule instead of pinning
+    // seen failures in Needs-you for 24h.
+    if (thread.lastVisitedAt === undefined) return false;
+    return failureNeedsYou(thread, nowMs);
+  }
+  if (status === "working" || status === "waiting") return false;
+  if (thread.hasActionableProposedPlan) return true;
+  return threadHasUnseenCompletion(thread) && !finishedWithin(thread, status, nowMs);
 }
 
 /** Threads the agent is still on, or that wait on the user, lead the list. */
@@ -756,6 +769,12 @@ export function buildThreadListV2Items(input: {
       outbox. A pinned thread with queued work stays pinned even when the
       server has settled it. */
   readonly queuedThreadKeys?: ReadonlySet<string>;
+  /** Keeps an opened chat in the Needs-you tier until the user leaves it so
+      tapping/marking it read does not drop the row away immediately. */
+  readonly heldNeedsYouKey?: string | null;
+  /** While the user is touching or scrolling the list, keep previously shown
+      active rows in their relative order so rows cannot jump under a finger. */
+  readonly heldMainOrderKeys?: ReadonlyArray<string> | null;
 }): ThreadListV2Layout {
   const now = input.now;
   const nowMs = parseTimestampMs(now);
@@ -815,11 +834,15 @@ export function buildThreadListV2Items(input: {
       continue;
     }
     const status = resolveThreadListV2Status(thread);
+    const threadKey = `${thread.environmentId}:${thread.id}`;
     if (thread.pinnedAt != null) {
       pinned.push(thread);
-    } else if (threadListV2WaitsOnYou(thread, status, nowMs)) {
+    } else if (
+      threadListV2WaitsOnYou(thread, status, nowMs) ||
+      (input.heldNeedsYouKey != null && threadKey === input.heldNeedsYouKey)
+    ) {
       waitingOnYou.push(thread);
-    } else if (threadListV2Leads(status) || finishedWithin(thread, nowMs)) {
+    } else if (threadListV2Leads(status) || finishedWithin(thread, status, nowMs)) {
       // A turn that just finished keeps its place among the working chats.
       leading.push(thread);
     } else {
@@ -904,30 +927,31 @@ export function buildThreadListV2Items(input: {
       ...waiting(thread),
     });
   }
-  for (const thread of sortThreadsByActivity(waitingOnYou)) {
+  const sortedWaitingOnYou = sortThreadsByActivity(waitingOnYou);
+  const sortedLeading = sortThreadsByAsked(leading);
+  const sortedRest = sortThreadsByActivity(rest);
+  const orderedMain =
+    input.heldMainOrderKeys != null && input.heldMainOrderKeys.length > 0
+      ? holdOrderedItems(
+          [...sortedWaitingOnYou, ...sortedLeading, ...sortedRest],
+          input.heldMainOrderKeys,
+          (thread) => `${thread.environmentId}:${thread.id}`,
+        )
+      : [...sortedWaitingOnYou, ...sortedLeading, ...sortedRest];
+  const leadingKeys = new Set<string>();
+  for (const thread of sortedWaitingOnYou) leadingKeys.add(`${thread.environmentId}:${thread.id}`);
+  for (const thread of sortedLeading) leadingKeys.add(`${thread.environmentId}:${thread.id}`);
+  let pendingTasksIndex = items.length;
+  for (const thread of orderedMain) {
     items.push({
       thread,
       snoozed: false,
       pinned: false,
       ...waiting(thread),
     });
-  }
-  for (const thread of sortThreadsByAsked(leading)) {
-    items.push({
-      thread,
-      snoozed: false,
-      pinned: false,
-      ...waiting(thread),
-    });
-  }
-  const pendingTasksIndex = items.length;
-  for (const thread of sortThreadsByActivity(rest)) {
-    items.push({
-      thread,
-      snoozed: false,
-      pinned: false,
-      ...waiting(thread),
-    });
+    if (leadingKeys.has(`${thread.environmentId}:${thread.id}`)) {
+      pendingTasksIndex = items.length;
+    }
   }
   const snoozedShelfHeaderIndex = orderedSnoozed.length > 0 ? items.length : null;
   for (const thread of visibleSnoozed) {

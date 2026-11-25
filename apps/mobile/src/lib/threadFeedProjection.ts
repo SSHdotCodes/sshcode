@@ -110,7 +110,6 @@ function streamingFlag(item: OrchestrationV2TurnItem): boolean {
 /** Items these types never produce feed rows, so their in-place updates change nothing. */
 function neverFeedVisible(item: OrchestrationV2TurnItem, liveThoughts: boolean): boolean {
   return (
-    item.type === "todo_list" ||
     item.type === "checkpoint" ||
     item.type === "run_interrupt_request" ||
     (item.type === "reasoning" && streamingFlag(item) && !liveThoughts)

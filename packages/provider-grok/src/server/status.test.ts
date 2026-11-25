@@ -7,7 +7,11 @@ import * as Schema from "effect/Schema";
 import * as Path from "effect/Path";
 
 import { GrokSettings } from "../settings.ts";
-import { checkGrokProviderStatus } from "./status.ts";
+import {
+  buildGrokModelsFromSessionModelState,
+  checkGrokProviderStatus,
+  parseGrokModelsCliOutput,
+} from "./status.ts";
 
 it.layer(NodeServices.layer)("Grok status", (it) => {
   it.effect("discovers account models without initializing ACP in the server workspace", () =>
@@ -52,4 +56,54 @@ it.layer(NodeServices.layer)("Grok status", (it) => {
       expect(snapshot.models.map((model) => model.slug)).toEqual(["grok-test"]);
     }),
   );
+});
+
+it("folds Grok's fast variant into a Fast mode switch on its model", () => {
+  const efforts = {
+    supportsReasoningEffort: true,
+    reasoningEffort: "high",
+    reasoningEfforts: [
+      { id: "high", value: "high", label: "High", default: true },
+      { id: "low", value: "low", label: "Low" },
+    ],
+  };
+  const models = buildGrokModelsFromSessionModelState({
+    currentModelId: "grok-4.7-build-fast",
+    availableModels: [
+      { modelId: "grok-4.7", name: "Grok 4.7", _meta: efforts },
+      { modelId: "grok-4.7-build-fast", name: "Grok 4.7 Fast", _meta: efforts },
+      { modelId: "grok-4.6", name: "Grok 4.6", _meta: efforts },
+    ],
+  });
+  expect(models.map((model) => model.slug)).toEqual(["grok-4.7", "grok-4.6"]);
+  const [grok47, grok46] = models;
+  // The session runs the fast variant: its model is the default with Fast mode on.
+  expect(grok47?.isDefault).toBe(true);
+  expect(grok47?.capabilities?.optionDescriptors?.map((descriptor) => descriptor.id)).toEqual([
+    "reasoningEffort",
+    "fastMode",
+  ]);
+  expect(
+    grok47?.capabilities?.optionDescriptors?.find((descriptor) => descriptor.id === "fastMode"),
+  ).toMatchObject({ type: "boolean", currentValue: true });
+  // A model without a fast variant gets no switch.
+  expect(
+    grok46?.capabilities?.optionDescriptors?.some((descriptor) => descriptor.id === "fastMode"),
+  ).toBe(false);
+});
+
+it("folds the fast variant in `grok models` output too", () => {
+  const { models } = parseGrokModelsCliOutput(
+    [
+      "You are logged in with grok.com.",
+      "Available models:",
+      "  * grok-4.7 (default)",
+      "  - grok-4.7-build-fast",
+      "  - grok-4.6",
+    ].join("\n"),
+  );
+  expect(models.map((model) => model.slug)).toEqual(["grok-4.7", "grok-4.6"]);
+  expect(models[0]?.isDefault).toBe(true);
+  // No options here: the registry keeps the reasoning and Fast mode the ACP probe last read.
+  expect(models[0]?.capabilities?.optionDescriptors ?? []).toEqual([]);
 });

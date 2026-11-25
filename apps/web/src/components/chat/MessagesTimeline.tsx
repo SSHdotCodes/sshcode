@@ -3,7 +3,7 @@ import { BugIcon, WorkflowIcon } from "lucide-react";
 import { UserMessageBubble } from "./UserMessageBubble";
 import {
   matchesTimelineJump,
-  type TimelineJumpTarget,
+  type TimelineJumpRequest,
 } from "@t3tools/client-runtime/state/thread-search";
 import { DiscordSteerReply } from "../discord/DiscordSteerReply";
 import { CasualAssistantSurface } from "../discord/CasualAssistantSurface";
@@ -222,7 +222,7 @@ import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { useFileContextMenuHandler } from "../../fileContextMenu";
-import { useProject, useThreadShell } from "../../state/entities";
+import { useLinkedThreadShell, useProject, useThreadShell } from "../../state/entities";
 import {
   CHAT_TIMELINE_ANCHOR_OFFSET,
   readTimelineViewState,
@@ -232,7 +232,8 @@ import {
 } from "./timelineScrollAnchoring";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { ContinueOnModelButton } from "./ContinueOnModelButton";
-import { noteTimelineRows, timelineRowArrived } from "./timelineArrivals";
+import { shouldAnimateTimelineRowArrival, useTimelineArrivalIds } from "./timelineArrivals";
+import { useKeptChatPaneHidden } from "./KeptChatPane";
 import { ReplaceProviderCredentialButton } from "./ReplaceProviderCredentialButton";
 import { canContinueOnAnotherModel, type ContinueCandidate } from "./continueOnModel";
 import { promptLinkFor } from "../promptLinks/copyPromptLink";
@@ -413,12 +414,13 @@ function timelineImageActionsSource(
 // ---------------------------------------------------------------------------
 
 interface TimelineRowSharedState {
+  searchJumpRowId: string | null;
   discord: boolean;
   casualVoice: boolean;
   onCiteAssistantText: MessagesTimelineProps["onCiteAssistantText"];
   citationRequest: AssistantCitationTarget | null;
   listRef: React.RefObject<LegendListRef | null>;
-  mediaJump?: { readonly item: TimelineJumpTarget; readonly sequence: number } | null;
+  mediaJump?: TimelineJumpRequest | null;
   onMediaJumpHandled?: ((sequence: number) => void) | undefined;
   timestampFormat: TimestampFormat;
   routeThreadKey: string;
@@ -619,7 +621,7 @@ interface MessagesTimelineProps {
   footer?: ReactNode;
 
   listRef: React.RefObject<LegendListRef | null>;
-  mediaJump?: { readonly item: TimelineJumpTarget; readonly sequence: number } | null;
+  mediaJump?: TimelineJumpRequest | null;
   onMediaJumpHandled?: ((sequence: number) => void) | undefined;
   timelineEntries: ReadonlyArray<TimelineEntry>;
   promptNavigationRef?: React.RefObject<TimelinePromptNavigation | null>;
@@ -630,6 +632,8 @@ interface MessagesTimelineProps {
   displayThreadKey?: string;
   /** The rows are a held snapshot of the previous thread while the next one loads. */
   paintOnly?: boolean;
+  /** Suppresses live arrival fades while initial history is still syncing. */
+  suppressArrivals?: boolean;
   onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   parentThreadLink?: {
@@ -759,6 +763,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   routeThreadKey,
   displayThreadKey,
   paintOnly = false,
+  suppressArrivals = false,
   onOpenTurnDiff,
   onOpenThread,
   parentThreadLink = null,
@@ -1197,9 +1202,21 @@ const ConversationTimeline = memo(function ConversationTimeline({
     ],
   );
   const rows = useStableRows(decoratedRows, listIdentityKey);
-  // Rows that arrive while the chat is open rise into place (see timelineArrivals.ts).
-  noteTimelineRows(listIdentityKey, rows, performance.now());
+  const paneHidden = useKeptChatPaneHidden();
+  const arrivedRowIds = useTimelineArrivalIds(
+    paintOnly || suppressArrivals || paneHidden ? null : listIdentityKey,
+    rows,
+  );
   const completedMediaJump = useRef<string | null>(null);
+  const [searchJumpHighlight, setSearchJumpHighlight] = useState<{
+    readonly rowId: string;
+    readonly listKey: string;
+  } | null>(null);
+  useEffect(() => {
+    if (!searchJumpHighlight) return;
+    const timer = window.setTimeout(() => setSearchJumpHighlight(null), 2200);
+    return () => window.clearTimeout(timer);
+  }, [searchJumpHighlight]);
   const cancelJumpSettle = useRef<(() => void) | null>(null);
   useEffect(() => () => cancelJumpSettle.current?.(), []);
   useEffect(() => {
@@ -1267,6 +1284,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
     const list = listRef.current;
     if (!list) return;
     completedMediaJump.current = jumpKey;
+    if (mediaJump.highlight)
+      setSearchJumpHighlight({
+        rowId: row.id,
+        listKey: listIdentityKey,
+      });
     onManualNavigation();
     cancelJumpSettle.current?.();
     let cancelled = false;
@@ -1725,8 +1747,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
     };
   }, [timelineViewportElement, rows.length, reportContentOverflow, chatWidth]);
 
+  const searchJumpRowId =
+    searchJumpHighlight?.listKey === listIdentityKey ? searchJumpHighlight.rowId : null;
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
+      searchJumpRowId,
       discord,
       casualVoice,
       onCiteAssistantText,
@@ -1774,6 +1799,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       workGroupViewState,
     }),
     [
+      searchJumpRowId,
       discord,
       casualVoice,
       onCiteAssistantText,
@@ -1980,17 +2006,20 @@ const ConversationTimeline = memo(function ConversationTimeline({
     contentInsetEndAdjustment,
   });
 
-  // Stable renderItem — no closure deps. Row components read shared state
-  // from TimelineRowCtx, which propagates through LegendList's memo.
+  // Refresh mounted containers on row-count changes and when committed arrivals change.
+  const listExtraData = useMemo(
+    () => ({ listIdentityKey, rowCount: rows.length, arrivedRowIds }),
+    [listIdentityKey, rows.length, arrivedRowIds],
+  );
   const renderItem = useCallback(
     ({ item }: { item: MessagesTimelineRow }) => (
       <div className="messages-timeline-row-frame">
         <div className="chat-content-lane overflow-x-clip" data-timeline-root="true">
-          <TimelineRowContent row={item} />
+          <TimelineRowContent row={item} arrived={arrivedRowIds.has(item.id)} />
         </div>
       </div>
     ),
-    [],
+    [arrivedRowIds],
   );
 
   const forwardMinimapWheel = useCallback(
@@ -2068,9 +2097,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
               <LegendList<MessagesTimelineRow>
                 ref={setTimelineList}
                 data={rows}
-                // Refresh mounted containers when activity rows are replaced or removed on Stop.
-                // Streaming text in an existing row keeps the same extraData.
-                extraData={`${listIdentityKey}:${rows.length}`}
+                extraData={listExtraData}
                 keyExtractor={keyExtractor}
                 getItemType={getItemType}
                 renderItem={renderItem}
@@ -2608,8 +2635,15 @@ function TimelineMinimapNavigationButton({
 type TimelineWorkEntry = Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"][number];
 type TimelineRow = MessagesTimelineRow;
 
-const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
-  const { discord, casualVoice } = use(TimelineRowCtx);
+const TimelineRowContent = memo(function TimelineRowContent({
+  row,
+  arrived,
+}: {
+  row: TimelineRow;
+  arrived: boolean;
+}) {
+  const { discord, casualVoice, searchJumpRowId } = use(TimelineRowCtx);
+  const searchJumpHighlighted = searchJumpRowId === row.id;
   if (row.kind === "steer-reply") return casualVoice ? <SteerReplyTimelineRow row={row} /> : null;
   const terminalDivider =
     row.kind === "work" &&
@@ -2650,6 +2684,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       ) : null}
       <div
         className={cn(
+          searchJumpHighlighted && "rounded-lg bg-primary/10",
           // Commentary (non-terminal assistant) rows carry no metadata row, so
           // they sit closer to the work that follows them.
           isWorkLogRow || isSubagentGroup
@@ -2681,8 +2716,16 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
         }
         data-dc-activity-start={(discord && row.startsAgentGroup) || undefined}
         data-timeline-row-id={row.id}
+        data-search-jump-highlight={searchJumpHighlighted || undefined}
         data-timeline-row-kind={row.kind}
-        data-arrived={timelineRowArrived(row.id, performance.now()) ? "" : undefined}
+        data-arrived={
+          arrived &&
+          shouldAnimateTimelineRowArrival(row.kind, {
+            isExpandedToolGroup: row.kind === "work" && row.isExpandedToolGroup,
+          })
+            ? ""
+            : undefined
+        }
         data-message-id={
           row.kind === "message" || row.kind === "assistant-meta" ? row.message.id : undefined
         }
@@ -3706,7 +3749,7 @@ function AgentMessageRow({
   readonly onToggle: () => void;
 }) {
   const ctx = use(TimelineRowCtx);
-  const sender = useThreadShell(
+  const sender = useLinkedThreadShell(
     senderThreadId ? scopeThreadRef(ctx.activeThreadEnvironmentId, senderThreadId) : null,
   );
   // The live shell index leaves out archived and deleted threads; those read as "another agent".
@@ -5398,7 +5441,7 @@ function LiveActivityContent({
 function useThreadReadTarget(entry: TimelineWorkEntry, environmentId: EnvironmentId) {
   const rawThreadId = threadReadTargetId(entry);
   const threadId = rawThreadId === null ? null : ThreadId.make(rawThreadId);
-  const shell = useThreadShell(threadId ? scopeThreadRef(environmentId, threadId) : null);
+  const shell = useLinkedThreadShell(threadId ? scopeThreadRef(environmentId, threadId) : null);
   const title = threadReadTargetTitle(shell);
   return threadId && title ? { threadId, title } : null;
 }
@@ -5744,8 +5787,17 @@ function WorkGroupHeader(props: {
         />
       }
       label={
-        <span className={cn("block truncate", props.active && !props.failed && "live-tool-shine")}>
-          {props.label}
+        <span className="inline-flex max-w-full items-center gap-1">
+          <span className={cn("truncate", props.active && !props.failed && "live-tool-shine")}>
+            {props.label}
+          </span>
+          <ChevronRightIcon
+            aria-hidden
+            className={cn(
+              "size-3 shrink-0 text-icon-muted opacity-55 transition-[transform,opacity] duration-150 ease-out motion-reduce:transition-none group-hover/timeline-row:opacity-95",
+              props.expanded && "rotate-90 opacity-90",
+            )}
+          />
         </span>
       }
       trailing={
@@ -7423,8 +7475,8 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
           >
             <ChevronRightIcon
               className={cn(
-                "size-3 shrink-0 text-icon-muted opacity-70 transition-transform duration-200",
-                expanded && "rotate-90",
+                "size-3 shrink-0 text-icon-muted opacity-40 transition-[transform,opacity] duration-150 ease-out motion-reduce:transition-none group-hover/timeline-row:opacity-90",
+                expanded && "rotate-90 opacity-90",
               )}
             />
           </span>

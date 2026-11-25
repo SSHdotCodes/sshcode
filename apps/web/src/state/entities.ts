@@ -182,7 +182,8 @@ const linkedThreadShellAtom = Atom.family((key: string) => {
     const state = get(environmentShell.stateValueAtom(ref.environmentId));
     if (
       state.snapshot._tag === "None" ||
-      state.snapshot.value.idleAppOwnedSubagentsOmitted !== true
+      (state.snapshot.value.idleAppOwnedSubagentsOmitted !== true &&
+        state.snapshot.value.idleSubagentsOmitted !== true)
     )
       return null;
     const row = get(createdChatShellAtom(ref));

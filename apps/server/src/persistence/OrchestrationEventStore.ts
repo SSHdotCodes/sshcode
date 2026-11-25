@@ -38,6 +38,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { replayAndBufferProjectedLiveEvents } from "../orchestration-v2/LiveStreamBudget.ts";
+import type { ShellApplicationEvent } from "../orchestration-v2/ShellStream.ts";
 
 import {
   toPersistenceDecodeError,
@@ -137,6 +138,12 @@ export class OrchestrationEventStore extends Context.Service<
       readonly throughSequence: number;
       readonly skipUnknownEventTypes?: boolean;
     }) => Stream.Stream<ApplicationStoredEvent, OrchestrationEventStoreError>;
+
+    /** Find the shell rows changed in a bounded range without reading event bodies. */
+    readonly readShellChanges: (input: {
+      readonly afterSequence: number;
+      readonly throughSequence: number;
+    }) => Effect.Effect<ReadonlyArray<ShellApplicationEvent>, OrchestrationEventStoreError>;
 
     /** Publish only after the surrounding event/projection transaction commits. */
     readonly publishCommitted: (
@@ -281,9 +288,13 @@ function rowToApplicationStoredEvent(
 }
 
 const isKnownProjectEventType = Schema.is(ProjectEventType);
+type ApplicationEventHeader = Pick<
+  ApplicationEventRow,
+  "aggregate_kind" | "event_type" | "sequence" | "stream_id"
+>;
 
 /** Filter only unknown discriminants; known types still undergo strict payload decoding. */
-const keepReplayRow = (row: ApplicationEventRow, skipUnknownEventTypes?: boolean) =>
+const keepReplayRow = (row: ApplicationEventHeader, skipUnknownEventTypes?: boolean) =>
   skipUnknownEventTypes !== true ||
   (row.aggregate_kind === "project"
     ? isKnownProjectEventType(row.event_type)
@@ -754,6 +765,40 @@ const makeEventStore = Effect.gen(function* () {
       ),
     );
 
+  const readShellChanges: OrchestrationEventStore["Service"]["readShellChanges"] = (input) =>
+    sql<ApplicationEventHeader>`
+      SELECT sequence, aggregate_kind, stream_id, event_type
+      FROM orchestration_events INDEXED BY idx_orchestration_events_application_high_water
+      WHERE sequence > ${input.afterSequence}
+        AND sequence <= ${input.throughSequence}
+        AND (
+          aggregate_kind = 'project'
+          OR (application_event_version = 2 AND aggregate_kind = 'thread')
+        )
+      ORDER BY sequence ASC
+    `.pipe(
+      NodeSqliteClient.readOnly,
+      Effect.mapError(toPersistenceSqlError("OrchestrationEventStore.readShellChanges:query")),
+      Effect.flatMap((rows) => Effect.filter(rows, (row) => keepReplayRow(row, true))),
+      Effect.map((rows) =>
+        rows.flatMap((row): ReadonlyArray<ShellApplicationEvent> => {
+          if (row.aggregate_kind === "thread") {
+            return [{ sequence: row.sequence, event: { threadId: ThreadId.make(row.stream_id) } }];
+          }
+          return isKnownProjectEventType(row.event_type)
+            ? [
+                {
+                  sequence: row.sequence,
+                  aggregateKind: "project",
+                  aggregateId: ProjectId.make(row.stream_id),
+                  type: row.event_type,
+                },
+              ]
+            : [];
+        }),
+      ),
+    );
+
   const streamProjectedApplicationEvents: OrchestrationEventStore["Service"]["streamProjectedApplicationEvents"] =
     (input) =>
       replayAndBufferProjectedLiveEvents({
@@ -787,6 +832,7 @@ const makeEventStore = Effect.gen(function* () {
     latestAgentSequence,
     latestApplicationSequence,
     readApplicationEvents: catchUpApplicationEvents,
+    readShellChanges,
     publishCommitted: (events) => PubSub.publishAll(committedEvents, events).pipe(Effect.asVoid),
     streamApplicationEvents,
     streamProjectedApplicationEvents,

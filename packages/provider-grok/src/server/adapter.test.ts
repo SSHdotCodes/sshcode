@@ -261,3 +261,44 @@ describe("Grok reasoning effort", () => {
     }),
   );
 });
+
+describe("Grok Fast mode", () => {
+  // Fast mode runs the model's fast variant; switching it off returns to the model itself.
+  const fast = (model: string, on: boolean, reasoningEffort?: string): ModelSelection => ({
+    instanceId,
+    model,
+    options: [
+      { id: "fastMode", value: on },
+      ...(reasoningEffort === undefined ? [] : [{ id: "reasoningEffort", value: reasoningEffort }]),
+    ],
+  });
+  const selections = [
+    fast("grok-4.6", false, "low"),
+    fast("grok-4.6", true, "high"),
+    fast("grok-4.6", false, "low"),
+    // An older chat that picked the fast model by name keeps running it.
+    select("grok-4.6-fast", "high"),
+  ];
+
+  it.live("protocol 1 switches between the model and its fast variant", () =>
+    Effect.gen(function* () {
+      assert.deepEqual(yield* writesPerSelection(selections, { T3_GROK_MOCK_PROTOCOL: "1" }), [
+        ["set_model grok-4.6 effort=low"],
+        ["set_model grok-4.6-fast effort=high"],
+        ["set_model grok-4.6 effort=low"],
+        ["set_model grok-4.6-fast effort=high"],
+      ]);
+    }),
+  );
+
+  it.live("newer protocols switch the model option to the fast variant", () =>
+    Effect.gen(function* () {
+      assert.deepEqual(yield* writesPerSelection(selections, { T3_GROK_MOCK_PROTOCOL: "2" }), [
+        ["set_config_option reasoning_effort=low"],
+        ["set_config_option model=grok-4.6-fast"],
+        ["set_config_option model=grok-4.6", "set_config_option reasoning_effort=low"],
+        ["set_config_option model=grok-4.6-fast"],
+      ]);
+    }),
+  );
+});

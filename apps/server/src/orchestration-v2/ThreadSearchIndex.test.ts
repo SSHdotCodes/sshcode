@@ -1,4 +1,5 @@
 import { it, assert } from "@effect/vitest";
+import { MessageId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
@@ -18,6 +19,101 @@ const threads = ["one", "two", "three"].map((threadId) => ({
   title: `Chat ${threadId}`,
   archived: threadId === "three",
 }));
+
+it.effect("continues beyond the message window and stops at the last posting", () =>
+  Effect.gen(function* () {
+    const index = yield* openSearchIndex(":memory:");
+    yield* index.syncThreads(threads);
+    yield* index.upsert([
+      doc("older", "one", "distinctivekeyword"),
+      ...Array.from({ length: 1536 }, (_, index) =>
+        doc(`newer-${index}`, "two", "distinctivekeyword"),
+      ),
+      doc("prefix", "three", "distinctivekeywords"),
+    ]);
+    const first = yield* index.keyword("distinctivekeyword");
+    assert.deepEqual(
+      first.matches.map((hit) => hit.threadId),
+      [ThreadId.make("two")],
+    );
+    assert.isDefined(first.nextCursor?.exact);
+    const second = yield* index.keyword("distinctivekeyword", 50, first.nextCursor);
+    assert.deepEqual(
+      second.matches.map((hit) => hit.threadId),
+      [ThreadId.make("one"), ThreadId.make("three")],
+    );
+    assert.isUndefined(second.nextCursor);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("retrieves an old exact phrase ahead of more than a window of loose prefixes", () =>
+  Effect.gen(function* () {
+    const index = yield* openSearchIndex(":memory:");
+    yield* index.syncThreads(threads);
+    yield* index.upsert([
+      doc("exact", "one", "red green blue"),
+      ...Array.from({ length: 1536 }, (_, index) =>
+        doc(`loose-${index}`, "two", "redesign greenhouse blueprint"),
+      ),
+    ]);
+    const result = yield* index.keyword("red green blue", 1);
+    assert.equal(result.matches[0]?.messageId, "exact");
+    const more = yield* index.keyword("red green blue", 1, result.nextCursor);
+    assert.equal(more.matches[0]?.threadId, "two");
+  }).pipe(Effect.scoped),
+);
+
+it.effect("ranks an exact message above a one-edit title match", () =>
+  Effect.gen(function* () {
+    const index = yield* openSearchIndex(":memory:");
+    yield* index.syncThreads([{ ...threads[0]!, title: "Apply changes" }, threads[1]!]);
+    yield* index.upsert([doc("literal", "two", "apple")]);
+    assert.lengthOf((yield* index.names("apple")).matches, 0);
+    const result = yield* index.keyword("apple");
+    assert.equal(result.matches[0]?.messageId, "literal");
+    assert.equal(result.matches[1]?.titleCorrection, "Apply");
+  }).pipe(Effect.scoped),
+);
+
+it.effect("returns every ranked chat when a page ends inside a window", () =>
+  Effect.gen(function* () {
+    const index = yield* openSearchIndex(":memory:");
+    yield* index.syncThreads(threads);
+    yield* index.upsert(
+      threads.map(({ threadId }) => doc(threadId, threadId, "distinctivekeyword")),
+    );
+    const found = new Set<ThreadId>();
+    let page = yield* index.keyword("distinctivekeyword", 1);
+    for (let count = 0; count < 3; count++) {
+      assert.lengthOf(page.matches, 1);
+      found.add(page.matches[0]!.threadId);
+      if (!page.nextCursor) break;
+      page = yield* index.keyword("distinctivekeyword", 1, page.nextCursor);
+    }
+    assert.deepEqual(found, new Set(threads.map(({ threadId }) => ThreadId.make(threadId))));
+    assert.isUndefined(page.nextCursor);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("continues title results without offering an empty message page", () =>
+  Effect.gen(function* () {
+    const index = yield* openSearchIndex(":memory:");
+    yield* index.syncThreads(threads);
+    const ids = [];
+    let page = yield* index.keyword("chat", 1);
+    for (let indexOfPage = 0; indexOfPage < threads.length; indexOfPage++) {
+      ids.push(page.matches[0]?.threadId);
+      assert.isUndefined(page.nextCursor?.words);
+      if (!page.nextCursor) break;
+      page = yield* index.keyword("chat", 1, page.nextCursor);
+    }
+    assert.deepEqual(
+      ids,
+      threads.map(({ threadId }) => ThreadId.make(threadId)),
+    );
+    assert.isUndefined(page.nextCursor);
+  }).pipe(Effect.scoped),
+);
 
 it.effect("ranks phrases, unordered words, identifiers and paths, grouping by chat", () =>
   Effect.gen(function* () {
@@ -47,6 +143,76 @@ it.effect("ranks phrases, unordered words, identifiers and paths, grouping by ch
     assert.lengthOf((yield* index.keyword('" OR * %')).matches, 0);
     yield* index.syncThreads(threads.slice(0, 2));
     assert.lengthOf((yield* index.keyword("satisfiesSemverRange")).matches, 0);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("finds named chats before message hits and explains model and spelling matches", () =>
+  Effect.gen(function* () {
+    const index = yield* openSearchIndex(":memory:");
+    yield* index.syncThreads([
+      {
+        ...threads[0]!,
+        title: "Archive resolver",
+        model: "muse-wonder-full",
+        harness: "Claude Code",
+        updatedAt: "2026-10-27T00:00:00.000Z",
+      },
+      {
+        ...threads[1]!,
+        title: "Archive resolver",
+        model: "gpt-5.4",
+        updatedAt: "2026-10-28T00:00:00.000Z",
+      },
+      { ...threads[2]!, title: "Release notes" },
+    ]);
+    yield* index.upsert([doc("third", "three", "Archive resolver, archive resolver")]);
+
+    const exact = yield* index.keyword("archive resolver");
+    assert.deepEqual(
+      exact.matches.map((match) => [match.threadId, match.messageId]),
+      [
+        [ThreadId.make("two"), null],
+        [ThreadId.make("one"), null],
+        [ThreadId.make("three"), MessageId.make("third")],
+      ],
+    );
+    const model = yield* index.keyword("wonder resolver");
+    assert.deepEqual(
+      model.matches.map((match) => [match.threadId, match.matchedModel]),
+      [["one", "muse-wonder-full"]],
+    );
+    const harness = yield* index.keyword("claude code wonder resolver");
+    assert.equal(harness.matches[0]?.matchedHarness, "Claude Code");
+    assert.equal(harness.matches[0]?.matchedModel, "muse-wonder-full");
+    const typo = yield* index.keyword("resolver arhive");
+    assert.equal(typo.matches[0]?.titleCorrection, "Archive");
+    const transposed = yield* index.keyword("arhcive");
+    assert.equal(transposed.matches[0]?.titleCorrection, "Archive");
+    assert.lengthOf((yield* index.keyword("resolver unrelated")).matches, 0);
+
+    // Metadata lives in memory and follows projected model changes without a cache migration.
+    yield* index.syncThreads([{ ...threads[0]!, title: "Archive resolver", model: "claude-opus" }]);
+    assert.lengthOf((yield* index.keyword("muse wonder")).matches, 0);
+    assert.equal((yield* index.keyword("opus")).matches[0]?.matchedModel, "claude-opus");
+  }).pipe(Effect.scoped),
+);
+
+it.effect("centers a noncontiguous query excerpt near the words deep in a message", () =>
+  Effect.gen(function* () {
+    const index = yield* openSearchIndex(":memory:");
+    yield* index.syncThreads(threads);
+    yield* index.upsert([
+      doc(
+        "message",
+        "one",
+        "Background. ".repeat(100) +
+          "The retry of the network call succeeded. " +
+          "Background. ".repeat(100),
+      ),
+    ]);
+    const result = yield* index.keyword("network retry");
+    assert.include(result.matches[0]?.snippet ?? "", "retry of the network");
+    assert.isAtMost(result.matches[0]?.snippet.length ?? 0, 240);
   }).pipe(Effect.scoped),
 );
 

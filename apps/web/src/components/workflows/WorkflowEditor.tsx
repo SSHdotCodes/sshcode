@@ -77,6 +77,7 @@ import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
+import { PanelLoading } from "../ui/panel-loading";
 import { Spinner } from "../ui/spinner";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
@@ -228,9 +229,13 @@ export function WorkflowEditorPage({
       ) : (
         <>
           <EditorHeader title="Workflow" />
-          <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-            {view.loading ? <Spinner /> : (view.error ?? "This workflow is gone.")}
-          </div>
+          {view.loading ? (
+            <PanelLoading label="Loading workflow…" toolbar={false} />
+          ) : (
+            <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-muted-foreground">
+              {view.error ?? "This workflow is gone."}
+            </div>
+          )}
         </>
       )}
     </div>

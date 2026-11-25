@@ -70,7 +70,7 @@ export const ModelListRow = memo(function ModelListRow(props: {
       )}
     >
       <div className="min-w-0 flex-1 text-left">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 items-center gap-1.5">
           <div
             className="min-w-0 truncate text-xs font-medium leading-snug"
             onPointerEnter={(event) => {
@@ -87,7 +87,7 @@ export const ModelListRow = memo(function ModelListRow(props: {
           </div>
           {props.showNewBadge ? (
             <span
-              className="shrink-0 rounded border border-update/35 bg-update/15 px-0.5 py-px text-3xs font-bold uppercase leading-none tracking-wide text-update-foreground"
+              className="inline-flex h-4 shrink-0 items-center rounded-sm border border-update/35 bg-update/15 px-1.5 text-3xs font-semibold uppercase leading-none tracking-wide text-update-foreground"
               aria-label="New model"
             >
               New

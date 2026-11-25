@@ -1,4 +1,5 @@
 import { useModelMentionCatalog } from "./use-model-mention-catalog";
+import { resolveNewChatLayout } from "./new-chat-layout";
 import { useChatBackdropEnabled, useNewChatDashboardEnabled } from "./useNewChatDashboard";
 import { markCloudSettle } from "./NewChatBackdrop";
 import { NewChatBackdrop, NewChatDashboard } from "./NewChatDashboard";
@@ -311,10 +312,13 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
   } = useIncomingShare();
   const insets = useSafeAreaInsets();
   const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
-  const { height: windowHeight } = useWindowDimensions();
+  const { fontScale, height: windowHeight } = useWindowDimensions();
   // Room for the dashboard's cards; it reports the height it really takes.
   const dashboardRoom = Math.min(440, Math.max(200, windowHeight * 0.46));
   const [dashboardShownHeight, setDashboardShownHeight] = useState<number | null>(null);
+  const [composerDockHeight, setComposerDockHeight] = useState<number | null>(null);
+  /** The resting composer's top in this screen, so the horizon's crown sits on it. */
+  const [composerTop, setComposerTop] = useState<number | null>(null);
   const dashboardHeight = dashboardShownHeight ?? Math.min(340, dashboardRoom);
   const controlsBottomPadding = Math.max(insets.bottom, 10);
   const [newChatDashboardEnabled] = useNewChatDashboardEnabled();
@@ -340,6 +344,19 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
     !isKeyboardVisible &&
     !flow.editingPendingTask &&
     flow.selectedEnvironmentId !== null;
+  const layout = resolveNewChatLayout({
+    platform: Platform.OS,
+    windowHeight,
+    showsDashboard,
+    fontScale,
+    composerTop,
+    isProjectDraft: !flow.isScratchDraft,
+  });
+  const dashboardHeroClearance =
+    dashboardHeight +
+    (Platform.OS === "ios"
+      ? (composerDockHeight ?? (layout.compactNewChatLayout ? 110 : 150)) + 12
+      : 236);
   const keyboardOpenedOffset = Math.max(0, controlsBottomPadding - 8);
   const { projectScopes, selectedProject, selectedProjectKey, setProject } = flow;
   // The picker and sidebar name a project by its repository scope; a workspace
@@ -477,8 +494,6 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
     reportFailure: false,
   });
   const [scheduleOpen, setScheduleOpen] = useState(false);
-  /** The resting composer's top in this screen, so the horizon's crown sits on it. */
-  const [composerTop, setComposerTop] = useState<number | null>(null);
   // Subagents stay on for a new chat; the chat's Agents sheet has the rarely used switch.
   // An edited pending task keeps the choice it was queued with.
   const subagentsOff = flow.editingPendingTask?.creation?.subagentsOff === true;
@@ -1959,12 +1974,13 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
   const heroRef = useRef<ViewInstance>(null);
   const heroViewportRef = useRef<ViewInstance>(null);
   const measureHeroVisibility = useCallback(() => {
+    if (layout.heroSize === 0) return;
     heroViewportRef.current?.measureInWindow((_x, viewportY, _width, viewportHeight) => {
       heroRef.current?.measureInWindow((_heroX, heroY) =>
-        setHeroVisible(heroY + 96 > viewportY && heroY < viewportY + viewportHeight),
+        setHeroVisible(heroY + layout.heroSize > viewportY && heroY < viewportY + viewportHeight),
       );
     });
-  }, []);
+  }, [layout.heroSize]);
 
   if (!selectedProject || scratchFallback !== null) {
     return (
@@ -2063,7 +2079,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
         singleLineCentered={false}
         contentInsetVertical={0}
         style={{
-          minHeight: 72,
+          minHeight: layout.editorMinHeight,
           maxHeight: 160,
           paddingVertical: 4,
         }}
@@ -2153,16 +2169,20 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
         : null,
     ),
   });
-  const heroMascot = (
-    <MascotCompanion
-      key={heroInstanceId ?? heroDriver}
-      state="greet"
-      size={96}
-      visible={heroVisible}
-    >
-      {(state) => <HarnessMascot {...heroIdentity} state={state} size={96} visible={heroVisible} />}
-    </MascotCompanion>
-  );
+  const { heroSize } = layout;
+  const heroMascot =
+    heroSize > 0 ? (
+      <MascotCompanion
+        key={heroInstanceId ?? heroDriver}
+        state="greet"
+        size={heroSize}
+        visible={heroVisible}
+      >
+        {(state) => (
+          <HarnessMascot {...heroIdentity} state={state} size={heroSize} visible={heroVisible} />
+        )}
+      </MascotCompanion>
+    ) : null;
   const hero = flow.isScratchDraft ? (
     <View
       ref={heroRef}
@@ -2183,7 +2203,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
     <View
       ref={heroRef}
       onLayout={measureHeroVisibility}
-      className="items-center gap-6 px-6"
+      className={layout.compactProjectHero ? "items-center gap-2 px-6" : "items-center gap-6 px-6"}
       testID="new-task-hero"
     >
       {heroMascot}
@@ -2228,6 +2248,9 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
       ref={heroViewportRef}
       onLayout={measureHeroVisibility}
       className="flex-1"
+      style={
+        layout.heroViewportHeight === null ? undefined : { maxHeight: layout.heroViewportHeight }
+      }
       collapsable={false}
     >
       <ScrollView
@@ -2249,7 +2272,9 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
         showsVerticalScrollIndicator={false}
         style={{ flex: 1 }}
         contentContainerStyle={
-          showsDashboard ? { paddingBottom: 236 + dashboardHeight } : undefined
+          showsDashboard && layout.heroViewportHeight === null
+            ? { paddingBottom: dashboardHeroClearance }
+            : undefined
         }
         testID="new-task-hero-scroll"
         scrollEventThrottle={100}
@@ -2293,6 +2318,11 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
 
   const composerDock = (
     <View
+      onLayout={
+        Platform.OS === "ios" && showsDashboard
+          ? ({ nativeEvent }) => setComposerDockHeight(Math.ceil(nativeEvent.layout.height))
+          : undefined
+      }
       className={
         isKeyboardVisible || !showsDashboard
           ? Platform.OS === "android"
@@ -2392,10 +2422,10 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
         opaque={showsBackdrop}
         style={{
           borderRadius: 26,
-          minHeight: 140,
+          minHeight: layout.composerMinHeight,
           overflow: "hidden",
           paddingBottom: 6,
-          paddingTop: 14,
+          paddingTop: layout.composerPaddingTop,
         }}
       >
         {stripAttachments.length > 0 ? (
@@ -2406,9 +2436,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
               imageBorderRadius={12}
               imageSize={56}
               onRemove={
-                isComposerInteractionLocked || voiceInput.isBusy
-                  ? () => undefined
-                  : flow.removeAttachment
+                isComposerInteractionLocked || voiceInput.isBusy ? undefined : flow.removeAttachment
               }
               onPressPreview={
                 isComposerInteractionLocked || voiceInput.isBusy ? undefined : openFilePreview
@@ -2640,6 +2668,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
           if (option) flow.setSelectedModelKey(option.key, selected?.options, true);
         }}
         maxHeight={dashboardRoom}
+        compact={layout.compactDashboard}
         bottomInset={controlsBottomPadding}
         onHeight={setDashboardShownHeight}
       />

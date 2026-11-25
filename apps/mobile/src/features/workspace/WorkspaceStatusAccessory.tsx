@@ -67,7 +67,8 @@ function LimitRing(props: { readonly limits: ProviderLimits }) {
   const { tightest, driver, pool } = props.limits;
   // Only older readings behind it (their probes read nothing lately): drawn quieter.
   const older =
-    pool.accounts.length > 0 && pool.accounts.every((account) => account.asOf !== undefined);
+    pool.accounts.length > 0 &&
+    pool.accounts.every((account) => account.asOf !== undefined && !account.limits.refreshing);
   const stroke = 2.5;
   const radius = (RING_SIZE - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
@@ -230,7 +231,7 @@ export function WorkspaceStatusAccessory(props: {
             label: rings
               .map(
                 (ring) =>
-                  `${ring.label ?? PROVIDER_DISPLAY_NAMES[ring.limits.driver] ?? ring.limits.driver} ${ring.limits.tightest.label} ${usedPercentLabel(ring.limits.tightest)}`,
+                  `${ring.label ?? PROVIDER_DISPLAY_NAMES[ring.limits.driver] ?? ring.limits.driver} ${ring.limits.tightest.label} ${usedPercentLabel(ring.limits.tightest)}${ring.limits.pool.accounts.some((account) => account.limits.refreshing) ? ", refreshing" : ""}`,
               )
               .join(", "),
             node: (

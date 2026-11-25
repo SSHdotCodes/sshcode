@@ -2,12 +2,15 @@
 import {
   MessageId,
   RunId,
+  ThreadId,
   TurnItemId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import { applyOrchestrationV2ProjectionEvent } from "@t3tools/client-runtime/state/orchestration-v2-projection";
+import { matchesTimelineJump } from "@t3tools/client-runtime/state/thread-search";
+import { threadFindViewportStart } from "./thread-find";
 import * as DateTime from "effect/DateTime";
 import { act, memo, useLayoutEffect, useMemo, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -190,6 +193,34 @@ function applyTurnItemUpdate(
 }
 
 describe("ThreadFeed row memoization and volatile store isolation", () => {
+  it("starts Find in chat at a visible message and falls back to the newest searchable row", () => {
+    const feed = createThreadFeedProjector()(makeSyntheticConversation().visibleTurnItems);
+    const near = feed.findIndex((row) => row.id === "m-u-2");
+    expect(near).toBeGreaterThan(0);
+    expect(threadFindViewportStart(feed, { start: near, end: near + 1 })).toEqual({
+      entryId: "m-u-2",
+      occurrence: 0,
+    });
+    expect(threadFindViewportStart(feed, undefined)).toEqual({
+      entryId: "m-a-3",
+      occurrence: 0,
+    });
+  });
+
+  it("resolves a Find in chat entry from inherited history", () => {
+    const inherited = {
+      ...makeSyntheticConversation().visibleTurnItems[0]!,
+      visibility: "inherited" as const,
+      sourceThreadId: ThreadId.make("parent-chat"),
+    };
+    const target = {
+      messageId: MessageId.make("m-u-1"),
+      sourceItemId: TurnItemId.make("m-u-1"),
+    };
+    expect(matchesTimelineJump(inherited, target)).toBe(true);
+    expect(matchesTimelineJump(inherited, { ...target, sourceThreadId: v2ThreadId })).toBe(false);
+  });
+
   it("isolates row renders across streaming tokens, tool updates, and per-row interactions", () => {
     const renderCounts = new Map<string, number>();
 
@@ -206,6 +237,7 @@ describe("ThreadFeed row memoization and volatile store isolation", () => {
           data-expanded={slice.expandedRowsKey}
           data-unsettled={String(slice.isUnsettledTurn)}
           data-setup={slice.setupWorkingStartedAt ?? ""}
+          data-search-jump={String(slice.searchJumpHighlighted)}
         />
       );
     });
@@ -214,6 +246,7 @@ describe("ThreadFeed row memoization and volatile store isolation", () => {
       readonly projection: OrchestrationV2ThreadProjection;
       readonly latestRun: ThreadFeedLatestRun | null;
       readonly copiedRowId: string | null;
+      readonly searchJumpRowId?: string;
       readonly expandedWorkRows: Record<string, boolean>;
       readonly editingMessageId?: MessageId;
       readonly setupWorkingStartedAt: string | null;
@@ -260,6 +293,7 @@ describe("ThreadFeed row memoization and volatile store isolation", () => {
           : null;
       const storeState: ThreadFeedRowStoreState = {
         copiedRowId: props.copiedRowId,
+        searchJumpRowId: props.searchJumpRowId ?? null,
         expandedWorkRows: props.expandedWorkRows,
         editingMessageId: props.editingMessageId ?? null,
         dispatchingMessageId: null,
@@ -404,6 +438,13 @@ describe("ThreadFeed row memoization and volatile store isolation", () => {
     renderCounts.clear();
     renderHarness({ editingMessageId: firstUserMessageId });
     expect(Array.from(renderCounts)).toEqual([[firstUserRowId, 1]]);
+
+    renderCounts.clear();
+    renderHarness({ searchJumpRowId: streamingRowId });
+    expect(Array.from(renderCounts)).toEqual([[streamingRowId, 1]]);
+    expect(host.querySelector('[data-search-jump="true"]')?.getAttribute("data-row-id")).toBe(
+      streamingRowId,
+    );
 
     // 6. Worktree setup working header: ONLY the setup anchor (first user row) renders.
     renderCounts.clear();

@@ -151,3 +151,22 @@ it("Stop everything shows Stopping while Stop reply leaves the menu usable", asy
   expect(stop).toHaveBeenCalledOnce();
   expect(stopButton().getAttribute("aria-label")).toBe("Stopping");
 });
+
+it("keeps the same button element across Send <-> Stop transitions for smooth morphing", async () => {
+  await render(null, true, { canInterrupt: false });
+  const initialButton = container.querySelector<HTMLButtonElement>("[data-composer-primary-mode]")!;
+  expect(initialButton.getAttribute("data-composer-primary-mode")).toBe("send");
+  expect(initialButton.getAttribute("type")).toBe("submit");
+
+  await render(null, true, { canInterrupt: true });
+  const stopNode = container.querySelector<HTMLButtonElement>("[data-composer-primary-mode]")!;
+  expect(stopNode).toBe(initialButton);
+  expect(stopNode.getAttribute("data-composer-primary-mode")).toBe("stop");
+  expect(stopNode.getAttribute("type")).toBe("button");
+  expect(stopNode.getAttribute("aria-label")).toBe("Stop generation");
+
+  await render(null, true, { canInterrupt: false });
+  const returnButton = container.querySelector<HTMLButtonElement>("[data-composer-primary-mode]")!;
+  expect(returnButton).toBe(initialButton);
+  expect(returnButton.getAttribute("data-composer-primary-mode")).toBe("send");
+});

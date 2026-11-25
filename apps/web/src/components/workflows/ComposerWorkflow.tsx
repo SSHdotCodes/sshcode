@@ -7,6 +7,7 @@ import { create } from "zustand";
 import { cn } from "../../lib/utils";
 import { ComposerBanner } from "../chat/ComposerBanner";
 import type { ComposerCommandItem } from "../chat/ComposerCommandMenu";
+import { ListState } from "../ui/list-state";
 import { toastManager } from "../ui/toast";
 import { useWorkflowCommands, useWorkflowsState } from "./useWorkflows";
 import { isAgent } from "./workflowGraph";
@@ -134,25 +135,23 @@ export function ComposerWorkflowPicker({
         className="flex max-h-72 flex-col overflow-y-auto p-1.5"
       >
         {workflows.length === 0 ? (
-          <p className="px-3.5 pt-2 pb-5 text-xs text-secondary-label">
-            {loading ? (
-              "Loading workflows…"
-            ) : (
-              <>
-                No workflows yet.{" "}
-                <button
-                  type="button"
-                  className="underline underline-offset-2"
-                  onClick={() => {
-                    close();
-                    void navigate({ to: "/workflows" });
-                  }}
-                >
-                  Draw one
-                </button>
-              </>
-            )}
-          </p>
+          loading ? (
+            <ListState loading size="compact" title="Loading workflows…" />
+          ) : (
+            <p className="px-3.5 pt-2 pb-5 text-xs text-secondary-label">
+              No workflows yet.{" "}
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-foreground"
+                onClick={() => {
+                  close();
+                  void navigate({ to: "/workflows" });
+                }}
+              >
+                Draw one
+              </button>
+            </p>
+          )
         ) : (
           workflows.map((workflow, index) => {
             const agents = workflow.nodes.filter(isAgent);

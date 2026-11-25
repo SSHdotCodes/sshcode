@@ -4,12 +4,22 @@ import type { ReviewGuideGenerationInput } from "@t3tools/provider-core/server/t
 /** Longest a settled remark is quoted. The guide needs what was raised, not the argument. */
 const SETTLED_REMARK_CHARS = 200;
 
+function splitsSurrogatePair(text: string, offset: number): boolean {
+  const before = text.charCodeAt(offset - 1);
+  const after = text.charCodeAt(offset);
+  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
+}
+
 function oneLine(text: string): string {
   const flat = text
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  return flat.length > SETTLED_REMARK_CHARS ? `${flat.slice(0, SETTLED_REMARK_CHARS)}…` : flat;
+  if (flat.length <= SETTLED_REMARK_CHARS) return flat;
+  const end = splitsSurrogatePair(flat, SETTLED_REMARK_CHARS)
+    ? SETTLED_REMARK_CHARS - 1
+    : SETTLED_REMARK_CHARS;
+  return `${flat.slice(0, end)}…`;
 }
 
 /**

@@ -152,8 +152,12 @@ export const makeClaudeContinuationGroupKey = Effect.fn("makeClaudeContinuationG
     config: Pick<ClaudeSettings, "homePath">,
     environment?: NodeJS.ProcessEnv,
   ): Effect.fn.Return<string, never, Path.Path | FileSystem.FileSystem> {
+    const fileSystem = yield* FileSystem.FileSystem;
     const resolvedHomePath = yield* resolveClaudeHomePath(config, environment);
-    return `claude:home:${yield* resolveClaudeChatsHome(resolvedHomePath)}`;
+    const canonicalHomePath = yield* fileSystem
+      .realPath(resolvedHomePath)
+      .pipe(Effect.orElseSucceed(() => resolvedHomePath));
+    return `claude:home:${yield* resolveClaudeChatsHome(canonicalHomePath)}`;
   },
 );
 

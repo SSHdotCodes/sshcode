@@ -95,7 +95,11 @@ import {
 import type { ProviderSnapshotSource } from "./builtInProviderCatalog.ts";
 import { makeUsageLimitHistory } from "./usageLimitHistory.ts";
 import { makeUsageLimitRecorder } from "./usageLimitRecorder.ts";
-import { isUsageLimitReadingStale, withLastUsageReading } from "./usageLimitFreshness.ts";
+import {
+  isUsageLimitReadingStale,
+  usageReadingWhileRefreshing,
+  withLastUsageReading,
+} from "./usageLimitFreshness.ts";
 import { signedOutReason } from "@t3tools/provider-core/server/failure";
 import { makeModelFailureTracker, type ModelFailure } from "./modelFailures.ts";
 import { recentUseMoved } from "./providerRecentUse.ts";
@@ -242,6 +246,7 @@ const hasModelCapabilities = (model: ServerProvider["models"][number]): boolean 
   (model.capabilities?.optionDescriptors?.length ?? 0) > 0;
 
 const MAX_WORKSPACE_SNAPSHOTS_PER_PROVIDER = 16;
+const CACHED_READINESS_GRACE_MS = 2 * 60_000;
 
 function dropProviderWorkspaceSnapshot(provider: ServerProvider, cwd: string): ServerProvider {
   return provider.workspaceSnapshots?.some((snapshot) => snapshot.cwd === cwd)
@@ -296,6 +301,7 @@ const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean =>
     // Native session discovery signals completion even when auth is unknown.
     return !(
       provider.installed &&
+      !provider.refreshing &&
       provider.status === "ready" &&
       provider.nativeSessions !== undefined
     );
@@ -418,11 +424,43 @@ const carrySavedAntigravityAccount = (
 export const mergeProviderSnapshot = (
   previousProvider: ServerProvider | undefined,
   nextProvider: ServerProvider,
+  keepCachedReadiness = true,
 ): ServerProvider => {
   if (!previousProvider) {
     return nextProvider;
   }
-  const savedAccount = carrySavedAntigravityAccount(previousProvider, nextProvider);
+  if (
+    keepCachedReadiness &&
+    nextProvider.refreshing &&
+    nextProvider.nativeSessions === undefined &&
+    previousProvider.enabled &&
+    previousProvider.installed &&
+    previousProvider.status !== "error" &&
+    previousProvider.auth.status !== "unauthenticated" &&
+    isCachedProviderCorrelated({
+      cachedProvider: previousProvider,
+      fallbackProvider: nextProvider,
+    }) &&
+    canReuseCachedReadiness(previousProvider, nextProvider)
+  ) {
+    const { recentFailure: _cachedFailure, ...cached } = hydrateCachedProvider({
+      cachedProvider: previousProvider,
+      fallbackProvider: nextProvider,
+    });
+    return {
+      ...cached,
+      ...(nextProvider.recentFailure === undefined
+        ? {}
+        : { recentFailure: nextProvider.recentFailure }),
+      ...(previousProvider.workspaceSnapshots === undefined
+        ? {}
+        : { workspaceSnapshots: previousProvider.workspaceSnapshots }),
+    };
+  }
+  const savedAccount =
+    keepCachedReadiness || !nextProvider.refreshing
+      ? carrySavedAntigravityAccount(previousProvider, nextProvider)
+      : undefined;
   // "Google account access is not checked yet" describes the probe, not the
   // account; it must not outlive the state it explained.
   const { message: _uncheckedMessage, ...nextWithoutMessage } = nextProvider;
@@ -492,12 +530,45 @@ const haveProvidersChanged = (
   nextProviders: ReadonlyArray<ServerProvider>,
 ): boolean => !Equal.equals(previousProviders, nextProviders);
 
+type UsageReadingAccount = Pick<ServerProvider, "auth" | "usageLimits">;
+
+const knownValuesDiffer = (left: string | undefined, right: string | undefined) =>
+  left !== undefined && right !== undefined && left !== right;
+
+// A pending check can lack account identity while cached readiness is provisional.
+// A quota reading requires positive evidence that it belongs to the current account.
+const canReuseCachedReadiness = (reading: UsageReadingAccount, current: UsageReadingAccount) =>
+  current.auth.status !== "unauthenticated" &&
+  !knownValuesDiffer(reading.auth.type, current.auth.type) &&
+  !knownValuesDiffer(reading.auth.email?.toLowerCase(), current.auth.email?.toLowerCase()) &&
+  !knownValuesDiffer(reading.auth.workspaceId, current.auth.workspaceId) &&
+  !knownValuesDiffer(
+    reading.usageLimits?.credentialFingerprint,
+    current.usageLimits?.credentialFingerprint,
+  );
+
 const matchesUsageReadingAccount = (
-  reading: ServerProvider["auth"],
-  current: ServerProvider["auth"],
-): boolean =>
-  (reading.email === undefined || current.email === undefined || reading.email === current.email) &&
-  (current.workspaceId === undefined || reading.workspaceId === current.workspaceId);
+  reading: UsageReadingAccount,
+  current: UsageReadingAccount,
+  configuredCredentialIdentifiesAccount: boolean,
+): boolean => {
+  if (reading.auth.status === "unauthenticated" || !canReuseCachedReadiness(reading, current)) {
+    return false;
+  }
+  if (
+    configuredCredentialIdentifiesAccount ||
+    (reading.usageLimits?.credentialFingerprint !== undefined &&
+      reading.usageLimits.credentialFingerprint === current.usageLimits?.credentialFingerprint)
+  )
+    return true;
+  const email = reading.auth.email?.toLowerCase();
+  return (
+    email !== undefined &&
+    email === current.auth.email?.toLowerCase() &&
+    reading.auth.workspaceId === current.auth.workspaceId &&
+    reading.auth.type === current.auth.type
+  );
+};
 
 const correlateSnapshotWithSource = (
   source: ProviderSnapshotSource,
@@ -534,13 +605,16 @@ const snapshotInstanceKey = (provider: ServerProvider): ProviderInstanceId => {
 // after `ProviderInstanceRegistry` rebuilds an instance (e.g. because
 // its settings changed), a fresh source rides the new PubSub instead
 // of a closed one.
-const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource => ({
-  instanceId: instance.instanceId,
-  driverKind: instance.driverKind,
-  getSnapshot: instance.snapshot.getSnapshot,
-  refresh: instance.snapshot.refresh,
-  streamChanges: instance.snapshot.streamChanges,
-});
+const buildSnapshotSource = (instance: ProviderInstanceRegistry.ConfiguredProviderInstance) =>
+  ({
+    instance,
+    instanceId: instance.instanceId,
+    driverKind: instance.driverKind,
+    getSnapshot: instance.snapshot.getSnapshot,
+    refresh: instance.snapshot.refresh,
+    streamChanges: instance.snapshot.streamChanges,
+  }) satisfies ProviderSnapshotSource & { readonly instance: ProviderInstance };
+type LiveProviderSnapshotSource = ReturnType<typeof buildSnapshotSource>;
 
 export const layer = Layer.effect(
   ProviderRegistry,
@@ -578,12 +652,12 @@ export const layer = Layer.effect(
       fallbackByInstance.set(source.instanceId, provider);
     }
 
-    // The limits each instance published before this process started. Hydration leaves them out
-    // so nothing old looks live at boot; a probe that then fails shows them as an older reading.
+    // Keep the original reading for fallback if a probe fails after startup.
     const savedUsageLimits = new Map<
       ProviderInstanceId,
-      { readonly limits: ServerProviderUsageLimits; readonly auth: ServerProvider["auth"] }
+      { readonly usageLimits: ServerProviderUsageLimits; readonly auth: ServerProvider["auth"] }
     >();
+    const bootedAt = yield* Clock.currentTimeMillis;
     const cachedProviders = yield* Effect.forEach(
       bootSources,
       (source) =>
@@ -621,13 +695,40 @@ export const layer = Layer.effect(
                   cachedDriver: cachedProvider.driver ?? null,
                 }).pipe(Effect.as(undefined as ServerProvider | undefined));
               }
-              if (cachedProvider.usageLimits?.windows.length) {
+              const credential = source.instance.credentialSettings;
+              if (
+                cachedProvider.configuredCredentialFingerprint !== credential?.fingerprint ||
+                !canReuseCachedReadiness(cachedProvider, fallbackProvider)
+              ) {
+                return Effect.succeed(undefined);
+              }
+              const limits = cachedProvider.usageLimits;
+              if (
+                limits?.windows.length &&
+                cachedProvider.enabled &&
+                fallbackProvider.enabled &&
+                cachedProvider.auth.status !== "unauthenticated"
+              ) {
                 savedUsageLimits.set(source.instanceId, {
-                  limits: cachedProvider.usageLimits,
+                  usageLimits: limits,
                   auth: cachedProvider.auth,
                 });
               }
-              return Effect.succeed(hydrateCachedProvider(correlation));
+              const hydrated = hydrateCachedProvider(correlation);
+              // A fast status probe can finish before its separate quota read.
+              const usageLimits =
+                fallbackProvider.usageLimits === undefined &&
+                matchesUsageReadingAccount(
+                  cachedProvider,
+                  fallbackProvider,
+                  credential?.identifiesAccount === true,
+                )
+                  ? usageReadingWhileRefreshing(
+                      savedUsageLimits.get(source.instanceId)?.usageLimits,
+                      bootedAt,
+                    )
+                  : undefined;
+              return Effect.succeed(usageLimits ? { ...hydrated, usageLimits } : hydrated);
             }),
           );
         }),
@@ -638,6 +739,7 @@ export const layer = Layer.effect(
           providers.filter((provider): provider is ServerProvider => provider !== undefined),
         ),
       ),
+      Effect.withSpan("provider.status.cache.hydrate"),
     );
     const initialManifest = yield* manifestService.current;
     const classifyCompatibility = (
@@ -652,14 +754,24 @@ export const layer = Layer.effect(
     const providersRef = yield* Ref.make<ReadonlyArray<ServerProvider>>(
       cachedProviders.map((provider) => classifyCompatibility(provider, initialManifest)),
     );
+    const refreshingSince = new Map(
+      cachedProviders
+        .filter((provider) => provider.refreshing)
+        .map((provider) => [provider.instanceId, bootedAt] as const),
+    );
     const usageLimitHistory = makeUsageLimitHistory();
     const usageLimitProbedAt = new Map<ProviderInstanceId, number>();
-    const usageLimitRecorder = yield* makeUsageLimitRecorder({
-      filePath: path.join(config.providerStatusCacheDir, "usage-limit-readings.ndjson"),
-    }).pipe(
-      Effect.tapError(() => Effect.logWarning("usage limit recording unavailable")),
-      Effect.orElseSucceed(() => ({ append: () => Effect.void })),
+    const getUsageLimitRecorder = yield* Effect.cached(
+      makeUsageLimitRecorder({
+        filePath: path.join(config.providerStatusCacheDir, "usage-limit-readings.ndjson"),
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+        Effect.tapError(() => Effect.logWarning("usage limit recording unavailable")),
+        Effect.orElseSucceed(() => ({ append: () => Effect.void })),
+      ),
     );
+    yield* getUsageLimitRecorder.pipe(Effect.forkIn(serviceScope));
     const workspaceRefreshesRef = yield* Ref.make<
       ReadonlyMap<ProviderInstance, ReadonlySet<string>>
     >(new Map());
@@ -703,59 +815,127 @@ export const layer = Layer.effect(
     // `bootSources`. Keyed by `instanceId`; the stored `ProviderInstance`
     // reference is used for identity equality so "no-op" reconciles
     // (settings unchanged) skip re-subscribing + re-probing.
-    const liveSubsRef = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ProviderInstance>>(
-      new Map(),
-    );
+    let liveInstances: ReadonlyMap<
+      ProviderInstanceId,
+      ProviderInstanceRegistry.ConfiguredProviderInstance
+    > = new Map(bootInstances.map((instance) => [instance.instanceId, instance]));
+    let liveSourcesSynced = false;
     // Serialize `syncLiveSources` so a rapid burst of reconciles doesn't
     // interleave two passes clobbering each other's fiber bookkeeping.
     const syncSemaphore = yield* Semaphore.make(1);
 
-    const getLiveSources: Effect.Effect<ReadonlyArray<ProviderSnapshotSource>> = Ref.get(
-      liveSubsRef,
-    ).pipe(Effect.map((map) => Array.from(map.values(), buildSnapshotSource)));
+    const getLiveSources = Effect.sync(() =>
+      Array.from(liveInstances.values(), buildSnapshotSource),
+    );
 
-    const persistProvider = (provider: ServerProvider) =>
-      Effect.gen(function* () {
-        // Persist every instance — the file name is the instance id, so
-        // multi-instance setups (e.g. `codex_personal`, `codex_work`) each
-        // get their own cache. We resolve the path fresh so snapshots
-        // produced by newly-added instances post-boot still land on disk
-        // without the aggregator holding a stale `cachePathByInstance`
-        // entry.
-        const key = snapshotInstanceKey(provider);
-        const filePath = yield* resolveProviderStatusCachePath({
-          cacheDir: config.providerStatusCacheDir,
-          instanceId: key,
-        }).pipe(Effect.provideService(Path.Path, path));
-        const {
-          workspaceSnapshots: _workspaceSnapshots,
-          recentFailure: _recentFailure,
-          recentUse: _recentUse,
-          ...machineProvider
-        } = provider;
-        // Snapshots published before the first probe carry no limits; keep the saved ones on
-        // disk until a probe replaces them, so a second restart can still fall back to them.
-        const saved = savedUsageLimits.get(key);
-        yield* writeProviderStatusCache({
-          filePath,
-          provider: {
-            ...machineProvider,
-            ...(provider.usageLimits === undefined &&
+    const cacheWriters = new Map<
+      ProviderInstanceId,
+      { lock: Semaphore.Semaphore; users: number }
+    >();
+    const withProviderCacheLock = <A, E>(key: ProviderInstanceId, use: Effect.Effect<A, E>) =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const writer = cacheWriters.get(key) ?? { lock: Semaphore.makeUnsafe(1), users: 0 };
+          writer.users++;
+          cacheWriters.set(key, writer);
+          return writer;
+        }),
+        ({ lock }) => lock.withPermit(use),
+        (writer) =>
+          Effect.sync(() => {
+            writer.users--;
+            if (writer.users === 0) cacheWriters.delete(key);
+          }),
+      );
+    const invalidateProviderCache = (
+      instance: ProviderInstanceRegistry.ConfiguredProviderInstance,
+    ) =>
+      withProviderCacheLock(
+        instance.instanceId,
+        Effect.gen(function* () {
+          const filePath = path.join(config.providerStatusCacheDir, `${instance.instanceId}.json`);
+          const saved = yield* readProviderStatusCache(filePath).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+          );
+          if (
             saved &&
-            matchesUsageReadingAccount(saved.auth, provider.auth)
-              ? { usageLimits: saved.limits }
-              : {}),
-            ...(rememberedAccountFailure(provider)
-              ? { recentFailure: provider.recentFailure }
-              : {}),
-          },
-        }).pipe(
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-          Effect.tapError(Effect.logError),
-          Effect.ignore,
-        );
-      });
+            (saved.driver !== instance.driverKind ||
+              saved.configuredCredentialFingerprint !== instance.credentialSettings?.fingerprint)
+          ) {
+            yield* fileSystem.remove(filePath, { force: true }).pipe(
+              Effect.tapError(() => Effect.logWarning("Failed to remove outdated provider cache.")),
+              Effect.ignore,
+            );
+          }
+        }),
+      );
+    const persistProvider = (key: ProviderInstanceId, accountFailure = false) =>
+      withProviderCacheLock(
+        key,
+        Effect.gen(function* () {
+          const latest = (yield* Ref.get(providersRef)).find(
+            (provider) => provider.instanceId === key,
+          );
+          if (!latest || (latest.refreshing && !accountFailure)) return;
+          const credential = liveInstances.get(key)?.credentialSettings;
+          // Persist every instance — the file name is the instance id, so
+          // multi-instance setups (e.g. `codex_personal`, `codex_work`) each
+          // get their own cache. We resolve the path fresh so snapshots
+          // produced by newly-added instances post-boot still land on disk
+          // without the aggregator holding a stale `cachePathByInstance`
+          // entry.
+          const filePath = yield* resolveProviderStatusCachePath({
+            cacheDir: config.providerStatusCacheDir,
+            instanceId: key,
+          }).pipe(Effect.provideService(Path.Path, path));
+          const savedSnapshot = latest.refreshing
+            ? yield* readProviderStatusCache(filePath).pipe(
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+              )
+            : undefined;
+          const lastComplete = latest.refreshing ? savedSnapshot : latest;
+          if (
+            !lastComplete ||
+            (savedSnapshot &&
+              savedSnapshot.configuredCredentialFingerprint !== credential?.fingerprint) ||
+            !isCachedProviderCorrelated({
+              cachedProvider: lastComplete,
+              fallbackProvider: latest,
+            })
+          )
+            return;
+          const {
+            workspaceSnapshots: _workspaceSnapshots,
+            recentFailure: _recentFailure,
+            recentUse: _recentUse,
+            ...machineProvider
+          } = lastComplete;
+          // During the first probe a repeat restart should still find the original reading.
+          const saved = savedUsageLimits.get(key);
+          yield* writeProviderStatusCache({
+            filePath,
+            configuredCredentialFingerprint: credential?.fingerprint,
+            provider: {
+              ...machineProvider,
+              ...((lastComplete.usageLimits === undefined || lastComplete.usageLimits.refreshing) &&
+              saved &&
+              matchesUsageReadingAccount(
+                saved,
+                lastComplete,
+                credential?.identifiesAccount === true,
+              )
+                ? { usageLimits: saved.usageLimits }
+                : {}),
+              ...(rememberedAccountFailure(latest) ? { recentFailure: latest.recentFailure } : {}),
+            },
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+            Effect.tapError(Effect.logError),
+            Effect.ignore,
+          );
+        }),
+      );
 
     /** Overlay run health and maintenance state on the driver-owned snapshot. */
     const applyProviderUpdateState = Effect.fn("applyProviderUpdateState")(function* (
@@ -768,6 +948,7 @@ export const layer = Layer.effect(
       if (
         storedFailure?.outOfCredit &&
         limits &&
+        !limits.refreshing &&
         !limits.unavailable &&
         Date.parse(limits.checkedAt) > Date.parse(storedFailure.occurredAt) &&
         limits.windows.length > 0 &&
@@ -792,6 +973,7 @@ export const layer = Layer.effect(
       if (
         storedFailure?.kind === "authentication_error" &&
         limits &&
+        !limits.refreshing &&
         Date.parse(limits.checkedAt) > Date.parse(storedFailure.occurredAt)
       ) {
         const { resetAt: _retry, ...confirmed } = storedFailure;
@@ -838,39 +1020,12 @@ export const layer = Layer.effect(
       };
     });
 
-    /**
-     * The limits to publish: the probe's own, or, when it read nothing, the last reading this
-     * instance published (in this process, else before the restart) as an older reading. A
-     * reading taken under another signed-in email or workspace is never carried over.
-     */
-    const lastUsageReadingFor = (
-      key: ProviderInstanceId,
-      limits: ServerProviderUsageLimits,
-      auth: ServerProvider["auth"],
-      previous: ServerProvider | undefined,
-      now: number,
-    ): ServerProviderUsageLimits => {
-      if (!limits.unavailable) savedUsageLimits.delete(key);
-      if (limits.unavailable?.reason !== "probeFailed" || limits.windows.length > 0) return limits;
-      const saved = savedUsageLimits.get(key);
-      const last = [
-        previous?.usageLimits && { limits: previous.usageLimits, auth: previous.auth },
-        saved,
-      ].find(
-        (candidate) =>
-          candidate !== undefined &&
-          candidate.limits.windows.length > 0 &&
-          matchesUsageReadingAccount(candidate.auth, auth),
-      );
-      return withLastUsageReading(limits, last?.limits, now);
-    };
-
     const upsertProviders = Effect.fn("upsertProviders")(function* (
       nextProviders: ReadonlyArray<ServerProvider>,
       options?: {
-        readonly publish?: boolean;
         readonly persist?: boolean;
         readonly replace?: boolean;
+        readonly source?: LiveProviderSnapshotSource;
       },
     ) {
       const manifest = yield* manifestService.current;
@@ -882,83 +1037,138 @@ export const layer = Layer.effect(
         },
       );
       const now = yield* Clock.currentTimeMillis;
-      const [previousProviders, providers, providersToPersist] = yield* Ref.modify(
-        providersRef,
-        (previousProviders) => {
-          const mergedProviders = new Map(
-            previousProviders.map((provider) => [snapshotInstanceKey(provider), provider] as const),
-          );
-          const updatedKeys = new Set<ProviderInstanceId>();
+      const updatedProviders = yield* Ref.modify(providersRef, (previousProviders) => {
+        const mergedProviders = new Map(
+          previousProviders.map((provider) => [snapshotInstanceKey(provider), provider] as const),
+        );
+        const updatedKeys = new Set<ProviderInstanceId>();
 
-          for (const provider of nextProvidersWithUpdateState) {
-            const key = snapshotInstanceKey(provider);
-            const previous = mergedProviders.get(key);
-            const withPace = provider.usageLimits
-              ? {
-                  ...provider,
-                  usageLimits: usageLimitHistory.record(
-                    key,
-                    lastUsageReadingFor(key, provider.usageLimits, provider.auth, previous, now),
-                    previous?.usageLimits,
-                  ),
-                }
-              : provider;
-            updatedKeys.add(key);
-            mergedProviders.set(
-              key,
-              options?.replace === true
-                ? withPace
-                : mergeProviderSnapshot(mergedProviders.get(key), withPace),
-            );
+        for (const [index, provider] of nextProvidersWithUpdateState.entries()) {
+          const key = snapshotInstanceKey(provider);
+          const previous = mergedProviders.get(key);
+          const source = options?.source;
+          if (!source) {
+            // An overlay can contain hydrated auth. Only a source can verify quota
+            // ownership, and an overlay must not revive a superseded snapshot.
+            if (options?.replace || previous === nextProviders[index]) {
+              updatedKeys.add(key);
+              mergedProviders.set(key, provider);
+            }
+            continue;
           }
+          if (liveInstances.get(key) !== source.instance) continue;
+          if (provider.enabled && provider.refreshing) {
+            if (!refreshingSince.has(key)) refreshingSince.set(key, now);
+          } else {
+            refreshingSince.delete(key);
+          }
+          const keepCachedReadiness =
+            now - (refreshingSince.get(key) ?? now) < CACHED_READINESS_GRACE_MS;
+          const identifiesAccount =
+            liveInstances.get(key)?.credentialSettings?.identifiesAccount === true;
+          const saved = savedUsageLimits.get(key);
+          const probedLimits = provider.usageLimits;
+          if (
+            !provider.enabled ||
+            provider.auth.status === "unauthenticated" ||
+            (probedLimits &&
+              !probedLimits.refreshing &&
+              probedLimits.unavailable?.reason !== "probeFailed") ||
+            (saved && !canReuseCachedReadiness(saved, provider))
+          )
+            savedUsageLimits.delete(key);
+          if (previous && !canReuseCachedReadiness(previous, provider))
+            usageLimitHistory.clear(key);
+          const canKeepReading = provider.enabled && (provider.installed || provider.refreshing);
+          const previousReading =
+            canKeepReading &&
+            previous &&
+            matchesUsageReadingAccount(previous, provider, identifiesAccount)
+              ? previous.usageLimits
+              : undefined;
+          const savedReading =
+            canKeepReading &&
+            saved &&
+            matchesUsageReadingAccount(saved, provider, identifiesAccount)
+              ? saved.usageLimits
+              : undefined;
+          const limits = probedLimits
+            ? withLastUsageReading(
+                probedLimits,
+                previousReading?.windows.length ? previousReading : savedReading,
+                now,
+              )
+            : usageReadingWhileRefreshing(
+                previousReading?.refreshing ? previousReading : savedReading,
+                now,
+              );
+          const withPace = limits
+            ? {
+                ...provider,
+                usageLimits: limits.refreshing
+                  ? limits
+                  : usageLimitHistory.record(key, limits, previousReading ?? savedReading),
+              }
+            : provider;
+          updatedKeys.add(key);
+          mergedProviders.set(key, mergeProviderSnapshot(previous, withPace, keepCachedReadiness));
+        }
 
-          const providers = orderProviderSnapshots(
-            [...mergedProviders.values()].map((provider) =>
-              classifyCompatibility(provider, manifest),
-            ),
-          );
-          const providersToPersist = providers.filter((provider) =>
-            updatedKeys.has(snapshotInstanceKey(provider)),
-          );
-          return [[previousProviders, providers, providersToPersist] as const, providers];
-        },
-      );
+        const providers = orderProviderSnapshots(
+          [...mergedProviders.values()].map((provider) =>
+            classifyCompatibility(provider, manifest),
+          ),
+        );
+        if (!haveProvidersChanged(previousProviders, providers)) {
+          return [undefined, previousProviders];
+        }
+        const updated = providers.filter((provider) =>
+          updatedKeys.has(snapshotInstanceKey(provider)),
+        );
+        return [updated, providers];
+      });
 
-      if (haveProvidersChanged(previousProviders, providers)) {
+      if (!updatedProviders) return yield* Ref.get(providersRef);
+      if (options?.persist !== false) {
         yield* Effect.forEach(
-          providersToPersist,
+          updatedProviders.filter((provider) => !provider.refreshing),
+          (provider) => persistProvider(provider.instanceId),
+          { concurrency: "unbounded", discard: true },
+        );
+      }
+      // A concurrent provider may have finished during this instance's cache write.
+      // Publish the current list, and keep the shared usage archive off this path.
+      yield* Ref.get(providersRef).pipe(
+        Effect.map((current) => PubSub.publishUnsafe(changesPubSub, current)),
+      );
+      if (
+        updatedProviders.some(
+          (provider) => provider.usageLimits && !provider.usageLimits.refreshing,
+        )
+      ) {
+        const recorder = yield* getUsageLimitRecorder;
+        yield* Effect.forEach(
+          updatedProviders,
           (provider) =>
-            provider.usageLimits
-              ? usageLimitRecorder.append(
-                  provider.instanceId,
-                  provider.driver,
-                  provider.usageLimits,
-                )
+            provider.usageLimits && !provider.usageLimits.refreshing
+              ? recorder.append(provider.instanceId, provider.driver, provider.usageLimits)
               : Effect.void,
           { discard: true },
         );
-        if (options?.persist !== false) {
-          yield* Effect.forEach(providersToPersist, persistProvider, {
-            concurrency: "unbounded",
-            discard: true,
-          });
-        }
-        if (options?.publish !== false) {
-          yield* PubSub.publish(changesPubSub, providers);
-        }
       }
 
-      return providers;
+      return yield* Ref.get(providersRef);
     });
 
     const compatibilityRefreshRunning = yield* Ref.make(false);
     const syncProvider = Effect.fn("syncProvider")(function* (
+      source: LiveProviderSnapshotSource,
       provider: ServerProvider,
-      options?: {
-        readonly publish?: boolean;
-      },
     ) {
-      const providers = yield* upsertProviders([provider], options);
+      if ((yield* instanceRegistry.getInstance(source.instanceId)) !== source.instance) {
+        return yield* Ref.get(providersRef);
+      }
+      const providers = yield* upsertProviders([provider], { source });
       // Reclassify the current read model after fetching. Never republish the
       // probe captured before the fetch: a newer health result may have landed.
       if (!(yield* Ref.getAndSet(compatibilityRefreshRunning, true))) {
@@ -1003,8 +1213,7 @@ export const layer = Layer.effect(
           return existingProviders;
         }
 
-        const nextProvider = yield* applyProviderUpdateState(matchingProvider);
-        return yield* upsertProviders([nextProvider], {
+        return yield* upsertProviders([matchingProvider], {
           persist: false,
         });
       },
@@ -1065,6 +1274,7 @@ export const layer = Layer.effect(
       );
       if (!matchingProvider) return;
       yield* upsertProviders([matchingProvider]);
+      if (matchingProvider.refreshing) yield* persistProvider(input.instanceId, true);
       if (check) yield* checkSignIn(input.instanceId);
     });
 
@@ -1142,12 +1352,12 @@ export const layer = Layer.effect(
     });
 
     const refreshOneSource = Effect.fn("refreshOneSource")(function* (
-      providerSource: ProviderSnapshotSource,
+      providerSource: LiveProviderSnapshotSource,
     ) {
       return yield* providerSource.refresh.pipe(
         Effect.flatMap((nextProvider) =>
           correlateSnapshotWithSource(providerSource, nextProvider).pipe(
-            Effect.flatMap(syncProvider),
+            Effect.flatMap((provider) => syncProvider(providerSource, provider)),
           ),
         ),
       );
@@ -1241,7 +1451,7 @@ export const layer = Layer.effect(
       provider: ProviderDriverKind,
       options?: { readonly fresh?: boolean },
     ) {
-      // Read the instance registry, not `liveSubsRef`: the latter trails
+      // Read the instance registry, since the live source map trails
       // reconciliation, and an update must never run a retired instance's
       // command against a freshly configured executable.
       const instance = yield* instanceRegistry.getInstance(instanceId);
@@ -1275,71 +1485,85 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const instances = yield* instanceRegistry.listInstances;
         const unavailableProviders = yield* instanceRegistry.listUnavailable;
-        const nextByInstance = new Map<ProviderInstanceId, ProviderInstance>(
+        const nextByInstance = new Map(
           instances.map((instance) => [instance.instanceId, instance] as const),
         );
         const knownInstanceIds = new Set<ProviderInstanceId>(nextByInstance.keys());
         for (const provider of unavailableProviders) {
           knownInstanceIds.add(snapshotInstanceKey(provider));
         }
-        const previousSubs = yield* Ref.get(liveSubsRef);
-        for (const [instanceId, previousInstance] of previousSubs) {
-          if (nextByInstance.get(instanceId) !== previousInstance)
-            usageLimitHistory.clear(instanceId);
-        }
-
-        // Carry over subscriptions for instances whose identity is
-        // unchanged (reconcile treated them as no-op). Instances that
-        // disappeared, or were rebuilt with a different reference,
-        // fall through to the "newly-added" branch below.
-        const carriedOver = new Map<ProviderInstanceId, ProviderInstance>();
+        const previousSubs = liveInstances;
+        const changedCredentials = new Map<
+          ProviderInstanceId,
+          ProviderInstanceRegistry.ConfiguredProviderInstance
+        >();
         for (const [instanceId, previousInstance] of previousSubs) {
           const nextInstance = nextByInstance.get(instanceId);
-          if (nextInstance !== undefined && nextInstance === previousInstance) {
-            carriedOver.set(instanceId, previousInstance);
+          if (nextInstance !== previousInstance) {
+            usageLimitHistory.clear(instanceId);
+            savedUsageLimits.delete(instanceId);
+            refreshingSince.delete(instanceId);
+          }
+          if (
+            nextInstance &&
+            (previousInstance.driverKind !== nextInstance.driverKind ||
+              previousInstance.credentialSettings?.fingerprint !==
+                nextInstance.credentialSettings?.fingerprint)
+          ) {
+            changedCredentials.set(instanceId, nextInstance);
           }
         }
 
-        // Collect new/rebuilt instances in `nextByInstance` insertion
-        // order (which preserves settings-author order).
-        const newlyAdded: Array<readonly [ProviderInstanceId, ProviderInstance]> = [];
-        for (const [instanceId, instance] of nextByInstance) {
-          if (carriedOver.has(instanceId)) {
-            continue;
-          }
-          newlyAdded.push([instanceId, instance] as const);
-        }
+        const newlyAdded = instances.filter(
+          (instance) => !liveSourcesSynced || previousSubs.get(instance.instanceId) !== instance,
+        );
 
         const rebuiltInstanceIds = new Set(
           newlyAdded
-            .map(([instanceId]) => instanceId)
-            .filter((instanceId) => previousSubs.has(instanceId)),
+            .filter((instance) => {
+              const previous = previousSubs.get(instance.instanceId);
+              return previous !== undefined && previous !== instance;
+            })
+            .map((instance) => instance.instanceId),
         );
-        if (rebuiltInstanceIds.size > 0) {
-          const [previousProviders, providers] = yield* Ref.modify(
-            providersRef,
-            (previousProviders) => {
-              const providers = previousProviders.map((provider) => {
-                if (!rebuiltInstanceIds.has(provider.instanceId)) return provider;
-                const { workspaceSnapshots: _workspaceSnapshots, ...machineSnapshot } = provider;
-                return machineSnapshot;
-              });
-              return [[previousProviders, providers] as const, providers];
-            },
-          );
-          if (haveProvidersChanged(previousProviders, providers)) {
-            yield* PubSub.publish(changesPubSub, providers);
-          }
+        if (changedCredentials.size > 0) {
+          yield* Ref.update(recentFailuresRef, (previous) => {
+            const next = new Map(previous);
+            for (const instanceId of changedCredentials.keys()) next.delete(instanceId);
+            return next;
+          });
         }
+        const [beforeRebuild, afterRebuild] = yield* Ref.modify(providersRef, (providers) => {
+          // Change the source and its read model together. Late results from an old
+          // credential cannot be stamped with the replacement's fingerprint.
+          liveInstances = nextByInstance;
+          liveSourcesSynced = true;
+          const updated = providers.flatMap((provider) => {
+            if (changedCredentials.has(provider.instanceId)) return [];
+            if (!rebuiltInstanceIds.has(provider.instanceId)) return [provider];
+            const { workspaceSnapshots: _workspaceSnapshots, ...machineSnapshot } = provider;
+            return [machineSnapshot];
+          });
+          return [[providers, updated] as const, updated];
+        });
+        if (haveProvidersChanged(beforeRebuild, afterRebuild)) {
+          yield* PubSub.publish(changesPubSub, afterRebuild);
+        }
+        yield* Effect.forEach(changedCredentials.values(), invalidateProviderCache, {
+          concurrency: "unbounded",
+          discard: true,
+        });
 
         // Fork long-lived subscriptions to each new/rebuilt instance's
         // change stream before reading its current snapshot. If the
         // driver's own initial probe finishes during this sync, either
         // the current read or the active subscriber observes the result.
-        for (const [, instance] of newlyAdded) {
+        for (const instance of newlyAdded) {
           const source = buildSnapshotSource(instance);
           yield* Stream.runForEach(source.streamChanges, (provider) =>
-            correlateSnapshotWithSource(source, provider).pipe(Effect.flatMap(syncProvider)),
+            correlateSnapshotWithSource(source, provider).pipe(
+              Effect.flatMap((snapshot) => syncProvider(source, snapshot)),
+            ),
           ).pipe(Effect.forkScoped);
         }
         yield* Effect.yieldNow;
@@ -1350,12 +1574,12 @@ export const layer = Layer.effect(
         // or HTTP server construction path.
         yield* Effect.forEach(
           newlyAdded,
-          ([, instance]) =>
+          (instance) =>
             Effect.gen(function* () {
               const source = buildSnapshotSource(instance);
               const provider = yield* source.getSnapshot;
               yield* correlateSnapshotWithSource(source, provider).pipe(
-                Effect.flatMap(syncProvider),
+                Effect.flatMap((snapshot) => syncProvider(source, snapshot)),
               );
             }).pipe(Effect.ignoreCause({ log: true })),
           { concurrency: "unbounded", discard: true },
@@ -1364,12 +1588,6 @@ export const layer = Layer.effect(
           persist: false,
           replace: true,
         });
-
-        const nextSubs = new Map(carriedOver);
-        for (const [instanceId, instance] of newlyAdded) {
-          nextSubs.set(instanceId, instance);
-        }
-        yield* Ref.set(liveSubsRef, nextSubs);
 
         // Drop aggregator state for instances that have disappeared —
         // otherwise the UI would keep rendering ghosts.
@@ -1412,13 +1630,6 @@ export const layer = Layer.effect(
       }),
     );
 
-    // Seed `providersRef` with the boot-time fallback snapshots so
-    // consumers calling `getProviders` immediately after layer build see
-    // a populated list — even before the first `syncLiveSources` refresh
-    // resolves. Cached snapshots (already in `providersRef`) merge with
-    // these via `upsertProviders` so on-disk state wins where present
-    // and pending fallbacks fill the gaps.
-    yield* upsertProviders(fallbackProviders, { publish: false });
     // Subscribe to registry mutations BEFORE running the initial sync.
     // `subscribeChanges` acquires the dequeue synchronously in this
     // fibre; the subscription is active the instant this `yield*`
@@ -1609,6 +1820,7 @@ export const layer = Layer.effect(
                   ? instances === provider.instanceId
                   : instances.includes(provider.instanceId))) &&
               provider.usageLimits !== undefined &&
+              !provider.refreshing &&
               isUsageLimitReadingStale(provider.usageLimits, now) &&
               // A probe that keeps failing leaves the reading stale: do not start one per call.
               now - (usageLimitProbedAt.get(provider.instanceId) ?? Number.NEGATIVE_INFINITY) >=

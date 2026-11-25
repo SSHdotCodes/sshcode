@@ -1,44 +1,17 @@
-import { focusThreadSearchSnippet } from "@t3tools/shared/threadSearch";
+import type { OrchestrationThreadSearchMatch } from "@t3tools/contracts";
+import type { ThreadSearchResultsState } from "@t3tools/client-runtime/state/thread-search";
+import { focusThreadSearchSnippet, splitThreadSearchExcerpt } from "@t3tools/shared/threadSearch";
+import { ChevronDownIcon, RotateCwIcon } from "lucide-react";
 
-function foldAsciiCase(value: string): string {
-  return value.replace(/[A-Z]/g, (character) => character.toLowerCase());
-}
+import { Spinner } from "~/components/ui/spinner";
+import { cn } from "~/lib/utils";
 
-function HighlightedSearchText(props: { text: string; query: string }) {
-  const query = props.query.trim();
-  if (query.length === 0) return props.text;
-
-  const normalizedText = foldAsciiCase(props.text);
-  const normalizedQuery = foldAsciiCase(query);
-  const parts: Array<{
-    readonly text: string;
-    readonly highlighted: boolean;
-    readonly start: number;
-  }> = [];
-  let cursor = 0;
-
-  while (cursor < props.text.length) {
-    const matchIndex = normalizedText.indexOf(normalizedQuery, cursor);
-    if (matchIndex === -1) {
-      parts.push({ text: props.text.slice(cursor), highlighted: false, start: cursor });
-      break;
-    }
-    if (matchIndex > cursor) {
-      parts.push({
-        text: props.text.slice(cursor, matchIndex),
-        highlighted: false,
-        start: cursor,
-      });
-    }
-    parts.push({
-      text: props.text.slice(matchIndex, matchIndex + query.length),
-      highlighted: true,
-      start: matchIndex,
-    });
-    cursor = matchIndex + query.length;
-  }
-
-  return parts.map((part) =>
+export function HighlightedSearchText(props: {
+  readonly text: string;
+  readonly query: string;
+  readonly correction?: string | undefined;
+}) {
+  return splitThreadSearchExcerpt(props.text, props.query, props.correction).map((part) =>
     part.highlighted ? (
       <mark className="bg-transparent font-semibold text-foreground" key={part.start}>
         {part.text}
@@ -50,26 +23,63 @@ function HighlightedSearchText(props: { text: string; query: string }) {
 }
 
 export function ThreadSearchMatchExcerpt(props: {
-  match: {
-    readonly source: "user" | "assistant";
-    readonly snippet: string;
+  readonly match: Pick<OrchestrationThreadSearchMatch, "source" | "snippet"> & {
     readonly query: string;
-    readonly archived?: boolean;
     readonly messageId?: string | null;
+    readonly matchedModel?: string;
+    readonly matchedHarness?: string;
   };
 }) {
-  if (props.match.messageId === null) return null;
-  const isUser = props.match.source === "user";
+  const { matchedModel, matchedHarness, messageId, query, snippet, source } = props.match;
+  if (messageId === null && !matchedModel && !matchedHarness) return null;
+  const context = [matchedHarness, matchedModel].filter(Boolean).join(" · ");
   return (
     <span className="truncate text-xs text-muted-foreground/85">
-      <span className={isUser ? "text-info-foreground" : "text-success-foreground"}>
-        {isUser ? "You:" : "Agent:"}
-      </span>{" "}
+      {matchedHarness
+        ? "Harness:"
+        : matchedModel
+          ? "Model:"
+          : source === "user"
+            ? "You:"
+            : "Agent:"}{" "}
       <HighlightedSearchText
-        text={focusThreadSearchSnippet(props.match.snippet, props.match.query)}
-        query={props.match.query}
+        text={context || focusThreadSearchSnippet(snippet, query)}
+        query={query}
       />
-      {props.match.archived ? " · Archived" : ""}
     </span>
+  );
+}
+
+export function ThreadSearchMoreButton(props: {
+  readonly pagination: ThreadSearchResultsState["pagination"];
+  readonly className?: string;
+}) {
+  const { pagination, className } = props;
+  if (!pagination) return null;
+  return (
+    <button
+      type="button"
+      disabled={pagination.isLoading}
+      onClick={pagination.loadMore}
+      className={cn(
+        "mt-0.5 flex h-9 w-full shrink-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 text-left text-xs font-medium text-sidebar-muted-foreground outline-none transition-[background-color,color,scale] duration-120 ease-out motion-reduce:transition-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground active:scale-[0.99] active:bg-sidebar-row-active motion-reduce:active:scale-100 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60",
+        className,
+      )}
+    >
+      {pagination.isLoading ? (
+        <Spinner size="xs" aria-hidden className="shrink-0" />
+      ) : pagination.failed ? (
+        <RotateCwIcon aria-hidden className="size-3.5 shrink-0 opacity-75" />
+      ) : (
+        <ChevronDownIcon aria-hidden className="size-3.5 shrink-0 opacity-75" />
+      )}
+      <span className="truncate">
+        {pagination.isLoading
+          ? "Searching more…"
+          : pagination.failed
+            ? "Retry more results"
+            : "More results"}
+      </span>
+    </button>
   );
 }

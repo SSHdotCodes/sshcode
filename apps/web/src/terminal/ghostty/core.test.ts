@@ -9,7 +9,10 @@ import {
   type TerminalBufferState,
 } from "@t3tools/client-runtime/state/terminal";
 
-import { writeTerminalOutputUpdate } from "../../components/ThreadTerminalDrawer";
+import {
+  terminalPromptNavigationData,
+  writeTerminalOutputUpdate,
+} from "../../components/ThreadTerminalDrawer";
 import { GHOSTTY_CELL_WIDE, GhosttyTerminalCore, ghosttyCellText } from "./core";
 import { loadGhosttyRuntime } from "./runtime";
 
@@ -110,6 +113,35 @@ describe("GhosttyTerminalCore snapshots", () => {
     cores.clear();
     vi.restoreAllMocks();
   });
+
+  it.each([
+    { name: "Option+Left", key: "ArrowLeft", altKey: true, prompt: "\x1bb", app: "\x1b[1;3D" },
+    { name: "Cmd+Right", key: "ArrowRight", metaKey: true, prompt: "\x05", app: "\x1b[1;9C" },
+  ])(
+    "moves the shell prompt on $name but leaves it to full-screen apps",
+    async ({ key, altKey = false, metaKey = false, prompt, app }) => {
+      const core = await createCore();
+      const event = {
+        code: key,
+        key,
+        repeat: false,
+        shiftKey: false,
+        ctrlKey: false,
+        altKey,
+        metaKey,
+        isComposing: false,
+        getModifierState: () => false,
+      } as unknown as KeyboardEvent;
+      const send = () =>
+        terminalPromptNavigationData(core, event, "MacIntel") ?? core.encodeKey(event);
+
+      expect(send()).toBe(prompt);
+      core.write("\x1b[?1049h");
+      expect(send()).toBe(app);
+      core.write("\x1b[?1049l");
+      expect(send()).toBe(prompt);
+    },
+  );
 
   it("preserves styles, wide cells, and selection after shared memory grows", async () => {
     const core = await createCore();

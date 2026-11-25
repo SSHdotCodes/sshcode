@@ -30,6 +30,8 @@ import type { TimelineEntry } from "../../session-logic";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { shouldUseRestingComposerLayout } from "../composerFooterLayout";
 import { useComposerFocusState } from "./useComposerFocusState";
+import { KeptChatPane } from "./KeptChatPane";
+import { TIMELINE_ARRIVAL_MS } from "./timelineArrivals";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { LegendListRef } from "@legendapp/list/react";
 
@@ -267,6 +269,8 @@ function stubDomGlobals() {
     matchMedia,
     addEventListener: () => {},
     removeEventListener: () => {},
+    setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout,
     requestAnimationFrame: (callback: FrameRequestCallback) => {
       callback(0);
       return 0;
@@ -505,6 +509,95 @@ function buildSnapShotTimelineEntry(previewUrl?: string) {
 }
 
 describe("MessagesTimeline", () => {
+  it("seeds rows added while a kept chat was out of view without animating them", async () => {
+    vi.unstubAllGlobals();
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    const props = buildProps();
+    const first = buildUserTimelineEntry("First prompt");
+    const reply = buildAssistantTimelineEntry("Reply while away");
+    const received = {
+      ...reply,
+      id: "reply-while-away",
+      message: { ...reply.message, id: MessageId.make("reply") },
+    };
+    const render = (hidden: boolean, timelineEntries: TimelineEntry[]) =>
+      root.render(
+        <KeptChatPane hidden={hidden}>
+          <section>
+            <MessagesTimeline {...props} timelineEntries={timelineEntries} />
+          </section>
+        </KeptChatPane>,
+      );
+
+    try {
+      await act(() => render(false, [first]));
+      await act(() => render(true, [first]));
+      await act(() => render(false, [first, received]));
+      expect(host.textContent).toContain("Reply while away");
+      expect(host.querySelector("[data-arrived]")).toBeNull();
+    } finally {
+      await act(() => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("marks arrivals on commit and clears them even when the timeline stays idle", async () => {
+    vi.unstubAllGlobals();
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    const props = buildProps();
+    const first = buildUserTimelineEntry("First prompt");
+    const reply = buildAssistantTimelineEntry("Live reply");
+    const arrived = {
+      ...reply,
+      id: "live-reply",
+      message: { ...reply.message, id: MessageId.make("reply") },
+    };
+    const pending = new Promise<never>(() => {});
+    let attempts = 0;
+    function LoadingPanel(): never {
+      attempts++;
+      throw pending;
+    }
+    const render = (timelineEntries: TimelineEntry[], loading = false) =>
+      root.render(
+        <Suspense fallback={null}>
+          <MessagesTimeline {...props} timelineEntries={timelineEntries} />
+          {loading && <LoadingPanel />}
+        </Suspense>,
+      );
+
+    try {
+      await act(() => render([first]));
+      await act(() => startTransition(() => render([first, arrived], true)));
+      expect(attempts).toBeGreaterThan(0);
+      expect(host.textContent).not.toContain("Live reply");
+      await act(() => vi.advanceTimersByTime(TIMELINE_ARRIVAL_MS));
+
+      await act(() => render([first, arrived]));
+      expect(
+        host.querySelector('[data-timeline-row-id="live-reply"][data-arrived]'),
+      ).not.toBeNull();
+      await act(() => vi.advanceTimersByTime(TIMELINE_ARRIVAL_MS));
+      expect(host.querySelector("[data-arrived]")).toBeNull();
+      expect(host.textContent).toContain("Live reply");
+    } finally {
+      await act(() => root.unmount());
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps a work group expanded after switching chats without scrolling", async () => {
     vi.unstubAllGlobals();
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

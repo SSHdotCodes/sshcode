@@ -650,13 +650,13 @@ export function UsagePage() {
                 ))}
               </div>
             ) : (
-              <div aria-busy={loading.partial} className="flex flex-col gap-6">
+              <div aria-busy={loading.partial} className="flex flex-col gap-8">
                 {sourceMessages.map((message) => (
                   <p key={message} className="mb-4 text-sm text-muted-foreground">
                     {message}
                   </p>
                 ))}
-                <section className="grid gap-6 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
+                <section className="grid gap-6 rounded-xl border border-border/60 bg-card/40 p-5 shadow-xs/5 dark:inset-shadow-card-highlight lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
                   <div className="flex min-w-0 flex-col gap-5">
                     <div className="flex flex-col gap-1">
                       <span
@@ -886,9 +886,9 @@ export function UsagePage() {
                   now={limitsNow}
                 />
 
-                <section className="flex flex-col gap-2">
+                <section className="flex flex-col gap-2.5">
                   <h2 className="text-sm font-medium text-foreground">Totals</h2>
-                  <div className="grid grid-cols-2 gap-x-6 gap-y-4 py-1 md:grid-cols-5">
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-xl border border-border/60 bg-card/40 px-4 py-3.5 shadow-xs/5 dark:inset-shadow-card-highlight md:grid-cols-5">
                     <Metric
                       loading={loading.partial}
                       label="Processed tokens"
@@ -976,166 +976,182 @@ export function UsagePage() {
                   </div>
 
                   {breakdown === "model" ? (
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-border text-right text-xs text-muted-foreground">
-                          <th className="py-2 pr-3 text-left font-normal">#</th>
-                          <th className="w-full py-2 text-left font-normal">Model</th>
-                          <th className="py-2 pl-6 font-normal">Cost</th>
-                          <th className="hidden py-2 pl-6 font-normal sm:table-cell">Share</th>
-                          <th className="py-2 pl-6 font-normal">Tokens</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {breakdownModels.length === 0 ? (
-                          <tr>
-                            <td colSpan={5} className="py-6 text-center text-muted-foreground">
-                              No activity in this window.
-                            </td>
+                    <div className="overflow-hidden rounded-xl border border-border/60 bg-card/40 shadow-xs/5 dark:inset-shadow-card-highlight">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-border/60 bg-muted/20 text-right text-xs text-muted-foreground">
+                            <th className="py-2.5 pl-4 pr-3 text-left font-normal">#</th>
+                            <th className="w-full py-2.5 text-left font-normal">Model</th>
+                            <th className="py-2.5 pl-6 font-normal">Cost</th>
+                            <th className="hidden py-2.5 pl-6 font-normal sm:table-cell">Share</th>
+                            <th className="py-2.5 pl-6 pr-4 font-normal">Tokens</th>
                           </tr>
-                        ) : (
-                          breakdownModels.map((model, index) => {
-                            const key = usageModelKey(model);
-                            const value = metric === "tokens" ? model.totalTokens : model.costUsd;
-                            const share = modelShare(
-                              model,
-                              metric === "tokens" ? "tokens" : "cost",
-                            );
-                            const rowFigures = figureClass(isProviderLoading(model.provider));
-                            return (
-                              <tr
-                                key={key}
-                                className="relative border-b border-border/50 text-right whitespace-nowrap text-muted-foreground tabular-nums transition-colors hover:bg-muted/50 has-focus-visible:bg-muted/50"
-                              >
-                                <td className="py-2.5 pr-3 text-left text-xs">{index + 1}</td>
-                                <td className="py-2.5 text-left whitespace-normal">
-                                  {/* The button's overlay makes the whole row open the model.
-                                      Focus shows as the row's hover fill, not a ring. */}
-                                  <button
-                                    type="button"
-                                    onClick={() => setSelectedModelKey(key)}
-                                    className="flex items-center gap-2 text-left text-foreground outline-none after:absolute after:inset-0"
-                                  >
-                                    <ProviderMark provider={model.provider} className="size-3.5" />
-                                    {model.model}
-                                  </button>
-                                  {model.instanceId !== undefined ? (
-                                    <span className="text-xs text-muted-foreground">
-                                      {model.displayName ?? model.instanceId}
-                                    </span>
-                                  ) : null}
-                                  <div
-                                    aria-hidden
-                                    className={cn("mt-1.5 h-0.5 max-w-48", rowFigures)}
-                                  >
-                                    <div
-                                      className="h-full rounded-full"
-                                      style={{
-                                        // A short minimum keeps tiny shares a dash, not a dot.
-                                        width:
-                                          value > 0 && breakdownPeak > 0
-                                            ? `max(0.5rem, ${(value / breakdownPeak) * 100}%)`
-                                            : 0,
-                                        backgroundColor:
-                                          PROVIDER_PRESENTATION[model.provider].color,
-                                      }}
-                                    />
-                                  </div>
-                                </td>
-                                <td className={cn("py-2.5 pl-6 text-foreground", rowFigures)}>
-                                  {isModelCostUnknown(model) ? (
-                                    <span className="text-muted-foreground">Unpriced</span>
-                                  ) : (
-                                    formatUsd(model.costUsd)
-                                  )}
-                                </td>
-                                <td className={cn("hidden py-2.5 pl-6 sm:table-cell", rowFigures)}>
-                                  {share === null ? "" : formatPercent(share)}
-                                </td>
-                                <td className={cn("py-2.5 pl-6", rowFigures)}>
-                                  {formatTokens(model.totalTokens)}
-                                </td>
-                              </tr>
-                            );
-                          })
-                        )}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <table className="w-full table-fixed text-sm">
-                      <colgroup>
-                        <col className="w-2/5" />
-                        {activeProviders.map((provider) => (
-                          <col key={provider} style={{ width: timeValueColumnWidth }} />
-                        ))}
-                        <col style={{ width: timeValueColumnWidth }} />
-                        <col style={{ width: timeValueColumnWidth }} />
-                      </colgroup>
-                      <thead>
-                        <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                          <th className="py-2 font-normal">{shownHourly ? "Hour" : "Day"}</th>
-                          {activeProviders.map((provider) => (
-                            <th key={provider} className="py-2 text-right font-normal">
-                              {PROVIDER_PRESENTATION[provider].label}
-                            </th>
-                          ))}
-                          <th className="py-2 text-right font-normal">Total</th>
-                          <th className="py-2 text-right font-normal">Tokens</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {breakdownPeriods.length === 0 ? (
-                          <tr>
-                            <td
-                              colSpan={activeProviders.length + 3}
-                              className="py-6 text-center text-muted-foreground"
-                            >
-                              No activity in this window.
-                            </td>
-                          </tr>
-                        ) : (
-                          breakdownPeriods.map((period) => (
-                            <tr
-                              key={"hourStart" in period ? period.hourStart : period.day}
-                              className="border-b border-border/50 transition-colors hover:bg-muted/50"
-                            >
-                              <td className="py-2 text-foreground">
-                                {"hourStart" in period
-                                  ? formatHourShort(period.hourStart, shownWindow.timeZone)
-                                  : formatDayShort(period.day)}
-                              </td>
-                              {activeProviders.map((provider) => (
-                                <td
-                                  key={provider}
-                                  className={cn(
-                                    "py-2 text-right text-muted-foreground tabular-nums",
-                                    figureClass(isProviderLoading(provider)),
-                                  )}
-                                >
-                                  {formatUsd(period.byProvider.get(provider)?.costUsd ?? 0)}
-                                </td>
-                              ))}
+                        </thead>
+                        <tbody>
+                          {breakdownModels.length === 0 ? (
+                            <tr>
                               <td
-                                className={cn(
-                                  "py-2 text-right text-foreground tabular-nums",
-                                  figureClass(loading.partial),
-                                )}
+                                colSpan={5}
+                                className="px-4 py-10 text-center text-xs text-muted-foreground"
                               >
-                                {formatUsd(period.costUsd)}
-                              </td>
-                              <td
-                                className={cn(
-                                  "py-2 text-right text-muted-foreground tabular-nums",
-                                  figureClass(loading.partial),
-                                )}
-                              >
-                                {formatTokens(period.totalTokens)}
+                                No activity in this window.
                               </td>
                             </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
+                          ) : (
+                            breakdownModels.map((model, index) => {
+                              const key = usageModelKey(model);
+                              const value = metric === "tokens" ? model.totalTokens : model.costUsd;
+                              const share = modelShare(
+                                model,
+                                metric === "tokens" ? "tokens" : "cost",
+                              );
+                              const rowFigures = figureClass(isProviderLoading(model.provider));
+                              return (
+                                <tr
+                                  key={key}
+                                  className="relative border-b border-border/50 text-right whitespace-nowrap text-muted-foreground tabular-nums transition-colors duration-100 last:border-b-0 hover:bg-muted/45 has-focus-visible:bg-muted/45"
+                                >
+                                  <td className="py-2.5 pl-4 pr-3 text-left text-xs">
+                                    {index + 1}
+                                  </td>
+                                  <td className="py-2.5 text-left whitespace-normal">
+                                    {/* The button's overlay makes the whole row open the model.
+                                        Focus shows as the row's hover fill, not a ring. */}
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedModelKey(key)}
+                                      className="flex items-center gap-2 text-left text-foreground outline-none after:absolute after:inset-0"
+                                    >
+                                      <ProviderMark
+                                        provider={model.provider}
+                                        className="size-3.5"
+                                      />
+                                      {model.model}
+                                    </button>
+                                    {model.instanceId !== undefined ? (
+                                      <span className="text-xs text-muted-foreground">
+                                        {model.displayName ?? model.instanceId}
+                                      </span>
+                                    ) : null}
+                                    <div
+                                      aria-hidden
+                                      className={cn("mt-1.5 h-0.5 max-w-48", rowFigures)}
+                                    >
+                                      <div
+                                        className="h-full rounded-full"
+                                        style={{
+                                          // A short minimum keeps tiny shares a dash, not a dot.
+                                          width:
+                                            value > 0 && breakdownPeak > 0
+                                              ? `max(0.5rem, ${(value / breakdownPeak) * 100}%)`
+                                              : 0,
+                                          backgroundColor:
+                                            PROVIDER_PRESENTATION[model.provider].color,
+                                        }}
+                                      />
+                                    </div>
+                                  </td>
+                                  <td className={cn("py-2.5 pl-6 text-foreground", rowFigures)}>
+                                    {isModelCostUnknown(model) ? (
+                                      <span className="text-muted-foreground">Unpriced</span>
+                                    ) : (
+                                      formatUsd(model.costUsd)
+                                    )}
+                                  </td>
+                                  <td
+                                    className={cn("hidden py-2.5 pl-6 sm:table-cell", rowFigures)}
+                                  >
+                                    {share === null ? "" : formatPercent(share)}
+                                  </td>
+                                  <td className={cn("py-2.5 pl-6 pr-4", rowFigures)}>
+                                    {formatTokens(model.totalTokens)}
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="overflow-hidden rounded-xl border border-border/60 bg-card/40 shadow-xs/5 dark:inset-shadow-card-highlight">
+                      <table className="w-full table-fixed text-sm">
+                        <colgroup>
+                          <col className="w-2/5" />
+                          {activeProviders.map((provider) => (
+                            <col key={provider} style={{ width: timeValueColumnWidth }} />
+                          ))}
+                          <col style={{ width: timeValueColumnWidth }} />
+                          <col style={{ width: timeValueColumnWidth }} />
+                        </colgroup>
+                        <thead>
+                          <tr className="border-b border-border/60 bg-muted/20 text-left text-xs text-muted-foreground">
+                            <th className="py-2.5 pl-4 font-normal">
+                              {shownHourly ? "Hour" : "Day"}
+                            </th>
+                            {activeProviders.map((provider) => (
+                              <th key={provider} className="py-2.5 text-right font-normal">
+                                {PROVIDER_PRESENTATION[provider].label}
+                              </th>
+                            ))}
+                            <th className="py-2.5 text-right font-normal">Total</th>
+                            <th className="py-2.5 pr-4 text-right font-normal">Tokens</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {breakdownPeriods.length === 0 ? (
+                            <tr>
+                              <td
+                                colSpan={activeProviders.length + 3}
+                                className="px-4 py-10 text-center text-xs text-muted-foreground"
+                              >
+                                No activity in this window.
+                              </td>
+                            </tr>
+                          ) : (
+                            breakdownPeriods.map((period) => (
+                              <tr
+                                key={"hourStart" in period ? period.hourStart : period.day}
+                                className="border-b border-border/50 transition-colors duration-100 last:border-b-0 hover:bg-muted/45"
+                              >
+                                <td className="py-2.5 pl-4 text-foreground">
+                                  {"hourStart" in period
+                                    ? formatHourShort(period.hourStart, shownWindow.timeZone)
+                                    : formatDayShort(period.day)}
+                                </td>
+                                {activeProviders.map((provider) => (
+                                  <td
+                                    key={provider}
+                                    className={cn(
+                                      "py-2.5 text-right text-muted-foreground tabular-nums",
+                                      figureClass(isProviderLoading(provider)),
+                                    )}
+                                  >
+                                    {formatUsd(period.byProvider.get(provider)?.costUsd ?? 0)}
+                                  </td>
+                                ))}
+                                <td
+                                  className={cn(
+                                    "py-2.5 text-right text-foreground tabular-nums",
+                                    figureClass(loading.partial),
+                                  )}
+                                >
+                                  {formatUsd(period.costUsd)}
+                                </td>
+                                <td
+                                  className={cn(
+                                    "py-2.5 pr-4 text-right text-muted-foreground tabular-nums",
+                                    figureClass(loading.partial),
+                                  )}
+                                >
+                                  {formatTokens(period.totalTokens)}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </section>
               </div>
@@ -1614,8 +1630,8 @@ function UsageProviderFilter({
  */
 function UsageSkeleton() {
   return (
-    <>
-      <section className="grid gap-6 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
+    <div className="flex flex-col gap-8">
+      <section className="grid gap-6 rounded-xl border border-border/60 bg-card/40 p-5 shadow-xs/5 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
         <div className="flex flex-col gap-5">
           <div className="flex flex-col gap-1">
             <Skeleton className="h-10 w-36" />
@@ -1645,7 +1661,7 @@ function UsageSkeleton() {
         </div>
       </section>
 
-      <section className="flex flex-col gap-2">
+      <section className="flex flex-col gap-2.5">
         <h2 className="text-sm font-medium text-foreground">Totals</h2>
         <MetricSkeletons
           labels={["Processed tokens", "Cached input", "Uncached input", "Output", "Cache savings"]}
@@ -1665,15 +1681,17 @@ function UsageSkeleton() {
           <h2 className="text-sm font-medium text-foreground">Breakdown</h2>
           <Skeleton shape="card" className="h-7 w-28" />
         </div>
-        <Skeleton className="h-44" />
+        <div className="rounded-xl border border-border/60 bg-card/40 p-4">
+          <Skeleton className="h-44" />
+        </div>
       </section>
-    </>
+    </div>
   );
 }
 
 function MetricSkeletons({ labels }: { readonly labels: readonly string[] }) {
   return (
-    <div className="grid grid-cols-2 gap-x-6 gap-y-4 py-1 md:grid-cols-5">
+    <div className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-xl border border-border/60 bg-card/40 px-4 py-3.5 md:grid-cols-5">
       {labels.map((label) => (
         <div key={label} className="flex flex-col gap-0.5">
           <span className="text-xs text-muted-foreground">{label}</span>

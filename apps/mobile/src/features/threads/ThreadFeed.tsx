@@ -7,8 +7,9 @@ import type { UserMessageDisclosureProps } from "../../native/UserMessageDisclos
 import { editingQueuedMessageIdsAtom } from "../../state/use-thread-outbox";
 import {
   matchesTimelineJump,
-  type TimelineJumpTarget,
+  type TimelineJumpRequest,
 } from "@t3tools/client-runtime/state/thread-search";
+import { threadFindViewportStart, type ThreadFindAnchorReader } from "./thread-find";
 import type { discordAvatarIdentity } from "@t3tools/shared/discordProfile";
 import { CasualAssistantMessage, CasualWorkStatus } from "../discord/CasualAssistantMessage";
 import { MessageWorkflowProvider } from "./MessageWorkflowProvider";
@@ -283,7 +284,11 @@ import {
 } from "../../state/assets";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { usePreparedConnection } from "../../state/session";
-import { useLiveThreadLinkLabels, useThreadShell } from "../../state/entities";
+import {
+  useLinkedThreadTitle,
+  useLiveThreadLinkLabels,
+  useThreadShell,
+} from "../../state/entities";
 import { useThreadSelection } from "../../state/use-thread-selection";
 import { composerDocumentAttachmentRecord } from "../../lib/composerContext";
 import * as Option from "effect/Option";
@@ -376,10 +381,13 @@ export interface ThreadFeedProps {
   readonly onRewindingChange: (rewinding: boolean) => void;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
-  readonly mediaJump?: { readonly item: TimelineJumpTarget; readonly sequence: number } | null;
+  readonly mediaJump?: TimelineJumpRequest | null;
+  readonly findAnchorReader?: import("react").RefObject<ThreadFindAnchorReader | null> | undefined;
   readonly onMediaJumpHandled?: ((sequence: number) => void) | undefined;
   readonly pendingHandoff?: HandoffEndpoints | null;
   readonly contentPresentation: ThreadContentPresentation;
+  /** Follows the thread's delayed sync status so warm opens never flash placeholders. */
+  readonly showLoadingPlaceholder: boolean;
   readonly agentLabel: string;
   readonly agentDriver?: string | null;
   readonly agentAvatars?: ReadonlyMap<string, ReturnType<typeof discordAvatarIdentity>> | undefined;
@@ -1275,12 +1283,10 @@ function AgentMessageRow(props: {
 }) {
   const navigation = useNavigation();
   const senderThreadId = props.senderThreadId;
-  const sender = useThreadShell(
-    senderThreadId ? scopeThreadRef(props.environmentId, senderThreadId) : null,
-  );
+  const senderTitle = useLinkedThreadTitle(props.environmentId, senderThreadId);
   const presentation = resolveAgentMessagePresentation({
     text: props.text,
-    senderTitle: sender?.title,
+    senderTitle,
     inputIntent: props.inputIntent,
     status: props.status,
   });
@@ -1776,7 +1782,9 @@ function renderFeedEntry(
                       paddingHorizontal: props.harnessView.userBubble.paddingX,
                       paddingVertical: props.harnessView.userBubble.paddingY,
                     }
-                  : {}),
+                  : Platform.OS === "ios" && !isAgentMessage
+                    ? { borderBottomEndRadius: 8 }
+                    : {}),
               maxWidth: props.discord
                 ? "100%"
                 : props.usesNativeWorkspaceColumns && Platform.OS === "ios" && !Platform.isPad
@@ -2015,7 +2023,8 @@ function renderFeedEntry(
 
     // Skip empty assistant messages (no text, no attachments) — they would
     // render as an orphaned timestamp and break adjacent activity-group merging.
-    if (renderedText.trim().length === 0 && attachments.length === 0) {
+    const hasReplyText = renderedText.trim().length > 0;
+    if (!hasReplyText && attachments.length === 0) {
       return null;
     }
 
@@ -2037,7 +2046,16 @@ function renderFeedEntry(
         )}
         {...(enterAnimated ? { entering: THREAD_FEED_ASSISTANT_ENTER } : {})}
       >
-        {renderedText.trim().length > 0 ? (
+        {!props.discord && message.streaming && hasReplyText ? (
+          <View
+            pointerEvents="none"
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+            className="absolute top-[4px] h-[16px] w-[2px] rounded-full bg-primary"
+            style={{ start: -3 }}
+          />
+        ) : null}
+        {hasReplyText ? (
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
             <CasualAssistantMessage
               environmentId={props.environmentId}
@@ -2368,6 +2386,7 @@ function ThreadFeedPlaceholder(props: {
   readonly horizontalPadding: number;
   readonly title: string;
   readonly topInset: number;
+  readonly icon: AppSymbolName;
 }) {
   return (
     <View
@@ -2382,10 +2401,40 @@ function ThreadFeedPlaceholder(props: {
       }}
     >
       <View className="max-w-[320px] items-center gap-2">
-        <Text className="text-center font-t3-bold text-lg text-foreground">{props.title}</Text>
-        <Text className="text-center text-sm leading-normal text-foreground-secondary">
+        <View
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          className="mb-1 size-[44px] items-center justify-center rounded-[14px] border-continuous bg-subtle"
+        >
+          <SymbolView name={props.icon} size={20} tintColorClassName="accent-icon-muted" />
+        </View>
+        <Text className="text-center text-lg font-t3-medium text-foreground">{props.title}</Text>
+        <Text className="text-center text-sm leading-normal text-foreground-muted">
           {props.detail}
         </Text>
+      </View>
+    </View>
+  );
+}
+
+function ThreadFeedLoading(props: {
+  readonly bottomInset: number;
+  readonly horizontalPadding: number;
+}) {
+  return (
+    <View
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      className="flex-1 justify-end gap-4"
+      style={{
+        paddingBottom: props.bottomInset + 16,
+        paddingHorizontal: props.horizontalPadding,
+      }}
+    >
+      <View className="h-9 w-2/5 self-end rounded-2xl border-continuous bg-foreground/10" />
+      <View className="gap-2">
+        <View className="h-3 w-4/5 rounded-full bg-foreground/10" />
+        <View className="h-3 w-3/5 rounded-full bg-foreground/5" />
       </View>
     </View>
   );
@@ -2555,6 +2604,7 @@ const ThreadFeedRowContent = memo(function ThreadFeedRowContent(props: {
   return (
     <Animated.View
       key={item.id}
+      className={slice.searchJumpHighlighted ? "rounded-lg bg-primary/10" : undefined}
       entering={
         snapshot.disclosureToggleSettling ? THREAD_FEED_DISCLOSURE_ENTER_TRANSITION : undefined
       }
@@ -3273,21 +3323,65 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [discord, unfilteredPresentedFeed, filterDiscordThreadFeed, stabilizePresentedFeed],
   );
   const projectDecorations = useMemo(() => createTimelineDecorationsProjector(), []);
-  const completedMediaJump = useRef<number | null>(null);
   useEffect(() => {
-    const request = props.mediaJump;
-    if (waitingForViewport || !request || completedMediaJump.current === request.sequence) return;
-    const matches = (row: ThreadFeedEntry) =>
-      row.type === "message"
-        ? matchesTimelineJump(row.message.projectedItem, request.item)
-        : row.type === "activity-group" || row.type === "work-toggle"
-          ? row.activities.some((activity) =>
-              matchesTimelineJump(activity.projectedItem, request.item),
-            )
-          : false;
-    const index = presentedFeed.findIndex(matches);
-    if (index < 0) {
-      const original = props.feed.find(matches);
+    const ref = props.findAnchorReader;
+    if (!ref) return;
+    const reader = () => threadFindViewportStart(presentedFeed, props.listRef.current?.getState());
+    ref.current = reader;
+    return () => {
+      if (ref.current === reader) ref.current = null;
+    };
+  }, [props.findAnchorReader, props.listRef, presentedFeed]);
+  const completedMediaJump = useRef<number | null>(null);
+  const mediaJump = props.mediaJump;
+  const activeMediaJump = useRef(mediaJump);
+  useLayoutEffect(() => {
+    activeMediaJump.current = mediaJump;
+    return () => {
+      activeMediaJump.current = null;
+    };
+  }, [mediaJump]);
+  const loadingJumpHistory = props.historyControls?.loading === true;
+  const matchesMediaJump = useCallback(
+    (row: ThreadFeedEntry) =>
+      mediaJump !== null &&
+      mediaJump !== undefined &&
+      (row.type === "message"
+        ? matchesTimelineJump(row.message.projectedItem, mediaJump.item)
+        : (row.type === "activity-group" || row.type === "work-toggle") &&
+          row.activities.some((activity) =>
+            matchesTimelineJump(activity.projectedItem, mediaJump.item),
+          )),
+    [mediaJump],
+  );
+  const mediaJumpIndex = useMemo(
+    () => (mediaJump ? presentedFeed.findIndex(matchesMediaJump) : -1),
+    [matchesMediaJump, mediaJump, presentedFeed],
+  );
+  // Once a jump can land, it owns the scroll position until the native scroll finishes.
+  const revealingMediaJump = !waitingForViewport && !loadingJumpHistory && mediaJumpIndex >= 0;
+  const [searchJumpHighlight, setSearchJumpHighlight] = useState<{
+    readonly rowId: string;
+    readonly threadId: ThreadId;
+  } | null>(null);
+  useEffect(() => {
+    if (!searchJumpHighlight) return;
+    const timer = setTimeout(() => setSearchJumpHighlight(null), 2200);
+    return () => clearTimeout(timer);
+  }, [searchJumpHighlight]);
+  useEffect(() => {
+    const request = mediaJump;
+    // A history load can publish several pages. Revealing midway uses offsets
+    // that the next prepend will replace.
+    if (
+      waitingForViewport ||
+      loadingJumpHistory ||
+      !request ||
+      completedMediaJump.current === request.sequence
+    )
+      return;
+    if (mediaJumpIndex < 0) {
+      const original = props.feed.find(matchesMediaJump);
       const runId =
         original?.type === "message"
           ? original.message.runId
@@ -3301,7 +3395,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         }));
       return;
     }
-    const row = presentedFeed[index]!;
+    const row = presentedFeed[mediaJumpIndex]!;
     if (row.type === "work-toggle" && !row.expanded) {
       setInteractionState((current) => ({
         ...current,
@@ -3309,21 +3403,40 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       }));
       return;
     }
-    const list = props.listRef.current;
-    if (!list) return;
-    completedMediaJump.current = request.sequence;
-    endOpeningPin();
-    setEndFollow(false);
-    void list.scrollToIndex({ index, animated: true, viewOffset: 24 });
-    props.onMediaJumpHandled?.(request.sequence);
+    // Wait for LegendList to install the final history page's row positions.
+    const frame = requestAnimationFrame(() => {
+      const list = props.listRef.current;
+      if (!list) return;
+      const mountedIndex = list.getState().indexByKey(row.id);
+      if (mountedIndex === undefined) return;
+      completedMediaJump.current = request.sequence;
+      endOpeningPin();
+      setEndFollow(false);
+      // Search hits need room below UIKit's transparent header.
+      const searchReveal = request.highlight
+        ? { viewOffset: 24 + (usesNativeAutomaticInsets ? anchorTopInset : 0), viewPosition: 0.25 }
+        : { viewOffset: 24 };
+      void list.scrollToIndex({ index: mountedIndex, animated: true, ...searchReveal }).then(() => {
+        if (activeMediaJump.current !== request) return;
+        if (request.highlight) setSearchJumpHighlight({ rowId: row.id, threadId: props.threadId });
+        props.onMediaJumpHandled?.(request.sequence);
+      });
+    });
+    return () => cancelAnimationFrame(frame);
   }, [
     waitingForViewport,
-    props.mediaJump,
+    loadingJumpHistory,
+    props.threadId,
+    mediaJump,
+    mediaJumpIndex,
+    matchesMediaJump,
     props.onMediaJumpHandled,
     props.feed,
     props.listRef,
     presentedFeed,
     expandedTurnIds,
+    usesNativeAutomaticInsets,
+    anchorTopInset,
     endOpeningPin,
     setEndFollow,
   ]);
@@ -3731,6 +3844,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const setupAnchorRowId =
     setupAnchorIndex >= 0 ? (presentedFeed[setupAnchorIndex]?.id ?? null) : null;
   const rowStoreState: ThreadFeedRowStoreState = {
+    searchJumpRowId:
+      searchJumpHighlight?.threadId === props.threadId ? searchJumpHighlight.rowId : null,
     copiedRowId,
     expandedWorkRows,
     editingMessageId: props.editingMessageId,
@@ -3768,6 +3883,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       <ThreadFeedPlaceholder
         title={props.contentPresentation.title}
         detail={props.contentPresentation.detail}
+        icon="exclamationmark.circle"
         topInset={topContentInset}
         bottomInset={bottomContentInset}
         horizontalPadding={horizontalPadding}
@@ -3868,7 +3984,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                   // Follow the measured end immediately. Animating toward an estimated
                   // end races row measurement when a pending message is acknowledged.
                   maintainScrollAtEnd={
-                    disclosureToggleSettling || !endFollowEnabled
+                    revealingMediaJump || disclosureToggleSettling || !endFollowEnabled
                       ? false
                       : {
                           animated: false,
@@ -3880,7 +3996,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                         }
                   }
                   maintainVisibleContentPosition={
-                    endFollowEnabled && !disclosureToggleSettling
+                    revealingMediaJump || (endFollowEnabled && !disclosureToggleSettling)
                       ? false
                       : maintainVisibleContentPosition
                   }
@@ -3963,19 +4079,27 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         </View>
         {presentedFeed.length === 0 &&
         !props.worktreeSetup &&
-        props.activeWorkStartedAt === null &&
-        props.contentPresentation.kind === "ready" ? (
+        (props.showLoadingPlaceholder ||
+          (props.activeWorkStartedAt === null && props.contentPresentation.kind === "ready")) ? (
           <View
             pointerEvents="none"
             style={[StyleSheet.absoluteFill, { left: contentLeftInset, right: contentRightInset }]}
           >
-            <ThreadFeedPlaceholder
-              title="No conversation yet"
-              detail="Ask the agent to inspect the repo, run a command, or continue the active chat."
-              topInset={topContentInset}
-              bottomInset={bottomContentInset}
-              horizontalPadding={horizontalPadding}
-            />
+            {props.showLoadingPlaceholder ? (
+              <ThreadFeedLoading
+                bottomInset={bottomContentInset}
+                horizontalPadding={contentHorizontalPadding}
+              />
+            ) : (
+              <ThreadFeedPlaceholder
+                title="No messages yet"
+                detail="Send a message to start this chat."
+                icon="bubble.left"
+                topInset={topContentInset}
+                bottomInset={bottomContentInset}
+                horizontalPadding={horizontalPadding}
+              />
+            )}
           </View>
         ) : null}
         <VideoPreviewModal source={expandedVideo} onRequestClose={() => setExpandedVideo(null)} />

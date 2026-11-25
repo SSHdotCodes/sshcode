@@ -9,7 +9,10 @@
  * themselves (`boxTitles`). The "now" line never renames a chat: it also describes asides
  * and follow-ups of the same task.
  */
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Give the synchronous cache a process epoch.
+import * as NodeCrypto from "node:crypto";
 import { sameSessionTopic } from "@t3tools/shared/sessionBoxes";
+import type { ShellDecorationCursor } from "@t3tools/contracts";
 
 export interface BoxNamerBasis {
   readonly title: string;
@@ -55,6 +58,11 @@ const entries = new Map<string, BoxNamerEntry>();
 const wanted = new Map<string, BoxNamerBasis>();
 let onWanted: (() => void) | null = null;
 const namedListeners = new Set<(threadId: string) => void>();
+const SHELL_DECORATION_HISTORY_LIMIT = 512;
+const decorationEpoch = NodeCrypto.randomUUID();
+const latestDecorationByThread = new Map<string, number>();
+let decorationRevision = 0;
+let lastEvictedDecoration = 0;
 const retitleListeners = new Set<(candidate: RetitleCandidate) => void>();
 const titlesByHand = new Set<string>();
 /** Requests that already renamed their chat: one rename per request, so titles can't flap. */
@@ -134,9 +142,39 @@ export function autoTitleFor(input: {
   return title[0]!.toUpperCase() + title.slice(1);
 }
 
-/** Tells shell subscribers that a chat's box fields changed (a name, or its icon). */
+/** Records non-event shell changes for both live delivery and reconnects. */
 export function announceBoxChange(threadId: string) {
+  latestDecorationByThread.delete(threadId);
+  latestDecorationByThread.set(threadId, ++decorationRevision);
+  if (latestDecorationByThread.size > SHELL_DECORATION_HISTORY_LIMIT) {
+    const oldest = latestDecorationByThread.entries().next().value;
+    if (oldest !== undefined) {
+      latestDecorationByThread.delete(oldest[0]);
+      lastEvictedDecoration = oldest[1];
+    }
+  }
   for (const listener of namedListeners) listener(threadId);
+}
+
+export function shellDecorationCursor(): ShellDecorationCursor {
+  return { epoch: decorationEpoch, revision: decorationRevision };
+}
+
+export function shellDecorationChangesAfter(cursor: ShellDecorationCursor | undefined) {
+  const since = cursor?.revision ?? 0;
+  if (
+    (cursor !== undefined && cursor.epoch !== decorationEpoch) ||
+    since < lastEvictedDecoration ||
+    since > decorationRevision
+  ) {
+    return null;
+  }
+  return {
+    cursor: shellDecorationCursor(),
+    threadIds: [...latestDecorationByThread]
+      .filter(([, revision]) => revision > since)
+      .map(([threadId]) => threadId),
+  };
 }
 
 /** Calls `listener` with each chat the model has just named; returns an unsubscribe. */
@@ -199,8 +237,14 @@ export const boxNamerCache = {
   put(threadId: string, entry: BoxNamerEntry) {
     const previous = entries.get(threadId);
     entries.set(threadId, entry);
-    if (previous?.name !== entry.name || previous?.now !== entry.now)
-      for (const listener of namedListeners) listener(threadId);
+    if (
+      previous?.name !== entry.name ||
+      previous?.now !== entry.now ||
+      previous?.title !== entry.title ||
+      previous?.requestId !== entry.requestId
+    ) {
+      announceBoxChange(threadId);
+    }
     const next = entry.retitle ?? null;
     if (next === null || titlesByHand.has(threadId)) return;
     const before = previous?.retitle ?? null;

@@ -200,11 +200,17 @@ across connected environments. Sidebar search on web, desktop, and mobile starts
 message search after two characters. It combines keywords and meaning, includes
 archived chats, and opens results at the matching message.
 
+Use remembered title words, a model or harness name, or part of a file name.
+You can enter words in any order, and search can recover a small typo in a chat
+title. Select **More results** when a search has more history to check. Open
+**Find in chat** from the iPhone chat header to search the conversation you are
+reading, including older messages.
+
 Search stays on the connected machine. If its local embedding model is unavailable,
 keyword search still works. Check progress or rebuild the index in **Settings →
 Storage → Search** (**Client Storage** on mobile).
 
-Title search also accepts abbreviated letters in order, so `kbnav` can find
+In the command palette, abbreviated letters in order also work, so `kbnav` can find
 “Keyboard navigation”. Exact matches on thread IDs, project names, and other fields
 appear before abbreviated title matches, with recent chats first within each match tier.
 Broad searches show the best 100 matches. Add more of the title to narrow the list.

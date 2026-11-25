@@ -57,6 +57,12 @@ export function ThreadHeader(
         icon: "photo",
         onPress: props.onOpenMedia,
       });
+    if (props.onFindInChat)
+      actions.push({
+        accessibilityLabel: "Find in chat",
+        icon: "magnifyingglass",
+        onPress: props.onFindInChat,
+      });
     if (uiMode === "discord")
       actions.push({
         accessibilityLabel: "Members",
@@ -139,6 +145,7 @@ export function ThreadHeader(
     props.gitControls.canOpenTerminal,
     props.sideChat,
     props.onOpenMedia,
+    props.onFindInChat,
     visibleHeaderItems,
   ]);
 

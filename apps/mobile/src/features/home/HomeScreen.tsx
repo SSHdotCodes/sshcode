@@ -37,6 +37,7 @@ import { use, useCallback, useEffect, useMemo, useRef, useState, type ComponentP
 import {
   ActionSheetIOS,
   Alert,
+  AppState,
   Dimensions,
   Platform,
   Pressable,
@@ -100,10 +101,16 @@ import {
 } from "../threads/thread-list-v2-items";
 import { useThreadRowProviderInstanceResolver } from "../threads/thread-provider-instance";
 import {
+  createOrderHoldController,
+  type OrderHoldController,
+} from "@t3tools/client-runtime/state/thread-sort";
+import {
   buildThreadListV2Items,
   rankedContentSearchMatches,
   getThreadListV2OrderedSection,
   buildThreadListV2ListItems,
+  resolveThreadListV2Status,
+  threadListV2WaitsOnYou,
   type ThreadListV2ListItem,
 } from "../threads/threadListV2";
 import { useThreadListV2ShelfPreferences } from "../threads/use-thread-list-v2-shelf-preferences";
@@ -551,6 +558,29 @@ function HomeScreenContent(allProps: HomeScreenProps) {
       insets.top,
     ],
   );
+  const [heldMainOrderKeys, setHeldMainOrderKeys] = useState<ReadonlyArray<string> | null>(null);
+  const shownMainKeysRef = useRef<ReadonlyArray<string>>([]);
+  const orderHoldRef = useRef<OrderHoldController | null>(null);
+  useEffect(() => {
+    const controller = createOrderHoldController({
+      scrollSettleMs: 450,
+      idleReleaseMs: 4_000,
+      onHold: () => setHeldMainOrderKeys((current) => current ?? shownMainKeysRef.current),
+      onRelease: () => setHeldMainOrderKeys(null),
+      setTimeoutFn: setTimeout,
+      clearTimeoutFn: clearTimeout,
+    });
+    orderHoldRef.current = controller;
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state !== "active") controller.forceRelease();
+    });
+    return () => {
+      subscription.remove();
+      controller.dispose();
+      orderHoldRef.current = null;
+    };
+  }, []);
+  useFocusEffect(useCallback(() => () => orderHoldRef.current?.forceRelease(), []));
   const trackListTouches = useCallback(
     (event: GestureResponderEvent, started: boolean) => {
       const { changedTouches, touches } = event.nativeEvent;
@@ -558,13 +588,32 @@ function HomeScreenContent(allProps: HomeScreenProps) {
         started ? changedTouches.map((touch) => String(touch.identifier)) : [],
         touches.map((touch) => String(touch.identifier)),
       );
+      if (started) {
+        orderHoldRef.current?.beginPointer();
+      } else if (touches.length === 0) {
+        orderHoldRef.current?.endPointer();
+      }
     },
     [swipeRowActivation],
   );
+  const handleOrderAwareScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      orderHoldRef.current?.markScroll();
+      handleListScroll(event);
+    },
+    [handleListScroll],
+  );
+  const handleOrderAwareScrollBeginDrag = useCallback(() => {
+    orderHoldRef.current?.markScroll();
+    handleScrollBeginDrag();
+  }, [handleScrollBeginDrag]);
   const { swipeEnabled, scrollGateHandlers } = useSwipeableScrollGate({
-    onScroll: handleListScroll,
-    onScrollBeginDrag: handleScrollBeginDrag,
+    onScroll: handleOrderAwareScroll,
+    onScrollBeginDrag: handleOrderAwareScrollBeginDrag,
   });
+  useEffect(() => {
+    orderHoldRef.current?.setScrollGate(!swipeEnabled);
+  }, [swipeEnabled]);
 
   const hasSearchQuery = props.searchQuery.trim().length > 0;
   const handleSnoozeThread = useCallback(
@@ -674,16 +723,41 @@ function HomeScreenContent(allProps: HomeScreenProps) {
       snoozeWakeTick,
     ],
   );
+  // Keep an opened Needs-you chat in place until the user selects another chat.
+  const [heldOpenNeedsYou, setHeldOpenNeedsYou] = useState<{
+    readonly key: string | null;
+    readonly held: boolean;
+  }>({ key: null, held: false });
+  const visibleThreads = useMemo(
+    () =>
+      props.threads.filter(
+        (thread) =>
+          thread.archivedAt === null &&
+          (hasSearchQuery || homeChatTabShows(chatTabs.selected, chatTabs.tabs, thread)),
+      ),
+    [chatTabs.selected, chatTabs.tabs, hasSearchQuery, props.threads],
+  );
+  const openNeedsYouHeld =
+    heldOpenNeedsYou.key === selectedThreadKey
+      ? heldOpenNeedsYou.held
+      : (() => {
+          if (selectedThreadKey === null) return false;
+          const open = visibleThreads.find(
+            (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
+          );
+          if (!open) return false;
+          const status = resolveThreadListV2Status(open);
+          return threadListV2WaitsOnYou(open, status, Date.parse(`${nowMinute}:00.000Z`));
+        })();
+  if (heldOpenNeedsYou.key !== selectedThreadKey) {
+    setHeldOpenNeedsYou({ key: selectedThreadKey, held: openNeedsYouHeld });
+  }
   // Keep working sessions visible and fold settled history into its own shelf.
   const threadListV2Layout = useMemo(
     () =>
       buildThreadListV2Items({
         pendingOrder,
-        threads: props.threads.filter(
-          (thread) =>
-            thread.archivedAt === null &&
-            (hasSearchQuery || homeChatTabShows(chatTabs.selected, chatTabs.tabs, thread)),
-        ),
+        threads: visibleThreads,
         searchQuery: props.searchQuery,
         settlementEnvironmentIds,
         snoozeEnvironmentIds,
@@ -692,9 +766,13 @@ function HomeScreenContent(allProps: HomeScreenProps) {
         settledShelfExpanded: discord || settledShelfExpanded,
         snoozedShelfExpanded: discord || snoozedShelfExpanded,
         selectedThreadKey,
+        heldNeedsYouKey: openNeedsYouHeld ? selectedThreadKey : null,
+        heldMainOrderKeys,
       }),
     [
       discord,
+      heldMainOrderKeys,
+      openNeedsYouHeld,
       pendingOrder,
       selectedThreadKey,
       queuedThreadKeys,
@@ -705,12 +783,14 @@ function HomeScreenContent(allProps: HomeScreenProps) {
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
       props.searchQuery,
-      props.threads,
-      hasSearchQuery,
-      chatTabs.selected,
-      chatTabs.tabs,
+      visibleThreads,
     ],
   );
+  useEffect(() => {
+    shownMainKeysRef.current = threadListV2Layout.items
+      .filter((item) => !item.pinned && !item.snoozed && !item.settled)
+      .map((item) => `${item.thread.environmentId}:${item.thread.id}`);
+  }, [threadListV2Layout.items]);
   // Re-partition the moment the earliest snooze expires (clamped to the
   // signed-32-bit setTimeout range; far-future wakes re-arm at the clamp).
   const nextSnoozeWakeAt = threadListV2Layout.nextSnoozeWakeAt;
@@ -875,7 +955,7 @@ function HomeScreenContent(allProps: HomeScreenProps) {
       const match = threadSearchMatchByKey.get(
         threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
       );
-      if (match?.messageId) appAtomRegistry.set(pendingThreadSearchJumpAtom, match);
+      appAtomRegistry.set(pendingThreadSearchJumpAtom, match?.messageId ? match : null);
       props.onSelectThread(thread);
     },
     [props.onSelectThread, threadSearchMatchByKey],
@@ -1358,7 +1438,8 @@ function HomeScreenContent(allProps: HomeScreenProps) {
   if (
     Platform.OS === "android" &&
     threadListV2Items.length === 0 &&
-    extraSearchMatches.length === 0
+    extraSearchMatches.length === 0 &&
+    !threadSearch.pagination
   ) {
     return (
       <View className="flex-1 bg-header">
@@ -1426,13 +1507,16 @@ function HomeScreenContent(allProps: HomeScreenProps) {
               recycleItems
               extraData={v2ExtraData}
               ListHeaderComponent={v2ListHeader}
-              ListEmptyComponent={extraSearchMatches.length ? null : v2ListEmpty}
+              ListEmptyComponent={
+                extraSearchMatches.length || threadSearch.pagination ? null : v2ListEmpty
+              }
               onEndReached={showsInsights ? revealInsights : undefined}
               onEndReachedThreshold={0.6}
               ListFooterComponent={
                 <>
                   <ThreadSearchExtraMatches
                     matches={extraSearchMatches}
+                    pagination={threadSearch.pagination}
                     query={props.searchQuery}
                     onSelectThread={selectThread}
                   />

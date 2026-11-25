@@ -420,7 +420,7 @@ export function buildCheckedAcpRegistrySnapshot(
         ? `Set ${advertisedAuthMethod.envVarNames!.join(", ")} under this instance's environment variables in provider settings. SSHCode will detect it on the next provider refresh.`
         : `Sign in in provider settings using "${advertisedAuthMethod.name}".`
     : undefined;
-  return baseSnapshot({
+  const snapshot = baseSnapshot({
     ...input,
     ...(input.inspection.status === "ready" && input.inspection.documentationUrl
       ? { documentationUrl: input.inspection.documentationUrl }
@@ -454,6 +454,7 @@ export function buildCheckedAcpRegistrySnapshot(
         ? { message: readiness.message }
         : {}),
   });
+  return input.probeError?.reason === "probe_failed" ? { ...snapshot, refreshing: true } : snapshot;
 }
 
 export const checkAcpRegistryProviderStatus = Effect.fn("AcpRegistryDriver.checkProviderStatus")(
@@ -532,7 +533,10 @@ export const checkAcpRegistryProviderStatus = Effect.fn("AcpRegistryDriver.check
         ...(input.readModelIds === undefined ? {} : { readModelIds: input.readModelIds }),
         ...(onDiscovery === undefined
           ? {}
-          : { onProgress: (probe) => onDiscovery(discovered(probe), probe, true) }),
+          : {
+              onProgress: (probe) =>
+                onDiscovery({ ...discovered(probe), refreshing: true }, probe, true),
+            }),
       }),
     );
     if (Result.isFailure(probed))
@@ -586,6 +590,7 @@ export const checkAcpRegistryProviderReadiness = Effect.fn(
   return inspected._tag === "Success" && inspected.success.status === "ready"
     ? {
         ...snapshot,
+        refreshing: true,
         message: "Checking ACP authentication, models, and commands in the background...",
       }
     : snapshot;
@@ -864,7 +869,10 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         getSettings: snapshotSettings.getSettings,
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-        initialSnapshot: () => checkProvider,
+        initialSnapshot: () =>
+          buildInitialAcpRegistrySnapshot(readinessInput).pipe(
+            Effect.flatMap(withLiveRuntimeState),
+          ),
         checkProvider,
         ...(devinUsageProbe === undefined ? {} : { checkUsageLimits: devinUsageProbe.probe }),
         enrichSnapshot: ({ settings, snapshot, getSnapshot, publishSnapshot: publish }) => {

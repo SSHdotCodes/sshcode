@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -22,5 +23,5 @@ it.effect("a credential config patch preserves machine-provided instances", () =
       "After",
       "Machine provider",
     ]);
-  }).pipe(Effect.scoped),
+  }).pipe(Effect.provide(NodeCrypto.layer), Effect.scoped),
 );

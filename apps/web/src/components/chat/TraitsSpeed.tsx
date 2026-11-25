@@ -14,6 +14,32 @@ export function acpSpeedChoices(descriptor: ProviderOptionDescriptor) {
   return on && off ? { on, off } : null;
 }
 
+/**
+ * A speed setting with only two states (Fast mode on or off), which the composer flips with one
+ * click on its bolt instead of opening a menu. `next` is the value a click sets.
+ */
+export function speedToggleChoice(
+  provider: ProviderDriverKind,
+  descriptor: ProviderOptionDescriptor,
+): { name: string; on: boolean; next: string | boolean } | null {
+  if (descriptor.id === "fastMode" && descriptor.type === "boolean") {
+    const on = descriptor.currentValue === true;
+    return { name: "Fast mode", on, next: !on };
+  }
+  if (descriptor.type !== "select" || descriptor.options.length !== 2) return null;
+  const acpSpeed = acpSpeedChoices(descriptor);
+  if (acpSpeed) {
+    const on = getProviderOptionCurrentValue(descriptor) === acpSpeed.on.id;
+    return { name: acpSpeed.on.label, on, next: on ? acpSpeed.off.id : acpSpeed.on.id };
+  }
+  if (provider !== "codex" || descriptor.id !== "serviceTier") return null;
+  const fast = descriptor.options.find(({ label }) => label === "Fast");
+  const normal = descriptor.options.find((option) => option !== fast);
+  if (!fast || !normal) return null;
+  const on = getProviderOptionCurrentValue(descriptor) === fast.id;
+  return { name: "Fast mode", on, next: on ? normal.id : fast.id };
+}
+
 export function getTraitsSpeedDisplay(
   provider: ProviderDriverKind,
   descriptor: ProviderOptionDescriptor,
@@ -88,7 +114,7 @@ export function TraitsSpeedIcon({
 
 /** Fast mode in the traits trigger: a bolt that strikes every few seconds instead of the word. */
 export function TraitsSpeedBolt({
-  provider,
+  provider: _provider,
   speedIcon,
   size = "sm",
   spaced,
@@ -98,15 +124,16 @@ export function TraitsSpeedBolt({
   size?: ComposerControlSize;
   spaced: boolean;
 }) {
-  // The color sits on the icon too: the composer control greys out any svg without one.
-  const color = provider === "claudeAgent" ? "text-[#d97757]" : "text-warning";
+  // Lightning yellow for every provider. The color sits on the icon too: the composer control
+  // greys out any svg without one.
+  const color = "text-yellow-500 dark:text-yellow-400";
   return (
     <span
       ref={observeVisibleAnimation}
       aria-hidden="true"
       data-speed={speedIcon}
       className={cn(
-        "traits-speed-bolt relative inline-flex align-[-0.125em]",
+        "traits-speed-bolt relative inline-flex items-center justify-center align-[-0.125em]",
         spaced && (size === "xs" ? "ms-0.5" : "ms-1"),
         color,
       )}

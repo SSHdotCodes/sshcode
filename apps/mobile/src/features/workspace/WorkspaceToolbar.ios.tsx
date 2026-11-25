@@ -1,4 +1,5 @@
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { use, useCallback, useEffect, useRef } from "react";
 import { Platform } from "react-native";
 import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
@@ -17,16 +18,17 @@ export function WorkspaceToolbar(props: {
   readonly sidebar?: boolean;
 }) {
   const workspace = useWorkspaceTabs()!;
-  const navigation = useNavigation();
+  const navigation = useNavigation<NativeStackNavigationProp<ReactNavigation.RootParamList>>();
   const metrics = useNativeLayoutMetrics();
   const nativeToolbarCompose =
     Platform.OS === "ios" && (Platform.isPad || (metrics?.verticalBarEdge ?? "none") !== "none");
-  const { isTabActive } = workspace;
+  const { dispatch, isTabActive, recordScrollOffset } = workspace;
   const tabActive = use(NativeWorkspaceTabActivityContext)?.active ?? true;
   const { panes, togglePrimarySidebar } = useAdaptiveWorkspaceLayout();
   const searchRef = useRef<SearchBarCommands>(null);
   const tab = workspace.state.tabs[workspace.state.selectedTab];
   const selectedTab = workspace.state.selectedTab;
+  const hasSearch = tab.searchMode !== "resting" || tab.query !== "";
   const enterSearch = useCallback(() => {
     workspace.dispatch({
       type: "scroll",
@@ -48,12 +50,25 @@ export function WorkspaceToolbar(props: {
     if (isTabActive(selectedTab) && tab.searchMode !== "resting")
       searchRef.current?.setText(tab.query);
   }, [isTabActive, selectedTab, tab.searchMode, tab.query]);
+  const cancelSearch = useCallback(() => {
+    recordScrollOffset(selectedTab, tab.searchEntryOffset);
+    dispatch({ type: "cancel", tab: selectedTab });
+  }, [dispatch, recordScrollOffset, selectedTab, tab.searchEntryOffset]);
   useFocusEffect(
     useCallback(() => {
       const frame = requestAnimationFrame(restoreSearch);
       return () => cancelAnimationFrame(frame);
     }, [restoreSearch]),
   );
+  useEffect(() => {
+    if (!NATIVE_LIQUID_GLASS_SUPPORTED || props.sidebar || !hasSearch) return;
+    // UIKit collapses the integrated field when a pushed screen takes over the header.
+    return navigation.addListener("transitionEnd", ({ data }) => {
+      if (!data.closing) return;
+      searchRef.current?.clearText();
+      cancelSearch();
+    });
+  }, [cancelSearch, hasSearch, navigation, props.sidebar]);
   useEffect(() => {
     if (!tabActive) return;
     const frame = requestAnimationFrame(restoreSearch);
@@ -92,10 +107,7 @@ export function WorkspaceToolbar(props: {
                       query: nativeEvent.text,
                       tab: selectedTab,
                     }),
-                  onCancelButtonPress: () => {
-                    workspace.recordScrollOffset(selectedTab, tab.searchEntryOffset);
-                    workspace.dispatch({ type: "cancel", tab: selectedTab });
-                  },
+                  onCancelButtonPress: cancelSearch,
                 }
               : undefined,
         }}

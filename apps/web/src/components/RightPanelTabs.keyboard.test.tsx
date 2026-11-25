@@ -145,6 +145,13 @@ describe("right panel new-tab shortcut", () => {
     expect(document.querySelector('[role="menu"]:not([data-closed])')).toBeNull();
   });
 
+  it("hides the add control and leaves the shortcut alone when no surface is available", async () => {
+    await renderPanel({ filesAvailable: false });
+    expect(container.querySelector('[aria-label="Add panel surface"]')).toBeNull();
+    expect((await press("t", { metaKey: true })).defaultPrevented).toBe(false);
+    expect(document.querySelector('[role="menu"]:not([data-closed])')).toBeNull();
+  });
+
   it.each(["Win32", "Linux x86_64"])(
     "leaves Ctrl+T for the focused terminal on %s",
     async (platform) => {

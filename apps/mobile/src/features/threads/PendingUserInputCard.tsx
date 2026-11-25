@@ -270,13 +270,13 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
         className="min-h-[44px] flex-1 flex-row items-center gap-2 active:opacity-70"
       >
         {mascotReady ? <HarnessMascot state="waiting" size={24} visible={props.collapsed} /> : null}
-        <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
-          {asks ? "Question" : "User input needed"}
+        <Text className="min-w-0 flex-1 font-t3-medium text-sm text-foreground">
+          {asks
+            ? questionCount === 1
+              ? "Question from the agent"
+              : `${questionCount} questions from the agent`
+            : "Your input is needed"}
         </Text>
-        <Text className="font-sans text-xs text-foreground-muted">
-          {questionCount} question{questionCount === 1 ? "" : "s"}
-        </Text>
-        <View className="flex-1" />
         <SymbolView
           name="chevron.up"
           size={12}
@@ -307,7 +307,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
           : FadeOutDown.duration(USER_INPUT_TOGGLE_DURATION_MS).easing(Easing.out(Easing.cubic))
       }
       layout={CARD_LAYOUT_TRANSITION}
-      className="overflow-hidden gap-2.5 rounded-[20px] border border-border bg-card-alt p-4"
+      className="overflow-hidden gap-2.5 rounded-[20px] border-continuous border border-border bg-card-alt p-4"
       style={[
         keyboardHeightStyle,
         EXPANDED_CARD_IS_OVERLAY && cardAnimatedStyle,
@@ -328,9 +328,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
           {mascotReady ? (
             <HarnessMascot state="waiting" size={24} visible={!props.collapsed} />
           ) : null}
-          <Text className="min-w-0 flex-1 font-t3-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
-            {eyebrow}
-          </Text>
+          <Text className="min-w-0 flex-1 font-t3-medium text-sm text-foreground">{eyebrow}</Text>
           <View className="h-8 w-8 items-center justify-center rounded-full border border-input-border bg-grouped-card">
             <SymbolView
               name="chevron.down"
@@ -356,12 +354,10 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
         bottomOffset={footerHeight + heightConstraints.composerOverlapHeight + 44}
       >
         {asks ? (
-          <Text className="font-sans text-sm text-foreground-muted">
-            The agent keeps working. Answer when you are ready.
+          <Text className="text-xs text-foreground-muted">
+            You can answer while the agent works.
           </Text>
-        ) : (
-          <Text className="font-t3-bold text-lg text-foreground">Fill in the pending answers</Text>
-        )}
+        ) : null}
         {!canRespond ? (
           <Text className="font-sans text-sm leading-5 text-foreground-muted">
             The provider process for this request is no longer available. Interrupt or restart the
@@ -372,7 +368,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
           const draft = props.drafts[question.id];
           return (
             <View key={question.id} className="gap-2 pt-1">
-              <Text className="font-t3-bold text-xs uppercase tracking-[1px] text-foreground-muted">
+              <Text className="font-t3-medium text-xs text-foreground-muted">
                 {question.header}
               </Text>
               <QuestionText markdown={question.question} />
@@ -389,7 +385,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                       accessibilityState={{ checked: selected, disabled: responseDisabled }}
                       disabled={responseDisabled}
                       className={cn(
-                        "min-h-[44px] w-full rounded-2xl border px-3.5 py-3",
+                        "min-h-[44px] w-full flex-row items-start gap-2.5 rounded-2xl border-continuous border px-3 py-2.5 active:opacity-75",
                         selected ? "border-primary bg-primary/10" : "border-border bg-input",
                       )}
                       onPress={() =>
@@ -400,8 +396,26 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                         )
                       }
                     >
+                      <View
+                        className={cn(
+                          "mt-0.5 size-[18px] shrink-0 items-center justify-center border",
+                          question.multiSelect ? "rounded-[5px]" : "rounded-full",
+                          selected ? "border-primary bg-primary" : "border-foreground-tertiary",
+                        )}
+                      >
+                        {selected ? (
+                          <SymbolView
+                            name="checkmark"
+                            size={10}
+                            tintColorClassName="accent-primary-foreground"
+                            type="monochrome"
+                          />
+                        ) : null}
+                      </View>
                       <View className="min-w-0 flex-1 gap-0.5">
-                        <Text className="font-t3-bold text-sm text-foreground">{option.label}</Text>
+                        <Text className="font-t3-medium text-sm text-foreground">
+                          {option.label}
+                        </Text>
                         {description ? (
                           <Text className="font-sans text-sm leading-5 text-foreground-muted">
                             {description}

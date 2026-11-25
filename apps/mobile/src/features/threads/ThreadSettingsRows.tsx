@@ -1,3 +1,4 @@
+import { View } from "react-native";
 import { SymbolView } from "../../components/AppSymbol";
 import {
   ModelRowContent,
@@ -7,15 +8,23 @@ import {
 } from "./ThreadSettingsRows.shared";
 
 function SelectedCheckmark(props: { readonly selected: boolean }) {
-  return props.selected ? (
-    <SymbolView
-      name="checkmark"
-      size={16}
-      tintColorClassName="accent-icon"
-      type="monochrome"
-      weight="semibold"
-    />
-  ) : null;
+  return (
+    <View
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      className="w-[16px] shrink-0 items-center"
+    >
+      {props.selected ? (
+        <SymbolView
+          name="checkmark"
+          size={16}
+          tintColorClassName="accent-primary"
+          type="monochrome"
+          weight="semibold"
+        />
+      ) : null}
+    </View>
+  );
 }
 
 export function ModelRow(props: ModelRowProps) {

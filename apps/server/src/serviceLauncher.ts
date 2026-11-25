@@ -842,8 +842,13 @@ export class Launcher {
     await writeServiceState(this.#statePath, next);
     this.#state = next;
     child.role = "active";
-    await discardDatabaseBackup(this.#baseDir, committed.id).catch(() => undefined);
-    await sendMessage(child.process, { type: "committed", updateId: committed.id });
+    // The commit is already durable, so answer before cleanup: the trial waits
+    // for this reply, and dropping a large backup can take longer than that.
+    try {
+      await sendMessage(child.process, { type: "committed", updateId: committed.id });
+    } finally {
+      await discardDatabaseBackup(this.#baseDir, committed.id).catch(() => undefined);
+    }
   }
 
   async #handlePreparedTimeout(child: ManagedChild): Promise<void> {

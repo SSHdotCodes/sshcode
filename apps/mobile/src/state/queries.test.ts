@@ -7,7 +7,8 @@ import { buildCheckpointDiffTargets, normalizeComposerPathSearchQuery } from "./
 describe("appQueries", () => {
   it("normalizes composer path search input", () => {
     expect(normalizeComposerPathSearchQuery("  src/app  ")).toBe("src/app");
-    expect(normalizeComposerPathSearchQuery(null)).toBe("");
+    expect(normalizeComposerPathSearchQuery(" ")).toBe("");
+    expect(normalizeComposerPathSearchQuery(null)).toBeNull();
   });
 
   it("routes the first turn range through the full-thread diff query", () => {

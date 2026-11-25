@@ -22,7 +22,10 @@ import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
-import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import {
+  getModelSelectionBooleanOptionValue,
+  getModelSelectionStringOptionValue,
+} from "@t3tools/shared/model";
 
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
@@ -32,6 +35,7 @@ import {
   currentGrokModelIdFromSessionSetup,
   GROK_DEFAULT_MODEL_SLUG,
   grokApprovalOptions,
+  grokModelIdForSpeed,
   makeGrokAcpRuntime,
   resolveGrokAcpBaseModelId,
 } from "./acpSupport.ts";
@@ -250,7 +254,13 @@ const applyGrokSessionModelSelection: NonNullable<AcpAdapterV2Flavor["applyModel
     startResult,
     modelSelection,
   }) {
-    const requestedModelId = resolveGrokAcpBaseModelId(modelSelection.model);
+    const pickedModelId = resolveGrokAcpBaseModelId(modelSelection.model);
+    // Fast mode runs the model's fast variant, which Grok offers as a model of its own.
+    const requestedFast = getModelSelectionBooleanOptionValue(modelSelection, "fastMode");
+    const withSpeed = (offeredModelIds: ReadonlySet<string>) =>
+      pickedModelId === GROK_DEFAULT_MODEL_SLUG
+        ? pickedModelId
+        : grokModelIdForSpeed(pickedModelId, requestedFast, offeredModelIds);
     const requestedEffort = getModelSelectionStringOptionValue(
       modelSelection,
       GROK_REASONING_EFFORT_OPTION_ID,
@@ -265,6 +275,9 @@ const applyGrokSessionModelSelection: NonNullable<AcpAdapterV2Flavor["applyModel
     if (startResult.initializeResult.protocolVersion === 1) {
       const setup = startResult.sessionSetupResult;
       const currentModelId = currentGrokModelIdFromSessionSetup(setup);
+      const requestedModelId = withSpeed(
+        new Set(setup.models?.availableModels.map((model) => model.modelId.trim()) ?? []),
+      );
       const targetModelId =
         requestedModelId === GROK_DEFAULT_MODEL_SLUG ? currentModelId : requestedModelId;
       const targetModel = setup.models?.availableModels.find(
@@ -300,7 +313,15 @@ const applyGrokSessionModelSelection: NonNullable<AcpAdapterV2Flavor["applyModel
           );
     }
 
-    const configuredModel = findModelConfigOption(yield* runtime.getConfigOptions)?.currentValue;
+    const modelOption = findModelConfigOption(yield* runtime.getConfigOptions);
+    const configuredModel = modelOption?.currentValue;
+    const requestedModelId = withSpeed(
+      new Set(
+        (modelOption?.options ?? []).flatMap((entry) =>
+          "options" in entry ? entry.options.map((option) => option.value) : [entry.value],
+        ),
+      ),
+    );
     const appliedModelId = yield* applyGrokAcpModelSelection({
       runtime: { setSessionModel: (model) => runtime.setModel(model).pipe(Effect.as({})) },
       currentModelId: typeof configuredModel === "string" ? configuredModel : undefined,
@@ -439,6 +460,7 @@ export function makeGrokAcpAdapterFlavor(
     extractSubagentUpdate: extractXAiAcpSubagentUpdate,
     extractSubagentEndNotice: extractXAiAcpSubagentEndNotice,
     normalizeToolCall: normalizeXAiAcpToolCallState,
+    todoListUpdatesAreSnapshots: true,
     // Show the plan while Grok is still writing it: plan.md writes under the
     // Grok session dir surface as the proposed-plan card before exit (#8358).
     extractProposedPlanMarkdown: (toolCall) =>

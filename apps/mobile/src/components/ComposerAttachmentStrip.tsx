@@ -1,5 +1,6 @@
 import { FilePreviewGallery, useFilePreviewGallery } from "./FilePreviewGallery";
 import { composerImageGallery } from "../lib/composerImageGallery";
+import { cn } from "../lib/cn";
 import { SymbolView } from "../components/AppSymbol";
 import { imageMimeType } from "@t3tools/shared/image";
 import { videoMimeType } from "@t3tools/shared/video";
@@ -30,8 +31,8 @@ export interface ComposerAttachmentStripProps {
   readonly environmentId?: EnvironmentId;
   /** Attachments to display. */
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
-  /** Called when the user removes an attachment. */
-  readonly onRemove: (imageId: string) => void;
+  /** Called when the user removes an attachment. Omit while editing is locked. */
+  readonly onRemove?: ((imageId: string) => void) | undefined;
   /** Called when the user taps an image or PDF to preview it. */
   readonly onPressPreview?: (source: FilePreviewSource) => void;
   readonly onPressVideo?: (
@@ -67,6 +68,13 @@ export function ComposerAttachmentThumbnail(props: ComposerAttachmentThumbnailPr
   return (
     <View style={{ width: props.size, height: props.size }}>
       <ComposerAttachmentContent {...props} />
+      <View
+        pointerEvents="none"
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        className="absolute inset-0 border-continuous border border-border-subtle"
+        style={{ borderRadius: props.borderRadius }}
+      />
       {upload && upload.status !== "ready" ? (
         <Pressable
           accessibilityRole={upload.status === "failed" ? "button" : "text"}
@@ -225,7 +233,7 @@ function ComposerImageAttachment(
         <Image
           source={previewUri === null ? undefined : { uri: previewUri }}
           style={style}
-          className="bg-subtle"
+          className="border-continuous bg-subtle"
           resizeMode="cover"
         />
       </Pressable>
@@ -287,14 +295,18 @@ function ComposerFileAttachment(
           }
           className={
             props.compact
-              ? "items-center justify-center bg-subtle"
-              : "items-center justify-center gap-1 bg-subtle px-2"
+              ? "items-center justify-center border-continuous bg-subtle"
+              : "items-center justify-center gap-1 border-continuous bg-subtle px-2"
           }
           style={style}
         >
           <PierreEntryIcon path={attachment.name} kind="file" size={props.compact ? 15 : 22} />
           {!props.compact ? (
-            <Text className="w-full text-center text-2xs text-foreground" numberOfLines={1}>
+            <Text
+              className="w-full text-center text-2xs text-foreground"
+              numberOfLines={1}
+              ellipsizeMode="middle"
+            >
               {attachment.name}
             </Text>
           ) : null}
@@ -316,7 +328,12 @@ function ComposerVideoAttachment(props: {
 }) {
   const { attachment } = props;
   const sourceIdentifier = `draft:${attachment.id}`;
-  const style = { width: props.size, height: props.size, borderRadius: props.borderRadius };
+  const style = {
+    width: props.size,
+    height: props.size,
+    borderRadius: props.borderRadius,
+    borderCurve: "continuous" as const,
+  };
   const actionsSource = useMemo<MediaActionsSource>(
     () => ({
       name: attachment.name,
@@ -347,9 +364,10 @@ export function ComposerAttachmentStrip(props: ComposerAttachmentStripProps) {
   const gallery = useMemo(() => composerImageGallery(props.attachments), [props.attachments]);
   const size = props.imageSize ?? 72;
   const radius = props.imageBorderRadius ?? 16;
-  const removeButtonPlacement = props.removeButtonPlacement ?? "gutter";
+  const usesRemoveGutter = props.removeButtonPlacement !== "overlay";
   // Keep the 44pt remove target clear of the thumbnail’s center, including compact tiles.
-  const removeButtonGutter = removeButtonPlacement === "gutter" ? Math.max(10, 45 - size / 2) : 0;
+  const removeButtonGutter = usesRemoveGutter ? Math.max(10, 45 - size / 2) : 0;
+  const removeDisabled = props.onRemove === undefined;
 
   if (props.attachments.length === 0) {
     return null;
@@ -364,7 +382,7 @@ export function ComposerAttachmentStrip(props: ComposerAttachmentStripProps) {
         keyboardDismissMode="none"
         style={{ height: size + removeButtonGutter, flexGrow: 0, flexShrink: 0 }}
       >
-        <View className="flex-row gap-2.5">
+        <View className="flex-row gap-1.5">
           {props.attachments.map((attachment) => (
             <View
               key={attachment.id}
@@ -386,20 +404,27 @@ export function ComposerAttachmentStrip(props: ComposerAttachmentStripProps) {
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`Remove ${attachment.name}`}
-                className="absolute right-0 top-0 size-11 active:opacity-70"
-                onPress={() => props.onRemove(attachment.id)}
+                accessibilityState={{ disabled: removeDisabled }}
+                disabled={removeDisabled}
+                className="absolute right-0 top-0 size-[44px] active:opacity-70 disabled:opacity-45"
+                onPress={() => props.onRemove?.(attachment.id)}
               >
                 <View
-                  className="absolute size-[22px] items-center justify-center rounded-full bg-black/55"
+                  className={cn(
+                    "absolute size-[22px] items-center justify-center rounded-full",
+                    usesRemoveGutter ? "border border-border bg-card" : "bg-black/65",
+                  )}
                   style={{
-                    top: removeButtonPlacement === "gutter" ? 0 : 4,
-                    right: removeButtonPlacement === "gutter" ? 0 : 4,
+                    top: usesRemoveGutter ? Math.max(0, removeButtonGutter - 15) : 4,
+                    right: usesRemoveGutter ? removeButtonGutter - 10 : 4,
                   }}
                 >
                   <SymbolView
                     name="xmark"
                     size={9}
-                    tintColor="#ffffff"
+                    {...(usesRemoveGutter
+                      ? { tintColorClassName: "accent-icon" }
+                      : { tintColor: "#ffffff" })}
                     type="monochrome"
                     weight="bold"
                   />

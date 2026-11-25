@@ -127,6 +127,10 @@ export interface CommandPaletteThreadContentMatch {
   readonly source: "user" | "assistant";
   readonly snippet: string;
   readonly query: string;
+  readonly messageId?: string | null;
+  readonly matchedModel?: string;
+  readonly matchedHarness?: string;
+  readonly titleCorrection?: string;
 }
 
 export interface CommandPaletteItem {

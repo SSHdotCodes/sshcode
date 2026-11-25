@@ -333,6 +333,8 @@ export const ServerProvider = Schema.Struct({
   status: ServerProviderState,
   auth: ServerProviderAuth,
   checkedAt: IsoDateTime,
+  /** A provider check is still pending. Status and models can be from the last complete check. */
+  refreshing: Schema.optionalKey(Schema.Boolean),
   message: Schema.optional(TrimmedNonEmptyString),
   // Optional for back-compat: every legacy producer omits this field and
   // an absent value is interpreted as `"available"` by consumers (see

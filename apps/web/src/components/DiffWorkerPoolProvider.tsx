@@ -13,6 +13,7 @@ import {
 import { useTheme } from "../hooks/useTheme";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "../lib/syntaxHighlighting";
+import { DiffFileHeaderSkeleton } from "./DiffPanelShell";
 
 export class DiffWorkerError extends Schema.TaggedError<DiffWorkerError>()("DiffWorkerError", {
   operation: Schema.Literals(["create-worker", "get-render-options", "set-render-options"]),
@@ -121,9 +122,16 @@ function DiffWorkerReady({ children }: { children?: ReactNode }) {
   ) : (
     <div
       role="status"
-      className="flex min-h-0 flex-1 items-center justify-center p-4 text-xs text-muted-foreground"
+      aria-live="polite"
+      aria-label="Loading code…"
+      className="min-h-0 flex-1 overflow-hidden bg-background"
     >
-      Loading code...
+      <div aria-hidden="true" className="divide-y divide-border/30">
+        <DiffFileHeaderSkeleton titleWidth="medium" />
+        <DiffFileHeaderSkeleton titleWidth="short" />
+        <DiffFileHeaderSkeleton titleWidth="long" />
+      </div>
+      <span className="sr-only">Loading code…</span>
     </div>
   );
 }

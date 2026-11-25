@@ -166,3 +166,45 @@ it("cancels the old search when its last UI subscriber leaves", async () => {
     registry.dispose();
   }
 });
+
+it("appends another page without replacing earlier results or duplicating chats", () => {
+  const match = (id: string) => ({
+    threadId: ThreadId.make(id),
+    projectId: ProjectId.make("project"),
+    source: "user" as const,
+    snippet: "needle",
+    messageCreatedAt: null,
+  });
+  const first = Atom.make(
+    AsyncResult.success<OrchestrationSearchThreadsResult>({
+      matches: [match("new")],
+      nextCursor: { words: { before: 100 } },
+    }),
+  );
+  const more = Atom.make<AsyncResult.AsyncResult<OrchestrationSearchThreadsResult, never>>(
+    AsyncResult.initial(true),
+  ).pipe(Atom.setIdleTTL(0));
+  const family = createThreadSearchResultsAtomFamily({
+    getSearchAtom: (_environmentId, _query, cursor) => (cursor ? more : first),
+    labelPrefix: "test:search-pages",
+  });
+  const registry = AtomRegistry.make();
+  try {
+    const result = family(makeThreadSearchKey([envA], "needle"));
+    const unmount = registry.mount(result);
+    const ids = () => registry.get(result).matches.map((hit) => hit.threadId);
+    const paginate = registry.get(result).pagination?.loadMore;
+    expect(paginate).toBeDefined();
+    paginate?.();
+    expect(registry.get(result).pagination?.isLoading).toBe(true);
+    expect(ids()).toEqual(["new"]);
+    registry.set(more, AsyncResult.success({ matches: [match("new"), match("old")] }));
+    expect(ids()).toEqual(["new", "old"]);
+    expect(registry.get(result).pagination).toBeUndefined();
+    paginate?.();
+    expect(ids()).toEqual(["new", "old"]);
+    unmount();
+  } finally {
+    registry.dispose();
+  }
+});

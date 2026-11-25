@@ -376,6 +376,142 @@ export function sortActiveThreadsByOrderKey<
 }
 
 /**
+ * Keep previously shown rows in their relative order while the user is
+ * hovering, touching, or scrolling the list so rows cannot jump under the
+ * pointer or finger. Rows that left free their slots; brand-new rows take
+ * their sorted place.
+ */
+export function holdOrderedItems<T>(
+  sorted: readonly T[],
+  previousKeys: readonly string[],
+  keyOf: (item: T) => string,
+): T[] {
+  if (previousKeys.length === 0 || sorted.length < 2) return [...sorted];
+  const byKey = new Map(sorted.map((item) => [keyOf(item), item]));
+  const kept = previousKeys.filter((key) => byKey.has(key));
+  const keptSet = new Set(kept);
+  let next = 0;
+  return sorted.map((item) => (keptSet.has(keyOf(item)) ? byKey.get(kept[next++]!)! : item));
+}
+
+export interface OrderHoldController {
+  readonly beginPointer: () => void;
+  readonly endPointer: () => void;
+  readonly markScroll: () => void;
+  readonly setScrollGate: (active: boolean) => void;
+  readonly forceRelease: () => void;
+  readonly dispose: () => void;
+}
+
+/**
+ * Coordinates temporary list-order holding across pointer/touch, scroll, and
+ * external scroll-gate signals with an independent scroll-settle timer. With
+ * `idleReleaseMs`, a hold also ends that long after the last touch or scroll,
+ * so a missed end event can never freeze the list while one in use keeps it.
+ * Without it, a hold lasts until the pointer leaves (mouse hover).
+ */
+export function createOrderHoldController<TTimer = ReturnType<typeof setTimeout>>(options: {
+  readonly scrollSettleMs?: number;
+  /** Ends a hold this long after the last activity; omit to hold until release. */
+  readonly idleReleaseMs?: number;
+  readonly onHold: () => void;
+  readonly onRelease: () => void;
+  readonly setTimeoutFn: (callback: () => void, ms: number) => TTimer;
+  readonly clearTimeoutFn: (handle: TTimer) => void;
+}): OrderHoldController {
+  const scrollSettleMs = options.scrollSettleMs ?? 450;
+  const setTimer = options.setTimeoutFn;
+  const clearTimer = options.clearTimeoutFn;
+
+  let holding = false;
+  let pointerActive = false;
+  let scrollActive = false;
+  let gateActive = false;
+  let scrollTimer: TTimer | null = null;
+  let idleTimer: TTimer | null = null;
+
+  const clearTimers = () => {
+    if (scrollTimer !== null) {
+      clearTimer(scrollTimer);
+      scrollTimer = null;
+    }
+    if (idleTimer !== null) {
+      clearTimer(idleTimer);
+      idleTimer = null;
+    }
+  };
+
+  const forceRelease = () => {
+    pointerActive = false;
+    scrollActive = false;
+    gateActive = false;
+    clearTimers();
+    if (holding) {
+      holding = false;
+      options.onRelease();
+    }
+  };
+
+  const releaseIfIdle = () => {
+    if (!pointerActive && !scrollActive && !gateActive) {
+      clearTimers();
+      if (holding) {
+        holding = false;
+        options.onRelease();
+      }
+    }
+  };
+
+  const ensureHolding = () => {
+    if (!holding) {
+      holding = true;
+      options.onHold();
+    }
+    // Every touch or scroll restarts the idle clock: rows never move under a list in use.
+    if (options.idleReleaseMs === undefined) return;
+    if (idleTimer !== null) clearTimer(idleTimer);
+    idleTimer = setTimer(() => {
+      idleTimer = null;
+      forceRelease();
+    }, options.idleReleaseMs);
+  };
+
+  return {
+    beginPointer() {
+      pointerActive = true;
+      ensureHolding();
+    },
+    endPointer() {
+      pointerActive = false;
+      releaseIfIdle();
+    },
+    markScroll() {
+      scrollActive = true;
+      ensureHolding();
+      if (scrollTimer !== null) clearTimer(scrollTimer);
+      scrollTimer = setTimer(() => {
+        scrollTimer = null;
+        scrollActive = false;
+        releaseIfIdle();
+      }, scrollSettleMs);
+    },
+    setScrollGate(active: boolean) {
+      gateActive = active;
+      if (active) ensureHolding();
+      else releaseIfIdle();
+    },
+    forceRelease,
+    dispose() {
+      pointerActive = false;
+      scrollActive = false;
+      gateActive = false;
+      holding = false;
+      clearTimers();
+    },
+  };
+}
+
+/**
  * planPinnedReorder specialized for mobile's Move up / Move down menu
  * actions: swap the moved thread with its displayed neighbor. Null when the
  * move falls off either end of the list. Same single-write-per-move

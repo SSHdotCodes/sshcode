@@ -42,7 +42,7 @@ function OverviewMessage({
   if (entry.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] rounded-2xl bg-muted px-4 py-2 text-sm">
+        <div className="max-w-[80%] rounded-2xl border border-border/60 bg-card/80 px-4 py-2 text-sm dark:bg-card dark:inset-shadow-card-highlight">
           <ChatMarkdown
             text={entry.text}
             cwd={undefined}
@@ -161,9 +161,11 @@ function OverviewPage() {
           </Button>
         </div>
       ) : environmentId === null ? (
-        <p className="p-6 text-sm text-muted-foreground">
-          Connect to your Mac to see what your chats are doing.
-        </p>
+        <div className="flex flex-1 items-center justify-center p-6 text-center">
+          <p className="text-sm text-muted-foreground">
+            Connect to your Mac to see what your chats are doing.
+          </p>
+        </div>
       ) : (
         <OverviewConversation environmentId={environmentId} overview={overview} />
       )}

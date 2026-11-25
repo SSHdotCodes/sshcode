@@ -1,3 +1,4 @@
+import { ThreadSearchMoreButton } from "./ThreadSearchMatch";
 import { openUseInAnotherApp } from "./mcp/UseInAnotherAppDialog";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useOpenChatBeside } from "../hooks/useOpenChatBeside";
@@ -4041,6 +4042,10 @@ function OpenCommandPaletteDialog(props: {
                     : threadSearch.failed
                       ? { emptyStateMessage: "Couldn't search thread messages." }
                       : {})}
+        />
+        <ThreadSearchMoreButton
+          pagination={threadSearch.pagination}
+          className="mx-1.5 mb-1.5 w-[calc(100%-0.75rem)] text-muted-foreground hover:bg-accent/70 hover:text-foreground active:bg-accent"
         />
       </PaletteThreadSearchQueryContext>
     </CommandPaletteContent>

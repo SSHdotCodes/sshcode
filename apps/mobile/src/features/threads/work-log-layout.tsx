@@ -38,7 +38,14 @@ export function WorkLogPressable({
   rowSizing?: ReturnType<typeof deriveThreadWorkLogSizing>;
 }) {
   return (
-    <Pressable {...props} hitSlop={4} className="rounded-md px-0.5 py-0 active:bg-subtle">
+    <Pressable
+      {...props}
+      hitSlop={4}
+      className={cn(
+        "rounded-lg border-continuous px-0.5 active:bg-subtle-strong",
+        props.accessibilityState?.expanded && "bg-subtle",
+      )}
+    >
       <View
         className="flex-row items-center gap-1.5"
         style={{ minHeight: rowSizing?.estimatedRowHeight ?? THREAD_WORK_ROW_MIN_HEIGHT }}
@@ -54,10 +61,12 @@ export function WorkLogLabel({
   children,
   tone = "default",
   ellipsizeMode = "tail",
+  emphasized = false,
 }: {
   children: ReactNode;
   tone?: "default" | "danger" | "warning";
   ellipsizeMode?: "head" | "tail";
+  emphasized?: boolean;
 }) {
   return (
     <Text
@@ -66,6 +75,7 @@ export function WorkLogLabel({
       ellipsizeMode={ellipsizeMode}
       className={cn(
         "min-w-0 flex-1 text-sm text-foreground-muted",
+        emphasized && "font-t3-medium text-foreground",
         tone === "danger" && "font-t3-medium text-adaptive-rose-600-400",
         tone === "warning" && "font-t3-medium text-warning-foreground",
       )}

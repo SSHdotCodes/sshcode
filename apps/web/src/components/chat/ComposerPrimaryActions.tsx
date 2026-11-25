@@ -329,11 +329,13 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  if (
+  const isStopPrimary =
     (canInterrupt || stopPhase === "pending" || stopPhase === "timedOut") &&
     !hasSendableContent &&
-    !isEditingQueuedMessage
-  ) {
+    !isEditingQueuedMessage;
+  const stopOpensMenu = isStopPrimary && Boolean(stopHelperSummary && onStopReply);
+
+  if (stopOpensMenu) {
     return renderStopGenerationButton(false);
   }
 
@@ -367,67 +369,102 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         ? `Click to ${followUpBehavior}, Ctrl/⌘-click${alternateShortcutLabel ? ` or ${alternateShortcutLabel}` : ""} to ${alternateAction}`
         : "Queue after the current turn"
       : submitLabel);
+  const stopTooltip =
+    stopPhase === "pending" ? "Stopping…" : stopPhase === "landed" ? "Stopped" : "Interrupt";
+  const primaryDisabled = isStopPrimary
+    ? !canOperateThread || isStopDisabled
+    : isSendBusy ||
+      isSendDisabled ||
+      isConnecting ||
+      isEnvironmentUnavailable ||
+      (!hasSendableContent && !showResume);
 
-  const sendButton = (
+  // Keep one persistent button node across Send <-> Stop transitions so the
+  // circle fill and glyph morph smoothly instead of remounting in a single frame.
+  const primaryButton = (
     <button
-      type={showResume ? "button" : "submit"}
+      type={isStopPrimary || showResume ? "button" : "submit"}
+      data-composer-primary-mode={isStopPrimary ? "stop" : "send"}
       className={cn(
-        "relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full shadow-xs transition-[background-color,box-shadow,scale,filter] duration-120 ease-out motion-reduce:transition-none enabled:cursor-pointer enabled:inset-shadow-control-highlight hover:scale-105 active:scale-[0.94] active:inset-shadow-control-pressed active:shadow-none motion-reduce:hover:scale-100 motion-reduce:active:scale-100 disabled:pointer-events-none disabled:shadow-none disabled:hover:scale-100 disabled:active:scale-100 sm:h-8 sm:w-8 [&_svg]:pointer-events-none",
-        stageBackdropVariant
-          ? "bg-transparent text-white enabled:shadow-black/24 enabled:hover:brightness-110 disabled:opacity-64"
-          : // With nothing to send it reads as a quiet grey circle rather than a faded accent.
-            "bg-message-action text-message-action-foreground enabled:shadow-message-action/24 hover:bg-message-action-hover disabled:bg-foreground/12 disabled:text-muted-foreground",
+        "relative isolate flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full shadow-xs transition-[background-color,color,box-shadow,scale,filter] duration-150 ease-motion motion-reduce:transition-none enabled:cursor-pointer enabled:inset-shadow-control-highlight active:scale-[0.94] active:inset-shadow-control-pressed active:shadow-none motion-reduce:hover:scale-100 motion-reduce:active:scale-100 disabled:shadow-none disabled:hover:scale-100 disabled:active:scale-100 sm:h-8 sm:w-8 [&_svg]:pointer-events-none",
+        isStopPrimary
+          ? // Neutral, like the native apps: stopping is routine, not an alarm.
+            "bg-foreground text-background hover:bg-foreground/85 disabled:cursor-default disabled:opacity-50"
+          : cn(
+              "hover:scale-105 disabled:pointer-events-none",
+              stageBackdropVariant
+                ? "bg-transparent text-white enabled:shadow-black/24 enabled:hover:brightness-110 disabled:opacity-40 disabled:saturate-50"
+                : // With nothing to send it reads as a quiet grey circle rather than a faded accent.
+                  "bg-message-action text-message-action-foreground enabled:shadow-message-action/24 hover:bg-message-action-hover disabled:bg-foreground/12 disabled:text-muted-foreground",
+            ),
       )}
       {...pointerFocusProps}
-      onClick={showResume ? onResume : onSubmitMessage}
-      disabled={
-        isSendBusy ||
-        isSendDisabled ||
-        isConnecting ||
-        isEnvironmentUnavailable ||
-        (!hasSendableContent && !showResume)
-      }
-      aria-label={submitStatus ?? submitLabel}
+      onClick={isStopPrimary ? stopEverything : showResume ? onResume : onSubmitMessage}
+      disabled={primaryDisabled}
+      aria-label={isStopPrimary ? stopLabel : (submitStatus ?? submitLabel)}
     >
-      {stageBackdropVariant ? (
+      {!isStopPrimary && stageBackdropVariant ? (
         <span className="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
           <StageBackdropButtonArt variant={stageBackdropVariant} />
         </span>
       ) : null}
-      {isConnecting || isSendBusy ? (
-        <Spinner size="sm" aria-hidden="true" />
-      ) : showResume ? (
-        <PlayIcon className="size-4 fill-current" aria-hidden="true" />
-      ) : isEditingQueuedMessage ? (
-        <CheckIcon className="size-4" aria-hidden="true" />
-      ) : isRunning ? (
-        <MorphIcon className="size-4" icon={isQueuing ? ListPlus : CornerUpRight} />
-      ) : (
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-          <path
-            d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      )}
+      <span className="relative flex size-4 items-center justify-center" aria-hidden="true">
+        <span
+          className={cn(
+            "absolute inset-0 flex items-center justify-center transition-[opacity,transform] duration-150 ease-motion motion-reduce:transition-none",
+            isStopPrimary
+              ? "translate-y-0 opacity-100"
+              : "pointer-events-none translate-y-0.5 opacity-0",
+          )}
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+            <rect x="2" y="2" width="8" height="8" rx="1.5" />
+          </svg>
+        </span>
+        <span
+          className={cn(
+            "flex items-center justify-center transition-[opacity,transform] duration-150 ease-motion motion-reduce:transition-none",
+            isStopPrimary
+              ? "pointer-events-none -translate-y-0.5 opacity-0"
+              : "translate-y-0 opacity-100",
+          )}
+        >
+          {isConnecting || isSendBusy ? (
+            <Spinner size="sm" aria-hidden="true" />
+          ) : showResume ? (
+            <PlayIcon className="size-4 fill-current" aria-hidden="true" />
+          ) : isEditingQueuedMessage ? (
+            <CheckIcon className="size-4" aria-hidden="true" />
+          ) : isRunning ? (
+            <MorphIcon className="size-4" icon={isQueuing ? ListPlus : CornerUpRight} />
+          ) : (
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path
+                d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          )}
+        </span>
+      </span>
     </button>
   );
 
-  const submit: ReactNode = (
-    <Tooltip key="submit">
-      <TooltipTrigger render={<span className="inline-flex" />}>{sendButton}</TooltipTrigger>
-      <TooltipPopup>{submitTooltip}</TooltipPopup>
+  const primaryControl: ReactNode = (
+    <Tooltip key="primary-action">
+      <TooltipTrigger render={<span className="inline-flex" />}>{primaryButton}</TooltipTrigger>
+      <TooltipPopup>{isStopPrimary ? stopTooltip : submitTooltip}</TooltipPopup>
     </Tooltip>
   );
   // Keep the clicked Stop at the right edge even when typing turns the primary action into Send.
-  return stopPhase === null ? (
-    submit
+  return isStopPrimary || stopPhase === null ? (
+    primaryControl
   ) : (
     <>
-      {submit}
+      {primaryControl}
       {renderStopGenerationButton(false)}
     </>
   );

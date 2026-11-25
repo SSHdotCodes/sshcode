@@ -7,6 +7,7 @@ import {
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
   type EnvironmentThreadSearchMatch,
+  type ThreadSearchResultsState,
 } from "@t3tools/client-runtime/state/thread-search";
 import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
 import type {
@@ -43,17 +44,17 @@ const EMPTY_PROJECT_ENTRIES: ReadonlyArray<ProjectEntry> = [];
 const EMPTY_CONTENT_MATCHES: ReadonlyArray<ProjectContentMatch> = [];
 const INITIAL_BRANCH_CURSORS = [undefined] as const;
 const EMPTY_THREAD_SEARCH_MATCHES: ReadonlyArray<EnvironmentThreadSearchMatch> = Object.freeze([]);
-const EMPTY_THREAD_SEARCH_ATOM = Atom.make({
+const EMPTY_THREAD_SEARCH_ATOM = Atom.make<ThreadSearchResultsState>({
   matches: EMPTY_THREAD_SEARCH_MATCHES,
   isLoading: false,
   failed: false,
 }).pipe(Atom.withLabel("web:thread-search:empty"));
 
 const threadSearchResultsAtom = createThreadSearchResultsAtomFamily({
-  getSearchAtom: (environmentId, query) =>
+  getSearchAtom: (environmentId, query, cursor) =>
     orchestrationEnvironment.threadSearch({
       environmentId,
-      input: { query },
+      input: { query, ...(cursor ? { cursor } : {}) },
     }),
   labelPrefix: "web:thread-search",
 });
@@ -82,6 +83,7 @@ export function useThreadSearch(
   readonly query: string;
   readonly failed: boolean;
   readonly isPending: boolean;
+  readonly pagination: ThreadSearchResultsState["pagination"];
 } {
   const normalizedQuery = query.trim();
   const debouncedQuery = useDebouncedValue(normalizedQuery, THREAD_SEARCH_DEBOUNCE_MS);
@@ -97,6 +99,7 @@ export function useThreadSearch(
   const isDebouncing = canSearch && normalizedQuery !== debouncedQuery;
   return {
     failed: settledQuery !== null && !result.isLoading && result.failed,
+    pagination: result.pagination,
     matches: isDebouncing ? EMPTY_THREAD_SEARCH_MATCHES : result.matches,
     query: settledQuery ?? "",
     isPending: canSearch && (isDebouncing || result.isLoading),

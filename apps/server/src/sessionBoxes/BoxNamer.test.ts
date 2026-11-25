@@ -3,10 +3,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { boxNamerPrompt, parseBoxNamerOutput } from "./BoxNamer.ts";
 import {
   AUTO_TITLE_WORK_MS,
+  announceBoxChange,
   autoTitleFor,
   boxNamerCache,
   boxTitles,
   lookupBoxNaming,
+  shellDecorationChangesAfter,
+  shellDecorationCursor,
   subscribeBoxNamed,
   subscribeRetitle,
   type RetitleCandidate,
@@ -92,6 +95,25 @@ describe("boxNamerCache", () => {
     unsubscribe();
     boxNamerCache.deactivate();
     expect(lookupBoxNaming("t1", basis)).toBeNull();
+  });
+});
+
+describe("shell decoration history", () => {
+  it("coalesces repeat changes and requires a fresh snapshot when history is unavailable", () => {
+    const before = shellDecorationCursor();
+    announceBoxChange("first-decoration");
+    announceBoxChange("second-decoration");
+    announceBoxChange("first-decoration");
+    const current = shellDecorationCursor();
+    expect(shellDecorationChangesAfter(before)).toEqual({
+      cursor: current,
+      threadIds: ["second-decoration", "first-decoration"],
+    });
+    expect(shellDecorationChangesAfter({ ...current, epoch: "another-server" })).toBeNull();
+
+    for (let index = 0; index < 513; index++) announceBoxChange(`decoration-${index}`);
+    expect(shellDecorationChangesAfter(current)).toBeNull();
+    expect(shellDecorationChangesAfter(shellDecorationCursor())?.threadIds).toEqual([]);
   });
 });
 

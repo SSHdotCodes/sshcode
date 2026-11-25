@@ -12,20 +12,31 @@ import * as Schema from "effect/Schema";
 
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 
+const ProviderStatusCache = Schema.Struct({
+  ...ServerProviderSchema.fields,
+  configuredCredentialFingerprint: Schema.optional(Schema.String),
+});
 const decodeProviderStatusCache = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(ServerProviderSchema),
+  Schema.fromJsonString(ProviderStatusCache),
 );
+
+const MAX_PROVIDER_STATUS_CACHE_BYTES = 512 * 1024;
 
 const mergeProviderModels = (
   fallbackModels: ReadonlyArray<ServerProvider["models"][number]>,
   cachedModels: ReadonlyArray<ServerProvider["models"][number]>,
 ): ReadonlyArray<ServerProvider["models"][number]> => {
+  const cachedBySlug = new Map(
+    cachedModels.filter((model) => !model.isCustom).map((model) => [model.slug, model]),
+  );
   const fallbackSlugs = new Set(fallbackModels.map((model) => model.slug));
   // The fallback snapshot is built from current settings and already carries
   // every custom model, so cached custom rows that are not in it were removed
   // while the cache was stale and must not come back.
   return [
-    ...fallbackModels,
+    ...fallbackModels.map((model) =>
+      model.isCustom ? model : (cachedBySlug.get(model.slug) ?? model),
+    ),
     ...cachedModels.filter((model) => !model.isCustom && !fallbackSlugs.has(model.slug)),
   ];
 };
@@ -64,7 +75,10 @@ export const isCachedProviderCorrelated = (input: {
   readonly fallbackProvider: ServerProvider;
 }): boolean =>
   input.cachedProvider.instanceId === input.fallbackProvider.instanceId &&
-  input.cachedProvider.driver === input.fallbackProvider.driver;
+  input.cachedProvider.driver === input.fallbackProvider.driver &&
+  (input.cachedProvider.continuation === undefined ||
+    input.fallbackProvider.continuation === undefined ||
+    input.cachedProvider.continuation.groupKey === input.fallbackProvider.continuation.groupKey);
 
 export const hydrateCachedProvider = (input: {
   readonly cachedProvider: ServerProvider;
@@ -87,21 +101,51 @@ export const hydrateCachedProvider = (input: {
   }
 
   const { message: _fallbackMessage, ...fallbackWithoutMessage } = input.fallbackProvider;
+  // A pending driver's bundled rows are placeholders. A complete cache already knows the
+  // detected inventory, including which models the installed version is too old to run.
+  const currentCustom = input.fallbackProvider.models.filter((model) => model.isCustom);
+  const customSlugs = new Set(currentCustom.map((model) => model.slug));
+  const models =
+    input.fallbackProvider.refreshing &&
+    input.cachedProvider.models.some((model) => !model.isCustom)
+      ? [
+          ...input.cachedProvider.models.filter(
+            (model) => !model.isCustom && !customSlugs.has(model.slug),
+          ),
+          ...currentCustom,
+        ]
+      : mergeProviderModels(input.fallbackProvider.models, input.cachedProvider.models);
+  const { action: _authAction, ...auth } = input.cachedProvider.auth;
   const hydratedProvider: ServerProvider = {
     ...fallbackWithoutMessage,
     ...(rememberedAccountFailure(input.cachedProvider)
       ? { recentFailure: input.cachedProvider.recentFailure }
       : {}),
-    models: mergeProviderModels(input.fallbackProvider.models, input.cachedProvider.models),
+    models,
     installed: input.cachedProvider.installed,
     version: input.cachedProvider.version,
     status: input.cachedProvider.status,
-    auth: input.cachedProvider.auth,
+    auth,
     checkedAt: input.cachedProvider.checkedAt,
     slashCommands: input.cachedProvider.slashCommands,
     skills: input.cachedProvider.skills,
+    ...(input.cachedProvider.nativeSessions === undefined
+      ? {}
+      : { nativeSessions: input.cachedProvider.nativeSessions }),
+    ...(input.cachedProvider.configurableProviders === undefined
+      ? {}
+      : { configurableProviders: input.cachedProvider.configurableProviders }),
+    ...(input.cachedProvider.updateRequiredModels === undefined
+      ? {}
+      : { updateRequiredModels: input.cachedProvider.updateRequiredModels }),
+    ...(input.cachedProvider.nativeModelDefaults === undefined
+      ? {}
+      : { nativeModelDefaults: input.cachedProvider.nativeModelDefaults }),
   };
 
+  if (hydratedProvider.refreshing && hydratedProvider.auth.status !== "unauthenticated") {
+    return { ...hydratedProvider, message: "Refreshing provider status…" };
+  }
   return input.cachedProvider.message
     ? { ...hydratedProvider, message: input.cachedProvider.message }
     : hydratedProvider;
@@ -134,8 +178,8 @@ export const resolveProviderStatusCachePath = Effect.fn("resolveProviderStatusCa
 export const readProviderStatusCache = (filePath: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const exists = yield* fs.exists(filePath).pipe(Effect.orElseSucceed(() => false));
-    if (!exists) {
+    const info = yield* fs.stat(filePath).pipe(Effect.orElseSucceed(() => undefined));
+    if (!info || Number(info.size) > MAX_PROVIDER_STATUS_CACHE_BYTES) {
       return undefined;
     }
 
@@ -160,14 +204,24 @@ export const readProviderStatusCache = (filePath: string) =>
 export const writeProviderStatusCache = (input: {
   readonly filePath: string;
   readonly provider: ServerProvider;
+  readonly configuredCredentialFingerprint?: string | undefined;
 }) => {
-  const { updateState: _updateState, usageLimits, ...machineProvider } = input.provider;
+  const {
+    updateState: _updateState,
+    refreshing: _refreshing,
+    auth: { action: _authAction, ...auth },
+    usageLimits,
+    ...machineProvider
+  } = input.provider;
+  const { refreshing: _usageRefreshing, ...savedLimits } = usageLimits ?? {};
   const cacheableProvider = {
     ...machineProvider,
+    configuredCredentialFingerprint: input.configuredCredentialFingerprint,
+    auth,
     ...(usageLimits
       ? {
           usageLimits: {
-            ...usageLimits,
+            ...savedLimits,
             windows: usageLimits.windows.map(
               ({ recentPercentPerHour: _pace, ...window }) => window,
             ),
@@ -175,8 +229,10 @@ export const writeProviderStatusCache = (input: {
         }
       : {}),
   };
+  const contents = `${JSON.stringify(cacheableProvider)}\n`;
+  if (Buffer.byteLength(contents) > MAX_PROVIDER_STATUS_CACHE_BYTES) return Effect.void;
   return writeFileStringAtomically({
     filePath: input.filePath,
-    contents: `${JSON.stringify(cacheableProvider, null, 2)}\n`,
+    contents,
   });
 };

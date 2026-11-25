@@ -13,7 +13,11 @@ export function threadContextAttachment(
     "thread",
     `${environmentId}:${transcript.threadId}:${updatedAt}`,
   );
-  const title = transcript.title.replace(/[^\p{L}\p{N}._ -]/gu, "_").slice(0, 64) || "Thread";
+  const sanitizedTitle = transcript.title.replace(/[^\p{L}\p{N}._ -]/gu, "_");
+  const before = sanitizedTitle.charCodeAt(63);
+  const after = sanitizedTitle.charCodeAt(64);
+  const splitPair = before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
+  const title = sanitizedTitle.slice(0, splitPair ? 63 : 64) || "Thread";
   // A transcript from another machine is untrusted input; naming that machine in
   // the visible filename keeps the origin in front of the user, not just the agent.
   const label = sourceLabel

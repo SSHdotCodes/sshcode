@@ -91,7 +91,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   const initialSettings = yield* input.getSettings;
   const initialSnapshot = yield* input.initialSnapshot(initialSettings);
   const snapshotStateRef = yield* Ref.make<ProviderSnapshotState>({
-    snapshot: initialSnapshot,
+    snapshot: initialSnapshot.enabled ? { ...initialSnapshot, refreshing: true } : initialSnapshot,
     enrichmentGeneration: 0,
   });
   const settingsRef = yield* Ref.make(initialSettings);

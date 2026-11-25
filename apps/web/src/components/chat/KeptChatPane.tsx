@@ -1,6 +1,20 @@
 import { RegistryContext } from "@effect/atom-react";
 import type { AtomRegistry } from "effect/reactivity";
-import { Activity, use, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import {
+  Activity,
+  createContext,
+  use,
+  useEffect,
+  useLayoutEffect,
+  useState,
+  type ReactNode,
+} from "react";
+
+const KeptChatPaneHiddenContext = createContext(false);
+
+export function useKeptChatPaneHidden() {
+  return use(KeptChatPaneHiddenContext);
+}
 
 /**
  * A chat view that stays mounted after it leaves the screen. <Activity> hides it:
@@ -23,7 +37,9 @@ export function KeptChatPane(props: { hidden: boolean; children: ReactNode }) {
   useEffect(() => pane.releaseHeld, [pane]);
   return (
     <RegistryContext value={pane.registry}>
-      <Activity mode={props.hidden ? "hidden" : "visible"}>{props.children}</Activity>
+      <KeptChatPaneHiddenContext value={props.hidden}>
+        <Activity mode={props.hidden ? "hidden" : "visible"}>{props.children}</Activity>
+      </KeptChatPaneHiddenContext>
     </RegistryContext>
   );
 }

@@ -12,6 +12,7 @@ import { serverEnvironment } from "../state/server";
 import { harnessMascotIdentity } from "@t3tools/shared/harnessThemes";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { WorkingStatusIndicator } from "./WorkingStatusIndicator";
+import { StatusCrossfade } from "./StatusCrossfade";
 import { type ScopedProjectRef } from "@t3tools/contracts";
 import {
   ThreadHoverCard,
@@ -58,7 +59,7 @@ import {
   type DragStartEvent,
   type Modifier,
 } from "@dnd-kit/core";
-import { SortableContext, useSortable } from "@dnd-kit/sortable";
+import { rectSortingStrategy, SortableContext, useSortable } from "@dnd-kit/sortable";
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -72,8 +73,10 @@ import {
 } from "@t3tools/client-runtime/state/thread-inbox";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import {
+  createOrderHoldController,
   resolveSettledThreadTimestamp,
   sortSettledThreads,
+  type OrderHoldController,
 } from "@t3tools/client-runtime/state/thread-sort";
 import {
   threadSearchMatchKey,
@@ -125,6 +128,7 @@ import {
   EyeIcon,
   GitBranchIcon,
   HashIcon,
+  ChevronDownIcon,
   ChevronRightIcon,
   EllipsisIcon,
   MessageCircleQuestionIcon,
@@ -209,7 +213,7 @@ import {
   parseChatTabMenuId,
   type ChatTabMenuId,
 } from "./sidebar/chatTabMenus";
-import { SessionBox, SessionBoxPainting } from "./sessionBoxes/SessionBox";
+import { SessionBox, SessionBoxPainting, type SessionBoxPaint } from "./sessionBoxes/SessionBox";
 import {
   compareSessionBoxes,
   presentSessionBoxCached,
@@ -236,7 +240,7 @@ import {
 import { DiscordServerSettings } from "./discord/DiscordServerSettings";
 import { useEnvironments } from "../state/environments";
 import { useSidebarLayout } from "./sessionBoxes/sidebarLayout";
-import { useNowMinute, useNowMinuteMs } from "../hooks/useNowMinute";
+import { useNowMinute, useNowMinuteMs, useNowMinuteValue } from "../hooks/useNowMinute";
 import {
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
@@ -362,7 +366,11 @@ import {
 } from "./ThreadStatusIndicators";
 import { resolveSnoozePresets, snoozeWakeLabel, type SnoozePreset } from "./Sidebar.snooze";
 import { ProjectFavicon, type ProjectFaviconProject } from "./ProjectFavicon";
-import { ThreadSearchMatchExcerpt } from "./ThreadSearchMatch";
+import {
+  HighlightedSearchText,
+  ThreadSearchMatchExcerpt,
+  ThreadSearchMoreButton,
+} from "./ThreadSearchMatch";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
@@ -405,6 +413,7 @@ const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, ProviderInstanceEntry> = new M
 // Collapsed shelves share one empty list so a route change alone does not
 // give the sidebar list a new identity.
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
+const EMPTY_SORTABLE_IDS: string[] = [];
 
 const SESSION_LIST_INITIAL_COUNT = 30;
 const SESSION_LIST_PAGE_COUNT = 30;
@@ -455,14 +464,35 @@ function threadTimeLabel(thread: SidebarThreadSummary, nowMs: number): string {
     : compactSidebarTimeLabel(formatRelativeTimeLabel(timestamp, nowMs));
 }
 
-// Settled rows read "how long ago did this wrap up", matching their sort
-// key: both go through resolveSettledThreadTimestamp so label and order can't
-// disagree.
-function settledTimeLabel(thread: SidebarThreadSummary, nowMs: number): string {
-  const timestamp = resolveSettledThreadTimestamp(thread);
-  return timestamp === null
-    ? ""
-    : compactSidebarTimeLabel(formatRelativeTimeLabel(timestamp, nowMs));
+// A minute tick only needs to update the timestamp on an idle row.
+function SidebarThreadTime({ timestamp }: { timestamp: string | null }) {
+  return useNowMinuteValue((nowMs) =>
+    timestamp === null ? "" : compactSidebarTimeLabel(formatRelativeTimeLabel(timestamp, nowMs)),
+  );
+}
+
+const sidebarThreadPaintings = new WeakMap<EnvironmentThreadShell, SessionBoxPaint>();
+
+// List rows use only the painting. A box's changing age label or sort score can
+// replace its presentation object while the painting itself is still the same.
+function sidebarThreadPainting(
+  thread: EnvironmentThreadShell,
+  presentation: SessionBoxPresentation | undefined,
+): SessionBoxPaint | undefined {
+  if (presentation === undefined) return undefined;
+  const { hue, face, badge, tone } = presentation;
+  const previous = sidebarThreadPaintings.get(thread);
+  if (
+    previous?.hue === hue &&
+    previous.face === face &&
+    previous.badge === badge &&
+    previous.tone === tone
+  ) {
+    return previous;
+  }
+  const painting = { hue, face, badge, tone };
+  sidebarThreadPaintings.set(thread, painting);
+  return painting;
 }
 
 // Floats at the row's right edge, vertically centered, while the jump
@@ -1197,7 +1227,11 @@ function SidebarSectionHeader(props: {
         }
         data-testid={`sidebar-${shelf}-shelf-toggle`}
         accessory={
-          count !== null ? <span className="font-normal tabular-nums">{count}</span> : null
+          count !== null ? (
+            <span className="font-normal text-sidebar-muted-foreground/80 tabular-nums">
+              {count}
+            </span>
+          ) : null
         }
       >
         {props.label}
@@ -1303,8 +1337,10 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
         data-testid="sidebar-draft-row"
         data-sidebar-thread-row
         className={cn(
-          "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left text-sidebar-foreground outline-none select-none transition-[background-color,color,scale] duration-100 ease-out motion-reduce:transition-none active:scale-[0.99] motion-reduce:active:scale-100 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-          props.isActive ? "bg-sidebar-row-active" : draftSurfaceClassName,
+          "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-lg text-left text-sidebar-foreground outline-none select-none transition-[background-color,color,scale] duration-100 ease-out motion-reduce:transition-none active:scale-[0.99] motion-reduce:active:scale-100 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          props.isActive
+            ? "bg-sidebar-row-active ring-1 ring-inset ring-sidebar-border/45"
+            : draftSurfaceClassName,
         )}
         onClick={handleActivate}
         onContextMenu={handleContextMenu}
@@ -1501,7 +1537,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // The session box to draw in the box layout (ranked and labeled by the list).
   box?: SessionBoxPresentation | undefined;
   // The chat's painting for the start of a list row.
-  paint?: SessionBoxPresentation | undefined;
+  paint?: SessionBoxPaint | undefined;
   // Settled rows un-settle, snoozed rows wake, and cards settle.
   variantAction: SidebarSweepAction;
   // False on environments whose server predates thread.settle/unsettle:
@@ -1687,10 +1723,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     props.box === undefined
       ? undefined
       : sessionBoxConnectionPresentation(props.box, connection?.connection.phase);
-  const paint =
-    props.paint === undefined
-      ? undefined
-      : sessionBoxConnectionPresentation(props.paint, connection?.connection.phase);
+  const paint = props.paint;
   const isInFlight =
     rawStatus === "working" ||
     rawStatus === "waiting" ||
@@ -1711,10 +1744,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     thread.settledOverride !== "settled";
   // Color asks for attention. A failure the user has already opened keeps its
   // label but goes quiet, like it does in the Needs you count.
-  const nowMs = useNowMinuteMs();
-  const failureSeen =
-    (status === "failed" || status === "limited") &&
-    !failureNeedsYou({ ...thread, lastVisitedAt }, nowMs);
+  const failureSeen = useNowMinuteValue(
+    (nowMs) =>
+      (status === "failed" || status === "limited") &&
+      !failureNeedsYou({ ...thread, lastVisitedAt }, nowMs),
+  );
   // Status hues follow the system-wide convention set by sidebar v1 and the
   // mobile Live Activity/widgets (amber approval, indigo input, sky working)
   // so a thread reads the same color everywhere it surfaces.
@@ -2056,9 +2090,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // a useful hierarchy nor a reliable hover cue. Status now lives in the row
   // content; surface is reserved for interaction (hover, multi-select, route).
   const rowSurfaceClassName = cn(
-    "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none transition-[background-color,color,scale] duration-100 ease-out motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+    "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-lg text-left outline-none select-none transition-[background-color,color,scale] duration-100 ease-out motion-reduce:transition-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     props.isActive
-      ? "bg-sidebar-row-active text-sidebar-foreground"
+      ? "bg-sidebar-row-active text-sidebar-foreground ring-1 ring-inset ring-sidebar-border/45"
       : isSelected || props.sweepAction !== null
         ? "bg-sidebar-row-selected text-sidebar-foreground"
         : hasUnsentDraft
@@ -2162,7 +2196,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       <span
         aria-hidden
         className={cn(
-          "min-w-0 flex-1 text-sm text-foreground transition-opacity motion-reduce:transition-none",
+          "min-w-0 flex-1 text-sm transition-[color,opacity] duration-100 ease-out motion-reduce:transition-none",
+          variant === "slim" && !props.isActive
+            ? "text-foreground/78 group-hover/sidebar-row:text-foreground group-focus-visible/sidebar-row:text-foreground"
+            : "text-foreground",
           wrapsTitle ? "line-clamp-2 leading-4.75 break-words" : "truncate",
           // The hover actions lie over the end of the title; it fades out under them.
           hasRowActions &&
@@ -2558,9 +2595,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     </Tooltip>
                   ) : (
                     <span className="text-xs">
-                      {variantAction === "unsettle"
-                        ? settledTimeLabel(thread, nowMs)
-                        : threadTimeLabel(thread, nowMs)}
+                      <SidebarThreadTime
+                        timestamp={
+                          variantAction === "unsettle"
+                            ? resolveSettledThreadTimestamp(thread)
+                            : sidebarSessionActivityAt(thread)
+                        }
+                      />
                     </span>
                   )}
                 </span>
@@ -2742,81 +2783,121 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                           isWokeStatus
                             ? "pointer-events-auto"
                             : "pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-any-hover/sidebar-row:opacity-0",
-                          "flex items-center self-center justify-self-end tabular-nums text-secondary-label transition-opacity",
+                          "flex items-center self-center justify-self-end tabular-nums text-secondary-label transition-opacity duration-120 ease-out motion-reduce:transition-none",
                           snoozeMenuOpen && !isWokeStatus && "pointer-events-none opacity-0",
                           snoozeMenuOpen &&
                             isWokeStatus &&
                             "pointer-events-none absolute right-0 opacity-0",
                         )}
                       >
-                        {topStatus ? (
-                          isWokeStatus ? (
-                            <Tooltip>
-                              <TooltipTrigger
-                                render={
-                                  <button
-                                    type="button"
-                                    aria-label="Dismiss Woke notification"
-                                    onClick={handleAcknowledgeWokeClick}
-                                    className={cn(
-                                      "inline-flex cursor-pointer items-center gap-1 rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                                      topStatus.className,
-                                    )}
-                                  >
-                                    <AlarmClockIcon aria-hidden className="size-4 shrink-0" />
-                                    <span role="status">{topStatus.label}</span>
-                                  </button>
-                                }
-                              />
-                              <TooltipPopup side="top">Dismiss Woke notification</TooltipPopup>
-                            </Tooltip>
-                          ) : (
-                            <span
-                              className={cn(
-                                "inline-flex items-center gap-1 font-medium",
-                                topStatus.className,
-                              )}
-                            >
-                              {/* A painted row's badge already shows what it is doing. */}
-                              {props.paint ? null : topStatus.icon === "working" ? (
-                                <WorkingStatusIndicator className="size-4 shrink-0" />
-                              ) : topStatus.icon === "waiting" ? (
-                                <CircleDotDashedIcon aria-hidden className="size-4 shrink-0" />
-                              ) : topStatus.icon === "input" ? (
-                                <MessageCircleQuestionIcon
-                                  aria-hidden
-                                  className="size-4 shrink-0"
+                        <StatusCrossfade
+                          scopeKey={thread.id}
+                          statusKey={
+                            topStatus
+                              ? `${topStatus.icon}:${topStatus.label}:${topStatus.className}`
+                              : "idle"
+                          }
+                          align="end"
+                          snapshot={
+                            topStatus ? (
+                              <span
+                                className={cn(
+                                  "inline-flex items-center gap-1 font-medium",
+                                  topStatus.className,
+                                )}
+                              >
+                                {topStatus.icon === "woke" ? (
+                                  <AlarmClockIcon aria-hidden className="size-4 shrink-0" />
+                                ) : props.paint ? null : topStatus.icon === "working" ? (
+                                  <WorkingStatusIndicator className="size-4 shrink-0" />
+                                ) : topStatus.icon === "waiting" ? (
+                                  <CircleDotDashedIcon aria-hidden className="size-4 shrink-0" />
+                                ) : topStatus.icon === "input" ? (
+                                  <MessageCircleQuestionIcon
+                                    aria-hidden
+                                    className="size-4 shrink-0"
+                                  />
+                                ) : topStatus.icon === "approval" ? (
+                                  <ShieldQuestionIcon aria-hidden className="size-4 shrink-0" />
+                                ) : topStatus.icon === "failed" ? (
+                                  <CircleAlertIcon aria-hidden className="size-4 shrink-0" />
+                                ) : null}
+                                <span>{topStatus.label}</span>
+                              </span>
+                            ) : (
+                              <SidebarThreadTime timestamp={sidebarSessionActivityAt(thread)} />
+                            )
+                          }
+                        >
+                          {topStatus ? (
+                            isWokeStatus ? (
+                              <Tooltip>
+                                <TooltipTrigger
+                                  render={
+                                    <button
+                                      type="button"
+                                      aria-label="Dismiss Woke notification"
+                                      onClick={handleAcknowledgeWokeClick}
+                                      className={cn(
+                                        "inline-flex cursor-pointer items-center gap-1 rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                                        topStatus.className,
+                                      )}
+                                    >
+                                      <AlarmClockIcon aria-hidden className="size-4 shrink-0" />
+                                      <span role="status">{topStatus.label}</span>
+                                    </button>
+                                  }
                                 />
-                              ) : topStatus.icon === "approval" ? (
-                                <ShieldQuestionIcon aria-hidden className="size-4 shrink-0" />
-                              ) : topStatus.icon === "failed" ? (
-                                <CircleAlertIcon aria-hidden className="size-4 shrink-0" />
-                              ) : null}
-                              {/* The label alone is the live region: a role="status"
-                            wrapper around the ticking duration would make
-                            screen readers announce every second. */}
-                              <span role="status">{topStatus.label}</span>
-                              {status === "working" ? (
-                                <span aria-hidden>
-                                  {/* Quiet counts from the last sign of life, not the turn's start. */}
-                                  <WorkingDuration
-                                    startedAt={
-                                      isQuiet ? lastActivityAt : resolveWorkingStartedAt(thread)
-                                    }
+                                <TooltipPopup side="top">Dismiss Woke notification</TooltipPopup>
+                              </Tooltip>
+                            ) : (
+                              <span
+                                className={cn(
+                                  "inline-flex items-center gap-1 font-medium",
+                                  topStatus.className,
+                                )}
+                              >
+                                {/* A painted row's badge already shows what it is doing. */}
+                                {props.paint ? null : topStatus.icon === "working" ? (
+                                  <WorkingStatusIndicator className="size-4 shrink-0" />
+                                ) : topStatus.icon === "waiting" ? (
+                                  <CircleDotDashedIcon aria-hidden className="size-4 shrink-0" />
+                                ) : topStatus.icon === "input" ? (
+                                  <MessageCircleQuestionIcon
+                                    aria-hidden
+                                    className="size-4 shrink-0"
                                   />
-                                </span>
-                              ) : status === "waiting" ? (
-                                <span aria-hidden>
-                                  <WorkingDuration
-                                    startedAt={resolveThreadWaitingStartedAt(thread)}
-                                  />
-                                </span>
-                              ) : null}
-                            </span>
-                          )
-                        ) : (
-                          threadTimeLabel(thread, nowMs)
-                        )}
+                                ) : topStatus.icon === "approval" ? (
+                                  <ShieldQuestionIcon aria-hidden className="size-4 shrink-0" />
+                                ) : topStatus.icon === "failed" ? (
+                                  <CircleAlertIcon aria-hidden className="size-4 shrink-0" />
+                                ) : null}
+                                {/* The label alone is the live region: a role="status"
+                              wrapper around the ticking duration would make
+                              screen readers announce every second. */}
+                                <span role="status">{topStatus.label}</span>
+                                {status === "working" ? (
+                                  <span aria-hidden>
+                                    {/* Quiet counts from the last sign of life, not the turn's start. */}
+                                    <WorkingDuration
+                                      startedAt={
+                                        isQuiet ? lastActivityAt : resolveWorkingStartedAt(thread)
+                                      }
+                                    />
+                                  </span>
+                                ) : status === "waiting" ? (
+                                  <span aria-hidden>
+                                    <WorkingDuration
+                                      startedAt={resolveThreadWaitingStartedAt(thread)}
+                                    />
+                                  </span>
+                                ) : null}
+                              </span>
+                            )
+                          ) : (
+                            <SidebarThreadTime timestamp={sidebarSessionActivityAt(thread)} />
+                          )}
+                        </StatusCrossfade>
                       </span>
                       {hasRowActions ? (
                         <span
@@ -2830,7 +2911,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             // Laid over the row's right edge, where the title fades out
                             // beneath them. A Woke label stays visible, so there they
                             // take their own width beside it as before.
-                            "pointer-events-none absolute inset-y-0 right-0 z-10 flex items-stretch opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
+                            "pointer-events-none absolute inset-y-0 right-0 z-10 flex items-stretch opacity-0 transition-opacity duration-120 ease-out motion-reduce:transition-none has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
                             isWokeStatus &&
                               "has-[:focus-visible]:static group-any-hover/sidebar-row:static",
                             snoozeMenuOpen && "pointer-events-auto opacity-100",
@@ -3131,7 +3212,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
               }}
               onClick={props.onSelect}
               className={cn(
-                "group/sidebar-row group/v2-row flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1 text-left text-sm outline-none",
+                "group/sidebar-row group/v2-row flex min-h-9 w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1 text-left text-sm outline-none",
                 props.isHighlighted || props.isRouteActive
                   ? "bg-sidebar-row-active text-sidebar-foreground"
                   : "text-sidebar-foreground hover:bg-sidebar-row-hover",
@@ -3149,7 +3230,15 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
                   thread.titleRegeneration != null && "opacity-55",
                 )}
               >
-                {privateLabel("Chat", thread.id, thread.title)}
+                {privacy || !props.searchQuery ? (
+                  privateLabel("Chat", thread.id, thread.title)
+                ) : (
+                  <HighlightedSearchText
+                    text={thread.title}
+                    query={props.searchQuery}
+                    correction={props.searchMatch?.titleCorrection}
+                  />
+                )}
               </span>
               <span id={`${props.resultId}-pr`} className="contents">
                 <ThreadSearchPullRequestNumber
@@ -3181,8 +3270,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
             {props.searchMatch && !privacy ? (
               <ThreadSearchMatchExcerpt
                 match={{
-                  source: props.searchMatch.source,
-                  snippet: props.searchMatch.snippet,
+                  ...props.searchMatch,
                   query: props.searchQuery,
                 }}
               />
@@ -3401,13 +3489,42 @@ export default memo(function Sidebar() {
   // captured when the settle started: if the user navigated elsewhere while
   // the command was in flight, completing it must not yank them away.
   const routeThreadKeyRef = useCommittedRef(routeThreadKey);
-  const openChatHeldRef = useRef<{ key: string | null; held: boolean }>({
-    key: null,
-    held: false,
-  });
-  // While the mouse is over the list, rows keep the order last shown.
-  const [sessionListHovered, setSessionListHovered] = useState(false);
-  const shownActiveOrderRef = useRef<readonly string[]>([]);
+  // Opening a chat marks it read. Keep it in the Needs-you tier until you
+  // leave it so the row you clicked doesn't drop away under the pointer.
+  const [heldOpenChat, setHeldOpenChat] = useState<{
+    readonly key: string | null;
+    readonly held: boolean;
+  }>({ key: null, held: false });
+  // While the mouse is over the list, rows keep the order last shown and any
+  // reorder lands once it leaves. Window blur, leaving the document and hiding
+  // the page also release, so a missed leave can never freeze the list.
+  const [heldActiveOrder, setHeldActiveOrder] = useState<readonly string[] | null>(null);
+  const shownActiveKeysRef = useRef<readonly string[]>([]);
+  const orderHoldRef = useRef<OrderHoldController | null>(null);
+  useEffect(() => {
+    const controller = createOrderHoldController({
+      scrollSettleMs: 450,
+      onHold: () => setHeldActiveOrder((current) => current ?? shownActiveKeysRef.current),
+      onRelease: () => setHeldActiveOrder(null),
+      setTimeoutFn: window.setTimeout.bind(window),
+      clearTimeoutFn: window.clearTimeout.bind(window),
+    });
+    orderHoldRef.current = controller;
+    const handleVisibilityChange = () => {
+      if (document.hidden) controller.forceRelease();
+    };
+    window.addEventListener("blur", controller.forceRelease);
+    document.addEventListener("mouseleave", controller.forceRelease);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("blur", controller.forceRelease);
+      document.removeEventListener("mouseleave", controller.forceRelease);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      controller.dispose();
+      orderHoldRef.current = null;
+    };
+  }, []);
+  const threadLastVisitedAtById = useUiStateStore((state) => state.threadLastVisitedAtById);
 
   const environmentLabelById = useMemo(
     () =>
@@ -3874,6 +3991,7 @@ export default memo(function Sidebar() {
     snoozedThreads,
     settledThreads,
     snoozeNow,
+    openChatHeldForRoute,
   } = useMemo(() => {
     // Snooze classification uses a REAL clock, not the quantized minute:
     // wake times are second-precise and a woken thread must not linger on
@@ -3959,22 +4077,22 @@ export default memo(function Sidebar() {
     // sort, or mixed-version fleets would render different pinned orders on
     // web and mobile from the same data.
     const sortedPinned = sortPinnedThreadsForSidebar(pinned);
-    // Opening a chat marks it read. It keeps its place until you leave it, so
-    // the row you clicked doesn't drop away under the pointer.
     const activeKey = (thread: EnvironmentThreadShell) =>
       scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    const localVisitFor = (thread: EnvironmentThreadShell) =>
+      threadLastVisitedAtById[activeKey(thread)];
     const nowMs = Date.parse(`${nowMinute}:00.000Z`);
-    if (openChatHeldRef.current.key !== routeThreadKey) {
-      const open = active.find((thread) => activeKey(thread) === routeThreadKey);
-      openChatHeldRef.current = {
-        key: routeThreadKey,
-        held: open !== undefined && sidebarSessionNeedsYou(open, nowMs),
-      };
-    }
-    const held = openChatHeldRef.current;
+    const openChatHeld =
+      heldOpenChat.key === routeThreadKey
+        ? heldOpenChat.held
+        : (() => {
+            const open = active.find((thread) => activeKey(thread) === routeThreadKey);
+            return open !== undefined && sidebarSessionNeedsYou(open, nowMs, localVisitFor(open));
+          })();
     const sortedActive = sortSidebarSessions(active, {
-      holdsNeedsYou: (thread) => held.held && activeKey(thread) === held.key,
+      holdsNeedsYou: (thread) => openChatHeld && activeKey(thread) === routeThreadKey,
       nowMs,
+      localLastVisitedAt: localVisitFor,
     });
     const shownActive =
       optimisticDrop?.section === "active" && optimisticDrop.order !== null
@@ -3983,10 +4101,9 @@ export default memo(function Sidebar() {
             preferredIds: optimisticDrop.order,
             getId: activeKey,
           })
-        : sessionListHovered
-          ? holdSidebarOrder(sortedActive, shownActiveOrderRef.current, activeKey)
+        : heldActiveOrder !== null
+          ? holdSidebarOrder(sortedActive, heldActiveOrder, activeKey)
           : sortedActive;
-    shownActiveOrderRef.current = shownActive.map(activeKey);
     return {
       pinnedThreads:
         optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
@@ -4009,28 +4126,39 @@ export default memo(function Sidebar() {
       ),
       settledThreads: sortSettledThreads(settled),
       snoozeNow: preciseNow,
+      openChatHeldForRoute: openChatHeld,
     };
   }, [
     chatTabViews,
     selectedMachineId,
     machineForThread,
     discordMode,
+    heldActiveOrder,
+    heldOpenChat,
     nowMinute,
     optimisticDrop,
     selectedChatTab,
     serverConfigs,
     routeThreadKey,
-    sessionListHovered,
     snoozeWakeTick,
+    threadLastVisitedAtById,
     threads,
     workingShelfEnabled,
   ]);
+  if (heldOpenChat.key !== routeThreadKey) {
+    setHeldOpenChat({ key: routeThreadKey, held: openChatHeldForRoute });
+  }
+  useEffect(() => {
+    shownActiveKeysRef.current = activeThreads.map((thread) =>
+      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+    );
+  }, [activeThreads]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [quickFilter, setQuickFilter] = useState<SidebarQuickFilter>("all");
   const [searchVisibleCount, setSearchVisibleCount] = useState(SESSION_LIST_INITIAL_COUNT);
-  const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
+  const [activeSearchResultKey, setActiveSearchResultKey] = useState<string | null>(null);
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
   const isShowingThreadResults = isSearchingThreads || quickFilter !== "all";
   const searchableThreads = useMemo(() => {
@@ -4051,7 +4179,6 @@ export default memo(function Sidebar() {
       new Map(threadSearch.matches.map((match) => [threadSearchMatchKey(match), match] as const)),
     [threadSearch.matches],
   );
-  const threadLastVisitedAtById = useUiStateStore((state) => state.threadLastVisitedAtById);
   const quickFilterResult = useMemo(
     () =>
       filterSidebarThreads(searchableThreads, quickFilter, threadLastVisitedAtById, discordMode),
@@ -4100,9 +4227,23 @@ export default memo(function Sidebar() {
     selectedChatTab,
     chatTabViews,
   ]);
+  const threadSearchResultKeys = useMemo(
+    () =>
+      threadSearchResults.map((thread) =>
+        scopedThreadKey(
+          scopeThreadRef(thread.environmentId, "id" in thread ? thread.id : thread.threadId),
+        ),
+      ),
+    [threadSearchResults],
+  );
+  const activeSearchResultIndex = Math.max(
+    0,
+    threadSearchResultKeys.indexOf(activeSearchResultKey ?? ""),
+  );
+  const selectedSearchResultKey = threadSearchResultKeys[activeSearchResultIndex];
   const visibleThreadSearchResults = useMemo(
-    () => threadSearchResults.slice(0, searchVisibleCount),
-    [threadSearchResults, searchVisibleCount],
+    () => threadSearchResults.slice(0, Math.max(searchVisibleCount, activeSearchResultIndex + 1)),
+    [threadSearchResults, searchVisibleCount, activeSearchResultIndex],
   );
   useEffect(() => {
     if (!isShowingThreadResults || !sidebarVisible) return;
@@ -4119,25 +4260,12 @@ export default memo(function Sidebar() {
     sidebarVisible,
     visibleThreadSearchResults,
   ]);
-  const threadSearchResultOrderKey = threadSearchResults
-    .map((thread) =>
-      scopedThreadKey(
-        scopeThreadRef(thread.environmentId, "id" in thread ? thread.id : thread.threadId),
-      ),
-    )
-    .join("\0");
-
   useEffect(() => {
-    setActiveSearchResultIndex(0);
-    setSearchVisibleCount(SESSION_LIST_INITIAL_COUNT);
-  }, [threadSearchResultOrderKey]);
-
-  useEffect(() => {
-    if (!isShowingThreadResults) return;
+    if (!isShowingThreadResults || selectedSearchResultKey === undefined) return;
     document
       .getElementById(`sidebar-thread-search-result-${activeSearchResultIndex}`)
       ?.scrollIntoView({ block: "nearest" });
-  }, [activeSearchResultIndex, isShowingThreadResults, threadSearchResultOrderKey]);
+  }, [activeSearchResultIndex, isShowingThreadResults, selectedSearchResultKey]);
 
   // Arm a timeout for the earliest upcoming wake so the shelf empties the
   // moment a snooze expires instead of on the next minute tick. Sorted
@@ -4639,7 +4767,8 @@ export default memo(function Sidebar() {
   const clearThreadSearch = useCallback(() => {
     setThreadSearchQuery("");
     setQuickFilter("all");
-    setActiveSearchResultIndex(0);
+    setActiveSearchResultKey(null);
+    setSearchVisibleCount(SESSION_LIST_INITIAL_COUNT);
   }, []);
   const selectThreadSearchResult = useCallback(
     (thread: EnvironmentThreadShell | EnvironmentThreadSearchMatch) => {
@@ -4647,7 +4776,7 @@ export default memo(function Sidebar() {
       const match = threadSearchMatchByKey.get(
         threadSearchMatchKey({ environmentId: thread.environmentId, threadId: id }),
       );
-      if (match?.messageId) appAtomRegistry.set(pendingThreadSearchJumpAtom, match);
+      appAtomRegistry.set(pendingThreadSearchJumpAtom, match?.messageId ? match : null);
       // The search stays, so the other results are a click away; × or Esc clears it.
       navigateToThread(scopeThreadRef(thread.environmentId, id));
     },
@@ -4688,7 +4817,7 @@ export default memo(function Sidebar() {
       if (navigation !== null) {
         event.preventDefault();
         setSearchVisibleCount(navigation.visibleCount);
-        setActiveSearchResultIndex(navigation.index);
+        setActiveSearchResultKey(threadSearchResultKeys[navigation.index] ?? null);
         return;
       }
       if (event.key === "Enter") {
@@ -4703,6 +4832,7 @@ export default memo(function Sidebar() {
       isShowingThreadResults,
       selectThreadSearchResult,
       threadSearchResults,
+      threadSearchResultKeys,
       visibleThreadSearchResults.length,
     ],
   );
@@ -5147,11 +5277,19 @@ export default memo(function Sidebar() {
     () => ({
       activeLeadingKeys: new Set(
         (isDraggingThread ? threads : [])
-          .filter((thread) => sidebarSessionNeedsYou(thread, Date.parse(`${nowMinute}:00.000Z`)))
+          .filter((thread) =>
+            sidebarSessionNeedsYou(
+              thread,
+              Date.parse(`${nowMinute}:00.000Z`),
+              threadLastVisitedAtById[
+                scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))
+              ],
+            ),
+          )
           .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
       ),
     }),
-    [isDraggingThread, threads, nowMinute],
+    [isDraggingThread, threads, nowMinute, threadLastVisitedAtById],
   );
   useEffect(() => {
     if (optimisticDrop === null || !optimisticDrop.commandsComplete) return;
@@ -5405,9 +5543,11 @@ export default memo(function Sidebar() {
     },
     [dropOptions, sidebarListItems],
   );
+  // Rows register for pointer activation as usual. Keep the sortable context
+  // stable until a drag needs the order, so paging doesn't update every row.
   const nextSortableIds = useMemo(
-    () => sidebarListItems.map(sidebarListItemId),
-    [sidebarListItems],
+    () => (isDraggingThread ? sidebarListItems.map(sidebarListItemId) : EMPTY_SORTABLE_IDS),
+    [isDraggingThread, sidebarListItems],
   );
   // The same array while the ids are the same: dnd-kit takes a new one for a
   // reorder, re-rendering every row with its transition cut for a frame.
@@ -5439,9 +5579,12 @@ export default memo(function Sidebar() {
         ...visibleActiveThreads.filter((candidate) => key(candidate) !== dragState.activeKey),
         applySidebarThreadDrop(thread, "active", dragState.occurredAt),
       ],
-      { nowMs: Date.parse(`${nowMinute}:00.000Z`) },
+      {
+        nowMs: Date.parse(`${nowMinute}:00.000Z`),
+        localLastVisitedAt: (candidate) => threadLastVisitedAtById[key(candidate)],
+      },
     ).map(key);
-  }, [dragState, nowMinute, threadByKey, visibleActiveThreads]);
+  }, [dragState, nowMinute, threadByKey, threadLastVisitedAtById, visibleActiveThreads]);
   const sidebarSortingStrategy = useMemo(
     () =>
       createSidebarSortingStrategy({
@@ -6708,8 +6851,26 @@ export default memo(function Sidebar() {
         )}
         <SidebarContent
           className="min-h-full"
-          onPointerEnter={(event) => setSessionListHovered(event.pointerType === "mouse")}
-          onPointerLeave={() => setSessionListHovered(false)}
+          onPointerEnter={(event) => {
+            if (event.pointerType === "mouse") {
+              orderHoldRef.current?.beginPointer();
+            }
+          }}
+          onPointerLeave={() => {
+            orderHoldRef.current?.endPointer();
+          }}
+          onPointerCancel={() => {
+            orderHoldRef.current?.forceRelease();
+          }}
+          onWheel={() => {
+            orderHoldRef.current?.markScroll();
+          }}
+          onTouchStart={() => {
+            orderHoldRef.current?.markScroll();
+          }}
+          onTouchMove={() => {
+            orderHoldRef.current?.markScroll();
+          }}
           fixedHeader={
             // Lifted above the stage backdrop, whose fade bleeds below the
             // header and would otherwise paint across the search row's outline.
@@ -6724,7 +6885,8 @@ export default memo(function Sidebar() {
                   if (showingTerminalSessions) setTerminalQuery(value);
                   else {
                     setThreadSearchQuery(value);
-                    setActiveSearchResultIndex(0);
+                    setActiveSearchResultKey(null);
+                    setSearchVisibleCount(SESSION_LIST_INITIAL_COUNT);
                   }
                 }}
                 onSearchKeyDown={(event) => {
@@ -6772,7 +6934,7 @@ export default memo(function Sidebar() {
                       aria-description={filter.hint}
                       onClick={() => {
                         setQuickFilter(filter.id);
-                        setActiveSearchResultIndex(0);
+                        setActiveSearchResultKey(null);
                         setSearchVisibleCount(SESSION_LIST_INITIAL_COUNT);
                         threadSearchInputRef.current?.focus();
                       }}
@@ -6853,24 +7015,34 @@ export default memo(function Sidebar() {
                             <button
                               type="button"
                               role="option"
+                              tabIndex={-1}
+                              onPointerDown={(event) => event.preventDefault()}
                               id={`sidebar-thread-search-result-${index}`}
                               aria-selected={activeSearchResultIndex === index}
                               aria-posinset={index + 1}
                               aria-setsize={threadSearchResults.length}
                               className={cn(
-                                "flex w-full flex-col gap-1 rounded-md px-2.5 py-2 text-left text-sm hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                                "flex w-full cursor-pointer flex-col gap-1 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                                 activeSearchResultIndex === index && "bg-sidebar-row-hover",
                               )}
-                              onFocus={() => setActiveSearchResultIndex(index)}
-                              onMouseEnter={() => setActiveSearchResultIndex(index)}
+                              onFocus={() =>
+                                setActiveSearchResultKey(threadSearchResultKeys[index] ?? null)
+                              }
+                              onMouseEnter={() =>
+                                setActiveSearchResultKey(threadSearchResultKeys[index] ?? null)
+                              }
                               onKeyDown={handleThreadSearchKeyDown}
                               onClick={() => selectThreadSearchResult(thread)}
                             >
                               <span>
-                                {privateLabel(
-                                  "Chat",
-                                  thread.threadId,
-                                  thread.title || "Untitled chat",
+                                {privacy ? (
+                                  privateLabel("Chat", thread.threadId, "")
+                                ) : (
+                                  <HighlightedSearchText
+                                    text={thread.title || "Untitled chat"}
+                                    query={threadSearchQuery}
+                                    correction={thread.titleCorrection}
+                                  />
                                 )}
                                 {thread.archived ? " · Archived" : ""}
                               </span>
@@ -6922,7 +7094,9 @@ export default memo(function Sidebar() {
                             ) ?? null
                           }
                           searchQuery={threadSearchQuery}
-                          onHighlight={() => setActiveSearchResultIndex(index)}
+                          onHighlight={() =>
+                            setActiveSearchResultKey(threadSearchResultKeys[index] ?? null)
+                          }
                           onSelect={() => selectThreadSearchResult(thread)}
                           onFileDropThreads={handleThreadFileDrop}
                         />
@@ -6936,15 +7110,17 @@ export default memo(function Sidebar() {
                       onClick={() =>
                         setSearchVisibleCount((count) => count + SESSION_LIST_PAGE_COUNT)
                       }
-                      className="flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-sm text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                      className="mt-0.5 flex h-9 w-full shrink-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 text-left text-xs font-medium text-sidebar-muted-foreground outline-none transition-[background-color,color,scale] duration-120 ease-out motion-reduce:transition-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground active:scale-[0.99] active:bg-sidebar-row-active motion-reduce:active:scale-100 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     >
-                      <PlusIcon aria-hidden className="size-4 shrink-0" />
-                      Show{" "}
-                      {Math.min(
-                        threadSearchResults.length - visibleThreadSearchResults.length,
-                        SESSION_LIST_PAGE_COUNT,
-                      )}{" "}
-                      more
+                      <ChevronDownIcon aria-hidden className="size-3.5 shrink-0 opacity-75" />
+                      <span className="truncate">
+                        Show{" "}
+                        {Math.min(
+                          threadSearchResults.length - visibleThreadSearchResults.length,
+                          SESSION_LIST_PAGE_COUNT,
+                        )}{" "}
+                        more
+                      </span>
                     </button>
                   ) : null}
                 </TooltipProvider>
@@ -6957,13 +7133,20 @@ export default memo(function Sidebar() {
                     ? "Searching chat messages…"
                     : threadSearch.failed
                       ? "Couldn't search thread messages"
-                      : quickFilter === "unread" && !isSearchingThreads
-                        ? "You're all caught up"
-                        : quickFilter === "needs-you" && !isSearchingThreads
-                          ? "No chats need you right now"
-                          : "No chats found"}
+                      : threadSearch.pagination
+                        ? "No matching chats yet"
+                        : quickFilter === "unread" && !isSearchingThreads
+                          ? "You're all caught up"
+                          : quickFilter === "needs-you" && !isSearchingThreads
+                            ? "No chats need you right now"
+                            : "No chats found"}
                 </p>
               )
+            ) : null}
+            {!showingTerminalSessions &&
+            isSearchingThreads &&
+            visibleThreadSearchResults.length === threadSearchResults.length ? (
+              <ThreadSearchMoreButton pagination={threadSearch.pagination} />
             ) : null}
             {!showingTerminalSessions && !isShowingThreadResults ? (
               <TooltipProvider
@@ -6988,7 +7171,10 @@ export default memo(function Sidebar() {
                   onDragEnd={handleThreadDragEnd}
                 >
                   <SidebarDragLifecycle onUnmount={cancelThreadDrag} />
-                  <SortableContext items={sortableIds} strategy={sidebarSortingStrategy}>
+                  <SortableContext
+                    items={sortableIds}
+                    strategy={isDraggingThread ? sidebarSortingStrategy : rectSortingStrategy}
+                  >
                     <ul
                       ref={attachListMotionRef}
                       // VoiceOver treats an exposed list as an interaction boundary,
@@ -7050,7 +7236,11 @@ export default memo(function Sidebar() {
                               prefetch={prefetch}
                               threadPrefetch={threadPrefetch}
                               box={box}
-                              paint={box ? undefined : boxPresentations.get(threadKey)}
+                              paint={
+                                box
+                                  ? undefined
+                                  : sidebarThreadPainting(thread, boxPresentations.get(threadKey))
+                              }
                               // Fade between card and compact rows while the outer
                               // sortable wrapper keeps its identity during a drag.
                               key={`${threadKey}:${rowVariant}`}

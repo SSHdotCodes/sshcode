@@ -1,8 +1,17 @@
-const motionTiming = { duration: 150, easing: "ease-out" };
-// Rows normally ride their displaced neighbour's travel. Absent a moving
-// neighbour, a row still travels on its own, clamped so a tall card does not
-// slide its full height.
-const rowTravel = (height: number) => Math.min(height, 40);
+export const SIDEBAR_LIST_MOTION_TIMING = {
+  duration: 185,
+  easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+} as const;
+export const SIDEBAR_LIST_EXIT_TIMING = {
+  duration: 120,
+  easing: "ease-in",
+} as const;
+const motionTiming = SIDEBAR_LIST_MOTION_TIMING;
+const exitTiming = SIDEBAR_LIST_EXIT_TIMING;
+// Standalone rows (new chat appearing, or a settled/snoozed/archived chat leaving)
+// use a calm 4 px settle paired with a clip-path height reveal/collapse, while
+// shelf blocks ride their displaced neighbour's travel as one unit.
+const STANDALONE_ROW_TRAVEL_PX = 4;
 // A project filter change or a bulk snooze swaps a large part of the list at
 // once. Fades are the expensive part: every removed row gets a deep clone and
 // every clone and entering row gets its own animation, and the layout reads
@@ -47,7 +56,7 @@ export function createSidebarListMotion(parent: HTMLUListElement) {
     entering.clear();
     exiting.clear();
   };
-  const fadeOut = (node: HTMLElement, position: RowPosition, travel: number) => {
+  const fadeOut = (node: HTMLElement, position: RowPosition, shelfTravel: number | null) => {
     if (position.height === 0) return;
     // React owns the removed row; only a noninteractive copy stays for the fade.
     const clone = node.cloneNode(true) as HTMLElement;
@@ -74,6 +83,7 @@ export function createSidebarListMotion(parent: HTMLUListElement) {
       height: `${position.height}px`,
       margin: "0",
       boxSizing: "border-box",
+      overflow: "hidden",
       contentVisibility: "visible",
       transform: "none",
       transition: "none",
@@ -82,13 +92,30 @@ export function createSidebarListMotion(parent: HTMLUListElement) {
     parent.append(clone);
     const entry = entering.get(node);
     const entryProgress = entry ? progress(entry.animation) : 1;
-    const animation = clone.animate(
-      [
-        { opacity: entryProgress, transform: "translateY(0px)" },
-        { opacity: 0, transform: `translateY(${travel}px)` },
-      ],
-      motionTiming,
-    );
+    const animation =
+      shelfTravel !== null
+        ? clone.animate(
+            [
+              { opacity: entryProgress, transform: "translateY(0px)" },
+              { opacity: 0, transform: `translateY(${shelfTravel}px)` },
+            ],
+            motionTiming,
+          )
+        : clone.animate(
+            [
+              {
+                opacity: entryProgress,
+                transform: "translateY(0px)",
+                clipPath: "inset(0px 0px 0px 0px)",
+              },
+              {
+                opacity: 0,
+                transform: `translateY(${-STANDALONE_ROW_TRAVEL_PX}px)`,
+                clipPath: "inset(0px 0px 100% 0px)",
+              },
+            ],
+            exitTiming,
+          );
     exiting.set(clone, animation);
     animation.addEventListener(
       "finish",
@@ -190,7 +217,7 @@ export function createSidebarListMotion(parent: HTMLUListElement) {
         for (const [node, position] of positions!) {
           if (next.has(node)) continue;
           const delta = ridingDelta(oldOrder, oldOrder.indexOf(node), (n) => next.has(n));
-          fadeOut(node, position, delta === undefined ? rowTravel(position.height) : -delta);
+          fadeOut(node, position, delta !== undefined && delta !== 0 ? -delta : null);
         }
       }
       for (const [node, entry] of entering) {
@@ -209,12 +236,26 @@ export function createSidebarListMotion(parent: HTMLUListElement) {
           if (previousTop === undefined) {
             if (position.height > 0) {
               const delta = ridingDelta(nextOrder, index, (n) => positions!.has(n));
-              const travel = delta === undefined ? -rowTravel(position.height) : delta;
+              const ridingShelf = delta !== undefined && delta !== 0;
+              const travel = ridingShelf ? delta : -STANDALONE_ROW_TRAVEL_PX;
               const animation = node.animate(
-                [
-                  { opacity: 0, transform: `translateY(${travel}px)` },
-                  { opacity: 1, transform: "translateY(0px)" },
-                ],
+                ridingShelf
+                  ? [
+                      { opacity: 0, transform: `translateY(${travel}px)` },
+                      { opacity: 1, transform: "translateY(0px)" },
+                    ]
+                  : [
+                      {
+                        opacity: 0,
+                        transform: `translateY(${travel}px)`,
+                        clipPath: "inset(0px 0px 100% 0px)",
+                      },
+                      {
+                        opacity: 1,
+                        transform: "translateY(0px)",
+                        clipPath: "inset(0px 0px 0px 0px)",
+                      },
+                    ],
                 motionTiming,
               );
               entering.set(node, { animation, travel });

@@ -14,7 +14,7 @@ export type FloatingWorkingStatus =
       /** The running turn's output speed, once a reply was timed. */
       readonly generation?: OrchestrationV2ProviderTurnGeneration;
     }
-  | { readonly kind: "syncing"; readonly label: string }
+  | { readonly kind: "syncing"; readonly label: string; readonly showSpinner: boolean }
   | { readonly kind: "compacting" }
   | {
       readonly kind: "child-input";

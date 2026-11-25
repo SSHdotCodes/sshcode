@@ -3,8 +3,10 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   activeThreadAnchorTimestampMs,
+  createOrderHoldController,
   generateSpreadPinOrderKeys,
   getLatestThreadForProject,
+  holdOrderedItems,
   pinOrderKeyBetween,
   planPinnedMove,
   planPinnedReorder,
@@ -509,5 +511,172 @@ describe("sortActiveThreadsByOrderKey", () => {
     const keys = new Map(assignments.map((assignment) => [assignment.id, assignment.orderKey]));
     const updated = threads.map((thread) => ({ ...thread, activeOrderKey: keys.get(thread.id) }));
     expect(sortActiveThreadsByOrderKey(updated).map((thread) => thread.id)).toEqual(orderedIds);
+  });
+});
+
+describe("holdOrderedItems", () => {
+  const keyOf = (item: string) => item;
+
+  it("keeps previously shown items in their relative order while placing new items at their sorted slot", () => {
+    expect(holdOrderedItems(["c", "new", "a", "b"], ["a", "b", "c"], keyOf)).toEqual([
+      "a",
+      "new",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("frees slots for removed items and returns sorted order when no prior order exists", () => {
+    expect(holdOrderedItems(["b", "a"], ["a", "gone", "b"], keyOf)).toEqual(["a", "b"]);
+    expect(holdOrderedItems(["b", "a"], [], keyOf)).toEqual(["b", "a"]);
+    expect(holdOrderedItems(["only"], ["other"], keyOf)).toEqual(["only"]);
+  });
+});
+
+describe("createOrderHoldController", () => {
+  function makeClock() {
+    let now = 0;
+    let nextId = 1;
+    const timers = new Map<number, { at: number; fn: () => void }>();
+    return {
+      setTimeoutFn: (fn: () => void, ms: number) => {
+        const id = nextId++;
+        timers.set(id, { at: now + ms, fn });
+        return id;
+      },
+      clearTimeoutFn: (id: number) => {
+        timers.delete(id);
+      },
+      advance: (ms: number) => {
+        const target = now + ms;
+        while (true) {
+          let earliest: [number, { at: number; fn: () => void }] | null = null;
+          for (const entry of timers.entries()) {
+            if (entry[1].at <= target && (earliest === null || entry[1].at < earliest[1].at)) {
+              earliest = entry;
+            }
+          }
+          if (earliest === null) break;
+          timers.delete(earliest[0]);
+          now = earliest[1].at;
+          earliest[1].fn();
+        }
+        now = target;
+      },
+    };
+  }
+
+  it("releases idleReleaseMs after the last activity even if touch/pointer end or scroll-gate end is lost", () => {
+    const clock = makeClock();
+    let held = false;
+    let holds = 0;
+    let releases = 0;
+    const controller = createOrderHoldController({
+      scrollSettleMs: 450,
+      idleReleaseMs: 4_000,
+      onHold: () => {
+        held = true;
+        holds += 1;
+      },
+      onRelease: () => {
+        held = false;
+        releases += 1;
+      },
+      setTimeoutFn: clock.setTimeoutFn,
+      clearTimeoutFn: clock.clearTimeoutFn,
+    });
+
+    controller.beginPointer();
+    controller.setScrollGate(true);
+    expect(held).toBe(true);
+    expect(holds).toBe(1);
+
+    // Neither endPointer nor setScrollGate(false) arrives; the idle release ends the hold.
+    clock.advance(3_999);
+    expect(held).toBe(true);
+    clock.advance(1);
+    expect(held).toBe(false);
+    expect(releases).toBe(1);
+  });
+
+  it("releases independently after scroll settles and immediately on forceRelease (blur/background)", () => {
+    const clock = makeClock();
+    let held = false;
+    const controller = createOrderHoldController({
+      scrollSettleMs: 450,
+      idleReleaseMs: 4_000,
+      onHold: () => {
+        held = true;
+      },
+      onRelease: () => {
+        held = false;
+      },
+      setTimeoutFn: clock.setTimeoutFn,
+      clearTimeoutFn: clock.clearTimeoutFn,
+    });
+
+    controller.markScroll();
+    expect(held).toBe(true);
+    clock.advance(449);
+    expect(held).toBe(true);
+    clock.advance(1);
+    expect(held).toBe(false);
+
+    // Force release clears an active pointer/touch hold immediately (e.g. AppState background or blur).
+    controller.beginPointer();
+    expect(held).toBe(true);
+    controller.forceRelease();
+    expect(held).toBe(false);
+  });
+
+  it("keeps holding while touches and scrolls continue, then releases once they stop", () => {
+    const clock = makeClock();
+    let held = false;
+    const controller = createOrderHoldController({
+      scrollSettleMs: 450,
+      idleReleaseMs: 4_000,
+      onHold: () => {
+        held = true;
+      },
+      onRelease: () => {
+        held = false;
+      },
+      setTimeoutFn: clock.setTimeoutFn,
+      clearTimeoutFn: clock.clearTimeoutFn,
+    });
+
+    controller.beginPointer();
+    for (let step = 0; step < 5; step += 1) {
+      clock.advance(3_000);
+      controller.markScroll();
+    }
+    // 15 s of steady scrolling with a finger down never moves rows.
+    expect(held).toBe(true);
+    clock.advance(3_999);
+    expect(held).toBe(true);
+    clock.advance(1);
+    expect(held).toBe(false);
+  });
+
+  it("holds for mouse hover until the pointer leaves when there is no idle release", () => {
+    const clock = makeClock();
+    let held = false;
+    const controller = createOrderHoldController({
+      scrollSettleMs: 450,
+      onHold: () => {
+        held = true;
+      },
+      onRelease: () => {
+        held = false;
+      },
+      setTimeoutFn: clock.setTimeoutFn,
+      clearTimeoutFn: clock.clearTimeoutFn,
+    });
+
+    controller.beginPointer();
+    clock.advance(60_000);
+    expect(held).toBe(true);
+    controller.endPointer();
+    expect(held).toBe(false);
   });
 });

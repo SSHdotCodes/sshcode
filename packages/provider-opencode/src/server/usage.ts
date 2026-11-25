@@ -190,7 +190,7 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
         const predicates =
           table === "session_message" ? ["type IN ('assistant', 'compaction')"] : [];
         if (timestamp !== "NULL") predicates.push("time_created >= ?");
-        predicates.push("rowid > ?", "rowid <= ?");
+        predicates.push("rowid > ?", "rowid <= page.through");
         const [range] = yield* sql.unsafe<{
           readonly first_row_id: number | null;
           readonly last_row_id: number | null;
@@ -200,28 +200,37 @@ export const readOpenCodeUsage = Effect.fn("readOpenCodeUsage")(function* (
         const firstRowId = range?.first_row_id;
         const lastRowId = range?.last_row_id;
         if (typeof firstRowId !== "number" || typeof lastRowId !== "number") continue;
-        // SqlClient materializes each result with StatementSync.all(), and the
-        // window can exclude most rows. Each statement covers MESSAGE_PAGE_SIZE
-        // rowids, however few match, and rows appended mid-scan are left out.
-        // Untraced, as a large history runs thousands of them.
-        for (let after = firstRowId - 1; after < lastRowId; after += MESSAGE_PAGE_SIZE) {
+        // Seek across existing keys before applying usage filters. Fixed-width
+        // rowid ranges spend queries in holes left by deleted messages, and a
+        // filtered page can be empty even when newer messages still match. The
+        // last row carries the page boundary from the same SQLite snapshot.
+        let after = firstRowId - 1;
+        while (after < lastRowId) {
           const rows = yield* sql
             .unsafe<{
+              readonly cursor: number;
               readonly id: unknown;
               readonly session_id: unknown;
               readonly data: unknown;
               readonly created: unknown;
             }>(
-              `SELECT id, session_id, data, ${timestamp} AS created
-               FROM ${table} WHERE ${predicates.join(" AND ")} ORDER BY rowid`,
-              [
-                ...(timestamp === "NULL" ? [] : [sinceMs]),
-                after,
-                Math.min(after + MESSAGE_PAGE_SIZE, lastRowId),
-              ],
+              `WITH page AS MATERIALIZED (
+                 SELECT COALESCE((
+                   SELECT rowid FROM ${table}
+                   WHERE rowid > ? AND rowid <= ? ORDER BY rowid
+                   LIMIT 1 OFFSET ${MESSAGE_PAGE_SIZE - 1}
+                 ), ?) AS through
+               )
+               SELECT id, session_id, data, ${timestamp} AS created, rowid AS cursor, 0 AS boundary
+               FROM page CROSS JOIN ${table} WHERE ${predicates.join(" AND ")}
+               UNION ALL
+               SELECT NULL, NULL, NULL, NULL, page.through, 1 FROM page
+               ORDER BY cursor, boundary`,
+              [after, lastRowId, lastRowId, ...(timestamp === "NULL" ? [] : [sinceMs]), after],
             )
             .pipe(Effect.withTracerEnabled(false));
-          for (const row of rows) {
+          after = rows.at(-1)?.cursor ?? lastRowId;
+          for (const row of rows.slice(0, -1)) {
             append(
               file.records,
               parseOpenCodeMessage(text(row.data), {

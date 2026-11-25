@@ -32,7 +32,9 @@ const state = vi.hoisted(() => ({
   helper: false,
   subagent: false,
   background: [] as Array<{ taskId: string; kind: "command" | "monitor" }>,
-  delegatedChild: null as "running" | "approval" | null,
+  delegatedChild: null as "running" | "approval" | "input" | null,
+  nestedChild: false,
+  recoveredAncestor: false,
   add: vi.fn(
     (_toast: { title: string; description: string; actionProps: { onClick: () => void } }) =>
       "toast-1",
@@ -109,7 +111,7 @@ function mockThreadShell() {
 
 // A delegated child changes while its parent's shell object stays the same.
 let stableParent: ReturnType<typeof mockThreadShell> | null = null;
-function mockThreads() {
+function mockThreads(merged: boolean) {
   if (state.delegatedChild === null) return [mockThreadShell()];
   stableParent ??= mockThreadShell();
   const child = {
@@ -119,22 +121,38 @@ function mockThreads() {
     creationSource: "mcp",
     lineage: {
       rootThreadId: "thread-1",
-      parentThreadId: "thread-1",
+      parentThreadId: state.nestedChild ? "middle" : "thread-1",
       relationshipToParent: "subagent",
     },
     pendingRuntimeRequest:
       state.delegatedChild === "approval"
         ? { id: "request-2", kind: "command", createdAt: SHELL_NOW }
-        : null,
+        : state.delegatedChild === "input"
+          ? { id: "request-2", kind: "user_input", createdAt: SHELL_NOW }
+          : null,
   };
+  if (merged && state.recoveredAncestor) {
+    const middle = {
+      ...child,
+      id: "middle",
+      title: "Coordinate the review",
+      status: "completed",
+      lineage: { ...child.lineage, parentThreadId: "thread-1" },
+      pendingRuntimeRequest: null,
+    };
+    return [stableParent, child, middle];
+  }
   return [stableParent, child];
 }
 
 vi.mock("@effect/atom-react", () => ({
-  useAtomValue: () => ({
-    status: state.live ? "live" : "disconnected",
-    snapshot: Option.some({ threads: mockThreads() }),
-  }),
+  useAtomValue: (atom: string) =>
+    atom === "snapshot"
+      ? { threads: mockThreads(true) }
+      : {
+          status: state.live ? "live" : "disconnected",
+          snapshot: Option.some({ threads: mockThreads(false) }),
+        },
 }));
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => state.navigate,
@@ -163,10 +181,11 @@ vi.mock("../state/environments", () => ({
   useEnvironmentIds: () => ["env-1"],
 }));
 vi.mock("../state/shell", () => ({
-  environmentShell: { stateValueAtom: vi.fn() },
+  environmentShell: { stateValueAtom: () => "shell" },
 }));
 vi.mock("../state/notificationRequests", () => ({ notificationThreadProjection: "load" }));
 vi.mock("../state/threads", () => ({
+  threadFamilies: { snapshotAtom: () => "snapshot" },
   threadEnvironment: {
     waitForSendConnection: "wait",
     respondToApproval: "approval",
@@ -233,6 +252,8 @@ beforeEach(() => {
     subagent: false,
     background: [],
     delegatedChild: null,
+    nestedChild: false,
+    recoveredAncestor: false,
   });
   stableParent = null;
   state.nativeListeners.clear();
@@ -303,6 +324,39 @@ describe("thread notifications", () => {
       expect.objectContaining({ title: "Approval needed", description: "Fix the login form" }),
     );
   });
+
+  it.each([
+    { focused: true, request: "approval", title: "Approval needed" },
+    { focused: false, request: "input", title: "Question" },
+  ] as const)(
+    "alerts on the root after recovering a nested $request",
+    async ({ focused, request, title }) => {
+      state.mode = "notifications-and-sound";
+      state.focused = focused;
+      state.nestedChild = true;
+      await render();
+
+      state.delegatedChild = request;
+      await render();
+      expect(state.sound).not.toHaveBeenCalled();
+
+      state.recoveredAncestor = true;
+      await render();
+      await render();
+      expect(state.sound).toHaveBeenCalledExactlyOnceWith("input", expect.any(Function));
+      if (focused) {
+        expect(state.add).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ title, description: "Fix the login form" }),
+        );
+      } else {
+        expect(state.notification).toHaveBeenCalledExactlyOnceWith(title, {
+          body: "Fix the login form",
+          tag: "env-1:thread-1",
+          silent: true,
+        });
+      }
+    },
+  );
 
   it("alerts once with system alerts off and opens the completed thread", async () => {
     await render();

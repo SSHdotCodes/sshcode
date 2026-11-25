@@ -487,7 +487,7 @@ interface PendingPiPrompt {
  * picks the select's last "Type something." line and answers the input dialog that follows.
  */
 interface PiCustomAnswerRoute {
-  readonly lines: ReadonlyArray<unknown>;
+  readonly optionLines: ReadonlyArray<unknown>;
   readonly sentinel: string;
   readonly followUpTitlePrefix: string;
 }
@@ -1225,7 +1225,9 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         const output = piToolOutput(resultRecord, toolName);
         const readPath =
           toolName === "read"
-            ? (recordString(args, "path") ?? recordString(args, "file_path"))?.trim()
+            ? (recordString(args, "path") ?? recordString(args, "file_path"))
+                ?.replace(/^@/, "")
+                .trim()
             : undefined;
         const viewedImagePath =
           readPath &&
@@ -3252,7 +3254,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               route !== undefined &&
               typeof response["value"] === "string" &&
               response["value"].trim().length > 0 &&
-              !route.lines.includes(response["value"])
+              !route.optionLines.includes(response["value"])
             ) {
               customAnswerFollowUps.set(route.followUpTitlePrefix, [
                 ...(customAnswerFollowUps.get(route.followUpTitlePrefix) ?? []),
@@ -3859,6 +3861,7 @@ function piAskUserSingleSelectQuestion(
       if (!options.every((option, index) => lines[index] === rpivOptionLine(option, index))) {
         continue;
       }
+      const optionLines = lines.slice(0, -1);
       return {
         question: {
           id: questionId,
@@ -3875,9 +3878,9 @@ function piAskUserSingleSelectQuestion(
         },
         // The follow-up repeats the option lines; only its trailing instruction is localized.
         customAnswerRoute: {
-          lines,
+          optionLines,
           sentinel,
-          followUpTitlePrefix: `${prefix}${text}\n\n${lines.slice(0, -1).join("\n")}\n\n`,
+          followUpTitlePrefix: `${prefix}${text}\n\n${optionLines.join("\n")}\n\n`,
         },
       };
     }

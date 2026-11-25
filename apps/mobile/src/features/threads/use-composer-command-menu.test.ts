@@ -11,6 +11,9 @@ import { createRoot, type Root } from "react-dom/client";
 
 const refreshProviders = vi.hoisted(() => vi.fn());
 vi.mock("react-native", () => ({ Alert: { alert: vi.fn() } }));
+vi.mock("expo-sqlite/kv-store", () => ({
+  default: { getItemSync: () => null, setItemSync: () => {} },
+}));
 
 vi.mock("../../state/queries", () => ({
   useComposerPathSearch: () => ({ entries: [], isPending: false }),
@@ -48,10 +51,30 @@ import {
   buildComposerModelItems,
   buildComposerSlashCommandItems,
   buildComposerWorkflowItems,
+  rankComposerPathEntries,
   rankSlashMenuItems,
   resolveComposerCommandSelection,
   useComposerCommandMenu,
 } from "./use-composer-command-menu";
+
+describe("mobile file mention recency", () => {
+  const exact = { path: "docs/plan" };
+  const alpha = { path: "docs/alpha-plan.md" };
+  const zulu = { path: "docs/zulu-plan.md" };
+  const entries = [exact, alpha, zulu];
+
+  it("leads with the most recently mentioned returned files on a bare @", () => {
+    expect(rankComposerPathEntries(entries, "", [zulu.path, alpha.path])).toEqual([
+      zulu,
+      alpha,
+      exact,
+    ]);
+  });
+
+  it("boosts equally relevant files within the workspace result order", () => {
+    expect(rankComposerPathEntries(entries, "plan", [zulu.path])).toEqual([exact, zulu, alpha]);
+  });
+});
 
 describe("mobile slash commands", () => {
   const antigravity = {
@@ -739,4 +762,44 @@ it("uses only the active draft's selection and clamps its own old caret", () => 
       local,
     }),
   ).toEqual({ start: 2, end: 2 });
+});
+
+it("ranks slash commands and skills by recent use on empty query and equal-rank ties", () => {
+  const items = [
+    {
+      id: "cmd:debug",
+      type: "slash-command" as const,
+      command: "debug" as const,
+      label: "/debug",
+      description: "Debug",
+    },
+    {
+      id: "cmd:model",
+      type: "slash-command" as const,
+      command: "model" as const,
+      label: "/model",
+      description: "Switch model",
+    },
+    {
+      id: "pcmd:compact",
+      type: "provider-slash-command" as const,
+      command: { name: "compact" },
+      label: "/compact",
+      description: "Compact",
+    },
+    {
+      id: "skill:compose",
+      type: "skill" as const,
+      skill: { name: "compose", path: "/skills/compose/SKILL.md", enabled: true },
+      label: "/compose",
+      description: "Compose",
+    },
+  ];
+  expect(
+    rankSlashMenuItems(items, "", ["skill:compose", "slash:model"]).map((item) => item.id),
+  ).toEqual(["skill:compose", "cmd:model", "cmd:debug", "pcmd:compact"]);
+  // Equal prefix rank ("comp") breaks ties by recent use.
+  expect(
+    rankSlashMenuItems(items.slice(2), "comp", ["skill:compose"]).map((item) => item.id),
+  ).toEqual(["skill:compose", "pcmd:compact"]);
 });

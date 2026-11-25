@@ -4,7 +4,6 @@ import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ProjectId } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import {
-  ActivityIndicator,
   Keyboard,
   Platform,
   Pressable,
@@ -18,6 +17,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/AppText";
 import { EmptyState } from "../../components/EmptyState";
+import { cn } from "../../lib/cn";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
 import { useWorkspaceState } from "../../state/workspace";
 import { useProjects } from "../../state/entities";
@@ -66,6 +66,26 @@ function PullRequestScrollView(props: ScrollViewProps) {
         contentOffset={props.contentOffset ?? { x: 0, y: -insets.top }}
       />
     </ScrollViewMarker>
+  );
+}
+
+function PullRequestListSkeleton(props: {
+  readonly widths: ReadonlyArray<"w-4/5" | "w-3/5" | "w-2/3">;
+  readonly label: string;
+}) {
+  return (
+    <View accessible accessibilityLabel={props.label} accessibilityState={{ busy: true }}>
+      {props.widths.map((width) => (
+        <View key={width} className="flex-row gap-3 px-4">
+          <View className="mt-3 size-5 rounded-md bg-foreground/10" />
+          <View className="min-w-0 flex-1 gap-2 border-b border-border-subtle py-3">
+            <View className="h-2.5 w-1/3 rounded-full bg-foreground/5" />
+            <View className={cn("h-3.5 rounded-full bg-foreground/10", width)} />
+            <View className="h-2.5 w-1/4 rounded-full bg-foreground/5" />
+          </View>
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -334,12 +354,7 @@ export function PullRequestsScreen(
         }
         ListFooterComponent={
           result.loadingMore ? (
-            <View className="items-center py-5">
-              <ActivityIndicator
-                colorClassName="accent-icon"
-                accessibilityLabel="Loading more pull requests"
-              />
-            </View>
+            <PullRequestListSkeleton label="Loading more pull requests" widths={["w-2/3"]} />
           ) : result.loadMoreError ? (
             <Pressable
               accessibilityRole="button"
@@ -354,9 +369,10 @@ export function PullRequestsScreen(
         }
         ListEmptyComponent={
           result.isPending && connectedTargets.length > 0 ? (
-            <View className="items-center py-12">
-              <ActivityIndicator colorClassName="accent-icon" />
-            </View>
+            <PullRequestListSkeleton
+              label="Loading pull requests"
+              widths={["w-4/5", "w-3/5", "w-2/3"]}
+            />
           ) : (
             <View className="px-8 py-12">
               <EmptyState

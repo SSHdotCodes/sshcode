@@ -974,6 +974,11 @@ function threadDetail(
 ): OrchestratorMcpThreadDetail {
   const latest = ThreadManagementService.latestRun(projection);
   const active = ThreadManagementService.latestActiveRun(projection);
+  const { settled, settledAt } = threadSettlement(projection.thread);
+  // From the shell, like the list, so read and list agree on snooze state.
+  const { snoozed, snoozedUntil } = threadSnooze(shell, nowMs);
+  const regeneration = projection.thread.titleRegeneration;
+  // Like list rows, fields with no value are left out.
   return {
     threadId: projection.thread.id,
     projectId: projection.thread.projectId,
@@ -984,34 +989,43 @@ function threadDetail(
         ? "server"
         : projection.thread.creationSource,
     status: active?.status ?? latest?.status ?? "idle",
-    latestRunId: latest?.id ?? null,
-    activeRunId: active?.id ?? null,
+    ...(latest === undefined ? {} : { latestRunId: latest.id }),
+    ...(active === undefined ? {} : { activeRunId: active.id }),
     providerInstanceId: projection.thread.modelSelection.instanceId,
     model: projection.thread.modelSelection.model,
     runtimeMode: projection.thread.runtimeMode,
     interactionMode: projection.thread.interactionMode,
-    linkedPullRequest: projection.thread.linkedPullRequest ?? null,
-    titleRegeneration:
-      projection.thread.titleRegeneration === undefined ||
-      projection.thread.titleRegeneration === null
-        ? null
-        : {
-            requestId: projection.thread.titleRegeneration.requestId,
-            startedAt: DateTime.formatIso(projection.thread.titleRegeneration.startedAt),
+    ...(projection.thread.linkedPullRequest == null
+      ? {}
+      : { linkedPullRequest: projection.thread.linkedPullRequest }),
+    ...(regeneration == null
+      ? {}
+      : {
+          titleRegeneration: {
+            requestId: regeneration.requestId,
+            startedAt: DateTime.formatIso(regeneration.startedAt),
           },
-    branch: projection.thread.branch,
-    worktreePath: projection.thread.worktreePath,
-    parentThreadId: projection.thread.lineage.parentThreadId,
-    relationshipToParent: projection.thread.lineage.relationshipToParent,
+        }),
+    ...(projection.thread.branch === null ? {} : { branch: projection.thread.branch }),
+    ...(projection.thread.worktreePath === null
+      ? {}
+      : { worktreePath: projection.thread.worktreePath }),
+    ...(projection.thread.lineage.parentThreadId === null
+      ? {}
+      : { parentThreadId: projection.thread.lineage.parentThreadId }),
+    ...(projection.thread.lineage.relationshipToParent === null
+      ? {}
+      : { relationshipToParent: projection.thread.lineage.relationshipToParent }),
     runCount: projection.runs.length,
     itemCount,
     pendingRequestCount: projection.runtimeRequests.filter(
       (request) => request.status === "pending",
     ).length,
     archived: projection.thread.archivedAt !== null,
-    ...threadSettlement(projection.thread),
-    // From the shell, like the list, so read and list agree on snooze state.
-    ...threadSnooze(shell, nowMs),
+    settled,
+    ...(settledAt === null ? {} : { settledAt }),
+    snoozed,
+    ...(snoozedUntil === null ? {} : { snoozedUntil }),
     ...(shell.pinnedAt == null ? {} : { pinned: true }),
     ...threadBackgroundWork(shell),
     createdAt: DateTime.formatIso(projection.thread.createdAt),
@@ -1027,8 +1041,8 @@ function threadRun(run: OrchestrationV2Run): OrchestratorMcpThreadRun {
     providerInstanceId: run.modelSelection.instanceId,
     model: run.modelSelection.model,
     requestedAt: DateTime.formatIso(run.requestedAt),
-    startedAt: run.startedAt === null ? null : DateTime.formatIso(run.startedAt),
-    completedAt: run.completedAt === null ? null : DateTime.formatIso(run.completedAt),
+    ...(run.startedAt === null ? {} : { startedAt: DateTime.formatIso(run.startedAt) }),
+    ...(run.completedAt === null ? {} : { completedAt: DateTime.formatIso(run.completedAt) }),
   };
 }
 
@@ -1115,6 +1129,8 @@ function turnItemText(item: OrchestrationV2TurnItem): string | null {
 
 function timelineItem(input: {
   readonly row: OrchestrationV2ThreadProjection["visibleTurnItems"][number];
+  /** The thread being read; its own items omit sourceThreadId. */
+  readonly threadId: ThreadId;
   readonly maxChars: number;
   readonly textOffset?: number;
   readonly messagesByThreadId: ReadonlyMap<ThreadId, OrchestrationV2ThreadProjection["messages"]>;
@@ -1133,23 +1149,29 @@ function timelineItem(input: {
       : input.messagesByThreadId
           .get(input.row.sourceThreadId)
           ?.find((candidate) => candidate.id === messageId);
+  // Fields with no value are left out: a page repeats them per item.
   return {
     position: input.row.position,
     visibility: input.row.visibility,
-    sourceThreadId: input.row.sourceThreadId,
+    ...(input.row.sourceThreadId === input.threadId
+      ? {}
+      : { sourceThreadId: input.row.sourceThreadId }),
     itemId: input.row.sourceItemId,
     ...(input.row.item.type === "subagent" ? { subagentId: input.row.item.subagentId } : {}),
-    runId: input.row.item.runId,
-    messageId,
-    createdBy: message?.createdBy ?? null,
-    creationSource:
-      message?.creationSource === "workflows" ? "server" : (message?.creationSource ?? null),
+    ...(input.row.item.runId === null ? {} : { runId: input.row.item.runId }),
+    ...(messageId === null ? {} : { messageId }),
+    ...(message === undefined ? {} : { createdBy: message.createdBy }),
+    ...(message === undefined
+      ? {}
+      : {
+          creationSource:
+            message.creationSource === "workflows" ? ("server" as const) : message.creationSource,
+        }),
     type: input.row.item.type,
     status: input.row.item.status,
-    title: input.row.item.title,
-    text: text === null ? null : text.slice(offset, end),
-    textTruncated,
-    nextTextOffset: textTruncated ? end : null,
+    ...(input.row.item.title === null ? {} : { title: input.row.item.title }),
+    ...(text === null ? {} : { text: text.slice(offset, end) }),
+    ...(textTruncated ? { textTruncated: true as const, nextTextOffset: end } : {}),
     updatedAt: DateTime.formatIso(input.row.item.updatedAt),
   };
 }
@@ -2296,6 +2318,14 @@ const make = Effect.gen(function* () {
         canExposeTaskRunResult(terminalRun) && terminalRun.id !== childRun?.id
           ? subagentResultForRun(childProjection, terminalRun).text
           : null;
+      const pendingChildRuns = hasPendingChildRuns(childProjection, childRun);
+      const pendingQuestion = childControls.runtimeRequests.some(
+        (request) =>
+          request.kind === "user_input" &&
+          request.status === "pending" &&
+          request.responseCapability.type === "live",
+      );
+      // Fields with no value are left out: every poll re-reads this result.
       const response = {
         ...(pendingRequests.length === 0 ? {} : { pendingRequests }),
         taskId: task.id,
@@ -2303,10 +2333,10 @@ const make = Effect.gen(function* () {
         childRunId: childRun?.id ?? null,
         status,
         workState,
-        hasPendingChildRuns: hasPendingChildRuns(childProjection, childRun),
+        ...(pendingChildRuns ? { hasPendingChildRuns: true as const } : {}),
         providerInstanceId: task.providerInstanceId,
-        model: task.model,
-        summary: derivedResult,
+        ...(task.model === null ? {} : { model: task.model }),
+        ...(derivedResult === null ? {} : { summary: derivedResult }),
         // Computed once at finish from the app's records, so the lead need not redo checks.
         ...(task.seen === undefined ? {} : { seen: task.seen }),
         ...(failureItem?.type === "error" ? { failure: failureItem.failure } : {}),
@@ -2320,25 +2350,23 @@ const make = Effect.gen(function* () {
               },
             }
           : {}),
-        resultContextTransferId: resultTransfer?.id ?? null,
+        ...(resultTransfer === null ? {} : { resultContextTransferId: resultTransfer.id }),
         // The long ids are left out where they repeat another field.
         ...(terminalRun !== undefined && terminalRun.id !== childRun?.id
           ? { latestTerminalRunId: terminalRun.id }
           : {}),
-        latestTerminalStatus:
-          terminalStatus !== null && isTerminalTaskStatus(terminalStatus) ? terminalStatus : null,
-        latestTerminalSummary: latestTerminalText === derivedResult ? null : latestTerminalText,
+        ...(terminalStatus !== null && isTerminalTaskStatus(terminalStatus)
+          ? { latestTerminalStatus: terminalStatus }
+          : {}),
+        ...(latestTerminalText === null || latestTerminalText === derivedResult
+          ? {}
+          : { latestTerminalSummary: latestTerminalText }),
         ...(latestTerminalTransferId !== undefined &&
         latestTerminalTransferId !== resultTransfer?.id
           ? { latestTerminalResultContextTransferId: latestTerminalTransferId }
           : {}),
-        hasPendingQuestion: childControls.runtimeRequests.some(
-          (request) =>
-            request.kind === "user_input" &&
-            request.status === "pending" &&
-            request.responseCapability.type === "live",
-        ),
-        waitTimedOut,
+        ...(pendingQuestion ? { hasPendingQuestion: true as const } : {}),
+        ...(waitTimedOut ? { waitTimedOut: true as const } : {}),
       } satisfies DelegateTaskDetails;
       if (
         acknowledgeTerminal &&
@@ -4212,6 +4240,7 @@ const make = Effect.gen(function* () {
         const allItems = timeline.items.map((row) => ({
           ...timelineItem({
             row,
+            threadId: target.thread.id,
             maxChars,
             messagesByThreadId,
             ...(input.itemId === undefined ? {} : { textOffset: input.textOffset ?? 0 }),
@@ -4589,16 +4618,16 @@ const make = Effect.gen(function* () {
                 // answer; saying so keeps the lead from treating silence as a view.
                 const silent =
                   result.status === "completed" &&
-                  (result.summary === null ||
+                  (result.summary === undefined ||
                     result.summary.trim() === "" ||
                     result.summary === EMPTY_CHILD_RESULT_TEXT);
                 return {
                   providerInstanceId: result.providerInstanceId,
-                  model: result.model,
+                  model: result.model ?? null,
                   taskId: result.taskId,
                   status: silent ? "no_answer" : result.status,
-                  answer: silent ? null : result.summary,
-                  waitTimedOut: result.waitTimedOut,
+                  answer: silent ? null : (result.summary ?? null),
+                  waitTimedOut: result.waitTimedOut ?? false,
                   ...(silent
                     ? {
                         error:

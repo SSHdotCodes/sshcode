@@ -1,68 +1,94 @@
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 
-import {
-  TIMELINE_ARRIVAL_MS,
-  noteTimelineRows,
-  resetTimelineArrivalsForTest,
-  timelineRowArrived,
-} from "./timelineArrivals";
+import { createTimelineArrivalTracker, shouldAnimateTimelineRowArrival } from "./timelineArrivals";
 
-const rows = (...ids: string[]) => ids.map((id) => ({ id }));
+const rows = (...ids: string[]) =>
+  ids.map((id) => ({ id, kind: id === "working" ? "working" : "message" }));
 
 describe("timeline arrivals", () => {
-  beforeEach(resetTimelineArrivalsForTest);
-
   it("does not animate the rows a chat opens with", () => {
-    noteTimelineRows("chat", rows("a", "b", "c"), 0);
-    expect(["a", "b", "c"].some((id) => timelineRowArrived(id, 1))).toBe(false);
+    const observe = createTimelineArrivalTracker();
+    expect(observe("chat", rows("a", "b", "c"))).toBeNull();
   });
 
-  it("marks a row appended to an open chat, for a moment", () => {
-    noteTimelineRows("chat", rows("a", "b"), 0);
-    noteTimelineRows("chat", rows("a", "b", "c"), 100);
-    expect(timelineRowArrived("c", 110)).toBe(true);
-    expect(timelineRowArrived("b", 110)).toBe(false);
-    expect(timelineRowArrived("c", 100 + TIMELINE_ARRIVAL_MS)).toBe(false);
+  it("marks a row appended to an open chat", () => {
+    const observe = createTimelineArrivalTracker();
+    observe("chat", rows("a", "b"));
+    expect(observe("chat", rows("a", "b", "c"))).toEqual(["c"]);
   });
 
   it("marks a row that lands just above the working indicator", () => {
-    noteTimelineRows("chat", rows("a", "working"), 0);
-    noteTimelineRows("chat", rows("a", "tool", "working"), 50);
-    expect(timelineRowArrived("tool", 60)).toBe(true);
+    const observe = createTimelineArrivalTracker();
+    observe("chat", rows("a", "working"));
+    expect(observe("chat", rows("a", "tool", "working"))).toEqual(["tool"]);
   });
 
   it("treats older history paged in at the top as already there", () => {
-    noteTimelineRows("chat", rows("m", "n", "o", "p", "q"), 0);
-    noteTimelineRows("chat", rows("k", "l", "m", "n", "o", "p", "q"), 50);
-    expect(timelineRowArrived("k", 60)).toBe(false);
-    expect(timelineRowArrived("l", 60)).toBe(false);
+    const observe = createTimelineArrivalTracker();
+    observe("chat", rows("m", "n", "o", "p", "q"));
+    expect(observe("chat", rows("k", "l", "m", "n", "o", "p", "q"))).toEqual([]);
+  });
+
+  it("keeps prepended history still even when the entire list is short", () => {
+    const observe = createTimelineArrivalTracker();
+    observe("chat", rows("m", "n"));
+    expect(observe("chat", rows("k", "m", "n"))).toEqual([]);
+  });
+
+  it("marks only the appended row when older history and live content arrive together", () => {
+    const observe = createTimelineArrivalTracker();
+    observe("chat", rows("m", "n", "working"));
+    expect(observe("chat", rows("k", "m", "n", "o", "working"))).toEqual(["o"]);
   });
 
   it("treats many rows at once as a load", () => {
-    noteTimelineRows("chat", rows(), 0);
-    noteTimelineRows("chat", rows("a", "b", "c", "d", "e"), 50);
-    expect(timelineRowArrived("e", 60)).toBe(false);
+    const observe = createTimelineArrivalTracker();
+    observe("chat", rows());
+    expect(observe("chat", rows("a", "b", "c", "d", "e"))).toEqual([]);
     // The first prompt of a new chat is an arrival.
-    noteTimelineRows("new", rows(), 0);
-    noteTimelineRows("new", rows("prompt", "working"), 50);
-    expect(timelineRowArrived("prompt", 60)).toBe(true);
+    observe("new", rows());
+    expect(observe("new", rows("prompt", "working"))).toEqual(["prompt"]);
   });
 
-  it("keeps chats apart and never replays a row", () => {
-    noteTimelineRows("one", rows("a"), 0);
-    noteTimelineRows("two", rows("x"), 0);
-    noteTimelineRows("one", rows("a", "b"), 10);
-    expect(timelineRowArrived("b", 20)).toBe(true);
-    // Folded away and back later: known, so it stays still.
-    noteTimelineRows("one", rows("a"), 1_000);
-    noteTimelineRows("one", rows("a", "b"), 2_000);
-    expect(timelineRowArrived("b", 2_010)).toBe(false);
-    expect(timelineRowArrived("x", 20)).toBe(false);
+  it("keeps independent timeline trackers apart and never replays a row", () => {
+    const observe = createTimelineArrivalTracker();
+    const observeOther = createTimelineArrivalTracker();
+    observe("chat", rows("a"));
+    observeOther("chat", rows("a", "b"));
+    expect(observe("chat", rows("a", "b"))).toEqual(["b"]);
+    // Folded away and back later: previously seen, so it stays still.
+    observe("chat", rows("a"));
+    expect(observe("chat", rows("a", "b"))).toEqual([]);
   });
 
   it("ignores updates that only change text in existing rows", () => {
-    noteTimelineRows("chat", rows("a", "b"), 0);
-    for (let tick = 1; tick < 50; tick++) noteTimelineRows("chat", rows("a", "b"), tick);
-    expect(timelineRowArrived("b", 50)).toBe(false);
+    const observe = createTimelineArrivalTracker();
+    observe("chat", rows("a", "b"));
+    expect(observe("chat", rows("a", "b"))).toEqual([]);
+  });
+
+  it("does not animate short history that hydrates after an empty loading frame", () => {
+    const observe = createTimelineArrivalTracker();
+    observe(null, rows());
+    expect(observe("short", rows("user-1", "assistant-1"))).toBeNull();
+    expect(observe("short", rows("user-1", "assistant-1", "user-2"))).toEqual(["user-2"]);
+  });
+
+  it("re-seeds silently when switching back into a chat that received messages while away", () => {
+    const observe = createTimelineArrivalTracker();
+    observe("one", rows("a"));
+    expect(observe("one", rows("a", "b"))).toEqual(["b"]);
+    observe("two", rows("x"));
+    expect(observe("one", rows("a", "b", "c"))).toBeNull();
+  });
+
+  it("animates content arrivals only, skipping metadata, working chrome, and expanded folds", () => {
+    expect(shouldAnimateTimelineRowArrival("message")).toBe(true);
+    expect(shouldAnimateTimelineRowArrival("work", { isExpandedToolGroup: false })).toBe(true);
+    expect(shouldAnimateTimelineRowArrival("work-live")).toBe(true);
+    expect(shouldAnimateTimelineRowArrival("work-toggle")).toBe(true);
+    expect(shouldAnimateTimelineRowArrival("work", { isExpandedToolGroup: true })).toBe(false);
+    expect(shouldAnimateTimelineRowArrival("working")).toBe(false);
+    expect(shouldAnimateTimelineRowArrival("assistant-meta")).toBe(false);
   });
 });

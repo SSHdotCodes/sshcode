@@ -2871,6 +2871,91 @@ describe("sortSidebarSessions", () => {
       "woken",
     ]);
   });
+
+  it("rises unseen failures and actionable plans above working chats immediately", () => {
+    const now = Date.parse("2026-03-09T12:00:30.000Z");
+    const working = session("working", {
+      latestUserMessageAt: "2026-03-09T12:00:25.000Z",
+      runtime: running,
+    });
+    // Fresh unopened failure (< 2 min ago, lastVisitedAt null) must rise at once,
+    // never linger in working or sink below working.
+    const unopenedFailure = session("failed-unopened", {
+      updatedAt: "2026-03-09T12:00:10.000Z",
+      latestRun: {
+        ...makeLatestRun({ completedAt: "2026-03-09T12:00:10.000Z" }),
+        status: "failed",
+      },
+      runtime: { ...running, status: "failed", activeRunId: null },
+      lastVisitedAt: null,
+    });
+    // Seen failure drops back to idle even within 2 minutes of failing.
+    const seenFailure = session("failed-seen", {
+      updatedAt: "2026-03-09T12:00:20.000Z",
+      latestRun: {
+        ...makeLatestRun({ completedAt: "2026-03-09T12:00:20.000Z" }),
+        status: "failed",
+      },
+      runtime: { ...running, status: "failed", activeRunId: null },
+      lastVisitedAt: "2026-03-09T12:00:22.000Z",
+    });
+    const planReady = session("plan-ready", {
+      updatedAt: "2026-03-09T11:55:00.000Z",
+      latestRun: makeLatestRun({ completedAt: "2026-03-09T11:55:00.000Z" }),
+      hasActionableProposedPlan: true,
+      lastVisitedAt: "2026-03-09T11:56:00.000Z",
+    });
+
+    expect(
+      sortSidebarSessions([working, seenFailure, planReady, unopenedFailure], { nowMs: now }).map(
+        (thread) => thread.id,
+      ),
+    ).toEqual(["failed-unopened", "plan-ready", "working", "failed-seen"]);
+  });
+
+  it("uses local visit watermarks for failures on pre-tracking servers where lastVisitedAt is undefined", () => {
+    const now = Date.parse("2026-03-09T12:00:30.000Z");
+    const working = session("working", {
+      latestUserMessageAt: "2026-03-09T12:00:25.000Z",
+      runtime: running,
+    });
+    // Server omits lastVisitedAt (undefined); browser recorded a visit after the failure.
+    const seenOnOldServer = session("failed-old-server-seen", {
+      updatedAt: "2026-03-09T12:00:10.000Z",
+      latestRun: {
+        ...makeLatestRun({ completedAt: "2026-03-09T12:00:10.000Z" }),
+        status: "failed",
+      },
+      runtime: { ...running, status: "failed", activeRunId: null },
+      lastVisitedAt: undefined,
+    });
+    const unseenOnOldServer = session("failed-old-server-unseen", {
+      updatedAt: "2026-03-09T12:00:15.000Z",
+      latestRun: {
+        ...makeLatestRun({ completedAt: "2026-03-09T12:00:15.000Z" }),
+        status: "failed",
+      },
+      runtime: { ...running, status: "failed", activeRunId: null },
+      lastVisitedAt: undefined,
+    });
+    const localVisits: Record<string, string | undefined> = {
+      "failed-old-server-seen": "2026-03-09T12:00:20.000Z",
+      "failed-old-server-unseen": "2026-03-09T12:00:05.000Z",
+    };
+
+    expect(sidebarSessionNeedsYou(seenOnOldServer, now, localVisits[seenOnOldServer.id])).toBe(
+      false,
+    );
+    expect(sidebarSessionNeedsYou(unseenOnOldServer, now, localVisits[unseenOnOldServer.id])).toBe(
+      true,
+    );
+    expect(
+      sortSidebarSessions([working, seenOnOldServer, unseenOnOldServer], {
+        nowMs: now,
+        localLastVisitedAt: (thread) => localVisits[thread.id],
+      }).map((thread) => thread.id),
+    ).toEqual(["failed-old-server-unseen", "working", "failed-old-server-seen"]);
+  });
 });
 
 describe("holdSidebarOrder", () => {

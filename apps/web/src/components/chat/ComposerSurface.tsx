@@ -37,7 +37,7 @@ function Shell({
 }
 
 const outlineClasses =
-  "after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] after:border after:border-(--chat-composer-outline) after:transition-[border-color,box-shadow] after:duration-150 after:ease-out motion-reduce:after:transition-none focus-within:after:border-foreground/18 dark:after:inset-shadow-2xs dark:after:inset-shadow-(color:--chat-composer-highlight)";
+  "after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] after:border after:border-(--chat-composer-outline) after:transition-[border-color,box-shadow] after:duration-150 after:ease-out motion-reduce:after:transition-none focus-within:after:border-foreground/22 focus-within:after:shadow-[0_0_0_3px_color-mix(in_srgb,var(--foreground)_5%,transparent)] dark:after:inset-shadow-2xs dark:after:inset-shadow-(color:--chat-composer-highlight) dark:focus-within:after:border-white/14 dark:focus-within:after:shadow-[0_0_0_3px_rgb(255_255_255/4%)]";
 
 // The bottom strip continues the outline, so leave the seam between its corners open.
 const contextSeamClasses =

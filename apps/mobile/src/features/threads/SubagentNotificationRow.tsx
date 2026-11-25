@@ -15,7 +15,7 @@ import { formatTranscriptTimestamp } from "../../lib/time";
 import { environmentThreadDetails } from "../../state/threads";
 import { subagentNotificationPresentation } from "./subagent-card-presentation";
 import { SubagentGradeBadge } from "./SubagentGradeBadge";
-import { SubagentRow } from "./SubagentRow";
+import { SUBAGENT_TRANSCRIPT_CARD_CLASS_NAME, SubagentRow } from "./SubagentRow";
 import { resolveSubagentRowPresentation } from "./threadAgentsPresentation";
 
 /** A past subagent event uses the same card and frozen status wording as the Mac. */
@@ -41,7 +41,7 @@ export function SubagentNotificationRow(props: {
         accessibilityRole="link"
         accessibilityLabel={`${presentation.title}, ${event.statusLabel}`}
         accessibilityHint="Opens this subagent's chat"
-        className="min-h-[44px] rounded-md px-0.5 py-1.5 active:bg-subtle"
+        className={SUBAGENT_TRANSCRIPT_CARD_CLASS_NAME}
         onPress={() =>
           navigation.dispatch(
             StackActions.push("Thread", {

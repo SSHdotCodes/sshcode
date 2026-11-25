@@ -124,4 +124,15 @@ describe("threadContextAttachment", () => {
     const hostile = threadContextAttachment(EnvironmentId.make("studio"), transcript, 'a") x');
     expect(hostile.name).toMatch(/^Gate tuning \(from a__ x\)-[a-f0-9]+\.jsonl$/);
   });
+
+  it("does not split a surrogate pair when truncating long titles", () => {
+    const file = threadContextAttachment(EnvironmentId.make("source"), {
+      threadId: ThreadId.make("surrogate-thread"),
+      title: `${"a".repeat(63)}𠀀`,
+      updatedAt: DateTime.makeUnsafe("2026-09-29T00:00:00.000Z"),
+      items: [],
+    });
+
+    expect(file.name).toMatch(/^a{63}-[a-f0-9]+\.jsonl$/);
+  });
 });

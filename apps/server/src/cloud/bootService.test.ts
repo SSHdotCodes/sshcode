@@ -166,10 +166,26 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
       const failed = command === control.failCommand;
       if (!failed && command === "loginctl enable-linger --no-ask-password 501")
         control.linger = "yes";
-      if (!failed && command === "systemctl --user enable sshcode-shared.service")
+      if (
+        !failed &&
+        (command === "systemctl --user enable sshcode-shared.service" ||
+          command.startsWith("launchctl enable "))
+      ) {
         control.enabled = true;
-      if (!failed && command === "systemctl --user restart sshcode-shared.service")
+      }
+      if (
+        !failed &&
+        (command === "systemctl --user restart sshcode-shared.service" ||
+          command.startsWith("launchctl bootstrap "))
+      ) {
         control.active = true;
+      }
+      if (
+        command === "systemctl --user stop sshcode-shared.service" ||
+        command.startsWith("launchctl bootout --wait ")
+      ) {
+        control.active = false;
+      }
       if (
         control.stateAfterStop !== undefined &&
         (command === "systemctl --user stop sshcode-shared.service" ||
@@ -185,14 +201,21 @@ const makeHarness = Effect.fn("test.make_boot_service_harness")(function* (
               `sshcode v${/versions\/([^/]+)\//.exec(input.command)?.[1] ?? "1.2.3"}\n`
             : input.command === "loginctl" && input.args[0] === "show-user"
               ? `${control.linger}\n`
-              : input.args[1] === "is-enabled"
-                ? control.enabled
-                  ? "enabled\n"
-                  : "disabled\n"
-                : "",
+              : input.command === "launchctl" && input.args[0] === "print-disabled"
+                ? `disabled services = {\n\t"io.github.sshdotcodes.sshcode.service" => ${control.enabled ? "enabled" : "disabled"}\n}\n`
+                : input.args[1] === "is-enabled"
+                  ? control.enabled
+                    ? "enabled\n"
+                    : "disabled\n"
+                  : "",
         stderr: "",
         code: ChildProcessSpawner.ExitCode(
-          failed || (input.args[1] === "is-active" && !control.active) ? 1 : 0,
+          failed ||
+            (input.command === "launchctl" && input.args[0] === "print" && !control.active) ||
+            (input.args[1] === "is-active" && !control.active) ||
+            (input.args[1] === "is-enabled" && !control.enabled)
+            ? 1
+            : 0,
         ),
         timedOut: false,
         stdoutTruncated: false,
@@ -686,7 +709,8 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
 
   it.effect("installs, reports current state, and uninstalls on macOS", () =>
     Effect.gen(function* () {
-      const { service, fs, statePath, commands, timeouts, runtime } = yield* makeHarness("darwin");
+      const { service, fs, statePath, commands, timeouts, runtime, control } =
+        yield* makeHarness("darwin");
       const path = yield* Path.Path;
       const plan = yield* service.install();
 
@@ -708,7 +732,16 @@ it.layer(NodeServices.layer)("boot service install", (it) => {
       expect(yield* service.status).toMatchObject({
         current: true,
         installedVersion: "1.2.3",
+        problems: [],
       });
+      control.active = false;
+      control.enabled = false;
+      expect(yield* service.status).toMatchObject({
+        current: false,
+        problems: ["service-disabled", "service-stopped"],
+      });
+      control.active = true;
+      control.enabled = true;
       expect(yield* service.uninstall).toBe(true);
       expect((yield* service.status).installed).toBe(false);
       expect(commands.some((command) => command.startsWith("systemctl "))).toBe(false);

@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { createSidebarListMotion } from "./Sidebar.motion";
+import {
+  createSidebarListMotion,
+  SIDEBAR_LIST_EXIT_TIMING,
+  SIDEBAR_LIST_MOTION_TIMING,
+} from "./Sidebar.motion";
 
 class TestAnimation {
   progress: number | null = 0;
@@ -97,7 +101,7 @@ function fixture(rows: TestRow[]) {
 function expectMove(row: TestRow, offset: number) {
   expect(row.animate).toHaveBeenLastCalledWith(
     [{ transform: `translateY(${offset}px)` }, { transform: "translateY(0px)" }],
-    { duration: 150, easing: "ease-out" },
+    SIDEBAR_LIST_MOTION_TIMING,
   );
 }
 
@@ -288,8 +292,8 @@ describe("sidebar list motion", () => {
         { opacity: 1, transform: "translateY(0px)" },
       ],
       {
-        duration: 150,
-        easing: "ease-out",
+        duration: SIDEBAR_LIST_MOTION_TIMING.duration,
+        easing: SIDEBAR_LIST_MOTION_TIMING.easing,
       },
     );
     const clone = a.clones[0]!;
@@ -312,8 +316,8 @@ describe("sidebar list motion", () => {
         { opacity: 0, transform: "translateY(-83px)" },
       ],
       {
-        duration: 150,
-        easing: "ease-out",
+        duration: SIDEBAR_LIST_MOTION_TIMING.duration,
+        easing: SIDEBAR_LIST_MOTION_TIMING.easing,
       },
     );
     expect(parent.children.includes(clone)).toBe(true);
@@ -345,14 +349,14 @@ describe("sidebar list motion", () => {
         { opacity: 0, transform: "translateY(72px)" },
         { opacity: 1, transform: "translateY(0px)" },
       ],
-      { duration: 150, easing: "ease-out" },
+      SIDEBAR_LIST_MOTION_TIMING,
     );
     expect(z.animate).toHaveBeenLastCalledWith(
       [
         { opacity: 0, transform: "translateY(72px)" },
         { opacity: 1, transform: "translateY(0px)" },
       ],
-      { duration: 150, easing: "ease-out" },
+      SIDEBAR_LIST_MOTION_TIMING,
     );
   });
 
@@ -372,7 +376,7 @@ describe("sidebar list motion", () => {
         { opacity: 0, transform: "translateY(-30px)" },
         { opacity: 1, transform: "translateY(0px)" },
       ],
-      { duration: 150, easing: "ease-out" },
+      SIDEBAR_LIST_MOTION_TIMING,
     );
   });
 
@@ -418,7 +422,7 @@ describe("sidebar list motion", () => {
         { opacity: 0.25, transform: "translateY(0px)" },
         { opacity: 0, transform: "translateY(9px)" },
       ],
-      { duration: 150, easing: "ease-out" },
+      SIDEBAR_LIST_MOTION_TIMING,
     );
     expectMove(header, -9);
     expectMove(x, -9);
@@ -444,13 +448,10 @@ describe("sidebar list motion", () => {
     motion.update(true);
     expect(a.animate).toHaveBeenCalledWith(
       [
-        { opacity: 0, transform: "translateY(0px)" },
-        { opacity: 1, transform: "translateY(0px)" },
+        { opacity: 0, transform: "translateY(-4px)", clipPath: "inset(0px 0px 100% 0px)" },
+        { opacity: 1, transform: "translateY(0px)", clipPath: "inset(0px 0px 0px 0px)" },
       ],
-      {
-        duration: 150,
-        easing: "ease-out",
-      },
+      SIDEBAR_LIST_MOTION_TIMING,
     );
     motion.dispose();
     expect(a.animations.at(-1)!.cancel).toHaveBeenCalledOnce();
@@ -470,17 +471,53 @@ describe("sidebar list motion", () => {
     const clone = a.clones[0]!;
     expect(clone.animate).toHaveBeenCalledWith(
       [
-        { opacity: 0.4, transform: "translateY(0px)" },
-        { opacity: 0, transform: "translateY(40px)" },
+        { opacity: 0.4, transform: "translateY(0px)", clipPath: "inset(0px 0px 0px 0px)" },
+        { opacity: 0, transform: "translateY(-4px)", clipPath: "inset(0px 0px 100% 0px)" },
       ],
-      {
-        duration: 150,
-        easing: "ease-out",
-      },
+      SIDEBAR_LIST_EXIT_TIMING,
     );
     motion.update(false);
     expect(parent.children).toEqual([]);
     expect(clone.animations[0]!.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("fades and height-collapses a removed row while displaced peers glide up", () => {
+    const a = new TestRow("a", 44);
+    const b = new TestRow("b", 44);
+    const c = new TestRow("c", 44);
+    const { motion, layout } = fixture([a, b, c]);
+    motion.update(true);
+    // Settling/snoozing/archiving b removes it while a stays put and c glides up.
+    layout([a, c]);
+    motion.update(true);
+    const clone = b.clones[0]!;
+    expect(clone.style.overflow).toBe("hidden");
+    expect(clone.animate).toHaveBeenCalledWith(
+      [
+        { opacity: 1, transform: "translateY(0px)", clipPath: "inset(0px 0px 0px 0px)" },
+        { opacity: 0, transform: "translateY(-4px)", clipPath: "inset(0px 0px 100% 0px)" },
+      ],
+      SIDEBAR_LIST_EXIT_TIMING,
+    );
+    expectMove(c, 45);
+    expect(a.animate).not.toHaveBeenCalled();
+  });
+
+  it("fades and reveals a new top chat while existing rows glide down", () => {
+    const existing = new TestRow("existing", 44);
+    const fresh = new TestRow("fresh", 44);
+    const { motion, layout } = fixture([existing]);
+    motion.update(true);
+    layout([fresh, existing]);
+    motion.update(true);
+    expect(fresh.animate).toHaveBeenCalledWith(
+      [
+        { opacity: 0, transform: "translateY(-4px)", clipPath: "inset(0px 0px 100% 0px)" },
+        { opacity: 1, transform: "translateY(0px)", clipPath: "inset(0px 0px 0px 0px)" },
+      ],
+      SIDEBAR_LIST_MOTION_TIMING,
+    );
+    expectMove(existing, -45);
   });
 
   it("retargets an in-flight entry when a later layout shift moves the row", () => {
@@ -541,5 +578,14 @@ describe("sidebar list motion", () => {
     motion.update(true);
     expectMove(a, 83);
     expectMove(b, -83);
+  });
+});
+
+describe("sidebar list motion timing", () => {
+  it("pins the reorder duration and easing", () => {
+    expect(SIDEBAR_LIST_MOTION_TIMING).toEqual({
+      duration: 185,
+      easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+    });
   });
 });

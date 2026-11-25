@@ -2,6 +2,7 @@
 import {
   DEFAULT_UNIFIED_SETTINGS,
   EnvironmentId,
+  RuntimeRequestId,
   ThreadId,
   type WorkflowDefinition,
 } from "@t3tools/contracts";
@@ -46,6 +47,7 @@ vi.mock("../workflows/useWorkflows", async (importOriginal) => {
 
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import { ChatComposer, type ChatComposerProps } from "./ChatComposer";
+import { KeptChatPane } from "./KeptChatPane";
 
 const environmentId = EnvironmentId.make("local");
 const draftId = DraftId.make("new-chat");
@@ -104,6 +106,7 @@ const props: ChatComposerProps = {
   isCompacting: false,
   bannerItems: [],
   environmentUnavailable: null,
+  pendingRequestsHydrated: false,
   activePendingApproval: null,
   pendingApprovals: [],
   pendingUserInputs: [],
@@ -243,4 +246,70 @@ it("offers a workflow in the @ menu as soon as the workflows load", async () => 
 
   expect(editor()?.getAttribute("aria-activedescendant") ?? "").toContain("workflow%3Adeploy");
   expect(document.body.textContent).toContain("Deploy review");
+});
+
+it("opens for a live question without replaying the entrance when switching back", async () => {
+  const question = {
+    id: "confirm",
+    header: "Confirm approach",
+    question: "Which approach should I use?",
+    options: [{ label: "Incremental", description: "One module at a time" }],
+    multiSelect: false,
+  };
+  const request = {
+    requestId: RuntimeRequestId.make("choose-approach"),
+    createdAt: "2026-11-01T00:00:00.000Z",
+    questions: [question],
+    responseCapability: "live" as const,
+    dismissible: false,
+  };
+  const firstThread = ThreadId.make("first");
+  const otherThread = ThreadId.make("other");
+  const renderComposer = async (
+    threadId: ThreadId,
+    pendingRequestsHydrated: boolean,
+    pendingUserInputs: ChatComposerProps["pendingUserInputs"] = [],
+    hidden = false,
+  ) => {
+    const routeThreadRef = { environmentId, threadId };
+    await act(async () =>
+      root.render(
+        <KeptChatPane hidden={hidden}>
+          <section>
+            <ChatComposer
+              {...props}
+              routeKind="server"
+              routeThreadRef={routeThreadRef}
+              composerDraftTarget={routeThreadRef}
+              activeThreadId={threadId}
+              activeThreadEnvironmentId={environmentId}
+              isServerThread
+              isLocalDraftThread={false}
+              pendingRequestsHydrated={pendingRequestsHydrated}
+              pendingUserInputs={pendingUserInputs}
+            />
+          </section>
+        </KeptChatPane>,
+      ),
+    );
+  };
+  const drawer = () => host.querySelector('[data-chat-composer-top-drawer-state="open"]');
+  const animatedDrawer = () => drawer()?.classList.contains("motion-safe:starting:grid-rows-[0fr]");
+
+  await renderComposer(firstThread, true);
+  await renderComposer(firstThread, true, [request]);
+  expect(animatedDrawer()).toBe(true);
+
+  const liveDrawer = drawer();
+  await renderComposer(firstThread, true, [request], true);
+  await renderComposer(firstThread, true, [request]);
+  expect(drawer()).toBe(liveDrawer);
+  expect(animatedDrawer()).toBe(false);
+
+  await renderComposer(otherThread, true);
+  await renderComposer(firstThread, false);
+  expect(drawer()).toBeNull();
+  await renderComposer(firstThread, true, [request]);
+  expect(drawer()?.textContent).toContain(question.question);
+  expect(animatedDrawer()).toBe(false);
 });

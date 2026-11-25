@@ -16,6 +16,7 @@ import {
   type ModelMakerLogo,
   type ModelMakerUse,
   type ModelRouteSource,
+  orderMakerModelsByUse,
   orderMakersByUse,
   parseModelRouteMemory,
   rememberChosenModelRoute,
@@ -58,7 +59,8 @@ export function modelOptionRoute(option: ModelOption): ModelOptionRoute {
 
 /**
  * The maker groups, the ones used most lately first (chats someone started, recent ones
- * counting more): the same order as the web rail. Makers never used keep their places.
+ * counting more), and each maker's models ordered the same way: the same order as web.
+ * Makers and models never used keep their catalog places.
  */
 export function orderMakerGroupsByUse(
   groups: ReadonlyArray<ModelOptionMakerGroup>,
@@ -66,9 +68,10 @@ export function orderMakerGroupsByUse(
   sources: ReadonlyArray<ModelRouteSource>,
   now: number,
 ): ModelOptionMakerGroup[] {
-  const byMaker = new Map(groups.map((group) => [group.maker, group]));
+  const orderedModels = orderMakerModelsByUse(groups, uses, sources, now);
+  const byMaker = new Map(orderedModels.map((group) => [group.maker, group]));
   return orderMakersByUse(
-    groups.map((group) => group.maker),
+    orderedModels.map((group) => group.maker),
     uses,
     sources,
     now,

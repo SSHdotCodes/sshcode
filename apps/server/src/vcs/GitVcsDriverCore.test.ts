@@ -2610,6 +2610,86 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("shows GBK-encoded files as readable text in the review diff and expansion", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const before = "// GBK 初始中文注释\nint a = 1;\n";
+        const after = "// GBK 修改后的中文注释\nint a = 2;\n";
+        const utf8Before = "// UTF8 初始中文注释\nint u = 1;\n";
+        const utf8After = "// UTF8 修改后的中文注释\nint u = 2;\n";
+        const writeMain = (hex: string) =>
+          Effect.sync(() =>
+            NodeFS.writeFileSync(pathService.join(cwd, "main.c"), Buffer.from(hex, "hex")),
+          );
+        yield* writeMain("2f2f2047424b20b3f5cabcd6d0cec4d7a2cacd0a696e742061203d20313b0a");
+        yield* writeTextFile(cwd, "utf8.c", utf8Before);
+        yield* git(cwd, ["add", "main.c", "utf8.c"]);
+        yield* git(cwd, ["commit", "-m", "add encoded files"]);
+        yield* writeMain("2f2f2047424b20d0deb8c4baf3b5c4d6d0cec4d7a2cacd0a696e742061203d20323b0a");
+        yield* writeTextFile(cwd, "utf8.c", utf8After);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const preview = yield* driver.getReviewDiffPreview({ cwd });
+        const diff = preview.sources.map((source) => source.diff).join("\n");
+        assert.include(diff, "-// GBK 初始中文注释");
+        assert.include(diff, "+// GBK 修改后的中文注释");
+        assert.include(diff, "-// UTF8 初始中文注释");
+        assert.include(diff, "+// UTF8 修改后的中文注释");
+
+        const contents = yield* driver.getReviewDiffFileContents(
+          makeReviewDiffFileContentsInput(cwd, { oldPath: "main.c", newPath: "main.c" }),
+        );
+        assert.deepStrictEqual(contents, { oldContents: before, newContents: after });
+      }),
+    );
+
+    it.effect("uses lenient UTF-8 for Latin-1 bytes in the review diff and expansion", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const file = pathService.join(cwd, "latin1.txt");
+        const before = Buffer.from("naïve\ncafé\ncafé_\n", "latin1");
+        // A genuine GBK run still cannot override the false GB18030 match inside "naïve".
+        const mixed = Buffer.concat([
+          Buffer.from("b3f5cabcd6d0cec4", "hex"),
+          Buffer.from(" naïve", "latin1"),
+        ]);
+        const after = Buffer.concat([
+          Buffer.from("résumé\ngarçon\n", "latin1"),
+          mixed,
+          Buffer.from("\n"),
+        ]);
+        yield* Effect.sync(() => NodeFS.writeFileSync(file, before));
+        yield* git(cwd, ["add", "latin1.txt"]);
+        yield* git(cwd, ["commit", "-m", "add Latin-1 text"]);
+        yield* Effect.sync(() => NodeFS.writeFileSync(file, after));
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const preview = yield* driver.getReviewDiffPreview({ cwd });
+        const diff = preview.sources.map((source) => source.diff).join("\n");
+        for (const line of [
+          "-na�ve",
+          "-caf�",
+          "-caf�_",
+          "+r�sum�",
+          "+gar�on",
+          `+${mixed.toString("utf8")}`,
+        ]) {
+          assert.include(diff, line);
+        }
+        const contents = yield* driver.getReviewDiffFileContents(
+          makeReviewDiffFileContentsInput(cwd, { oldPath: "latin1.txt", newPath: "latin1.txt" }),
+        );
+        assert.deepStrictEqual(contents, {
+          oldContents: "na�ve\ncaf�\ncaf�_\n",
+          newContents: `r�sum�\ngar�on\n${mixed.toString("utf8")}\n`,
+        });
+      }),
+    );
+
     it.effect("attributes working-tree filesystem failures to the failing operation", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

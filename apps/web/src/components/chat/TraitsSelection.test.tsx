@@ -11,6 +11,7 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import { ModelPickerReasoningColumn } from "./ModelPickerReasoningColumn";
+import { TraitsPicker } from "./TraitsPicker";
 
 const updateModel = vi.hoisted(() => vi.fn());
 
@@ -121,4 +122,41 @@ it("keeps new chat effort local and remembers its sticky default", () => {
   expect(
     useComposerDraftStore.getState().stickyOptionsByModelByProvider[instanceId]?.["gpt-5.4"],
   ).toContainEqual({ id: "reasoningEffort", value: "ultracode" });
+});
+
+it("flips Fast mode with one click on its bolt when speed is the only option left", () => {
+  const renderPicker = (fast: boolean) =>
+    act(() =>
+      root.render(
+        <TraitsPicker
+          provider={ProviderDriverKind.make("codex")}
+          instanceId={instanceId}
+          models={models}
+          model="gpt-5.4"
+          prompt=""
+          onPromptChange={() => {}}
+          planModeEnabled={false}
+          modelOptions={[{ id: "fastMode", value: fast }]}
+          omitReasoning
+          threadRef={threadRef}
+          onModelOptionsChange={updateModel}
+        />,
+      ),
+    );
+  renderPicker(false);
+  const bolt = () => host.querySelector<HTMLButtonElement>('button[aria-label="Fast mode"]');
+  expect(bolt()?.getAttribute("aria-pressed")).toBe("false");
+  expect(bolt()?.getAttribute("aria-haspopup")).toBeNull();
+  act(() => bolt()!.click());
+  expect(updateModel).toHaveBeenLastCalledWith(
+    expect.arrayContaining([{ id: "fastMode", value: true }]),
+  );
+
+  renderPicker(true);
+  expect(bolt()?.getAttribute("aria-pressed")).toBe("true");
+  expect(bolt()?.querySelector(".traits-speed-bolt")).not.toBeNull();
+  act(() => bolt()!.click());
+  expect(updateModel).toHaveBeenLastCalledWith(
+    expect.arrayContaining([{ id: "fastMode", value: false }]),
+  );
 });

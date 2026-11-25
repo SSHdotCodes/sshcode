@@ -79,6 +79,7 @@ function ConfiguredSettingsRouteScreen() {
           tint={SETTINGS_TINT.blue}
           label="T3 Account"
           value={accountLabel}
+          valuePosition={isSignedIn ? "below" : undefined}
           disabled={!isLoaded}
           onPress={() => navigation.navigate("SettingsSheet", { screen: "SettingsAuth" })}
         />
@@ -138,7 +139,7 @@ function SettingsIndexSections(props: {
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
         className="flex-1"
-        contentContainerClassName="gap-4 px-5 pt-4"
+        contentContainerClassName="gap-4 px-5 pt-4 ios:gap-5"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
         {selectedProjectKey !== null ? (
@@ -148,12 +149,13 @@ function SettingsIndexSections(props: {
               tint={SETTINGS_TINT.blue}
               label="Overview"
               value={projectLabel}
+              valuePosition="below"
               target="SettingsProjectOverview"
             />
           </SettingsSection>
         ) : null}
 
-        <SettingsSection title="Basics">
+        <SettingsSection title="Basics" separated>
           <SettingsRow
             icon="paintpalette"
             tint={SETTINGS_TINT.indigo}
@@ -175,20 +177,20 @@ function SettingsIndexSections(props: {
             />
           ) : null}
           {Platform.OS === "ios" ? (
-            <>
-              <SettingsRow
-                icon="keyboard"
-                tint={SETTINGS_TINT.gray}
-                label="Keyboard"
-                target="SettingsKeyboard"
-              />
-              <SettingsRow
-                icon="mic"
-                tint={SETTINGS_TINT.orange}
-                label="Microphone"
-                target="SettingsMicrophone"
-              />
-            </>
+            <SettingsRow
+              icon="keyboard"
+              tint={SETTINGS_TINT.gray}
+              label="Keyboard"
+              target="SettingsKeyboard"
+            />
+          ) : null}
+          {Platform.OS === "ios" ? (
+            <SettingsRow
+              icon="mic"
+              tint={SETTINGS_TINT.orange}
+              label="Microphone"
+              target="SettingsMicrophone"
+            />
           ) : null}
           {Platform.OS === "ios" && !Platform.isPad ? (
             <SettingsRow
@@ -206,7 +208,7 @@ function SettingsIndexSections(props: {
           />
         </SettingsSection>
 
-        <SettingsSection title="Agents & models">
+        <SettingsSection title="Agents & models" separated>
           <SettingsRow
             icon="text.bubble"
             tint={SETTINGS_TINT.green}
@@ -283,7 +285,7 @@ function SettingsIndexSections(props: {
           />
         </SettingsSection>
 
-        <SettingsSection title="Machines">
+        <SettingsSection title="Machines" separated>
           {props.accountRow}
           <SettingsRow
             icon="desktopcomputer"
@@ -312,7 +314,7 @@ function SettingsIndexSections(props: {
           />
         </SettingsSection>
 
-        <SettingsSection title="More">
+        <SettingsSection title="More" separated>
           <OverviewSwitchRow />
           <SettingsSwitchRow
             icon="arrow.triangle.branch"

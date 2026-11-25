@@ -13,19 +13,41 @@ import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { Tooltip, TooltipTrigger } from "../ui/tooltip";
 import { ThreadHoverCardPopup } from "../ThreadHoverCard";
+import { StatusCrossfade } from "../StatusCrossfade";
 
 const STATUS_VISUALS: Record<
   OrchestrationV2TurnItem["status"],
-  { dotClass: string; label: string }
+  { dotClass: string; textClass: string; label: string; pulse?: boolean }
 > = {
-  pending: { dotClass: "bg-info", label: "Queued" },
-  running: { dotClass: "bg-info", label: "Running" },
-  waiting: { dotClass: "bg-info", label: "Waiting" },
-  idle: { dotClass: "bg-muted-foreground/50", label: "Idle · resumable" },
-  completed: { dotClass: "bg-success", label: "Completed" },
-  failed: { dotClass: "bg-destructive", label: "Failed" },
-  cancelled: { dotClass: "bg-muted-foreground/60", label: "Stopped" },
-  interrupted: { dotClass: "bg-muted-foreground/60", label: "Stopped" },
+  pending: { dotClass: "bg-info", textClass: "text-info-foreground", label: "Queued", pulse: true },
+  running: {
+    dotClass: "bg-info",
+    textClass: "text-info-foreground",
+    label: "Running",
+    pulse: true,
+  },
+  waiting: { dotClass: "bg-info", textClass: "text-info-foreground", label: "Waiting" },
+  idle: {
+    dotClass: "bg-muted-foreground/50",
+    textClass: "text-muted-foreground",
+    label: "Idle · resumable",
+  },
+  completed: {
+    dotClass: "bg-success",
+    textClass: "text-success-foreground",
+    label: "Completed",
+  },
+  failed: { dotClass: "bg-destructive", textClass: "text-destructive", label: "Failed" },
+  cancelled: {
+    dotClass: "bg-muted-foreground/60",
+    textClass: "text-muted-foreground",
+    label: "Stopped",
+  },
+  interrupted: {
+    dotClass: "bg-muted-foreground/60",
+    textClass: "text-muted-foreground",
+    label: "Stopped",
+  },
 };
 
 export function subagentStatusVisual(status: OrchestrationV2TurnItem["status"]) {
@@ -80,8 +102,9 @@ export function SubagentAvatar({
       {status ? (
         <span
           className={cn(
-            "absolute -right-px -bottom-px size-2 rounded-full ring-2 ring-background",
+            "absolute -right-px -bottom-px size-2 rounded-full ring-2 ring-background transition-colors duration-160 ease-motion motion-reduce:transition-none",
             subagentStatusVisual(status).dotClass,
+            subagentStatusVisual(status).pulse && "motion-safe:animate-status-pulse",
           )}
         />
       ) : null}
@@ -119,6 +142,9 @@ export function SubagentCard(props: {
   readonly children?: ReactNode;
 }) {
   const failed = props.status === "failed";
+  const statusTextClass = props.status
+    ? subagentStatusVisual(props.status).textClass
+    : "text-muted-foreground";
   const content = (
     <>
       <SubagentAvatar
@@ -126,21 +152,33 @@ export function SubagentCard(props: {
         provider={props.provider}
         status={props.status ?? undefined}
         speed={props.speed}
+        className="size-7"
       />
-      <span className="min-w-0 flex-1">
+      <span className="min-w-0 flex-1 space-y-0.5">
         {/* The time shares the title's line and the status sits with the model:
             beside a cut-off title the status read as part of the time. */}
         <span className="flex items-baseline gap-2">
-          <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+          <span className="min-w-0 flex-1 truncate text-xs font-medium leading-snug text-foreground">
             {props.title}
           </span>
-          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+          <span className="shrink-0 text-2xs text-muted-foreground/85 tabular-nums">
             {props.elapsed}
           </span>
         </span>
         <span className="flex items-baseline gap-1 text-2xs text-muted-foreground">
-          <span className={cn("shrink-0", failed && "text-destructive")}>{props.statusLabel}</span>
-          <span aria-hidden className="shrink-0">
+          <StatusCrossfade
+            scopeKey={props.threadId ?? props.title}
+            statusKey={`${props.status ?? "none"}:${props.statusLabel}`}
+            snapshot={
+              <span className={cn("shrink-0 font-medium", statusTextClass)}>
+                {props.statusLabel}
+              </span>
+            }
+            className="shrink-0"
+          >
+            <span className={cn("shrink-0 font-medium", statusTextClass)}>{props.statusLabel}</span>
+          </StatusCrossfade>
+          <span aria-hidden className="shrink-0 text-muted-foreground/60">
             ·
           </span>
           <span className="min-w-0 truncate">
@@ -151,8 +189,8 @@ export function SubagentCard(props: {
         {props.detail ? (
           <span
             className={cn(
-              "block truncate text-2xs leading-relaxed",
-              failed ? "text-destructive" : "text-muted-foreground",
+              "block truncate text-2xs leading-snug transition-colors duration-160 ease-motion motion-reduce:transition-none",
+              failed ? "text-destructive" : "text-muted-foreground/90",
             )}
           >
             {props.detail.includes("/") && !props.detail.includes(" ") ? (
@@ -163,7 +201,7 @@ export function SubagentCard(props: {
           </span>
         ) : null}
         {props.preview ? (
-          <span className="block truncate text-2xs text-muted-foreground">
+          <span className="block truncate text-2xs leading-snug text-muted-foreground/85">
             {plainDetail(props.preview)}
           </span>
         ) : null}
@@ -171,13 +209,13 @@ export function SubagentCard(props: {
       {props.threadId !== null ? (
         <ChevronRightIcon
           aria-hidden
-          className="size-3.5 shrink-0 text-muted-foreground/60 transition-[color,transform] duration-150 ease-out motion-reduce:transition-none group-hover/subagent:translate-x-0.5 group-hover/subagent:text-foreground motion-reduce:group-hover/subagent:translate-x-0"
+          className="size-3.5 shrink-0 text-muted-foreground/55 transition-[color,transform] duration-150 ease-out motion-reduce:transition-none group-hover/subagent:translate-x-0.5 group-hover/subagent:text-foreground motion-reduce:group-hover/subagent:translate-x-0"
         />
       ) : null}
     </>
   );
   const className =
-    "group/subagent flex w-full min-w-0 items-center gap-2.5 rounded-md px-2 py-1.5 text-left";
+    "group/subagent my-1 flex w-full min-w-0 items-center gap-3 rounded-xl border border-border/55 bg-card/50 px-3 py-2.5 text-left shadow-2xs/10 dark:inset-shadow-card-highlight";
   const target =
     props.threadId === null ? (
       <div
@@ -196,7 +234,7 @@ export function SubagentCard(props: {
         onClick={() => props.onOpenThread(props.threadId!)}
         className={cn(
           className,
-          "cursor-pointer transition-[background-color,scale] duration-120 ease-out motion-reduce:transition-none hover:bg-accent/25 active:scale-[0.99] active:bg-accent/40 motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
+          "cursor-pointer transition-[background-color,border-color,scale] duration-120 ease-out motion-reduce:transition-none hover:border-border/90 hover:bg-accent/35 active:scale-[0.995] active:bg-accent/50 motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
         )}
       >
         {content}

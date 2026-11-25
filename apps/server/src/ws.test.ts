@@ -54,6 +54,13 @@ import * as ProjectEnrichment from "./project/ProjectEnrichmentService.ts";
 import type * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import * as EventLogCompaction from "./orchestration-v2/EventLogCompaction.ts";
+import * as ChatTabs from "./sessionBoxes/chatTabs.ts";
+import * as ScheduledTaskShells from "./scheduledTasks/ScheduledTaskShells.ts";
+import {
+  boxNamerCache,
+  lookupBoxNaming,
+  shellDecorationCursor,
+} from "./sessionBoxes/boxNamerCache.ts";
 import {
   layer,
   layerWsRpc,
@@ -375,6 +382,7 @@ it.live.each(["thread", "shell"] as const)(
             }).pipe(Effect.flatMap(consume))
           : yield* subscribeOrchestrationV2Shell({
               afterSequence: before!.sequence,
+              decorationCursor: shellDecorationCursor(),
               requestCompletionMarker: true,
             }).pipe(Effect.flatMap(consume));
       });
@@ -457,13 +465,15 @@ it.live.each(["thread", "shell"] as const)(
           Stream.runCollect,
           Effect.map(([item]) => item?.kind),
         );
-      const firstItem = (afterSequence: number) =>
+      const firstItem = (afterSequence: number, decorationCursor = shellDecorationCursor()) =>
         Effect.gen(function* () {
           return scope === "thread"
             ? yield* subscribeOrchestrationV2Thread({ threadId, afterSequence }).pipe(
                 Effect.flatMap(kindOf),
               )
-            : yield* subscribeOrchestrationV2Shell({ afterSequence }).pipe(Effect.flatMap(kindOf));
+            : yield* subscribeOrchestrationV2Shell({ afterSequence, decorationCursor }).pipe(
+                Effect.flatMap(kindOf),
+              );
         }).pipe(
           Effect.provideService(ThreadManagement.ThreadManagementService, {
             ensureLegacyTranscript: () => Effect.void,
@@ -515,9 +525,138 @@ it.live.each(["thread", "shell"] as const)(
         yield* firstItem(floor!.sequence - 1),
         scope === "thread" ? "event" : "project.updated",
       );
+      if (scope === "shell") {
+        assert.equal(
+          yield* firstItem(floor!.sequence - 1, { epoch: "previous-server", revision: 0 }),
+          "snapshot",
+        );
+      }
       // The replay stats would count only what is left; the floor tells.
       assert.equal(yield* firstItem(old!.sequence - 1), "snapshot");
     }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
+);
+
+it.live("shell resume refreshes quiet chat decorations after a busy gap", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const updates = yield* PubSub.unbounded();
+    const schedules = yield* ScheduledTaskShells.ScheduledTaskShells;
+    const tabs = ChatTabs.make().store;
+    const quiet = ThreadId.make("quiet-decorated-chat");
+    const namingBasis = { title: "Quiet chat", requestId: "quiet-request" };
+    const decorationCursor = shellDecorationCursor();
+    // The shell needs only the aggregate key. Give the events a body that would
+    // fail decoding as a turn item to catch an accidental full event read.
+    yield* sql`
+      WITH RECURSIVE burst(n) AS (
+        SELECT 1 UNION ALL SELECT n + 1 FROM burst WHERE n < 1243
+      )
+      INSERT INTO orchestration_events (
+        event_id, aggregate_kind, stream_id, stream_version, event_type,
+        occurred_at, actor_kind, payload_json, metadata_json, application_event_version
+      )
+      SELECT 'shell-burst:' || n, 'thread', ${v2ThreadShell.id}, n,
+        'turn-item.updated', '2026-01-05T00:00:00.000Z', 'provider', '{}', '{}', 2
+      FROM burst
+    `;
+    const events = yield* OrchestrationEventStore.OrchestrationEventStore;
+    const head = yield* events.latestApplicationSequence;
+    yield* tabs.command(
+      { action: "move", tab: "Filed while offline", threadIds: [quiet] },
+      { titleOf: () => namingBasis.title, now: 0 },
+    );
+    const nextRunAt = "2026-01-05T01:00:00.000Z";
+    yield* sql`
+      INSERT INTO scheduled_tasks (
+        task_id, title, prompt, enabled, schedule_json, project_id, thread_id,
+        workspace_strategy_json, model_selection_json, runtime_mode, interaction_mode,
+        created_by, creation_source, created_at, updated_at, next_run_at, last_run_status, run_count
+      ) VALUES (
+        'quiet-schedule', 'Reminder', 'Check status', 1, '{"type":"interval","everyMs":60000}',
+        ${v2ThreadShell.projectId}, ${quiet}, '{}', '{}', 'full-access', 'default',
+        'user', 'web', ${nextRunAt}, ${nextRunAt}, ${nextRunAt}, 'never', 0
+      )
+    `;
+    yield* schedules.refresh;
+    yield* Effect.acquireRelease(
+      Effect.sync(() => boxNamerCache.activate([], () => {})),
+      () => Effect.sync(() => boxNamerCache.deactivate()),
+    );
+    boxNamerCache.put(quiet, { ...namingBasis, name: "Named while offline", now: null });
+    assert.equal(yield* events.latestApplicationSequence, head);
+
+    const reads: ThreadId[] = [];
+    const stream = yield* subscribeOrchestrationV2Shell({
+      afterSequence: 0,
+      decorationCursor,
+      requestCompletionMarker: true,
+    }).pipe(
+      Effect.provideService(ThreadManagement.ThreadManagementService, {
+        getThreadShell: (threadId: ThreadId) =>
+          Effect.sync(() => {
+            reads.push(threadId);
+            return threadId === quiet
+              ? {
+                  ...v2ThreadShell,
+                  id: quiet,
+                  chatTab: tabs.get(quiet),
+                  nextScheduledRunAt: schedules.nextRunAt(quiet),
+                  boxName: lookupBoxNaming(quiet, namingBasis)?.name ?? null,
+                }
+              : v2ThreadShell;
+          }),
+      } as unknown as ThreadManagement.ThreadManagementService["Service"]),
+      Effect.provideService(ProjectStore.ProjectStoreV2, {
+        listShells: () => Effect.succeed([]),
+      } as unknown as ProjectStore.ProjectStoreV2["Service"]),
+      Effect.provideService(
+        ProjectService.ProjectService,
+        {} as ProjectService.ProjectService["Service"],
+      ),
+      Effect.provideService(ProjectEnrichment.ProjectEnrichmentService, {
+        subscribeChanges: PubSub.subscribe(updates),
+      } as ProjectEnrichment.ProjectEnrichmentService["Service"]),
+    );
+    const items = yield* stream.pipe(
+      Stream.takeUntil((item) => item.kind === "synchronized"),
+      Stream.runCollect,
+    );
+    assert.deepEqual(reads, [v2ThreadShell.id, quiet]);
+    assert.deepEqual(
+      items.map((item) => item.kind),
+      ["thread.updated", "snapshot", "synchronized"],
+    );
+    assert.equal(items[0]?.kind === "thread.updated" && items[0].sequence, head);
+    const patch = items[1];
+    assert.isTrue(patch?.kind === "snapshot");
+    if (patch?.kind === "snapshot") {
+      assert.deepEqual(patch.resolvedRepositoryIdentityRoots, []);
+      assert.deepEqual(
+        patch.snapshot.threads.map(({ id, chatTab, nextScheduledRunAt, boxName }) => ({
+          id,
+          chatTab,
+          nextScheduledRunAt,
+          boxName,
+        })),
+        [
+          {
+            id: quiet,
+            chatTab: { name: "Filed while offline", position: 0, manual: true },
+            nextScheduledRunAt: nextRunAt,
+            boxName: "Named while offline",
+          },
+        ],
+      );
+    }
+    const marker = items[2];
+    assert.deepEqual(
+      marker?.kind === "synchronized" && marker.decorationCursor,
+      shellDecorationCursor(),
+    );
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(ScheduledTaskShells.layer.pipe(Layer.provideMerge(ReplayTestLayer))),
+  ),
 );
 
 it.live("refreshes a chat whose only monitor ended while the shell was disconnected", () =>
@@ -525,6 +664,7 @@ it.live("refreshes a chat whose only monitor ended while the shell was disconnec
     const updates = yield* PubSub.unbounded();
     const input = {
       afterSequence: 0,
+      decorationCursor: shellDecorationCursor(),
       requestCompletionMarker: true,
       refreshMonitorThreadIds: [v2ThreadShell.id],
     };

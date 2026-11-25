@@ -22,6 +22,7 @@ import { Pressable, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppActivityIndicator } from "../../components/AppActivityIndicator";
+import { EmptyState } from "../../components/EmptyState";
 import { AppText as Text } from "../../components/AppText";
 import { ListRowLayout } from "../../components/ListRowLayout";
 import { ControlPillMenu } from "../../components/ControlPill";
@@ -88,9 +89,11 @@ export function SettingsToolsRouteScreen() {
             onChangeText={setSearch}
           />
           {selectedTargets.length === 0 ? (
-            <Text className="px-2 text-base text-foreground-muted">
-              Select a connected environment.
-            </Text>
+            <EmptyState
+              variant="plain"
+              title="Select an environment"
+              detail="Connect an environment or select one in the filter to manage its tools."
+            />
           ) : (
             selectedTargets.map((environment) => (
               <ToolsEnvironmentSettings

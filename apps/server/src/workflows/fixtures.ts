@@ -101,13 +101,6 @@ export const delegationResult = (
   childRunId: null,
   status,
   workState: "working" as const,
-  hasPendingChildRuns: false,
-  latestTerminalStatus: null,
-  latestTerminalSummary: null,
   providerInstanceId: selection.instanceId,
   model: selection.model,
-  summary: null,
-  resultContextTransferId: null,
-  hasPendingQuestion: false,
-  waitTimedOut: false,
 });

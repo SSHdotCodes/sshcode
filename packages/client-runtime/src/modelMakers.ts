@@ -820,6 +820,79 @@ export function orderMakersByUse<M extends ModelMaker>(
     .map(({ maker }) => maker);
 }
 
+/**
+ * Orders each maker's models by how often and recently the user starts chats
+ * with them (same 21-day half-life over 120 days as `orderMakersByUse`).
+ * Non-legacy models stay ahead of legacy ones; unused models keep catalog order.
+ */
+export function orderMakerModelsByUse<T extends ModelRouteSource>(
+  groups: ReadonlyArray<MakerGroup<T>>,
+  uses: ReadonlyArray<ModelMakerUse>,
+  sources: ReadonlyArray<ModelRouteSource>,
+  now: number,
+): ReadonlyArray<MakerGroup<T>> {
+  if (uses.length === 0 || groups.length === 0) return groups;
+  const keyByRoute = new Map<string, string>();
+  const keySet = new Set<string>();
+  for (const group of groups) {
+    for (const model of group.models) {
+      keySet.add(model.key);
+      for (const route of model.routes) {
+        for (const source of route.sources) {
+          keyByRoute.set(`${source.instanceId}\u0000${source.slug}`, model.key);
+        }
+      }
+    }
+  }
+  const bySourceRoute = new Map(
+    sources.map((source) => [`${source.instanceId}\u0000${source.slug}`, source]),
+  );
+  const scores = new Map<string, number>();
+  for (const use of uses) {
+    const age = Math.max(0, now - use.at) / DAY_MS;
+    if (age > USE_WINDOW_DAYS) continue;
+    const routeRef = `${use.instanceId}\u0000${use.slug}`;
+    let modelKey = keyByRoute.get(routeRef);
+    if (modelKey === undefined) {
+      const source = bySourceRoute.get(routeRef) ?? {
+        instanceId: use.instanceId,
+        driver: "",
+        instanceName: "",
+        slug: use.slug,
+        name: use.slug,
+      };
+      const family = modelVendorFamily(source);
+      const maker = modelMakerForFamily(family);
+      const candidate = `${maker.id}:${canonicalModelId(source, family)}`;
+      if (keySet.has(candidate)) modelKey = candidate;
+    }
+    if (modelKey === undefined) continue;
+    scores.set(modelKey, (scores.get(modelKey) ?? 0) + 0.5 ** (age / USE_HALF_LIFE_DAYS));
+  }
+  if (scores.size === 0) return groups;
+  return groups.map((group) => {
+    if (group.models.length < 2) return group;
+    let hasScored = false;
+    for (const model of group.models) {
+      if ((scores.get(model.key) ?? 0) > 0) {
+        hasScored = true;
+        break;
+      }
+    }
+    if (!hasScored) return group;
+    const ordered = group.models
+      .map((model, index) => ({ model, index, score: scores.get(model.key) ?? 0 }))
+      .sort(
+        (left, right) =>
+          (left.model.isLegacy === right.model.isLegacy ? 0 : left.model.isLegacy ? 1 : -1) ||
+          right.score - left.score ||
+          left.index - right.index,
+      )
+      .map(({ model }) => model);
+    return { ...group, models: ordered };
+  });
+}
+
 /** The maker list, without the `MakerModel` ids: for rails and filters. */
 export function modelMakerById(makerId: string): ModelMaker {
   const { families: _families, ...maker } = MAKERS.find((entry) => entry.id === makerId) ?? {

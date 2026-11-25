@@ -660,7 +660,7 @@ describe("OrchestratorMcpService", () => {
           );
         assert.equal(pending.status, "running");
         assert.equal(pending.workState, "waiting_for_children");
-        assert.isNull(pending.summary);
+        assert.isUndefined(pending.summary);
         assert.equal(yield* Ref.get(acknowledgementAttempts), 0);
         hasNestedWork = false;
         const error = yield* service.taskStatus(scope, taskId).pipe(Effect.flip);
@@ -776,7 +776,7 @@ describe("OrchestratorMcpService", () => {
         const held = yield* service.taskStatus(scope, taskId);
         assert.equal(held.status, "running");
         assert.equal(held.workState, "working");
-        assert.isNull(held.summary);
+        assert.isUndefined(held.summary);
         // The cut run has no outcome while its continuation is pending.
         assert.isNotOk(held.latestTerminalRunId);
         assert.isNotOk(held.latestTerminalStatus);
@@ -811,7 +811,7 @@ describe("OrchestratorMcpService", () => {
         assert.equal(recovered.summary, "Recovered result");
         assert.equal(recovered.latestTerminalRunId, childProjection.runs[1]!.id);
         assert.equal(recovered.latestTerminalStatus, "completed");
-        assert.isNull(recovered.latestTerminalSummary);
+        assert.isUndefined(recovered.latestTerminalSummary);
       }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
     }),
   );
@@ -919,7 +919,7 @@ describe("OrchestratorMcpService", () => {
           const waiting = yield* service.taskStatus(scope, taskId);
           assert.equal(waiting.status, "running");
           assert.equal(waiting.workState, "waiting_for_children");
-          assert.isNull(waiting.summary);
+          assert.isUndefined(waiting.summary);
           assert.isUndefined(waiting.notice);
           // A second check with nothing changed points at the wake-up instead.
           const again = yield* service.taskStatus(scope, taskId);
@@ -1127,7 +1127,7 @@ describe("OrchestratorMcpService", () => {
               label: "Choose target",
             },
           ]);
-          assert.equal(result.hasPendingQuestion, withSpawn);
+          assert.equal(result.hasPendingQuestion, withSpawn ? true : undefined);
           assert.equal(result.childRunId, followupRunId);
           assert.equal(result.resultContextTransferId, ContextTransferId.make("result-followup"));
           const original = yield* service.taskStatus(scope, originalId);
@@ -3773,7 +3773,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           } as OrchestrationV2StoredEvent);
           const result = yield* Fiber.join(waiting);
           assert.equal(result.status, "running");
-          assert.isFalse(result.waitTimedOut);
+          assert.isUndefined(result.waitTimedOut);
           assert.include(result.notice ?? "", "Read the user's new message now.");
           assert.include(dispatched, "delegated_task.wake-policy");
           return;
@@ -3798,7 +3798,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           },
         } as unknown as OrchestrationV2StoredEvent);
         const result = yield* Fiber.join(waiting);
-        assert.isFalse(result.waitTimedOut);
+        assert.isUndefined(result.waitTimedOut);
         if (terminal) {
           assert.equal(result.status, "completed");
           if (wake === "parent completion") assert.equal(result.summary, "done");

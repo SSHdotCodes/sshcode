@@ -311,8 +311,11 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const [uiMode] = useUiMode();
   const discordMode = uiMode === "discord";
   const [discordSidebarWidth, setDiscordSidebarWidth] = useState(readInitialDiscordSidebarWidth);
-  const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
-    usePanelAnimationSettings();
+  const {
+    active: panelAnimationsActive,
+    durationMs: panelAnimationDurationMs,
+    exitDurationMs: panelExitDurationMs,
+  } = usePanelAnimationSettings();
   // Settings routes show the settings nav in place of whichever thread
   // sidebar is active.
   // Seeds server-side visited tracking from this browser's localStorage the
@@ -355,6 +358,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const sidebarProviderStyle = {
     "--sidebar-width": `${clampThreadSidebarWidth(discordMode ? discordSidebarWidth : sidebarWidth, sidebarMinimumWidth, sidebarMaximumWidth)}px`,
     "--panel-animation-duration": `${panelAnimationDurationMs}ms`,
+    "--panel-exit-duration": `${panelExitDurationMs}ms`,
     ...windowControlsInsetStyle,
   } as CSSProperties;
 

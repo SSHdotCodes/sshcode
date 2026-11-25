@@ -90,8 +90,10 @@ export function useResizableWidth(options: UseResizableWidthOptions): {
   const { refresh, ...handlers } = useResizeDrag<HTMLElement>((event) => {
     const host = event.currentTarget.parentElement;
     // A collapsible host animates width; live drag writes must not. The host
-    // renders its own transition-duration, so override a property it leaves alone.
+    // renders its own transition-duration, so override a property it leaves alone
+    // and mark it so nested panel fade/slide transitions stay inert too.
     host?.style.setProperty("transition-property", "none");
+    host?.setAttribute("data-panel-resizing", "true");
     return {
       width: clampedWidth,
       edge,
@@ -111,6 +113,7 @@ export function useResizableWidth(options: UseResizableWidthOptions): {
       },
       cleanup(committed) {
         host?.style.removeProperty("transition-property");
+        host?.removeAttribute("data-panel-resizing");
         // React skips the write when the rendered width did not change.
         if (!committed) {
           host?.style.setProperty(RESIZABLE_WIDTH_PROPERTY, `${latestOptions.current.width}px`);

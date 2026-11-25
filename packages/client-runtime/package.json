@@ -39,6 +39,10 @@
       "types": "./src/composerThreadItems.ts",
       "default": "./src/composerThreadItems.ts"
     },
+    "./composer-command-recency": {
+      "types": "./src/composerCommandRecency.ts",
+      "default": "./src/composerCommandRecency.ts"
+    },
     "./image-attachment-size": {
       "types": "./src/imageAttachmentSize.ts",
       "default": "./src/imageAttachmentSize.ts"

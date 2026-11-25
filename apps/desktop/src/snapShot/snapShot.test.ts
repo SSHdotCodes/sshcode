@@ -242,6 +242,29 @@ describe("accessibleWindowElementTree", () => {
     ]);
   });
 
+  it("stops descending a cyclic tree", async () => {
+    type LoopElement = {
+      role: string;
+      name: string;
+      bounds: null;
+      children: () => Promise<ReadonlyArray<LoopElement>>;
+    };
+    const group: LoopElement = {
+      role: "group",
+      name: "Loop",
+      bounds: null,
+      children: async () => [group],
+    };
+    const tree = await accessibleWindowElementTree(
+      { role: "window", name: "Inbox", bounds: null, children: async () => [group] },
+      { x: 0, y: 0, width: 800, height: 600 },
+      { width: 800, height: 600 },
+    );
+
+    expect(tree?.truncated).toBe(true);
+    expect(tree?.root.name).toBe("Inbox");
+  });
+
   it("marks trees truncated before their serialized payload grows without bound", async () => {
     const tree = await accessibleWindowElementTree(
       {

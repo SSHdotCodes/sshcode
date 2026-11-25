@@ -374,6 +374,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
         version: null,
         status: "error",
         auth: { status: "unknown" },
+        refreshing: true,
         message: "Pi CLI is installed but timed out while running `pi --version`.",
       },
     });
@@ -486,6 +487,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
         version,
         status: "ready",
         auth: { status: "unknown" },
+        refreshing: true,
         message:
           "Pi is available, but model and command discovery needs interactive input. The live session will handle it.",
       },

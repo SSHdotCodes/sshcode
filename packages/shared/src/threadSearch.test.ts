@@ -2,8 +2,34 @@ import { expect, it } from "vite-plus/test";
 import {
   findThreadSearchOccurrences,
   focusThreadSearchSnippet,
+  splitThreadSearchExcerpt,
   splitThreadSearchText,
 } from "./threadSearch.ts";
+
+it("highlights accented title words with original UTF-16 ranges", () => {
+  const text = "😀 Café and Cafe\u0301";
+  expect(splitThreadSearchExcerpt(text, "CAFE").filter((part) => part.highlighted)).toEqual([
+    { text: "Café", highlighted: true, start: text.indexOf("Café") },
+    { text: "Cafe\u0301", highlighted: true, start: text.indexOf("Cafe\u0301") },
+  ]);
+  expect(focusThreadSearchSnippet(`${"context ".repeat(10)}Café`, "cafe")).toMatch(/^….*Café$/);
+});
+
+it("highlights reordered words, file fragments and a corrected title word", () => {
+  const highlighted = (text: string, query: string, correction?: string) =>
+    splitThreadSearchExcerpt(text, query, correction)
+      .filter((part) => part.highlighted)
+      .map((part) => part.text);
+  expect(highlighted("Retry the Network connection", "network retry")).toEqual([
+    "Retry",
+    "Network",
+  ]);
+  expect(highlighted("Open src/sidebar.tsx", "sidebar.ts")).toEqual(["sidebar.ts"]);
+  expect(highlighted("Resolve database retries", "retreis database", "retries")).toEqual([
+    "database",
+    "retries",
+  ]);
+});
 
 it("finds non-overlapping occurrences without invalidating Unicode offsets", () => {
   expect(findThreadSearchOccurrences("Deploy the Deployment", "deploy")).toEqual([0, 11]);

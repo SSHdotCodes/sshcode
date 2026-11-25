@@ -92,4 +92,19 @@ describe("withLastUsageReading", () => {
     expect(later).toBe(failed);
     expect(withLastUsageReading(failed, first, NOW + HOUR).windows).toEqual(first.windows);
   });
+
+  it("keeps a reading from the last few minutes as it was", () => {
+    const recent = { ...last, checkedAt: at(1.9) };
+    const served = withLastUsageReading(failed, recent, NOW);
+    // Six minutes old: still the current numbers, with no failure notice to grey them out.
+    expect(served.unavailable).toBeUndefined();
+    expect(served.checkedAt).toBe(recent.checkedAt);
+    expect(served.windows.map((window) => window.id)).toEqual([
+      "gemini-weekly",
+      "3p-5h",
+      "3p-weekly",
+    ]);
+    expect(served.windows[0]?.recentPercentPerHour).toBe(3);
+    expect(served.resetCredits).toEqual({ availableCount: 1 });
+  });
 });

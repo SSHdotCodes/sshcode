@@ -1243,7 +1243,7 @@ describe("orchestrator MCP toolkit", () => {
             const remainder = yield* decodeThreadReadResult(remainderCall.structuredContent).pipe(
               Effect.orDie,
             );
-            expect(remainder.items[0]?.nextTextOffset).toBeNull();
+            expect(remainder.items[0]?.nextTextOffset).toBeUndefined();
             expect(firstChunk.text + (remainder.items[0]?.text ?? "")).toBe(
               "Claude completed: Complete before a parent reads this child result directly.",
             );
@@ -1266,7 +1266,6 @@ describe("orchestrator MCP toolkit", () => {
               {
                 type: "assistant_message",
                 text: "Claude completed: Complete before a parent reads this child result directly.",
-                textTruncated: false,
               },
             ]);
             const longText = "界🧪\n".repeat(20_000) + "FINAL_CONSTRAINT";
@@ -1357,8 +1356,8 @@ describe("orchestrator MCP toolkit", () => {
             expect(oldPage.thread).toMatchObject({
               runCount: childRunCount,
               latestRunId: defaultPage.thread.latestRunId,
-              activeRunId: defaultPage.thread.activeRunId,
             });
+            expect(oldPage.thread.activeRunId).toBe(defaultPage.thread.activeRunId);
             const contractMaxCall = yield* invoke("t3_thread_read", {
               threadId: directChildThreadId,
               limit: 100,
@@ -1706,7 +1705,7 @@ describe("orchestrator MCP toolkit", () => {
             expect(taskStatusTool?.tool.annotations?.readOnlyHint).toBe(false);
             expect(taskStatusTool?.tool.annotations?.idempotentHint).toBe(true);
             expect(taskStatusTool?.tool.description).toContain(
-              "latestTerminalSummary is null when it would repeat summary",
+              "omitted when they would repeat summary",
             );
             const createThreadsTool = server.tools.find(
               ({ tool }) => tool.name === "create_threads",
@@ -2220,9 +2219,7 @@ describe("orchestrator MCP toolkit", () => {
             expect(delegatedStatus).toMatchObject({
               status: "completed",
               summary: delegatedResult,
-              hasPendingChildRuns: false,
               latestTerminalStatus: "completed",
-              latestTerminalSummary: null,
             });
             expect(delegatedStatus.resultContextTransferId).not.toBeNull();
             // Both latest-terminal ids equal the original ones, so they are left out.
@@ -2237,7 +2234,8 @@ describe("orchestrator MCP toolkit", () => {
             const gradedStatus = yield* decodeDelegateTaskResult(
               gradedStatusCall.structuredContent,
             ).pipe(Effect.orDie);
-            expect(gradedStatus).toMatchObject({ status: "completed", summary: null });
+            expect(gradedStatus).toMatchObject({ status: "completed" });
+            expect(gradedStatus.summary).toBeUndefined();
 
             // Wait-mode completion already returned its result while the parent was live.
             yield* expectOffersToStay(0);
@@ -2284,7 +2282,6 @@ describe("orchestrator MCP toolkit", () => {
             expect(delegatedStatusAfterFollowup).toMatchObject({
               status: "completed",
               summary: delegatedResult,
-              hasPendingChildRuns: false,
               latestTerminalRunId: childFollowupRunId,
               latestTerminalStatus: "completed",
               latestTerminalSummary:
@@ -2416,7 +2413,6 @@ describe("orchestrator MCP toolkit", () => {
             expect(delegatedStatusAfterCancel).toMatchObject({
               status: "completed",
               summary: delegatedResult,
-              hasPendingChildRuns: false,
               latestTerminalRunId: activeChildFollowupRunId,
               latestTerminalStatus: "interrupted",
             });
@@ -2510,7 +2506,7 @@ describe("orchestrator MCP toolkit", () => {
             // The child may not have started its provider turn yet.
             expect(["starting", "running"]).toContain(cancellable.status);
             // Original delegated run alone is not "later" work.
-            expect(cancellable.hasPendingChildRuns).toBe(false);
+            expect(cancellable.hasPendingChildRuns).toBeUndefined();
             yield* waitForProjection(orchestrator, cancellableChildThreadId, (projection) =>
               projection.providerTurns.some((turn) => turn.status === "running"),
             );
@@ -2522,10 +2518,10 @@ describe("orchestrator MCP toolkit", () => {
             ).pipe(Effect.orDie);
             expect(statusWhileOriginalRunning).toMatchObject({
               status: "running",
-              hasPendingChildRuns: false,
-              latestTerminalStatus: null,
             });
             expect(statusWhileOriginalRunning.latestTerminalRunId).toBeUndefined();
+            expect(statusWhileOriginalRunning.latestTerminalStatus).toBeUndefined();
+            expect(statusWhileOriginalRunning.hasPendingChildRuns).toBeUndefined();
             // The requested model options reach the child thread's selection.
             const optionedChild = yield* orchestrator.getThreadProjection(cancellableChildThreadId);
             expect(optionedChild.thread.modelSelection).toEqual({
@@ -2728,7 +2724,8 @@ describe("orchestrator MCP toolkit", () => {
               metadataList.threads.find((thread) => thread.threadId === emptyThread.threadId)
                 ?.settledAt,
             ).toBeUndefined();
-            expect(metadataRead.thread).toMatchObject({ settled: false, settledAt: null });
+            expect(metadataRead.thread).toMatchObject({ settled: false });
+            expect(metadataRead.thread.settledAt).toBeUndefined();
 
             yield* orchestrator.dispatch({
               type: "thread.settle",
@@ -2771,7 +2768,8 @@ describe("orchestrator MCP toolkit", () => {
               reason: "user",
             });
 
-            expect(metadataRead.thread).toMatchObject({ snoozed: false, snoozedUntil: null });
+            expect(metadataRead.thread).toMatchObject({ snoozed: false });
+            expect(metadataRead.thread.snoozedUntil).toBeUndefined();
             yield* orchestrator.dispatch({
               type: "thread.snooze",
               commandId: CommandId.make("command:mcp-empty:snooze"),
@@ -3417,7 +3415,6 @@ describe("orchestrator MCP toolkit", () => {
             expect((yield* Fiber.join(questionWait)).structuredContent).toMatchObject({
               status: "running",
               hasPendingQuestion: true,
-              waitTimedOut: false,
             });
             expect(
               (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
@@ -5009,9 +5006,7 @@ describe("orchestrator MCP toolkit", () => {
             status: "completed",
             summary: delegatedResult,
             providerInstanceId: codexInstanceId,
-            hasPendingChildRuns: false,
             latestTerminalStatus: "completed",
-            latestTerminalSummary: null,
           });
           expect(delegated.resultContextTransferId).not.toBeNull();
           expect(delegated.latestTerminalRunId).toBeUndefined();
@@ -5119,7 +5114,6 @@ describe("orchestrator MCP toolkit", () => {
             resultContextTransferId: delegated.resultContextTransferId,
             hasPendingChildRuns: true,
             latestTerminalStatus: "completed",
-            latestTerminalSummary: null,
           });
           expect(pendingStatus.latestTerminalRunId).toBeUndefined();
           expect(pendingStatus.latestTerminalResultContextTransferId).toBeUndefined();
@@ -5218,7 +5212,6 @@ describe("orchestrator MCP toolkit", () => {
             status: "completed",
             summary: delegatedResult,
             resultContextTransferId: delegated.resultContextTransferId,
-            hasPendingChildRuns: false,
             latestTerminalRunId: queuedFollowupRunId,
             latestTerminalStatus: "completed",
             latestTerminalSummary: queuedFollowupResult,

@@ -14,7 +14,9 @@ import { useSharedSkillsCatalog } from "../../state/useSharedSkills";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { ListState } from "../ui/list-state";
 import { Switch } from "../ui/switch";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 function commandError(result: AtomCommandResult<unknown, unknown>): string | null {
@@ -83,14 +85,21 @@ export function SharedSkillsSettings(props: {
         }
       />
       {props.environmentId === null ? (
-        <SettingsRow
+        <ListState
+          size="compact"
           title="No machine connected"
           description="Connect a machine to manage skills."
         />
       ) : catalog === null ? (
-        <SettingsRow title="Loading skills" description="Reading the shared library." />
+        <ListState
+          loading
+          size="compact"
+          title="Loading skills"
+          description="Reading the shared library."
+        />
       ) : catalog.skills.length === 0 ? (
-        <SettingsRow
+        <ListState
+          size="compact"
           title="No skills yet"
           description="Add a folder that contains SKILL.md, or a Git URL."
         />
@@ -103,9 +112,12 @@ export function SharedSkillsSettings(props: {
             // sit on their own quieter line instead of running on from the description.
             description={
               skill.description ? (
-                <span className="line-clamp-2" title={skill.description}>
-                  {skill.description}
-                </span>
+                <Tooltip>
+                  <TooltipTrigger render={<span className="line-clamp-2" />}>
+                    {skill.description}
+                  </TooltipTrigger>
+                  <TooltipPopup>{skill.description}</TooltipPopup>
+                </Tooltip>
               ) : undefined
             }
             status={
@@ -156,7 +168,7 @@ export function SharedSkillsSettings(props: {
           title="Add a skill"
           description="A local folder is copied in. A Git URL is cloned."
         >
-          <div className="flex flex-col gap-2 pt-1 pb-3">
+          <div className="mt-2.5 flex flex-col gap-2 pb-1">
             {isElectron ? (
               <Button
                 size="sm"

@@ -6,6 +6,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -20,6 +21,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { traceLocalHandlerWork } from "../cloud/traceRelayRequest.ts";
 import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
+import { shellDecorationCursor } from "../sessionBoxes/boxNamerCache.ts";
 import {
   buildBoundedThreadProjection,
   clampSnapshotUserTurnLimit,
@@ -91,6 +93,7 @@ export const layer = HttpApiBuilder.group(
     const loadShellSnapshot = Effect.fn("http.orchestration.loadShellSnapshot")(function* (
       omitIdleSubagents: IdleSubagentOmission | undefined,
     ) {
+      const decorationCursor = shellDecorationCursor();
       const base = buildActiveShellSnapshot(
         yield* loadShellSnapshotParts({
           sql,
@@ -106,6 +109,7 @@ export const layer = HttpApiBuilder.group(
       return {
         ...base,
         ...idleSubagentOmissionMarkers(omitIdleSubagents),
+        decorationCursor,
         projects,
       };
     });
@@ -162,7 +166,7 @@ export const layer = HttpApiBuilder.group(
     );
 
     return handlers
-      .handle(
+      .handleRaw(
         "shellSnapshot",
         Effect.fn("environment.orchestration.shellSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
@@ -175,6 +179,14 @@ export const layer = HttpApiBuilder.group(
                 : undefined;
           return yield* loadShellSnapshot(omission).pipe(
             traceLocalHandlerWork,
+            // The projection builds the wire shape from validated records.
+            // Its DateTime values serialize as ISO strings. Avoid rewalking
+            // every chat through the success codec just to produce identical JSON.
+            Effect.flatMap((snapshot) =>
+              HttpServerResponse.json(snapshot).pipe(
+                Effect.withSpan("http.orchestration.encodeShellSnapshot"),
+              ),
+            ),
             Effect.catch((cause) =>
               failEnvironmentInternal("orchestration_snapshot_failed", cause),
             ),

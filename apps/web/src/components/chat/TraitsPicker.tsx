@@ -41,7 +41,7 @@ import {
   type ComposerControlSize,
 } from "./ComposerControl";
 import { useComposerMenuProps } from "./composerEventScope";
-import { acpSpeedChoices, TraitsSpeedBolt } from "./TraitsSpeed";
+import { acpSpeedChoices, speedToggleChoice, TraitsSpeedBolt } from "./TraitsSpeed";
 import { useComposerMenuState } from "./useComposerMenuState";
 
 type ProviderOptions = ReadonlyArray<ProviderOptionSelection>;
@@ -747,14 +747,18 @@ export const TraitsPicker = memo(function TraitsPicker({
   }) {
   const composerFloatingLayerProps = useComposerMenuProps();
   const [isMenuOpen, setIsMenuOpen] = useComposerMenuState(hidden || disabled);
-  const visibility = getTraitsSectionVisibility({
+  const visibility = useTraitsSelection({
     provider,
+    ...(instanceId ? { instanceId } : {}),
     models,
     model,
     prompt,
+    onPromptChange,
     modelOptions,
+    reportedModelSelection,
     allowPromptInjectedEffort,
     planModeEnabled,
+    ...persistence,
   });
   const { descriptors, primarySelectDescriptor, ultrathinkPromptControlled } = visibility;
   if (!visibility.hasAnyControls || (omitReasoning && !hasTraitsBesidesReasoning(visibility))) {
@@ -776,6 +780,46 @@ export const TraitsPicker = memo(function TraitsPicker({
     : triggerDescriptors.length > 0 && triggerDescriptors.every(isSpeedDescriptor)
       ? ZapIcon
       : SlidersHorizontalIcon;
+  // Fast mode alone is a switch, not a menu: one click on the bolt turns it on or off, and the
+  // same bolt lights up and strikes while it is on.
+  const onlyDescriptor = triggerDescriptors.length === 1 ? triggerDescriptors[0] : undefined;
+  const speedToggle =
+    onlyDescriptor && !visibility.modelIsUnavailable
+      ? speedToggleChoice(provider, onlyDescriptor)
+      : null;
+  if (onlyDescriptor && speedToggle) {
+    const state = `${speedToggle.name} ${speedToggle.on ? "on" : "off"}`;
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <ComposerControl
+              disabled={disabled}
+              aria-label={speedToggle.name}
+              aria-pressed={speedToggle.on}
+              size={size}
+              className={cn(
+                "aspect-square shrink-0 px-0 aria-pressed:bg-transparent aria-pressed:hover:bg-accent",
+                triggerClassName,
+              )}
+              onClick={() =>
+                visibility.updateDescriptors(
+                  replaceDescriptorCurrentValue(descriptors, onlyDescriptor.id, speedToggle.next),
+                )
+              }
+            />
+          }
+        >
+          {speedToggle.on ? (
+            <TraitsSpeedBolt provider={provider} speedIcon="fast" size={size} spaced={false} />
+          ) : (
+            <ComposerControlIcon icon={ZapIcon} size={size} />
+          )}
+        </TooltipTrigger>
+        <TooltipPopup side="top">{state}</TooltipPopup>
+      </Tooltip>
+    );
+  }
   const triggerDisplay = buildTraitsTriggerDisplay({
     provider,
     descriptors: triggerDescriptors,

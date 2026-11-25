@@ -615,7 +615,7 @@ describe("buildThreadFeed", () => {
   );
 
   it.each(["pending", "running", "completed"] as const)(
-    "omits %s task progress without hiding adjacent conversation items",
+    "shows %s task progress alongside adjacent conversation items",
     (stepStatus) => {
       const todoItem = {
         ...base("item-tasks", "2026-06-20T00:00:02.500Z", 2),
@@ -627,8 +627,25 @@ describe("buildThreadFeed", () => {
       const tool = projected(command(), 1);
       const assistant = projected(assistantMessage(), 3);
 
-      expect(buildThreadFeed([user, tool, projected(todoItem, 2), assistant])).toEqual(
-        buildThreadFeed([user, tool, assistant]),
+      const feed = buildThreadFeed([user, tool, projected(todoItem, 2), assistant]);
+      expect(feed[0]?.type).toBe("message");
+      expect(feed.at(-1)?.type).toBe("message");
+      const presented = deriveThreadFeedPresentation(
+        feed,
+        { runId, status: "running", startedAt: null, completedAt: null },
+        new Set(),
+      );
+      const plan = presented
+        .flatMap((entry) => (entry.type === "activity-group" ? entry.activities : []))
+        .find((activity) => activity.projectedItem.item.type === "todo_list");
+      expect(plan).toMatchObject({
+        summary: "Plan updated",
+        detail: `${stepStatus === "completed" ? 1 : 0}/1 completed`,
+        canExpand: true,
+        projectedItem: { item: todoItem },
+      });
+      expect(workEntryRowLabel(plan!.workEntry)).toBe(
+        `Plan · ${stepStatus === "completed" ? 1 : 0}/1 completed`,
       );
     },
   );

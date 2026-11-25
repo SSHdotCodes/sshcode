@@ -5,7 +5,10 @@ import {
   OVERVIEW_THREAD_ID_PREFIX,
   MessageId,
   ProjectId,
+  PROVIDER_DISPLAY_NAMES,
+  ProviderDriverKind,
   ThreadId,
+  defaultInstanceIdForDriver,
   OrchestrationThreadSearchSource,
   type OrchestrationSearchThreadsInput,
   type OrchestrationSearchThreadsResult,
@@ -55,6 +58,9 @@ const ThreadRow = Schema.Struct({
   projectId: ProjectId,
   title: Schema.String,
   archived: Schema.Number,
+  updatedAt: IsoDateTime,
+  model: Schema.NullOr(Schema.String),
+  providerInstanceId: Schema.NullOr(Schema.String),
 });
 const MessageRow = Schema.Struct({
   rowId: Schema.Number,
@@ -71,6 +77,26 @@ const decodeThreads = Schema.decodeUnknownEffect(Schema.Array(ThreadRow));
 const decodeMessages = Schema.decodeUnknownEffect(Schema.Array(MessageRow));
 const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(EmbeddingConfig));
 const encodeConfig = Schema.encodeSync(Schema.fromJsonString(EmbeddingConfig));
+const defaultHarnessLabels = new Map<string, string>(
+  Object.entries(PROVIDER_DISPLAY_NAMES).flatMap(([driver, label]) =>
+    label ? [[defaultInstanceIdForDriver(ProviderDriverKind.make(driver)), label] as const] : [],
+  ),
+);
+const searchEvents = new Set<OrchestrationV2DomainEvent["type"]>([
+  "message.updated",
+  "run.updated",
+  "thread.created",
+  "thread.deleted",
+  "thread.archived",
+  "thread.unarchived",
+  "thread.metadata-updated",
+  "thread.model-selection-updated",
+  "thread.provider-switched",
+]);
+
+export function tracksSearchEvent(type: OrchestrationV2DomainEvent["type"]) {
+  return searchEvents.has(type);
+}
 
 export class ThreadSearch extends Context.Service<
   ThreadSearch,
@@ -172,12 +198,26 @@ export const make = Effect.gen(function* () {
   const hiddenMessage = hiddenSearchMessage(sql);
   const refreshThreads = Effect.gen(function* () {
     const rows = yield* read(
-      sql`SELECT t.thread_id AS "threadId",t.project_id AS "projectId",t.title,CASE WHEN t.archived_at IS NULL THEN 0 ELSE 1 END AS archived FROM orchestration_v2_projection_threads t JOIN projection_projects p ON p.project_id=t.project_id WHERE t.deleted_at IS NULL AND p.deleted_at IS NULL AND ${visibleThread}`,
+      sql`SELECT t.thread_id AS "threadId", t.project_id AS "projectId", t.title,
+        t.archived_at IS NOT NULL AS archived, t.updated_at AS "updatedAt",
+        json_extract(t.payload_json, '$.modelSelection.model') AS model,
+        COALESCE(t.provider_instance_id, t.default_provider) AS "providerInstanceId"
+        FROM orchestration_v2_projection_threads t
+        JOIN projection_projects p ON p.project_id = t.project_id
+        WHERE t.deleted_at IS NULL AND p.deleted_at IS NULL AND ${visibleThread}
+        ORDER BY t.updated_at DESC`,
     ).pipe(Effect.flatMap(decodeThreads));
     yield* index.syncThreads(
       rows
         .filter((t) => !isHelperThreadId(t.threadId))
-        .map((t) => ({ ...t, archived: !!t.archived })),
+        .map((t) => ({
+          ...t,
+          archived: !!t.archived,
+          harness: t.providerInstanceId
+            ? (defaultHarnessLabels.get(t.providerInstanceId) ??
+              t.providerInstanceId.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " "))
+            : null,
+        })),
     );
     const nextThreads = new Set(
       rows.filter((t) => !isHelperThreadId(t.threadId)).map((t) => String(t.threadId)),
@@ -342,19 +382,23 @@ export const make = Effect.gen(function* () {
       paused: !(yield* policy.shouldRunOpportunisticWork),
     };
   }).pipe(Effect.mapError(mapError));
+  const readKeyword = (input: OrchestrationSearchThreadsInput) =>
+    index.keyword(input.query, input.limit, input.cursor).pipe(
+      Effect.map((result) => ({
+        ...result,
+        matches: result.matches.filter((match) => !isHelperThreadId(match.threadId)),
+      })),
+    );
   const searchWithBudget = (
     input: OrchestrationSearchThreadsInput,
     budget: "120 millis" | "1500 millis",
     keywordResult?: OrchestrationSearchThreadsResult,
   ) =>
     Effect.gen(function* () {
-      const keyword = keywordResult ?? (yield* index.keyword(input.query, 50));
-      if (input.mode === "keyword")
-        return {
-          matches: keyword.matches
-            .filter((match) => !isHelperThreadId(match.threadId))
-            .slice(0, input.limit ?? 50),
-        };
+      const keyword = keywordResult ?? (yield* readKeyword(input));
+      const limit = input.limit ?? 50;
+      if (input.mode === "keyword" || input.cursor || keyword.matches.length >= limit)
+        return keyword;
       let vector = queryVectors.get(input.query);
       if (!vector && (yield* Clock.currentTimeMillis) >= retryEmbeddingsAt) {
         const result = yield* embed(embeddingConfig, [
@@ -375,36 +419,49 @@ export const make = Effect.gen(function* () {
         }
       }
       const semantic = vector ? yield* index.semantic(vector, 50) : { matches: [] };
+      const keywordIds = new Set(keyword.matches.map((match) => match.threadId));
+      let semanticSlots = limit - keyword.matches.length;
       return {
+        ...keyword,
         matches: fuseSearchResults(
           input.query,
-          keyword.matches.filter((match) => !isHelperThreadId(match.threadId)),
+          keyword.matches,
           semantic.matches.filter((match) => !isHelperThreadId(match.threadId)),
-          input.limit ?? 50,
-        ),
+          keyword.matches.length + semantic.matches.length,
+        ).filter((match) => keywordIds.has(match.threadId) || semanticSlots-- > 0),
       };
     }).pipe(Effect.mapError(mapError));
   const search: ThreadSearch["Service"]["search"] = (input) =>
     searchWithBudget(input, input.mode === "hybrid" ? "1500 millis" : "120 millis");
   const searchStream: ThreadSearch["Service"]["searchStream"] = (input) =>
-    Stream.unwrap(
-      index.keyword(input.query, 50).pipe(
-        Effect.mapError(mapError),
-        Effect.map((keyword) =>
-          Stream.concat(
-            Stream.make({
-              matches: keyword.matches
-                .filter((match) => !isHelperThreadId(match.threadId))
-                .slice(0, input.limit ?? 50),
-              complete: input.mode === "keyword",
-            }),
-            input.mode === "keyword"
-              ? Stream.empty
-              : Stream.fromEffect(
-                  searchWithBudget(input, "1500 millis", keyword).pipe(
-                    Effect.map((result) => ({ ...result, complete: true })),
+    Stream.concat(
+      input.cursor
+        ? Stream.empty
+        : Stream.fromEffect(index.names(input.query, input.limit)).pipe(
+            Stream.mapError(mapError),
+            Stream.map((result) => ({
+              matches: result.matches.filter((match) => !isHelperThreadId(match.threadId)),
+              complete: false,
+            })),
+            Stream.filter((result) => result.matches.length > 0),
+          ),
+      Stream.unwrap(
+        readKeyword(input).pipe(
+          Effect.mapError(mapError),
+          Effect.map((keyword) =>
+            Stream.concat(
+              Stream.make({
+                ...keyword,
+                complete: input.mode === "keyword" || input.cursor !== undefined,
+              }),
+              input.mode === "keyword" || input.cursor
+                ? Stream.empty
+                : Stream.fromEffect(
+                    searchWithBudget(input, "1500 millis", keyword).pipe(
+                      Effect.map((result) => ({ ...result, complete: true })),
+                    ),
                   ),
-                ),
+            ),
           ),
         ),
       ),
@@ -467,16 +524,7 @@ export const make = Effect.gen(function* () {
       const sink = yield* EventSink.EventSinkV2;
       const sequence = yield* sink.latestSequence().pipe(Effect.orElseSucceed(() => 0));
       yield* sink.stream({ afterSequence: sequence }).pipe(
-        Stream.filter(
-          ({ event }) =>
-            event.type === "message.updated" ||
-            event.type === "run.updated" ||
-            event.type === "thread.created" ||
-            event.type === "thread.deleted" ||
-            event.type === "thread.archived" ||
-            event.type === "thread.unarchived" ||
-            event.type === "thread.metadata-updated",
-        ),
+        Stream.filter(({ event }) => tracksSearchEvent(event.type)),
         Stream.runForEach(({ event }) => handle(event).pipe(Effect.ignore)),
         Effect.forkScoped,
       );

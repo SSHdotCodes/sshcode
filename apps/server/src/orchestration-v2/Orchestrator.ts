@@ -2024,6 +2024,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             : { senderThreadId: queuedMessage.senderThreadId }),
         }),
         inputIntent: "queued_turn",
+        status: "completed",
         startedAt: now,
         completedAt: now,
         updatedAt: now,
@@ -9156,7 +9157,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.threadId,
           ["runs", "messages", "nodes", "attempts", "turnItems"],
           {
-            turnItemTypes: command.retainMessage ? ["user_message"] : [],
+            turnItemTypes: ["user_message"],
             messageRoles: ["user"],
             queuedControls: true,
             runIds: [command.runId],
@@ -9201,10 +9202,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
       const now = yield* DateTime.now;
       const emitEvent = emit(events, command);
+      const previous =
+        queuedMessage === undefined
+          ? undefined
+          : projection.turnItems.find(
+              (item) => item.type === "user_message" && item.messageId === queuedMessage.id,
+            );
+      const previousIsOpen =
+        previous !== undefined &&
+        (previous.status === "idle" ||
+          previous.status === "pending" ||
+          previous.status === "running" ||
+          previous.status === "waiting");
       if (command.retainMessage && queuedMessage !== undefined) {
-        const previous = projection.turnItems.find(
-          (item) => item.type === "user_message" && item.messageId === queuedMessage.id,
-        );
         // A never-started queue has a message record but no transcript item yet.
         // Materialize it only for the owner's history-preserving storage action.
         yield* emitEvent({
@@ -9213,33 +9223,59 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           runId: queuedRun.id,
           providerInstanceId: queuedRun.providerInstanceId,
           occurredAt: now,
-          payload: previous ?? {
-            id: idAllocator.derive.userTurnItem({ messageId: queuedMessage.id }),
-            threadId: command.threadId,
-            runId: queuedRun.id,
-            nodeId: queuedRun.rootNodeId,
-            providerThreadId: queuedRun.providerThreadId,
-            providerTurnId: null,
-            nativeItemRef: null,
-            parentItemId: null,
-            ordinal: yield* nextTurnItemOrdinal(projection),
-            status: "completed",
-            title: "Cancelled queued message",
-            type: "user_message",
-            messageId: queuedMessage.id,
-            text: queuedMessage.text,
-            attachments: queuedMessage.attachments,
-            ...(queuedMessage.context ? { context: queuedMessage.context } : {}),
-            createdBy: queuedMessage.createdBy,
-            creationSource: queuedMessage.creationSource,
-            ...(queuedMessage.scheduledTaskId === undefined
-              ? {}
-              : { scheduledTaskId: queuedMessage.scheduledTaskId }),
-            ...(queuedMessage.senderThreadId === undefined
-              ? {}
-              : { senderThreadId: queuedMessage.senderThreadId }),
-            inputIntent: "queued_turn",
-            startedAt: queuedMessage.createdAt,
+          payload:
+            previous === undefined
+              ? {
+                  id: idAllocator.derive.userTurnItem({ messageId: queuedMessage.id }),
+                  threadId: command.threadId,
+                  runId: queuedRun.id,
+                  nodeId: queuedRun.rootNodeId,
+                  providerThreadId: queuedRun.providerThreadId,
+                  providerTurnId: null,
+                  nativeItemRef: null,
+                  parentItemId: null,
+                  ordinal: yield* nextTurnItemOrdinal(projection),
+                  status: "completed",
+                  title: "Cancelled queued message",
+                  type: "user_message",
+                  messageId: queuedMessage.id,
+                  text: queuedMessage.text,
+                  attachments: queuedMessage.attachments,
+                  ...(queuedMessage.context ? { context: queuedMessage.context } : {}),
+                  createdBy: queuedMessage.createdBy,
+                  creationSource: queuedMessage.creationSource,
+                  ...(queuedMessage.scheduledTaskId === undefined
+                    ? {}
+                    : { scheduledTaskId: queuedMessage.scheduledTaskId }),
+                  ...(queuedMessage.senderThreadId === undefined
+                    ? {}
+                    : { senderThreadId: queuedMessage.senderThreadId }),
+                  inputIntent: "queued_turn",
+                  startedAt: queuedMessage.createdAt,
+                  completedAt: now,
+                  updatedAt: now,
+                }
+              : previousIsOpen
+                ? {
+                    ...previous,
+                    status: "completed",
+                    title: previous.title ?? "Cancelled queued message",
+                    startedAt: previous.startedAt ?? queuedMessage.createdAt,
+                    completedAt: now,
+                    updatedAt: now,
+                  }
+                : previous,
+        });
+      } else if (previousIsOpen) {
+        yield* emitEvent({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          runId: queuedRun.id,
+          providerInstanceId: queuedRun.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            ...previous,
+            status: "cancelled",
             completedAt: now,
             updatedAt: now,
           },

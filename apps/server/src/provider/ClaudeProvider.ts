@@ -222,6 +222,9 @@ function claudeAuthStatus(
 // account info. The previous 8s budget expired mid-init, so the probe returned
 // `undefined` and left the provider unverified and unselectable in the picker.
 const CAPABILITIES_PROBE_TIMEOUT_MS = 25_000;
+// Claude Code fetches usage from Anthropic during the probe. Measured 11-25: the answer often
+// takes over 4 s on a busy Mac, and every miss greyed both Claude limit rings.
+export const CLAUDE_USAGE_TIMEOUT_MS = 15_000;
 
 /**
  * Keep workspace-scoped command discovery intact while isolating the periodic
@@ -521,7 +524,14 @@ const readClaudeProbe = (query: ClaudeProbeSession["query"], includeUsage: boole
               query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({
                 skipBehaviors: true,
               }),
-            ).pipe(Effect.timeout(DEFAULT_TIMEOUT_MS), Effect.result)
+            ).pipe(
+              Effect.timeout(CLAUDE_USAGE_TIMEOUT_MS),
+              Effect.mapError((error) =>
+                error._tag === "TimeoutError" ? "Timeout" : "ReadFailed",
+              ),
+              Effect.withSpan("ClaudeProvider.readUsage"),
+              Effect.result,
+            )
           : undefined;
         const usage =
           usageResult && Result.isSuccess(usageResult)
@@ -855,6 +865,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         version: null,
         status: "error",
         auth: { status: "unknown" },
+        refreshing: true,
         message:
           "Claude Agent CLI is installed but failed to run. Timed out while running command.",
       },
@@ -925,6 +936,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         version: parsedVersion,
         status: "warning",
         auth: { status: "unknown" },
+        refreshing: true,
         message: "Could not verify Claude authentication status from initialization result.",
       },
     });

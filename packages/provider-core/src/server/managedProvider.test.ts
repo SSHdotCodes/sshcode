@@ -282,7 +282,7 @@ describe("makeManagedServerProvider", () => {
           });
 
           const initial = yield* provider.getSnapshot;
-          assert.deepStrictEqual(initial, initialSnapshot);
+          assert.deepStrictEqual(initial, { ...initialSnapshot, refreshing: true });
 
           const updatesFiber = yield* Stream.take(provider.streamChanges, 1).pipe(
             Stream.runCollect,

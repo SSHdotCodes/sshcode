@@ -262,7 +262,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
     const next = yield* SubscriptionRef.updateAndGet(metadata, (state) => {
       if (state.authRevision !== before.authRevision) return state;
-      const { message: _previousMessage, ...draft } = state.draft;
+      const { message: _previousMessage, refreshing: _refreshing, ...draft } = state.draft;
       const authenticated = draft.auth.status === "authenticated";
       const message =
         errorMessage ??
@@ -280,6 +280,9 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
           // must not erase the version learned from a real ACP handshake.
           version: version === "unknown" ? draft.version : version || draft.version,
           status: errorMessage ? "error" : authenticated ? "ready" : "warning",
+          ...(Result.isSuccess(result) && Option.isNone(result.success)
+            ? { refreshing: true }
+            : {}),
           checkedAt: updatedAt,
           usageLimits: missingInstallation
             ? undefined
@@ -351,7 +354,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       ) {
         return state;
       }
-      const { message: _previousMessage, ...draft } = state.draft;
+      const { message: _previousMessage, refreshing: _refreshing, ...draft } = state.draft;
       const workspaces = draft.workspaceSnapshots ?? [];
       const workspace = cwd ? workspaces.find((entry) => entry.cwd === cwd) : undefined;
       return {

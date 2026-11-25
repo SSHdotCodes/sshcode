@@ -45,7 +45,11 @@ import {
   resolveFileDiffPath,
 } from "../lib/diffRendering";
 import { PREFERRED_HIGHLIGHTER } from "../lib/syntaxHighlighting";
-import { areAllDiffFilesCollapsed, toggleAllDiffFiles } from "../lib/diffCollapse";
+import {
+  areAllDiffFilesCollapsed,
+  shouldDefaultCollapseDiffFiles,
+  toggleAllDiffFiles,
+} from "../lib/diffCollapse";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useWorkspaceMutationRefresh } from "../hooks/useWorkspaceMutationRefresh";
 import { useProject, useThreadProjection, useThreadShell } from "../state/entities";
@@ -540,12 +544,33 @@ export default function DiffPanel({
     () => renderableFiles.map(getCachedFileEntry),
     [renderableFiles],
   );
+  const diffLineStat = useMemo(() => {
+    if (!selectedTurn && selectedGitSource?.files) {
+      return selectedGitSource.files.reduce(
+        (total, file) => ({
+          additions: total.additions + file.additions,
+          deletions: total.deletions + file.deletions,
+        }),
+        { additions: 0, deletions: 0 },
+      );
+    }
+    return getDiffLineStat(renderableFiles);
+  }, [renderableFiles, selectedGitSource, selectedTurn]);
+  const collapseByDefault = shouldDefaultCollapseDiffFiles({
+    diffFilesCollapsed: settings.diffFilesCollapsed,
+    fileCount:
+      !selectedTurn && selectedGitSource?.files
+        ? selectedGitSource.files.length
+        : renderableFileEntries.length,
+    changedLineCount: diffLineStat.additions + diffLineStat.deletions,
+    truncated: Boolean(lazySource) || isSelectedPatchTruncated,
+  });
   const defaultCollapsedDiffFileKeys = useMemo(
     () =>
-      settings.diffFilesCollapsed
+      collapseByDefault
         ? new Set(renderableFileEntries.map((file) => file.fileKey))
         : EMPTY_COLLAPSED_DIFF_FILE_KEYS,
-    [renderableFileEntries, settings.diffFilesCollapsed],
+    [collapseByDefault, renderableFileEntries],
   );
   const collapsedDiffFileKeys =
     collapsedDiffFiles.scopeKey === collapseScopeKey
@@ -599,18 +624,6 @@ export default function DiffPanel({
     [renderableFileEntries],
   );
   const allDiffFilesCollapsed = areAllDiffFilesCollapsed(diffFileKeys, collapsedDiffFileKeys);
-  const diffLineStat = useMemo(() => {
-    if (!selectedTurn && selectedGitSource?.files) {
-      return selectedGitSource.files.reduce(
-        (total, file) => ({
-          additions: total.additions + file.additions,
-          deletions: total.deletions + file.deletions,
-        }),
-        { additions: 0, deletions: 0 },
-      );
-    }
-    return getDiffLineStat(renderableFiles);
-  }, [renderableFiles, selectedGitSource, selectedTurn]);
   const fileTreeEntries = useMemo(() => diffFileTreeEntries(renderableFiles), [renderableFiles]);
   const selectedDiffFileKey = selectedFilePath
     ? (codeViewFiles.find((candidate) => candidate.filePath === selectedFilePath)?.fileKey ?? null)
@@ -791,10 +804,10 @@ export default function DiffPanel({
 
   const headerRow = (
     <>
-      <div className="flex min-w-0 flex-1 items-center gap-3 [-webkit-app-region:no-drag]">
+      <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
         <DropdownMenu>
           <DropdownMenuTrigger
-            render={<Button size="xs" variant="secondary" />}
+            render={<Button size="compact" variant="secondary" />}
             className="max-w-full"
             aria-label={`Diff scope: ${selectedScopeLabel}`}
           >
@@ -871,7 +884,7 @@ export default function DiffPanel({
               }}
             >
               <ComboboxTrigger
-                render={<Button variant="ghost-muted" size="xs" />}
+                render={<Button variant="ghost-muted" size="compact" />}
                 className="min-w-0 max-w-48"
                 aria-label={`Change comparison target. Currently ${selectedGitSource.baseRef}`}
               >
@@ -963,7 +976,7 @@ export default function DiffPanel({
           <DiffStatLabel
             additions={diffLineStat.additions}
             deletions={diffLineStat.deletions}
-            className="mr-1 text-2xs"
+            className="mr-1.5 text-2xs tabular-nums"
             layout="inline"
           />
         ) : null}
@@ -1010,6 +1023,9 @@ export default function DiffPanel({
             </TooltipPopup>
           </Tooltip>
         )}
+        {(canRefreshGitDiff || diffFileKeys.length > 0) && (
+          <span aria-hidden className="mx-0.5 h-3.5 w-px shrink-0 bg-border/60" />
+        )}
         <ToggleGroup
           aria-label="Diff layout"
           className="shrink-0"
@@ -1035,7 +1051,7 @@ export default function DiffPanel({
               <Toggle
                 aria-label={wordWrap ? "Disable diff line wrapping" : "Enable diff line wrapping"}
                 variant="ghost"
-                size="sm"
+                size="compact"
                 pressed={wordWrap}
                 onPressedChange={(pressed) => {
                   setWordWrap(Boolean(pressed));
@@ -1057,7 +1073,7 @@ export default function DiffPanel({
                   diffIgnoreWhitespace ? "Show whitespace changes" : "Hide whitespace changes"
                 }
                 variant="ghost"
-                size="sm"
+                size="compact"
                 pressed={diffIgnoreWhitespace}
                 onPressedChange={(pressed) => {
                   setDiffIgnoreWhitespace(Boolean(pressed));
@@ -1078,7 +1094,7 @@ export default function DiffPanel({
                 <Toggle
                   aria-label={fileTreeOpen ? "Hide file tree" : "Show file tree"}
                   variant="ghost"
-                  size="sm"
+                  size="compact"
                   pressed={fileTreeOpen}
                   onPressedChange={(pressed) => setFileTreeOpen(Boolean(pressed))}
                 />

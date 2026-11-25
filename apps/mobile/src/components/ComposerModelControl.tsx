@@ -1,4 +1,5 @@
 import type { ComponentProps } from "react";
+import { View } from "react-native";
 import type { ModelCapabilities, ModelSelection } from "@t3tools/contracts";
 import { composerModelName } from "@t3tools/client-runtime/composer-model-display";
 import { composerModelTraits } from "../lib/providerOptions";
@@ -28,6 +29,7 @@ export function ComposerModelControl({
   const traits = composerModelTraits({ capabilities, selection, reportedSelection, prompt });
   const name = composerModelName({ name: props.label, shortName });
   const effort = traits.effort;
+  const hasEffortGauge = effort !== null && effort.barCount > 0;
   const nameWithInstance = instanceLabel ? `${instanceLabel} · ${name}` : name;
   return (
     <ComposerInlineControl
@@ -42,10 +44,12 @@ export function ComposerModelControl({
         .filter(Boolean)
         .join(", ")}
       trailingAccessory={
-        <>
-          {effort && effort.barCount > 0 ? <EffortGauge effort={effort} /> : null}
-          {traits.speed ? <FastModeBolt /> : null}
-        </>
+        hasEffortGauge || traits.speed ? (
+          <View className="shrink-0 flex-row items-center gap-1">
+            {hasEffortGauge ? <EffortGauge effort={effort} /> : null}
+            {traits.speed ? <FastModeBolt /> : null}
+          </View>
+        ) : null
       }
     />
   );

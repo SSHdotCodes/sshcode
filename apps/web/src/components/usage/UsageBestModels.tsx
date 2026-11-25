@@ -91,7 +91,7 @@ function PickCard({
 
   return (
     <article
-      className="usage-rise group relative flex min-w-0 flex-col overflow-hidden rounded-xl border border-border/60 bg-card/40 p-4"
+      className="usage-rise group relative flex min-w-0 flex-col overflow-hidden rounded-xl border border-border/60 bg-card/40 p-4 shadow-xs/5 transition-colors duration-150 ease-out motion-reduce:transition-none hover:border-border/90 dark:inset-shadow-card-highlight"
       style={{ "--usage-rise-index": index } as CSSProperties}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}

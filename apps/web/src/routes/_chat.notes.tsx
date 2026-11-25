@@ -38,6 +38,8 @@ import { Button } from "../components/ui/button";
 import { Checkbox } from "../components/ui/checkbox";
 import { Input } from "../components/ui/input";
 import { SidebarInset } from "../components/ui/sidebar";
+import { Skeleton } from "../components/ui/skeleton";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { isElectron } from "../env";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useScratchProject } from "../hooks/useScratchProject";
@@ -72,7 +74,7 @@ function NoteRow({
         transition: transition,
       }}
       className={cn(
-        "group flex items-start gap-3 rounded-lg border border-border/60 bg-background px-3 py-2",
+        "group flex items-start gap-3 rounded-xl border border-border/60 bg-card/55 px-3 py-2 shadow-2xs/5 transition-colors duration-150 hover:border-border/90 dark:bg-card/80 dark:inset-shadow-card-highlight",
         isDragging && "relative z-10 opacity-70",
       )}
     >
@@ -81,7 +83,7 @@ function NoteRow({
       <span className="flex h-9 shrink-0 items-center">
         {!item.done ? (
           <Button
-            variant="ghost"
+            variant="ghost-muted"
             size="icon-sm"
             disabled={!canEdit}
             aria-label={`Reorder ${item.text}`}
@@ -148,18 +150,24 @@ function NoteRow({
         }}
       />
       <div className="flex h-9 shrink-0 items-center gap-1 opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 group-focus-within:opacity-100">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost-muted"
+                size="icon-sm"
+                disabled={!canEdit}
+                aria-label="Start a chat"
+                onClick={() => startChat(text?.trim() || item.text)}
+              />
+            }
+          >
+            <MessageSquarePlusIcon className="size-4" />
+          </TooltipTrigger>
+          <TooltipPopup>Start a chat</TooltipPopup>
+        </Tooltip>
         <Button
-          variant="ghost"
-          size="icon-sm"
-          disabled={!canEdit}
-          aria-label="Start a chat"
-          title="Start a chat"
-          onClick={() => startChat(text?.trim() || item.text)}
-        >
-          <MessageSquarePlusIcon className="size-4" />
-        </Button>
-        <Button
-          variant="ghost"
+          variant="ghost-muted"
           size="icon-sm"
           disabled={!canEdit}
           aria-label={`Delete ${item.text}`}
@@ -301,14 +309,40 @@ function EnvironmentNotes({
             </SortableContext>
           </DndContext>
           {active.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 py-8 text-center">
-              {!loading ? (
+            loading ? (
+              <div
+                role="status"
+                aria-live="polite"
+                aria-label="Loading ideas"
+                className="flex flex-col gap-2"
+              >
+                {(["medium", "long", "short"] as const).map((width) => (
+                  <div
+                    key={width}
+                    className="flex h-13 items-center gap-3 rounded-xl border border-border/60 bg-card/55 px-3 dark:bg-card/80 dark:inset-shadow-card-highlight"
+                  >
+                    <Skeleton className="size-4 shrink-0" />
+                    <Skeleton className="size-4 shrink-0" />
+                    <Skeleton
+                      shape="pill"
+                      className={
+                        width === "short"
+                          ? "h-3.5 w-1/2"
+                          : width === "medium"
+                            ? "h-3.5 w-3/5"
+                            : "h-3.5 w-2/3"
+                      }
+                    />
+                  </div>
+                ))}
+                <span className="sr-only">Loading ideas…</span>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-2 py-8 text-center">
                 <DefaultHarnessMascot environmentId={environmentId} state="idea" />
-              ) : null}
-              <p className="text-sm text-muted-foreground">
-                {loading ? "Loading ideas…" : "A little space for your next idea."}
-              </p>
-            </div>
+                <p className="text-sm text-muted-foreground">A little space for your next idea.</p>
+              </div>
+            )
           ) : null}
           {done.length > 0 ? (
             <section className="flex flex-col gap-3">
@@ -367,7 +401,7 @@ function NotesPage() {
         {environments.length > 1 ? (
           <select
             aria-label="Notes environment"
-            className="ml-auto bg-background text-sm"
+            className="ml-auto rounded-md border border-border/70 bg-card px-2 py-1 text-xs text-foreground"
             value={environment?.environmentId}
             onChange={(event) => setSelected(event.target.value as EnvironmentId)}
           >
@@ -386,9 +420,11 @@ function NotesPage() {
           connected={environment.connection.phase === "connected"}
         />
       ) : (
-        <p className="p-6 text-sm text-muted-foreground">
-          Connect to an environment to keep your ideas in sync.
-        </p>
+        <div className="flex flex-1 items-center justify-center p-6 text-center">
+          <p className="text-sm text-muted-foreground">
+            Connect to an environment to keep your ideas in sync.
+          </p>
+        </div>
       )}
     </SidebarInset>
   );

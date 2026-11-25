@@ -43,6 +43,21 @@ const makeProvider = (
 });
 
 it.layer(NodeServices.layer)("providerStatusCache", (it) => {
+  it.effect("keeps the last bounded snapshot when a new one is too large", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-provider-cache-cap-" });
+      const filePath = `${tempDir}/provider.json`;
+      const provider = makeProvider(CODEX_DRIVER);
+      yield* writeProviderStatusCache({ filePath, provider });
+      const oversized = { ...provider, message: "x".repeat(512 * 1024) };
+      yield* writeProviderStatusCache({ filePath, provider: oversized });
+      assert.deepStrictEqual(yield* readProviderStatusCache(filePath), provider);
+      yield* fs.writeFileString(filePath, JSON.stringify(oversized));
+      assert.isUndefined(yield* readProviderStatusCache(filePath));
+    }),
+  );
+
   it.effect("keeps recent pace out of the status file", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

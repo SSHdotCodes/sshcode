@@ -1,7 +1,11 @@
 import * as NodeWorkerThreads from "node:worker_threads";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { OrchestrationSearchThreadsResult } from "@t3tools/contracts";
+import {
+  OrchestrationSearchThreadsResult,
+  type OrchestrationSearchThreadsInput,
+} from "@t3tools/contracts";
 
 export class SearchIndexError extends Schema.TaggedError<SearchIndexError>()("SearchIndexError", {
   cause: Schema.Defect(),
@@ -24,6 +28,9 @@ export interface SearchThread {
   readonly projectId: string;
   readonly title: string;
   readonly archived: boolean;
+  readonly updatedAt?: string;
+  readonly model?: string | null;
+  readonly harness?: string | null;
 }
 
 // The index has its own worker: FTS reads, bulk writes and (later) vector scans
@@ -36,8 +43,13 @@ let db;
 let generation = 0;
 let vectors = null;
 const byMessage = new Map();
+// The newest 4096 chats keep model and activity metadata. Titles for every
+// chat are read from the existing table, including archives and older caches.
+const threadMetadata = new Map();
+const maxThreadMetadata = 4096;
 function open() {
   generation++;
+  threadMetadata.clear();
   db = new DatabaseSync(workerData.filename);
   if (workerData.filename !== ':memory:') fs.chmodSync(workerData.filename, 0o600);
   db.exec("PRAGMA recursive_triggers=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;");
@@ -73,29 +85,209 @@ function remember(row) {
   byMessage.get(row.messageId).add(row.id);
 }
 function transaction(f) { db.exec('BEGIN'); try { const result = f(); db.exec('COMMIT'); return result; } catch(e) { db.exec('ROLLBACK'); throw e; } }
+function fold(text) {
+  return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+}
+function tokens(text) {
+  return text.match(/[\p{L}\p{N}][\p{L}\p{N}\p{M}]*/gu) ?? [];
+}
 function snippet(text, query) {
   text = text.replace(/\s+/g, ' ').trim();
   if (text.length <= 240) return text;
-  const offset = text.toLowerCase().indexOf(query.toLowerCase());
-  const start = Math.min(Math.max(0, offset - 72), text.length - 236);
-  return (start ? '…' : '') + text.slice(start, start + 236) + (start + 236 < text.length ? '…' : '');
+  const lower = text.toLowerCase();
+  const phrase = query.toLowerCase().replace(/\s+/g, ' ');
+  let offset = phrase.length ? lower.indexOf(phrase) : 0;
+  if (offset < 0) {
+    for (const word of phrase.split(' ').sort((a, b) => b.length - a.length)) {
+      offset = lower.indexOf(word);
+      if (offset !== -1) break;
+    }
+  }
+  let start = Math.min(Math.max(0, offset - 18), text.length - 238);
+  if (start && /[\uDC00-\uDFFF]/.test(text[start])) start++;
+  let end = start + 238;
+  if (end < text.length && /[\uDC00-\uDFFF]/.test(text[end])) end--;
+  return (start ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
+}
+function oneEdit(left, right) {
+  if (Math.abs(left.length - right.length) > 1) return false;
+  let index = 0;
+  while (index < left.length && left[index] === right[index]) index++;
+  if (left.length < right.length) return left.slice(index) === right.slice(index + 1);
+  if (left.length > right.length) return left.slice(index + 1) === right.slice(index);
+  if (left.slice(index + 1) === right.slice(index + 1)) return true;
+  return left[index] === right[index + 1] && left[index + 1] === right[index] &&
+    left.slice(index + 2) === right.slice(index + 2);
+}
+function nameMatch(query, terms, title, metadata) {
+  const name = fold(title).trim().replace(/\s+/g, ' ');
+  if (name === query) return { score: 8 };
+  if (!terms.length) return null;
+  const titleWords = tokens(title).map(word => ({ word, folded: fold(word) }));
+  const words = titleWords.map(({ folded }) => folded);
+  const unmatched = terms.filter(term => !words.some(word => word.startsWith(term)));
+  if (unmatched.length === 0) {
+    const wholeWords = terms.every(term => words.includes(term));
+    if (name.startsWith(query)) return { score: wholeWords ? 7 : 6 };
+    if (name.includes(query)) return { score: wholeWords ? 6 : 5 };
+    return { score: wholeWords ? 5 : 4 };
+  }
+  const modelWords = metadata?.model ? tokens(fold(metadata.model)) : [];
+  const harnessWords = metadata?.harness ? tokens(fold(metadata.harness)) : [];
+  const hasTerm = (words, term) => words.some(word => word === term ||
+    (term.length >= 3 && word.startsWith(term)));
+  const harnessTerms = unmatched.filter(term => hasTerm(harnessWords, term));
+  const modelTerms = unmatched.filter(term => !hasTerm(harnessWords, term));
+  if (modelTerms.every(term => hasTerm(modelWords, term))) {
+    return {
+      score: 3,
+      ...(modelTerms.length ? { matchedModel: metadata.model } : {}),
+      ...(harnessTerms.length ? { matchedHarness: metadata.harness } : {}),
+    };
+  }
+  if (name.includes(query)) return { score: 2 };
+  if (unmatched.length === 1 && /^\p{L}{5,32}$/u.test(unmatched[0])) {
+    const correction = titleWords.find(({ folded }) => oneEdit(unmatched[0], folded));
+    if (correction) return { score: 1, titleCorrection: correction.word };
+  }
+  return null;
+}
+function compareNames(a, b) {
+  return b.score - a.score || a.archived - b.archived ||
+    b.updatedAt.localeCompare(a.updatedAt) || a.threadId.localeCompare(b.threadId);
+}
+function namedChats(query, limit, after, corrections = false) {
+  const phrase = fold(query).trim().replace(/\s+/g, ' ');
+  const terms = [...new Set(tokens(phrase))].slice(0, 20);
+  const best = [];
+  for (const thread of db.prepare('SELECT threadId, projectId, title, archived FROM threads').iterate()) {
+    const metadata = threadMetadata.get(thread.threadId);
+    const name = nameMatch(phrase, terms, thread.title, metadata);
+    if (!name || (name.score === 1) !== corrections) continue;
+    const hit = { ...thread, ...name, updatedAt: metadata?.updatedAt ?? '' };
+    if (after && compareNames(hit, after) <= 0) continue;
+    if (best.length > limit && compareNames(hit, best[best.length - 1]) >= 0) continue;
+    best.push(hit);
+    best.sort(compareNames);
+    if (best.length > limit + 1) best.pop();
+  }
+  let next;
+  if (best.length > limit) {
+    best.pop();
+    const {score, archived, updatedAt, threadId} = best[best.length - 1];
+    next = {score, archived, updatedAt, threadId};
+  }
+  const matches = best.map(({threadId, projectId, title, archived, matchedModel, matchedHarness, titleCorrection}) => ({
+    threadId, projectId, title, archived: !!archived, source: 'user',
+    snippet: title.slice(0, 240), messageId: null, messageCreatedAt: null,
+    ...(matchedModel ? { matchedModel } : {}),
+    ...(matchedHarness ? { matchedHarness } : {}),
+    ...(titleCorrection ? { titleCorrection } : {}),
+  }));
+  return {matches, next};
 }
 function quote(text) { return '"' + text.replaceAll('"', '""') + '"'; }
-function keyword(query, limit) {
-  const parts = query.trim().split(/\s+/).slice(0, 20);
-  const candidates = new Map();
-  for (const name of ['words', 'fragments']) {
-    const terms = name === 'words' ? parts.filter(p => /[\p{L}\p{N}]/u.test(p)) : parts.filter(p => [...p].length >= 3);
-    if (!terms.length) continue;
-    const match = terms.map(p => quote(p) + (name === 'words' ? '*' : '')).join(' AND ');
-    if(name === 'fragments' && candidates.size >= 50) continue;
-    const rows = db.prepare('WITH hits AS MATERIALIZED (SELECT d.rowid AS id,d.threadId,bm25(' + name + ',3,1) AS rank,instr(lower(d.text),lower(?))>0 AS exact FROM ' + name + ' JOIN documents d ON d.rowid=' + name + '.rowid WHERE ' + name + ' MATCH ?), best AS (SELECT *,row_number() OVER(PARTITION BY threadId ORDER BY exact DESC,rank,id DESC) AS n FROM hits) SELECT d.*,t.projectId,t.archived,best.rank FROM best JOIN documents d ON d.rowid=best.id JOIN threads t ON t.threadId=d.threadId WHERE n=1 ORDER BY best.exact DESC,best.rank LIMIT 200').all(query,match);
-    rows.forEach((row, i) => { if (!candidates.has(row.messageId)) candidates.set(row.messageId, {...row, order:i}); });
+function appendMessageHits(table, expression, position, search, defer = false) {
+  const {matches, seen, limit, recent, older, query} = search;
+  if (defer || matches.length === limit) {
+    const remaining = db.prepare('SELECT 1 FROM ' + table + ' JOIN documents d ON d.rowid = ' + table +
+      '.rowid WHERE ' + table + ' MATCH ? AND ' + table + '.rowid < ? AND d.createdAt IS NOT NULL LIMIT 1');
+    return remaining.get(expression, position.before ?? Number.MAX_SAFE_INTEGER) ? position : undefined;
   }
-  const exact = text => text.toLowerCase().includes(query.toLowerCase());
-  const rows = [...candidates.values()].sort((a,b) => Number(exact(b.text)) - Number(exact(a.text)) || a.order - b.order || (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
-  const seen = new Set();
-  return rows.filter(row => { if(seen.has(row.threadId)) return false; seen.add(row.threadId); return true; }).slice(0,limit).map(row => ({ threadId:row.threadId, projectId:row.projectId, title:row.title, archived:!!row.archived, source:row.source, snippet:snippet(row.text, query), messageId:row.messageId.startsWith('title:') ? null : row.messageId, messageCreatedAt:row.createdAt }));
+
+  // A cursor resumes inside a ranked window or just below its last scanned row.
+  // Read one extra posting so a full window can distinguish more history from EOF.
+  const windowSize = 512;
+  const rows = db.prepare('SELECT rowid, bm25(' + table + ') AS rank FROM ' + table +
+    ' WHERE ' + table + ' MATCH ? AND rowid < ? ORDER BY rowid DESC LIMIT ?');
+  const metadata = db.prepare('SELECT threadId, messageId FROM documents WHERE rowid = ?');
+  const document = db.prepare('SELECT d.messageId, d.text, d.source, d.createdAt, t.title, t.projectId, t.archived' +
+    ' FROM documents d JOIN threads t ON t.threadId=d.threadId WHERE d.rowid=?');
+  let before = position.before ?? Number.MAX_SAFE_INTEGER;
+  let skip = position.skip ?? 0;
+  for (let batch = 0; batch < 3; batch++) {
+    const rowsInWindow = rows.all(expression, before, windowSize + 1);
+    const hasOlderRows = rowsInWindow.length > windowSize;
+    if (hasOlderRows) rowsInWindow.pop();
+    if (!rowsInWindow.length) return;
+    const best = new Map();
+    for (const {rowid, rank} of rowsInWindow) {
+      const row = metadata.get(rowid);
+      if (!row || row.messageId.startsWith('title:')) continue;
+      const activity = threadMetadata.get(row.threadId)?.updatedAt ?? '';
+      const score = rank * (activity >= recent ? 1.2 : activity >= older ? 1.1 : 1);
+      if (!best.has(row.threadId) || score < best.get(row.threadId).score)
+        best.set(row.threadId, {id: rowid, threadId: row.threadId, score});
+    }
+    const ranked = [...best.values()].sort((a, b) => a.score - b.score || b.id - a.id);
+    const windowStart = Math.min(before, rowsInWindow[0].rowid + 1);
+    const nextBefore = rowsInWindow[rowsInWindow.length - 1].rowid;
+    for (let i = skip; i < ranked.length; i++) {
+      const {id, threadId} = ranked[i];
+      if (seen.has(threadId)) continue;
+      const row = document.get(id);
+      if (!row) continue;
+      seen.add(threadId);
+      matches.push({
+        threadId, projectId: row.projectId, title: row.title, archived: !!row.archived,
+        source: row.source, snippet: snippet(row.text, query), messageId: row.messageId,
+        messageCreatedAt: row.createdAt,
+      });
+      if (matches.length === limit) {
+        if (i + 1 < ranked.length) return {before: windowStart, skip: i + 1};
+        return hasOlderRows ? {before: nextBefore} : undefined;
+      }
+    }
+    if (!hasOlderRows) return;
+    before = nextBefore;
+    skip = 0;
+  }
+  return {before};
+}
+function keyword({query, limit, recent, older, cursor}) {
+  const names = !cursor || cursor.names ? namedChats(query, limit, cursor?.names) : {matches: []};
+  const matches = names.matches;
+  const namedCount = matches.length;
+  const seen = new Set(matches.map(match => match.threadId));
+  const search = {matches, seen, limit, recent, older, query};
+  const parts = [...new Set(query.trim().split(/\s+/))].slice(0, 20);
+  const words = parts.filter(part => /[\p{L}\p{N}]/u.test(part));
+  const next = {};
+  if (names.next) next.names = names.next;
+  const exact = quote(query.trim());
+  if (words.length && (!cursor || cursor.exact)) {
+    const position = appendMessageHits('words', 'text : ' + exact, cursor?.exact ?? {}, search);
+    if (position) next.exact = position;
+  }
+  if (words.length && (!cursor || cursor.words)) {
+    const prefix = words.map(part => quote(part) + '*').join(' AND ');
+    const position = appendMessageHits('words', 'text : ((' + prefix + ') NOT ' + exact + ')',
+      cursor?.words ?? {}, search, !!next.exact);
+    if (position) next.words = position;
+  }
+  // Trigrams recover partial identifiers and punctuation. When the word query
+  // covers a plain search, skip the redundant fragment pass.
+  const fragmentFallback = parts.every(part => [...part].length >= 3) &&
+    ((!next.exact && !next.words && matches.length - namedCount < 5) || parts.some(part => /[^\p{L}\p{N}]/u.test(part)));
+  const tryFragments = cursor ? cursor.fragments : fragmentFallback ? {} : undefined;
+  if (tryFragments) {
+    const position = appendMessageHits('fragments', 'text : (' + parts.map(quote).join(' AND ') + ')',
+      tryFragments, search, !!next.exact);
+    if (position) next.fragments = position;
+  }
+  if (!cursor || cursor.corrections !== undefined) {
+    const room = limit - matches.length;
+    const corrections = namedChats(query, Math.max(1, room), cursor?.corrections, true);
+    if (corrections.matches.length) {
+      if (room === 0 || next.exact || next.words || next.fragments) {
+        next.corrections = cursor?.corrections ?? null;
+      } else {
+        matches.push(...corrections.matches.filter(match => !seen.has(match.threadId)));
+        if (corrections.next) next.corrections = corrections.next;
+      }
+    }
+  }
+  return {matches, ...(Object.keys(next).length ? {nextCursor: next} : {})};
 }
 function semantic(vector, limit) {
   if (vectors === null) {
@@ -143,6 +335,12 @@ function run(op, input) {
     });
     case 'threads': return transaction(() => {
       const alive = new Set(input.map(t => t.threadId));
+      threadMetadata.clear();
+      for (const t of input.slice(0, maxThreadMetadata)) {
+        threadMetadata.set(t.threadId, {
+          model: t.model?.slice(0, 128), harness: t.harness?.slice(0, 128), updatedAt: t.updatedAt?.slice(0, 32)
+        });
+      }
       for (const {threadId} of db.prepare('SELECT threadId FROM threads').all()) if(!alive.has(threadId)) {
         for (const {messageId} of db.prepare('SELECT messageId FROM documents WHERE threadId=?').all(threadId)) { forget(messageId); db.prepare('DELETE FROM chunks WHERE messageId=?').run(messageId); }
         db.prepare('DELETE FROM documents WHERE threadId=?').run(threadId);
@@ -164,6 +362,9 @@ function run(op, input) {
       for (const d of input) {
         const thread = db.prepare('SELECT title FROM threads WHERE threadId=?').get(d.threadId);
         if(!thread) continue;
+        const metadata = threadMetadata.get(d.threadId);
+        if (metadata && (!metadata.updatedAt || d.createdAt > metadata.updatedAt))
+          metadata.updatedAt = d.createdAt;
         const old = db.prepare('SELECT text,updatedAt FROM documents WHERE messageId=?').get(d.messageId);
         if(old && (old.updatedAt > d.updatedAt || (old.text === d.text && old.updatedAt === d.updatedAt))) continue;
         forget(d.messageId);
@@ -188,13 +389,15 @@ function run(op, input) {
     } });
     case 'semantic': return { matches:semantic(input.vector,input.limit ?? 50) };
     case 'stats': return db.prepare('SELECT count(*) AS totalChunks,count(vector) AS embeddedChunks FROM chunks').get();
-    case 'keyword': return { matches:keyword(input.query,input.limit ?? 50) };
+    case 'names': return { matches:namedChats(input.query, input.limit).matches };
+    case 'keyword': return keyword(input);
     case 'count': return db.prepare("SELECT count(*) AS count FROM documents WHERE messageId NOT LIKE 'title:%'").get().count;
-    case 'rebuild': db.exec('DELETE FROM chunks; DELETE FROM documents; DELETE FROM threads;'); vectors = null; byMessage.clear(); return;
+    case 'rebuild': db.exec('DELETE FROM chunks; DELETE FROM documents; DELETE FROM threads;'); vectors = null; byMessage.clear(); threadMetadata.clear(); return;
     default: throw new Error('Unknown search operation');
   }
 }
-parentPort.on('message', ({id,op,input}) => {
+parentPort.on('message', ({id,op,input,cancel}) => {
+  if (cancel && Atomics.load(cancel, 0)) return;
   try { parentPort.postMessage({id,value:run(op,input)}); }
   catch (error) { parentPort.postMessage({id,error}); }
 });
@@ -243,6 +446,10 @@ export const openSearchIndex = Effect.fnUntraced(function* (filename: string) {
         return;
       }
       const id = ++nextId;
+      const cancel =
+        op === "keyword" || op === "names" || op === "semantic"
+          ? new Int32Array(new SharedArrayBuffer(4))
+          : undefined;
       pending.set(id, (result) =>
         resume(
           result.error
@@ -251,8 +458,9 @@ export const openSearchIndex = Effect.fnUntraced(function* (filename: string) {
         ),
       );
       // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers have no target origin.
-      worker.postMessage({ id, op, input });
+      worker.postMessage({ id, op, input, cancel });
       return Effect.sync(() => {
+        if (cancel) Atomics.store(cancel, 0, 1);
         pending.delete(id);
       });
     });
@@ -280,8 +488,22 @@ export const openSearchIndex = Effect.fnUntraced(function* (filename: string) {
     upsert: (documents: ReadonlyArray<SearchDocument>) =>
       request("documents", documents).pipe(Effect.asVoid),
     removeMessage: (messageId: string) => request("removeMessage", messageId).pipe(Effect.asVoid),
-    keyword: (query: string, limit = 50) =>
-      request("keyword", { query, limit }).pipe(
+    names: (query: string, limit = 50) =>
+      request("names", { query, limit }).pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(OrchestrationSearchThreadsResult)),
+        Effect.mapError((cause) => new SearchIndexError({ cause })),
+      ),
+    keyword: (query: string, limit = 50, cursor?: OrchestrationSearchThreadsInput["cursor"]) =>
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        return yield* request("keyword", {
+          query,
+          limit,
+          cursor,
+          recent: DateTime.formatIso(DateTime.subtract(now, { days: 7 })),
+          older: DateTime.formatIso(DateTime.subtract(now, { days: 30 })),
+        });
+      }).pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(OrchestrationSearchThreadsResult)),
         Effect.mapError((cause) => new SearchIndexError({ cause })),
       ),

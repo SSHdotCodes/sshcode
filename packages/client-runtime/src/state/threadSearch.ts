@@ -18,6 +18,17 @@ export interface ThreadSearchResultsState {
   readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
   readonly isLoading: boolean;
   readonly failed: boolean;
+  readonly pagination?: {
+    readonly isLoading: boolean;
+    readonly failed: boolean;
+    readonly loadMore: () => void;
+  };
+}
+
+type SearchCursor = NonNullable<OrchestrationSearchThreadsInput["cursor"]>;
+interface SearchPage {
+  readonly environmentId: EnvironmentId;
+  readonly cursor?: SearchCursor;
 }
 
 const ThreadSearchKey = Schema.fromJsonString(
@@ -54,39 +65,79 @@ export function createThreadSearchResultsAtomFamily<E>(options: {
   readonly getSearchAtom: (
     environmentId: EnvironmentId,
     query: string,
+    cursor?: SearchCursor,
   ) => Atom.Atom<AsyncResult.AsyncResult<OrchestrationSearchThreadsResult, E>>;
   readonly labelPrefix: string;
 }) {
-  return Atom.family((key: string) =>
-    Atom.make((get): ThreadSearchResultsState => {
+  return Atom.family((key: string) => {
+    const request = Atom.make<{
+      readonly pages: ReadonlyArray<SearchPage>;
+      readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
+    } | null>(null).pipe(Atom.setIdleTTL(0));
+    return Atom.make((get): ThreadSearchResultsState => {
       const parsedKey = parseThreadSearchKey(key);
       if (Option.isNone(parsedKey)) {
         return { matches: [], isLoading: false, failed: false };
       }
 
       const [environmentIds, query] = parsedKey.value;
-      const matches: EnvironmentThreadSearchMatch[] = [];
+      const pending = get(request);
+      const pages =
+        pending?.pages ?? environmentIds.map((environmentId): SearchPage => ({ environmentId }));
+      const matches = new Map(
+        pending?.matches.map((match) => [threadSearchMatchKey(match), match] as const),
+      );
+      const next: SearchPage[] = [];
+      const failedPages: Array<ReturnType<typeof options.getSearchAtom>> = [];
       let isLoading = false;
-      let failures = 0;
 
-      for (const environmentId of environmentIds) {
-        const result = get(options.getSearchAtom(environmentId, query));
-        isLoading ||= result.waiting;
-        if (AsyncResult.isFailure(result)) failures += 1;
+      for (const { environmentId, cursor } of pages) {
+        const source = options.getSearchAtom(environmentId, query, cursor);
+        const result = get(source);
+        const waiting = result.waiting || (pending !== null && AsyncResult.isInitial(result));
+        isLoading ||= waiting;
+        if (pending && waiting) {
+          if (cursor) next.push({ environmentId, cursor });
+          continue;
+        }
+        if (AsyncResult.isFailure(result)) {
+          failedPages.push(source);
+          if (cursor) next.push({ environmentId, cursor });
+        }
         const value = Option.getOrNull(AsyncResult.value(result));
-        if (value !== null) {
-          matches.push(
-            ...value.matches.map((match) => ({
-              ...match,
-              environmentId,
-            })),
-          );
+        if (value === null) continue;
+        if (!AsyncResult.isFailure(result) && value.nextCursor)
+          next.push({ environmentId, cursor: value.nextCursor });
+        for (const match of value.matches) {
+          const scopedMatch = { ...match, environmentId };
+          const matchKey = threadSearchMatchKey(scopedMatch);
+          if (!matches.has(matchKey)) matches.set(matchKey, scopedMatch);
         }
       }
 
-      return { matches, isLoading, failed: failures > 0 && failures === environmentIds.length };
-    }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`${options.labelPrefix}:${key}`)),
-  );
+      const visible = [...matches.values()];
+      const base = {
+        matches: visible,
+        isLoading: pending === null && isLoading,
+        failed: pending === null && failedPages.length > 0 && failedPages.length === pages.length,
+      };
+      if (!next.length || (pending === null && isLoading)) return base;
+      const registry = get.registry;
+      return {
+        ...base,
+        pagination: {
+          isLoading,
+          failed: pending !== null && failedPages.length > 0,
+          loadMore: () => {
+            // An old event handler or a double tap must not replace a page already in flight.
+            if (isLoading || registry.get(request) !== pending) return;
+            registry.set(request, { pages: next, matches: visible });
+            if (pending) for (const page of failedPages) registry.refresh(page);
+          },
+        },
+      };
+    }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`${options.labelPrefix}:${key}`));
+  });
 }
 
 /** A search selection survives navigation until the destination timeline can reveal it. */
@@ -96,8 +147,16 @@ export const pendingThreadSearchJumpAtom = Atom.make<EnvironmentThreadSearchMatc
 
 export type TimelineJumpTarget = Pick<
   import("../threadMedia.ts").ThreadMediaItem,
-  "sourceThreadId" | "sourceItemId" | "messageId"
->;
+  "sourceItemId" | "messageId"
+> & {
+  /** A find result uses its entry ID across the visible transcript, including inherited rows. */
+  readonly sourceThreadId?: import("@t3tools/contracts").ThreadId;
+};
+export interface TimelineJumpRequest {
+  readonly item: TimelineJumpTarget;
+  readonly sequence: number;
+  readonly highlight?: boolean;
+}
 export function searchJumpTarget(match: EnvironmentThreadSearchMatch): TimelineJumpTarget | null {
   return match.messageId
     ? {
@@ -112,8 +171,10 @@ export function matchesTimelineJump(
   target: TimelineJumpTarget,
 ) {
   return (
-    projected?.sourceThreadId === target.sourceThreadId &&
+    projected !== undefined &&
+    (target.sourceThreadId === undefined || projected.sourceThreadId === target.sourceThreadId) &&
     (projected.sourceItemId === target.sourceItemId ||
+      (target.sourceThreadId === undefined && projected.item.id === target.sourceItemId) ||
       (target.messageId !== undefined &&
         "messageId" in projected.item &&
         projected.item.messageId === target.messageId))

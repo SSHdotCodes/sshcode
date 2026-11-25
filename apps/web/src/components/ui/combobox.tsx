@@ -115,23 +115,20 @@ function ComboboxSearchInput({
 }) {
   return (
     <div className="min-w-0 shrink-0 px-3 pt-2.5">
-      <div className="relative -translate-y-px border-b border-border/70 pb-1.5 transition-colors focus-within:border-ring">
+      <div className="relative flex -translate-y-px items-center gap-1.5 border-b border-border/70 pb-1.5 transition-colors focus-within:border-ring">
         <SearchIcon
           aria-hidden="true"
-          className="pointer-events-none absolute top-1.5 left-0 size-4 shrink-0 text-muted-foreground/55"
+          className="pointer-events-none size-4 shrink-0 text-muted-foreground/55"
         />
         <ComboboxInput
           {...props}
-          className={cn(
-            "[&_input]:h-6.5 [&_input]:ps-5 [&_input]:font-sans [&_input]:leading-6.5",
-            trailing !== undefined && "[&_input]:pe-7",
-          )}
+          className="min-w-0 flex-1 [&_input]:h-6.5 [&_input]:px-0 [&_input]:font-sans [&_input]:leading-6.5"
           showTrigger={false}
           size="sm"
           unstyled
         />
         {trailing !== undefined ? (
-          <div className="absolute top-0 right-0 flex h-6.5 items-center">{trailing}</div>
+          <div className="flex h-6.5 shrink-0 items-center">{trailing}</div>
         ) : null}
       </div>
     </div>

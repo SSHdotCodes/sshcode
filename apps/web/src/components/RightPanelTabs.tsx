@@ -310,6 +310,7 @@ function SurfaceMenuItem(props: {
   available: boolean;
   disabledReason?: string;
   shortcut: string;
+  reserveSubmenuSlot?: boolean;
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -322,6 +323,7 @@ function SurfaceMenuItem(props: {
     >
       {props.children}
       <MenuShortcut>{props.shortcut}</MenuShortcut>
+      {props.reserveSubmenuSlot ? <span aria-hidden className="size-4 shrink-0" /> : null}
     </MenuItem>
   );
   if (props.available || !props.disabledReason) return item;
@@ -882,8 +884,16 @@ export function RightPanelTabs({ ref, ...props }: RightPanelTabsProps) {
     canScrollLeft: false,
     canScrollRight: false,
   });
+  const canAddSurface =
+    props.browserAvailable ||
+    props.terminalAvailable ||
+    props.filesAvailable ||
+    props.diffAvailable ||
+    props.pullRequestAvailable ||
+    props.pullRequestsAvailable ||
+    props.deviceAvailable;
 
-  if (props.open === false && addSurfaceMenuOpen) setAddSurfaceMenuOpen(false);
+  if ((props.open === false || !canAddSurface) && addSurfaceMenuOpen) setAddSurfaceMenuOpen(false);
 
   const onNewSurfaceKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (event.defaultPrevented || event.isComposing) return;
@@ -902,10 +912,10 @@ export function RightPanelTabs({ ref, ...props }: RightPanelTabsProps) {
     }
   });
   useEffect(() => {
-    if (props.open === false) return;
+    if (props.open === false || !canAddSurface) return;
     document.addEventListener("keydown", onNewSurfaceKeyDown, true);
     return () => document.removeEventListener("keydown", onNewSurfaceKeyDown, true);
-  }, [props.open]);
+  }, [props.open, canAddSurface]);
 
   const updateTabScrollState = useCallback(() => {
     const viewport = tabScrollViewport(tabListRef.current);
@@ -1336,7 +1346,7 @@ export function RightPanelTabs({ ref, ...props }: RightPanelTabsProps) {
                 );
               })}
             </SortableTabList>
-            {props.open !== false ? (
+            {props.open !== false && canAddSurface ? (
               <Menu open={addSurfaceMenuOpen} onOpenChange={setAddSurfaceMenuOpen}>
                 <MenuTrigger
                   ref={addSurfaceTriggerRef}
@@ -1355,16 +1365,18 @@ export function RightPanelTabs({ ref, ...props }: RightPanelTabsProps) {
                   align="start"
                   side="bottom"
                   sideOffset={6}
+                  className="min-w-52"
                   onKeyDownCapture={handleAddSurfaceMenuKeyDown}
                 >
                   {addSurfaceActions.map((action) => {
                     const Icon = action.icon;
+                    const hasBrowserSubmenu = props.browserAvailable && browserProfiles.length > 1;
                     // Browser collapses into one row: clicking the trigger opens
                     // the default profile (the common case stays one click),
                     // while hover or arrow reveals the profiles. The choice
                     // lives at open time because a tab's profile is fixed then —
                     // Electron only honours a partition before attach.
-                    if (action.label === "Browser" && action.available) {
+                    if (action.label === "Browser" && hasBrowserSubmenu) {
                       return (
                         <MenuSub key={action.label}>
                           <MenuSubTrigger
@@ -1414,6 +1426,7 @@ export function RightPanelTabs({ ref, ...props }: RightPanelTabsProps) {
                         available={action.available}
                         disabledReason={action.disabledReason}
                         shortcut={action.shortcut}
+                        reserveSubmenuSlot={hasBrowserSubmenu}
                         onClick={action.onClick}
                       >
                         <Icon />

@@ -14,6 +14,16 @@ import { ComposerBanner } from "./ComposerBanner";
 import ChatMarkdown from "../ChatMarkdown";
 import { isInsideComposerFloatingLayer } from "./composerEventScope";
 
+const RECOMMENDED_SUFFIX = /\s*\(Recommended\)\s*$/i;
+
+function splitRecommendedOptionLabel(label: string): { text: string; recommended: boolean } {
+  if (!RECOMMENDED_SUFFIX.test(label)) {
+    return { text: label, recommended: false };
+  }
+  const text = label.replace(RECOMMENDED_SUFFIX, "").trim();
+  return text.length > 0 ? { text, recommended: true } : { text: label, recommended: false };
+}
+
 interface PendingUserInputPanelProps {
   pendingUserInputs: PendingUserInput[];
   /** Resolves file links in the question text. */
@@ -228,7 +238,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         setCollapsedQuestionId(open ? null : activeQuestion.id);
       }}
     >
-      <div className="flex items-center">
+      <div className="flex items-center px-1.5 pt-1">
         <CollapsibleTrigger
           render={<ComposerBanner.Row render={<button type="button" />} />}
           className="min-w-0 flex-1"
@@ -239,8 +249,8 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         >
           {/* In the icon column: as a bare child of the row's grid it landed on a line of its own. */}
           {hasMascot ? (
-            <ComposerBanner.Icon className="[&>svg]:size-6">
-              <HarnessMascot state="waiting" size={24} />
+            <ComposerBanner.Icon className="[&>svg]:size-5.5">
+              <HarnessMascot state="waiting" size={22} />
             </ComposerBanner.Icon>
           ) : null}
           <ComposerBanner.Content>
@@ -281,12 +291,12 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       </div>
       <CollapsiblePanel>
         <ComposerBanner.Scroll>
-          <ComposerBanner.Body className="pe-1 pb-1 wrap-anywhere">
+          <ComposerBanner.Body className="ps-9 pe-3 pt-0.5 pb-2.5 wrap-anywhere sm:ps-8.5">
             <ChatMarkdown
               text={activeQuestion.question}
               cwd={cwd}
               threadRef={threadRef}
-              className="text-foreground/85"
+              className="text-foreground/90"
             />
             {activeQuestion.multiSelect ? (
               <p className="mt-1 text-secondary-label text-xs">
@@ -295,7 +305,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                   : "Select one or more options. You can add your own words below too."}
               </p>
             ) : null}
-            <div className="mt-2 space-y-0.5">
+            <div className="mt-2.5 space-y-1.5">
               {activeQuestion.options.map((option, index) => {
                 const optionValue = option.value ?? option.label;
                 const isOptimisticallySelected =
@@ -307,20 +317,30 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                   ((activeQuestion.multiSelect || !customAnswerActive) &&
                     progress.selectedOptionValues.includes(optionValue));
                 const shortcutKey = index < 9 ? index + 1 : null;
+                const parsedLabel = splitRecommendedOptionLabel(option.label);
                 const className = cn(
-                  "group flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                  "group flex w-full items-center gap-3 rounded-xl border px-3 py-2 text-left outline-none transition-[background-color,border-color,box-shadow,scale] duration-120 ease-out motion-reduce:transition-none active:scale-[0.992] motion-reduce:active:scale-100 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                   isSelected
-                    ? "bg-muted/55 text-foreground"
-                    : "bg-transparent text-foreground/85 hover:bg-muted/30",
-                  responseDisabled && "opacity-50 cursor-not-allowed",
+                    ? "border-primary/45 bg-primary/[0.08] text-foreground shadow-2xs/10"
+                    : "border-border/55 bg-background/45 text-foreground/90 hover:border-border/90 hover:bg-accent/35",
+                  responseDisabled && "cursor-not-allowed opacity-50 active:scale-100",
                   !responseDisabled && "cursor-pointer",
                 );
                 const content = (
                   <>
                     <div className="min-w-0 flex-1 flex flex-col gap-0.5">
-                      <span className="text-sm font-medium">{option.label}</span>
+                      <span className="flex flex-wrap items-center gap-1.5 text-sm font-medium leading-snug">
+                        <span>{parsedLabel.text}</span>
+                        {parsedLabel.recommended ? (
+                          <span className="inline-flex items-center rounded-full border border-primary/25 bg-primary/10 px-1.5 py-px text-3xs font-medium leading-tight text-primary">
+                            Recommended
+                          </span>
+                        ) : null}
+                      </span>
                       {option.description && option.description !== option.label ? (
-                        <span className="text-secondary-label text-2xs">{option.description}</span>
+                        <span className="text-secondary-label text-2xs leading-snug">
+                          {option.description}
+                        </span>
                       ) : null}
                     </div>
                     {isSelected ? (
@@ -328,7 +348,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                     ) : shortcutKey !== null ? (
                       <kbd
                         className={cn(
-                          "flex size-5 shrink-0 items-center justify-center text-3xs font-medium text-muted-foreground tabular-nums",
+                          "flex size-5 shrink-0 items-center justify-center rounded-md border border-border/60 bg-muted/45 text-3xs font-medium text-muted-foreground tabular-nums transition-colors duration-100 motion-reduce:transition-none group-hover:border-border/90 group-hover:text-foreground",
                         )}
                       >
                         {shortcutKey}

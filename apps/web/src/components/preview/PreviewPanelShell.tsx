@@ -124,9 +124,11 @@ function PreviewPanelShellFrame(
             : "shrink-0 border-l border-border"
           : "w-full",
         collapsible &&
-          "[[data-panel-animations=true]_&]:transition-[width] [[data-panel-animations=true]_&]:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:ease-out",
-        collapsible && open && "[[data-panel-animations=true]_&]:starting:w-0!",
-        collapsible && !open && "pointer-events-none",
+          "[[data-panel-animations=true]_&]:motion-safe:transition-[width] data-[panel-resizing=true]:transition-none!",
+        collapsible &&
+          (open
+            ? "[[data-panel-animations=true]_&]:motion-safe:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:motion-safe:ease-motion [[data-panel-animations=true]_&]:motion-safe:starting:w-0!"
+            : "[[data-panel-animations=true]_&]:motion-safe:duration-(--panel-exit-duration) [[data-panel-animations=true]_&]:motion-safe:ease-in pointer-events-none"),
       )}
       style={
         isInline
@@ -147,11 +149,24 @@ function PreviewPanelShellFrame(
       {isInline && !maximized ? <RightPanelResizeHandle handlers={handlers} /> : null}
       <div className={cn("h-full min-h-0 w-full", collapsible && "overflow-clip")}>
         <div
-          className="flex h-full min-h-0 min-w-0 flex-col"
+          className={cn(
+            "flex h-full min-h-0 min-w-0 flex-col",
+            collapsible &&
+              "[[data-panel-animations=true]_&]:motion-safe:transition-[opacity,transform] [[data-panel-resizing=true]_&]:transition-none!",
+            collapsible &&
+              (open
+                ? "translate-x-0 opacity-100 [[data-panel-animations=true]_&]:motion-safe:duration-(--panel-animation-duration) [[data-panel-animations=true]_&]:motion-safe:ease-motion [[data-panel-animations=true]_&]:motion-safe:starting:translate-x-1.5 [[data-panel-animations=true]_&]:motion-safe:starting:opacity-0"
+                : "translate-x-1.5 opacity-0 [[data-panel-animations=true]_&]:motion-safe:duration-(--panel-exit-duration) [[data-panel-animations=true]_&]:motion-safe:ease-in"),
+          )}
           style={
             collapsible && !maximized
-              ? { width: `calc(var(${RESIZABLE_WIDTH_PROPERTY}) - 1px)` }
-              : undefined
+              ? {
+                  width: `calc(var(${RESIZABLE_WIDTH_PROPERTY}) - 1px)`,
+                  transitionDuration: suppressWidthTransition ? "0ms" : undefined,
+                }
+              : suppressWidthTransition
+                ? { transitionDuration: "0ms" }
+                : undefined
           }
         >
           {props.children}

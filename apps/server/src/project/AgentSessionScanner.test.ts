@@ -1989,6 +1989,68 @@ it.layer(layerTest)("AgentSessionScanner", (it) => {
       }),
     );
 
+    it.effect("unreadable transcripts do not consume import slots needed by older history", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+        yield* TestClock.setTime(nowMs);
+        const claudeHomePath = yield* makeTempDir("t3code-slot-budget-claude-");
+        const codexHomePath = yield* makeTempDir("t3code-slot-budget-codex-");
+        const workspace = yield* makeTempDir("t3code-slot-budget-workspace-");
+        for (let index = 0; index < 100; index += 1) {
+          yield* writeTranscript({
+            filePath: path.join(
+              codexHomePath,
+              "sessions",
+              "2026",
+              "08",
+              "24",
+              `rollout-unreadable-${index}.jsonl`,
+            ),
+            contents:
+              encodeTranscriptRecord({
+                type: "session_meta",
+                payload: { id: `unreadable-${index}`, cwd: workspace },
+              }) + "\nnot json\n",
+            mtimeMs: nowMs - index,
+          });
+        }
+        yield* writeTranscript({
+          filePath: path.join(
+            codexHomePath,
+            "sessions",
+            "2026",
+            "08",
+            "24",
+            "rollout-older-valid.jsonl",
+          ),
+          contents:
+            [
+              encodeTranscriptRecord({
+                type: "session_meta",
+                payload: { id: "older-valid", cwd: workspace },
+              }),
+              encodeTranscriptRecord({
+                type: "event_msg",
+                payload: { type: "user_message", message: "Imported prompt" },
+              }),
+            ].join("\n") + "\n",
+          mtimeMs: nowMs - 101,
+        });
+
+        const outcomes = yield* runRecentThreadOutcomes({
+          claudeHomePath,
+          codexHomePath,
+          workspaceRoot: workspace,
+        });
+
+        expect(outcomes.at(-1)).toMatchObject({
+          _tag: "Importable",
+          thread: { providerSessionId: "older-valid" },
+        });
+      }),
+    );
+
     it.effect("skips excessive records without blocking an older valid transcript", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;

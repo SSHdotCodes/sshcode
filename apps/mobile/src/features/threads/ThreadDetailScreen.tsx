@@ -3,7 +3,8 @@ import { NewChatBackdrop, ThreadEmbers } from "./NewChatBackdrop";
 import { chatBackdropMood } from "@t3tools/client-runtime/new-chat-dashboard";
 import { useVisibleMinuteClock } from "./use-visible-second-clock";
 import { useChatBackdropEnabled } from "./useNewChatDashboard";
-import { type TimelineJumpTarget } from "@t3tools/client-runtime/state/thread-search";
+import { type TimelineJumpRequest } from "@t3tools/client-runtime/state/thread-search";
+import type { ThreadFindAnchorReader } from "./thread-find";
 import { ComparisonMembers } from "./ComparisonMembers";
 import { discordAvatarIdentity } from "@t3tools/shared/discordProfile";
 import type { OrchestrationV2ProviderTurnGeneration, OrchestrationV2Run } from "@t3tools/contracts";
@@ -214,7 +215,9 @@ export interface ThreadDetailScreenProps {
   readonly feedbackSubmissions: ReadonlyArray<CodexFeedbackSubmission>;
   readonly onDismissFeedback: (id: MessageId) => void;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
-  readonly mediaJump?: { readonly item: TimelineJumpTarget; readonly sequence: number } | null;
+  readonly mediaJump?: TimelineJumpRequest | null;
+  readonly findBar?: import("react").ReactNode;
+  readonly findAnchorReader?: import("react").RefObject<ThreadFindAnchorReader | null> | undefined;
   readonly onMediaJumpHandled?: ((sequence: number) => void) | undefined;
   readonly pendingHandoff?: HandoffEndpoints | null;
   readonly activityRun: ThreadFeedLatestRun | null;
@@ -581,6 +584,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   // Opening a running thread resyncs for a few frames. The pill shows the
   // sync label only when the sync lasts, so it does not flash before the timer.
   const threadSyncLabel = useDelayedStatus(selectedThreadKey, realThreadSyncLabel);
+  const showLoadingPlaceholder =
+    !discord &&
+    !props.worktreeSetup &&
+    props.queuedMessages.length === 0 &&
+    contentPresentationKind === "loading" &&
+    threadSyncLabel !== null;
   const connectionRetrying =
     props.connectionStateLabel === "connecting" || props.connectionStateLabel === "reconnecting";
   const retryError = connectionRetrying ? props.connectionError : null;
@@ -670,7 +679,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       return null;
     }
     if (threadSyncLabel !== null) {
-      return { kind: "syncing", label: threadSyncLabel };
+      return { kind: "syncing", label: threadSyncLabel, showSpinner: !showLoadingPlaceholder };
     }
     const childInput = childThreadInputs[0];
     if (childInput && contentPresentationKind === "ready") {
@@ -1443,6 +1452,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               workspaceRoot={props.threadCwd}
               feed={props.selectedThreadFeed}
               mediaJump={props.mediaJump}
+              findAnchorReader={props.findAnchorReader}
               onMediaJumpHandled={props.onMediaJumpHandled}
               pendingHandoff={props.pendingHandoff}
               worktreeSetup={props.worktreeSetup}
@@ -1463,6 +1473,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   : handleQuoteMessage
               }
               contentPresentation={props.contentPresentation}
+              showLoadingPlaceholder={showLoadingPlaceholder}
               agentLabel={agentLabel}
               agentDriver={agentProvider?.driver}
               visitedAtOpen={visitedAtOpen}
@@ -1554,6 +1565,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 list's bottom inset, so any padding above the pill/composer
                 pushes the resting content floor up by the same amount. */}
               <View ref={composerOverlayRef} onLayout={onComposerLayout} className="w-full">
+                {props.findBar}
                 {discord && floatingStatus?.kind === "working" ? (
                   <DiscordTypingIndicator label={agentLabel} startedAt={floatingStatus.startedAt} />
                 ) : null}

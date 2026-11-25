@@ -14,6 +14,30 @@ export function isUsageLimitReadingStale(limits: ServerProviderUsageLimits, now:
   );
 }
 
+function usableWindows(limits: ServerProviderUsageLimits, readAt: number, now: number) {
+  return limits.windows.filter((window) => {
+    if (window.resetsAt !== undefined) return Date.parse(window.resetsAt) > now;
+    const length = (window.windowDurationMins ?? 0) * 60_000;
+    return length === 0 || readAt + length > now;
+  });
+}
+
+/** A saved reading can paint the rings during startup, using its original timestamps. */
+export function usageReadingWhileRefreshing(
+  last: ServerProviderUsageLimits | undefined,
+  now: number,
+): ServerProviderUsageLimits | undefined {
+  if (!last || last.unavailable?.reason === "unsupported") return undefined;
+  const readAt = Date.parse(last.checkedAt);
+  if (!Number.isFinite(readAt) || readAt > now) return undefined;
+  const windows = usableWindows(last, readAt, now).map(
+    ({ recentPercentPerHour: _pace, ...window }) => window,
+  );
+  if (windows.length === 0) return undefined;
+  const { unavailable: _unavailable, resetCredits: _resetCredits, ...reading } = last;
+  return { ...reading, windows, refreshing: true };
+}
+
 /**
  * What an instance publishes when its probe could not read any limits: the windows of its last
  * reading, still dated `checkedAt` when they were read, beside the failure's notice. Clients tell
@@ -23,6 +47,9 @@ export function isUsageLimitReadingStale(limits: ServerProviderUsageLimits, now:
  * a whole window length older than now. With nothing left, the failure is published as it is.
  * Live readings and `unsupported` never come through here, and `last` may itself be such an
  * older reading, which then only loses windows.
+ *
+ * A live reading younger than the stale limit still stands as it was: the probe runs every few
+ * minutes, and one slow answer is no reason to grey out numbers read moments ago.
  */
 export function withLastUsageReading(
   failed: ServerProviderUsageLimits,
@@ -33,12 +60,17 @@ export function withLastUsageReading(
   if (last === undefined || last.unavailable?.reason === "unsupported") return failed;
   const readAt = Date.parse(last.checkedAt);
   if (!Number.isFinite(readAt) || readAt > now) return failed;
+  if (last.unavailable === undefined && now - readAt <= USAGE_LIMIT_STALE_AFTER_MS) {
+    const current = last.windows.filter(
+      (window) => window.resetsAt === undefined || Date.parse(window.resetsAt) > now,
+    );
+    if (current.length > 0)
+      return current.length === last.windows.length ? last : { ...last, windows: current };
+  }
   // The measured pace belonged to that moment; pace warnings must not fire from it.
-  const windows = last.windows.flatMap(({ recentPercentPerHour: _pace, ...window }) => {
-    if (window.resetsAt !== undefined) return Date.parse(window.resetsAt) > now ? [window] : [];
-    const length = (window.windowDurationMins ?? 0) * 60_000;
-    return length > 0 && readAt + length <= now ? [] : [window];
-  });
+  const windows = usableWindows(last, readAt, now).map(
+    ({ recentPercentPerHour: _pace, ...window }) => window,
+  );
   if (windows.length === 0) return failed;
   return {
     ...failed,

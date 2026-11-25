@@ -218,7 +218,7 @@ export interface LimitAccount {
     readonly input: ProviderConsumeResetCreditInput;
   } | null;
   readonly limits: ServerProviderUsageLimits;
-  /** Set when `limits` is an older reading the server kept because its probe read nothing. */
+  /** Set when the server serves a saved reading during or after a probe. */
   readonly asOf?: number;
   /**
    * Set on a plan with no numbers at all: its one-line notice. Only with `withNotices`; such
@@ -228,11 +228,14 @@ export interface LimitAccount {
 }
 
 /**
- * When a server serves an instance's last reading because its probe read nothing, the windows
- * stay dated when they were read: that time, else null for a live reading.
+ * Saved windows keep the date they were read, including while a new probe is pending.
  */
 export function olderReadingAt(limits: ServerProviderUsageLimits): number | null {
-  if (limits.unavailable?.reason !== "probeFailed" || limits.windows.length === 0) return null;
+  if (
+    (!limits.refreshing && limits.unavailable?.reason !== "probeFailed") ||
+    limits.windows.length === 0
+  )
+    return null;
   const at = Date.parse(limits.checkedAt);
   return Number.isFinite(at) ? at : null;
 }

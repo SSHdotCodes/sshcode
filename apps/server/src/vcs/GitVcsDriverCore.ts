@@ -800,6 +800,57 @@ export function parseGitCheckoutProgressLine(
 
 const OUTPUT_LINE_SEPARATOR = /\r\n|\r|\n/;
 
+const strictUtf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+const lenientUtf8Decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+const gb18030Decoder = new TextDecoder("gb18030", { ignoreBOM: true });
+const CONSECUTIVE_CJK = /[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]{2}/u;
+const CJK_BETWEEN_ASCII_LETTERS = /[A-Za-z][\u3000-\u303f\u4e00-\u9fff\uff00-\uffef][A-Za-z]/u;
+
+// A byte cap can end inside a UTF-8 character; that tail is not evidence of another encoding.
+const decodeStrictUtf8 = (bytes: Uint8Array, truncated: boolean): string => {
+  if (!truncated) return strictUtf8Decoder.decode(bytes);
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  const text = decoder.decode(bytes, { stream: true });
+  try {
+    return text + decoder.decode();
+  } catch {
+    return `${text}\uFFFD`;
+  }
+};
+
+const decodeUtf8OrGb18030 = (bytes: Uint8Array, truncated: boolean): string => {
+  try {
+    return decodeStrictUtf8(bytes, truncated);
+  } catch {
+    const fallback = gb18030Decoder.decode(bytes);
+    // A Western accented byte and the next ASCII letter can decode as one CJK character.
+    return !fallback.includes("\uFFFD") &&
+      CONSECUTIVE_CJK.test(fallback) &&
+      !CJK_BETWEEN_ASCII_LETTERS.test(fallback)
+      ? fallback
+      : lenientUtf8Decoder.decode(bytes);
+  }
+};
+
+// Git emits file bytes unchanged. Split lines and NUL records so one GBK file
+// or path does not send valid UTF-8 neighbours through the fallback encoding.
+const decodeGitText = (bytes: Uint8Array, truncated = false): string => {
+  try {
+    return decodeStrictUtf8(bytes, truncated);
+  } catch {
+    let text = "";
+    let start = 0;
+    while (start < bytes.length) {
+      let end = start;
+      while (end < bytes.length && bytes[end] !== 0x0a && bytes[end] !== 0x00) end += 1;
+      end = Math.min(end + 1, bytes.length);
+      text += decodeUtf8OrGb18030(bytes.subarray(start, end), truncated && end === bytes.length);
+      start = end;
+    }
+    return text;
+  }
+};
+
 const collectOutput = Effect.fnUntraced(function* (
   input: Pick<GitVcsDriver.ExecuteGitInput, "operation" | "cwd" | "args">,
   stream: Stream.Stream<Uint8Array, PlatformError.PlatformError>,
@@ -808,12 +859,12 @@ const collectOutput = Effect.fnUntraced(function* (
   onLine: ((line: string) => Effect.Effect<void, never>) | undefined,
   keepLineCallbacksAfterTruncation = false,
 ): Effect.fn.Return<{ readonly text: string; readonly truncated: boolean }, GitCommandError> {
-  const decoder = new TextDecoder();
   // With callbacks continuing past the cap, lines are decoded by their own
   // decoder from the first byte so no character is ever split at the cap.
   const lineDecoder = keepLineCallbacksAfterTruncation && onLine ? new TextDecoder() : null;
+  const lineStreamDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
+  const chunks: Array<Uint8Array> = [];
   let bytes = 0;
-  let text = "";
   let lineBuffer = "";
   let truncated = false;
   // A separator-free stream past the cap must not grow the line buffer
@@ -867,10 +918,13 @@ const collectOutput = Effect.fnUntraced(function* (
     bytes += chunkToDecode.byteLength;
     truncated = appendTruncationMarker && nextBytes > maxOutputBytes;
 
-    const decoded = decoder.decode(chunkToDecode, { stream: !truncated });
-    text += decoded;
-    lineBuffer += lineDecoder ? lineDecoder.decode(chunk, { stream: true }) : decoded;
-    yield* emitCompleteLines(false);
+    chunks.push(chunkToDecode);
+    if (onLine) {
+      lineBuffer += lineDecoder
+        ? lineDecoder.decode(chunk, { stream: true })
+        : lineStreamDecoder.decode(chunkToDecode, { stream: !truncated });
+      yield* emitCompleteLines(false);
+    }
   });
 
   yield* Stream.runForEach(stream, processChunk).pipe(
@@ -884,13 +938,13 @@ const collectOutput = Effect.fnUntraced(function* (
     }),
   );
 
-  const remainder = truncated ? "" : decoder.decode();
-  text += remainder;
-  lineBuffer += remainder;
-  if (lineDecoder) lineBuffer += lineDecoder.decode();
-  yield* emitCompleteLines(true);
+  if (onLine) {
+    if (!truncated && !lineDecoder) lineBuffer += lineStreamDecoder.decode();
+    if (lineDecoder) lineBuffer += lineDecoder.decode();
+    yield* emitCompleteLines(true);
+  }
   return {
-    text,
+    text: decodeGitText(Buffer.concat(chunks), truncated),
     truncated,
   };
 });
@@ -3156,7 +3210,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (bytes.includes(0)) {
       return yield* fileError("fs.readFile", `Cannot expand binary file '${input.newPath}'.`);
     }
-    return new TextDecoder("utf-8").decode(bytes);
+    return decodeGitText(bytes);
   });
 
   // Both views compare a commit with the working tree: HEAD for Uncommitted,

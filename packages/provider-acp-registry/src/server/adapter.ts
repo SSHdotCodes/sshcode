@@ -214,6 +214,7 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
     driver: ACP_REGISTRY_PROVIDER,
     capabilities: AcpProviderCapabilitiesV2,
     compactViaAdvertisedCommand: true,
+    todoListUpdatesAreSnapshots: true,
     customModels: readCustomModelEntries(options.settings.customModels).map((entry) => entry.slug),
     // glm-acp-agent is the agent whose per-turn response usage was verified upstream.
     ...(registryAgentId === "glm-acp-agent" ? { reportsPerTurnPromptUsage: true } : {}),

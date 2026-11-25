@@ -58,6 +58,7 @@ import {
 } from "@t3tools/contracts";
 import * as Semaphore from "effect/Semaphore";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
@@ -69,9 +70,14 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import { ProviderAdapterOpenSessionError } from "@t3tools/provider-core/server/ProviderAdapter";
+import { providerCredentialSettings } from "../settingsSecrets.ts";
 import { buildUnavailableProviderSnapshot } from "./unavailableProviderSnapshot.ts";
 import * as ProviderInstanceRegistryMutator from "./ProviderInstanceRegistryMutator.ts";
 import type { AnyProviderDriver, ProviderInstance } from "@t3tools/provider-core/server/driver";
+
+export interface ConfiguredProviderInstance extends ProviderInstance {
+  readonly credentialSettings?: Effect.Success<ReturnType<typeof providerCredentialSettings>>;
+}
 
 export class ProviderInstanceRegistry extends Context.Service<
   ProviderInstanceRegistry,
@@ -83,12 +89,12 @@ export class ProviderInstanceRegistry extends Context.Service<
      */
     readonly getInstance: (
       instanceId: ProviderInstanceId,
-    ) => Effect.Effect<ProviderInstance | undefined>;
+    ) => Effect.Effect<ConfiguredProviderInstance | undefined>;
     /**
      * Every available (driver-registered, successfully created) instance,
      * in stable settings-author order.
      */
-    readonly listInstances: Effect.Effect<ReadonlyArray<ProviderInstance>>;
+    readonly listInstances: Effect.Effect<ReadonlyArray<ConfiguredProviderInstance>>;
     /**
      * Wire-shape shadow snapshots for instances whose driver is unknown to
      * this build (or whose config failed to decode). Suitable for merging
@@ -137,7 +143,7 @@ export class ProviderInstanceRegistry extends Context.Service<
  * so `reconcile` can cheaply detect "no-op" updates.
  */
 interface LiveEntry {
-  readonly instance: ProviderInstance;
+  readonly instance: ConfiguredProviderInstance;
   readonly scope: Scope.Closeable;
   readonly entry: ProviderInstanceConfig;
   readonly sessions: Ref.Ref<number>;
@@ -196,7 +202,7 @@ const buildEntry = <R>(input: {
   | { readonly kind: "live"; readonly live: LiveEntry }
   | { readonly kind: "unavailable"; readonly snapshot: ServerProvider },
   never,
-  R
+  R | Crypto.Crypto
 > =>
   Effect.gen(function* () {
     const { driversById, parentScope, instanceId, rawInstanceId, entry } = input;
@@ -320,6 +326,7 @@ const buildEntry = <R>(input: {
       live: {
         instance: {
           ...instance,
+          credentialSettings: yield* providerCredentialSettings(entry),
           snapshot,
           orchestrationAdapter: { ...instance.orchestrationAdapter, openSession },
         },
@@ -340,7 +347,7 @@ const makeReconcile = <R>(input: {
   readonly driversById: ReadonlyMap<ProviderDriverKind, AnyProviderDriver<R>>;
   readonly parentScope: Scope.Scope;
   readonly admissionLock: Semaphore.Semaphore;
-}): ((configMap: ProviderInstanceConfigMap) => Effect.Effect<void, never, R>) => {
+}): ((configMap: ProviderInstanceConfigMap) => Effect.Effect<void, never, R | Crypto.Crypto>) => {
   const { state, driversById, parentScope } = input;
   return (configMap: ProviderInstanceConfigMap) =>
     Effect.gen(function* () {
@@ -467,7 +474,7 @@ export const makeProviderInstanceRegistry = <R>(input: {
     readonly mutator: ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutatorShape;
   },
   never,
-  R | Scope.Scope
+  R | Scope.Scope | Crypto.Crypto
 > =>
   Effect.gen(function* () {
     const driversById = new Map<ProviderDriverKind, AnyProviderDriver<R>>(
@@ -484,7 +491,7 @@ export const makeProviderInstanceRegistry = <R>(input: {
     // can be invoked later without re-providing driver dependencies.
     // The service tag's declared `reconcile: Effect<void>` hides R from
     // consumers — we materialize that here.
-    const driverContext = yield* Effect.context<R>();
+    const driverContext = yield* Effect.context<R | Crypto.Crypto>();
 
     const entries = yield* Ref.make<ReadonlyMap<ProviderInstanceId, LiveEntry>>(new Map());
     const unavailable = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ServerProvider>>(new Map());
@@ -516,10 +523,7 @@ export const makeProviderInstanceRegistry = <R>(input: {
     const registry: ProviderInstanceRegistry["Service"] = {
       getInstance: (id) => Ref.get(entries).pipe(Effect.map((map) => map.get(id)?.instance)),
       listInstances: Ref.get(entries).pipe(
-        Effect.map(
-          (map) =>
-            Array.from(map.values(), (live) => live.instance) as ReadonlyArray<ProviderInstance>,
-        ),
+        Effect.map((map) => Array.from(map.values(), (live) => live.instance)),
       ),
       listUnavailable: Ref.get(unavailable).pipe(
         Effect.map((map) => Array.from(map.values()) as ReadonlyArray<ServerProvider>),
@@ -567,7 +571,7 @@ export const layer = <R>(input: {
 }): Layer.Layer<
   ProviderInstanceRegistry | ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator,
   never,
-  R
+  R | Crypto.Crypto
 > =>
   Layer.effectContext(
     makeProviderInstanceRegistry(input).pipe(
@@ -580,5 +584,5 @@ export const layer = <R>(input: {
   ) as Layer.Layer<
     ProviderInstanceRegistry | ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator,
     never,
-    R
+    R | Crypto.Crypto
   >;

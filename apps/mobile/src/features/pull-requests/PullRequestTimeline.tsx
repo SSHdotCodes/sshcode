@@ -12,6 +12,7 @@ import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
 import { relativeTime } from "../../lib/time";
 import { PullRequestAvatar } from "./PullRequestPresentation";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
+import { collapsedTimelineCommentMarkdown } from "./PullRequestTimeline.logic";
 import { pullRequestDescriptionContent } from "./pullRequestDescriptionContent";
 import type { PullRequestParams } from "./usePullRequestDiff";
 
@@ -94,7 +95,9 @@ function TimelineComment({ comment }: { comment: PullRequestComment }) {
         <View className="gap-2 overflow-hidden rounded-2xl bg-grouped-card p-3">
           <View style={long && !expanded ? { maxHeight: 240, overflow: "hidden" } : undefined}>
             <PullRequestMarkdown
-              markdown={long && !expanded ? comment.body.slice(0, 1200) : comment.body}
+              markdown={
+                long && !expanded ? collapsedTimelineCommentMarkdown(comment.body) : comment.body
+              }
               imageGroupMarkdown={comment.body}
             />
           </View>

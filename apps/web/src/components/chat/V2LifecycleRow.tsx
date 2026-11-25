@@ -10,7 +10,7 @@ import {
 import { FirstSubagentAsk } from "./FirstSubagentAsk";
 import { subagentBackgroundWaitLabel } from "@t3tools/shared/chatControls";
 import type { ReactNode } from "react";
-import { useThreadShell, useProject } from "../../state/entities";
+import { useLinkedThreadShell, useThreadShell, useProject } from "../../state/entities";
 import { SubagentTooltipContent } from "./SubagentTooltipContent";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef, scopeProjectRef } from "@t3tools/client-runtime/environment";
@@ -463,7 +463,7 @@ function SubagentTimelineTooltip(
 ) {
   const environmentId = props.parentRef.environmentId;
   const parent = useThreadShell(props.parentRef)?.source;
-  const child = useThreadShell(
+  const child = useLinkedThreadShell(
     props.threadId ? scopeThreadRef(environmentId, props.threadId) : null,
   )?.source;
   const parentProject = useProject(

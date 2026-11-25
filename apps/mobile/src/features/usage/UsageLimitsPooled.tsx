@@ -484,7 +484,8 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
               </Text>
               {account.asOf === undefined ? null : (
                 <Text className="text-sm text-foreground-muted">
-                  Reading {formatAsOf(account.asOf, now)}
+                  {account.limits.refreshing ? "Refreshing · reading" : "Reading"}{" "}
+                  {formatAsOf(account.asOf, now)}
                 </Text>
               )}
               {window.resetsAt ? (

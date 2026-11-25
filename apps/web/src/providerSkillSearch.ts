@@ -1,3 +1,9 @@
+import {
+  composerRecentRankMap,
+  composerRecentTieBreakerPrefix,
+  composerSkillRecencyKey,
+  orderByComposerRecentUse,
+} from "@t3tools/client-runtime/composer-command-recency";
 import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
 import type { ServerProviderSkill } from "@t3tools/contracts";
 import {
@@ -69,20 +75,36 @@ export function scoreProviderSkill(skill: ServerProviderSkill, query: string): n
   return Math.min(...scores);
 }
 
+function skillMatchBand(skill: ServerProviderSkill, query: string, score: number): number {
+  const name = skill.name.toLowerCase();
+  const label = formatProviderSkillDisplayName(skill).toLowerCase();
+  if (name === query || label === query) return 0;
+  if (name.startsWith(query) || label.startsWith(query)) return 1;
+  if (score < 20) return 2;
+  if (score < 100) return 3;
+  return 4;
+}
+
 export function searchProviderSkills(
   skills: ReadonlyArray<ServerProviderSkill>,
   query: string,
   limit = Number.POSITIVE_INFINITY,
+  recentKeys: ReadonlyArray<string> = [],
 ): ServerProviderSkill[] {
   const enabledSkills = dedupeProviderSkillsByName(skills.filter(isProviderSkillUserInvocable));
   const normalizedQuery = normalizeSearchQuery(query, { trimLeadingPattern: /^\p{Sc}+/u });
 
   if (!normalizedQuery) {
-    return enabledSkills;
+    return orderByComposerRecentUse(enabledSkills, recentKeys, (skill) =>
+      composerSkillRecencyKey(skill.name),
+    ).slice(0, limit);
   }
 
-  const ranked: Array<{
+  const recentRanks = composerRecentRankMap(recentKeys);
+  const scored: Array<{
     item: ServerProviderSkill;
+    band: number;
+    recentRank: number;
     score: number;
     tieBreaker: string;
   }> = [];
@@ -93,16 +115,30 @@ export function searchProviderSkills(
       continue;
     }
 
-    insertRankedSearchResult(
-      ranked,
-      {
-        item: skill,
-        score,
-        tieBreaker: `${formatProviderSkillDisplayName(skill).toLowerCase()}\u0000${skill.name}`,
-      },
-      limit,
-    );
+    const recentRank = recentRanks.get(composerSkillRecencyKey(skill.name));
+    scored.push({
+      item: skill,
+      band: skillMatchBand(skill, normalizedQuery, score),
+      recentRank: recentRank ?? Number.POSITIVE_INFINITY,
+      score,
+      tieBreaker: `${composerRecentTieBreakerPrefix(recentRank)}\u0000${formatProviderSkillDisplayName(skill).toLowerCase()}\u0000${skill.name}`,
+    });
   }
 
-  return ranked.map((entry) => entry.item);
+  if (recentRanks.size === 0) {
+    const ranked: Array<{ item: ServerProviderSkill; score: number; tieBreaker: string }> = [];
+    for (const entry of scored) {
+      insertRankedSearchResult(ranked, entry, limit);
+    }
+    return ranked.map((entry) => entry.item);
+  }
+
+  scored.sort(
+    (left, right) =>
+      left.band - right.band ||
+      left.recentRank - right.recentRank ||
+      left.score - right.score ||
+      left.tieBreaker.localeCompare(right.tieBreaker),
+  );
+  return scored.slice(0, limit).map((entry) => entry.item);
 }

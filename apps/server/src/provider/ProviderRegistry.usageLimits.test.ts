@@ -1,7 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
-import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
+import type { ProviderDriver, ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -11,6 +11,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -29,7 +30,7 @@ const provider = (id: string, checkedAt = "1970-01-01T00:00:00.000Z"): ServerPro
   installed: true,
   version: null,
   status: "ready",
-  auth: { status: "authenticated" },
+  auth: { status: "authenticated", email: "account@example.test" },
   checkedAt,
   models: [],
   slashCommands: [],
@@ -89,6 +90,179 @@ const withRegistry = <A, E, R>(
     ),
   );
 };
+
+it.effect("serves saved models and quota before independently refreshing two providers", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-provider-restart-" });
+    const caches = `${baseDir}/caches`;
+    yield* fs.makeDirectory(caches, { recursive: true });
+    yield* TestClock.setTime(60_000);
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const { usageLimits: _limits, ...base } = provider("codex");
+    const model = {
+      slug: "detected",
+      name: "Detected",
+      isCustom: false,
+      capabilities: { optionDescriptors: [{ id: "fast", label: "Fast", type: "boolean" }] },
+    } satisfies ServerProvider["models"][number];
+    const previous = { ...provider("codex"), models: [model] };
+    const other = { ...previous, instanceId: ProviderInstanceId.make("codex_other") };
+    for (const cached of [previous, other]) {
+      yield* writeProviderStatusCache({
+        filePath: `${caches}/${cached.instanceId}.json`,
+        provider: cached,
+      });
+    }
+    const oldOnDisk = yield* readProviderStatusCache(`${caches}/codex.json`);
+    const slowStarted = yield* Deferred.make<void>();
+    const releaseSlow = yield* Deferred.make<void>();
+    const pending: ServerProvider = {
+      ...base,
+      auth: { ...base.auth, status: "unknown" },
+      installed: false,
+      status: "warning",
+      refreshing: true,
+      checkedAt: now,
+      models: [{ ...model, capabilities: null }],
+    };
+    const fail = {
+      ...previous,
+      checkedAt: now,
+      usageLimits: makeUnavailableUsageLimits({ checkedAt: now, reason: "probeFailed" }),
+    };
+    yield* withRegistry(
+      [
+        {
+          provider: pending,
+          refresh: Deferred.succeed(slowStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseSlow)),
+            Effect.as(fail),
+          ),
+        },
+        {
+          provider: { ...pending, instanceId: other.instanceId },
+          refresh: Effect.succeed({
+            ...other,
+            checkedAt: now,
+            usageLimits: { ...other.usageLimits!, checkedAt: now },
+          }),
+        },
+      ],
+      Effect.gen(function* () {
+        const registry = yield* ProviderRegistry.ProviderRegistry;
+        expect(yield* registry.getProviders).toMatchObject(
+          [previous, other].map((cached) => ({
+            instanceId: cached.instanceId,
+            refreshing: true,
+            installed: true,
+            status: "ready",
+            models: cached.models,
+            usageLimits: { ...cached.usageLimits, refreshing: true },
+          })),
+        );
+        expect(yield* readProviderStatusCache(`${caches}/codex.json`)).toEqual(oldOnDisk);
+        const failure = {
+          kind: "billing_error",
+          outOfCredit: true,
+          occurredAt: now,
+          message: "Out of credit",
+        } as const;
+        yield* registry.setProviderRecentFailure({ instanceId: previous.instanceId, failure });
+        expect((yield* registry.getProviders)[0]?.recentFailure).toEqual(failure);
+        expect((yield* readProviderStatusCache(`${caches}/codex.json`))?.recentFailure).toEqual(
+          failure,
+        );
+        yield* registry.setProviderRecentFailure({
+          instanceId: previous.instanceId,
+          failure: null,
+        });
+        expect((yield* registry.getProviders)[0]?.recentFailure).toBeUndefined();
+        expect(yield* readProviderStatusCache(`${caches}/codex.json`)).toEqual(oldOnDisk);
+
+        const slowRefresh = yield* registry
+          .refreshInstance(previous.instanceId)
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(slowStarted);
+        const fast = yield* registry.refreshInstance(other.instanceId);
+        expect(fast[1]?.refreshing).toBeUndefined();
+        expect(fast[1]?.usageLimits?.checkedAt).toBe(now);
+        expect(fast[0]?.refreshing).toBe(true);
+        yield* Deferred.succeed(releaseSlow, undefined);
+        const failed = yield* Fiber.join(slowRefresh);
+        expect(failed[0]?.usageLimits).toMatchObject({ ...previous.usageLimits, refreshing: true });
+        expect(failed[0]?.usageLimits?.unavailable).toBeUndefined();
+      }),
+      baseDir,
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "expires cached readiness after consecutive incomplete probes and resets on success",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-provider-readiness-" });
+      const caches = `${baseDir}/caches`;
+      yield* fs.makeDirectory(caches, { recursive: true });
+      const { usageLimits: _limits, ...ready } = provider("codex");
+      const saved: ServerProvider = {
+        ...ready,
+        models: [{ slug: "detected", name: "Detected", isCustom: false, capabilities: null }],
+      };
+      yield* writeProviderStatusCache({ filePath: `${caches}/codex.json`, provider: saved });
+      const incomplete: ServerProvider = {
+        ...ready,
+        installed: false,
+        auth: { status: "unknown" },
+        status: "warning",
+        refreshing: true,
+        message: "Provider check timed out.",
+      };
+      const current = yield* Ref.make(incomplete);
+      const refresh = Effect.gen(function* () {
+        return { ...(yield* Ref.get(current)), checkedAt: DateTime.formatIso(yield* DateTime.now) };
+      });
+      yield* TestClock.setTime(60_000);
+      yield* withRegistry(
+        [{ provider: incomplete, refresh }],
+        Effect.gen(function* () {
+          const registry = yield* ProviderRegistry.ProviderRegistry;
+          expect((yield* registry.getProviders)[0]).toMatchObject({
+            status: "ready",
+            refreshing: true,
+            models: saved.models,
+          });
+          yield* TestClock.adjust("1 minute");
+          expect((yield* registry.refreshInstance(saved.instanceId))[0]?.status).toBe("ready");
+          yield* TestClock.adjust("1 minute");
+          expect((yield* registry.refreshInstance(saved.instanceId))[0]).toMatchObject({
+            status: "warning",
+            installed: false,
+            auth: incomplete.auth,
+            message: incomplete.message,
+            models: saved.models,
+          });
+          yield* TestClock.adjust("1 minute");
+          expect((yield* registry.refreshInstance(saved.instanceId))[0]?.status).toBe("warning");
+
+          yield* Ref.set(current, saved);
+          expect((yield* registry.refreshInstance(saved.instanceId))[0]).toMatchObject({
+            status: "ready",
+            installed: true,
+          });
+          yield* Ref.set(current, incomplete);
+          expect((yield* registry.refreshInstance(saved.instanceId))[0]?.status).toBe("ready");
+          yield* TestClock.adjust("1 minute");
+          expect((yield* registry.refreshInstance(saved.instanceId))[0]?.status).toBe("ready");
+          yield* TestClock.adjust("1 minute");
+          expect((yield* registry.refreshInstance(saved.instanceId))[0]?.status).toBe("warning");
+        }),
+        baseDir,
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
 
 it.effect("does not refresh a fresh reading even when provider health is old", () =>
   Effect.gen(function* () {
@@ -253,6 +427,186 @@ it.effect("does not show the old workspace's quota after switching workspaces", 
 );
 
 it.effect(
+  "carries quota for the same credential fingerprint only when account identity is absent",
+  () =>
+    Effect.gen(function* () {
+      const setup = (id: string, credentialFingerprint?: string) => {
+        const original = provider(id);
+        return {
+          ...original,
+          auth: { status: "authenticated", type: "oauth" },
+          usageLimits: { ...original.usageLimits!, credentialFingerprint },
+        } satisfies ServerProvider;
+      };
+      const matched = setup("codex", "fixture-account");
+      const changed = setup("codex_changed", "old-fixture-account");
+      const unidentified = setup("codex_unidentified");
+      const entries = [
+        { original: matched, fingerprint: "fixture-account", expectedWindows: 1 },
+        { original: changed, fingerprint: "new-fixture-account", expectedWindows: 0 },
+        { original: unidentified, fingerprint: undefined, expectedWindows: 0 },
+      ].map(({ original, fingerprint, expectedWindows }) => {
+        const failed = {
+          ...original,
+          usageLimits: {
+            ...makeUnavailableUsageLimits({
+              checkedAt: "1970-01-01T00:01:00.000Z",
+              reason: "probeFailed",
+            }),
+            credentialFingerprint: fingerprint,
+          },
+        };
+        return { provider: original, refresh: Effect.succeed(failed), expectedWindows };
+      });
+      yield* withRegistry(
+        entries,
+        Effect.gen(function* () {
+          const registry = yield* ProviderRegistry.ProviderRegistry;
+          yield* TestClock.setTime(60_000);
+          for (const entry of entries) {
+            const result = yield* registry.refreshInstance(entry.provider.instanceId);
+            expect(
+              result.find((row) => row.instanceId === entry.provider.instanceId)?.usageLimits
+                ?.windows,
+            ).toHaveLength(entry.expectedWindows);
+          }
+        }),
+      );
+    }),
+);
+
+it.effect(
+  "invalidates Claude readiness and quota on a credential change live and across boot",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-credential-cache-" });
+      const driverKind = ProviderDriverKind.make("claudeAgent");
+      const instanceId = ProviderInstanceId.make("claude_token");
+      const config = (value: string) => ({
+        [instanceId]: {
+          driver: driverKind,
+          environment: [{ name: "CLAUDE_CODE_OAUTH_TOKEN", value, sensitive: true }],
+          config: { alwaysUseToken: true },
+        },
+      });
+      const alpha = config("synthetic-a");
+      const beta = config("synthetic-b");
+      const cached: ServerProvider = {
+        ...provider(instanceId),
+        driver: driverKind,
+        auth: { status: "authenticated" },
+      };
+      const { usageLimits: _cachedLimits, ...status } = cached;
+      const pending: ServerProvider = {
+        ...status,
+        installed: false,
+        status: "warning",
+        auth: { status: "unknown" },
+        refreshing: true,
+      };
+      const probeStarted = yield* Deferred.make<void>();
+      const finishOldProbe = yield* Deferred.make<void>();
+      const driver = {
+        driverKind,
+        metadata: { displayName: "Claude", supportsMultipleInstances: true },
+        configSchema: Schema.Struct({ alwaysUseToken: Schema.Boolean }),
+        defaultConfig: () => ({ alwaysUseToken: true }),
+        create: ({ environment, enabled }) => {
+          const first = environment[0]?.value === "synthetic-a";
+          return Effect.succeed({
+            instanceId,
+            driverKind,
+            continuationIdentity: { driverKind, continuationKey: "same-home" },
+            displayName: undefined,
+            enabled,
+            snapshot: {
+              getSnapshot: Effect.succeed(pending),
+              refresh: first
+                ? Deferred.succeed(probeStarted, undefined).pipe(
+                    Effect.andThen(Deferred.await(finishOldProbe)),
+                    Effect.as(cached),
+                  )
+                : Effect.succeed(pending),
+              streamChanges: Stream.empty,
+              applyUsageLimits: () => Effect.void,
+              resolveMaintenance: () => Effect.die("unused"),
+            },
+            orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+            textGeneration: {} as ProviderInstance["textGeneration"],
+          });
+        },
+      } satisfies ProviderDriver<{ readonly alwaysUseToken: boolean }>;
+      const makeRegistry = (configMap: ReturnType<typeof config>) =>
+        ProviderInstanceRegistry.makeProviderInstanceRegistry({ drivers: [driver], configMap });
+      const withInstances = <A, E, R>(
+        instances: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
+        effect: Effect.Effect<A, E, R | ProviderRegistry.ProviderRegistry>,
+      ) =>
+        effect.pipe(
+          Effect.provide(
+            ProviderRegistry.layer.pipe(
+              Layer.provide(
+                Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, instances),
+              ),
+              Layer.provide(ModelManifest.layerTest),
+              Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
+              Layer.provide(NodeServices.layer),
+            ),
+          ),
+          Effect.scoped,
+        );
+      const old = yield* makeRegistry(alpha);
+      const credentialFingerprint = (yield* old.registry.getInstance(instanceId))
+        ?.credentialSettings?.fingerprint;
+      expect(credentialFingerprint).toMatch(/^[a-f\d]{64}$/);
+      const filePath = `${baseDir}/caches/${instanceId}.json`;
+      yield* fs.makeDirectory(`${baseDir}/caches`, { recursive: true });
+      yield* writeProviderStatusCache({
+        filePath,
+        provider: cached,
+        configuredCredentialFingerprint: credentialFingerprint,
+      });
+      const assertPending = (snapshot: ServerProvider | undefined) => {
+        expect(snapshot).toMatchObject({ status: "warning", installed: false, auth: pending.auth });
+        expect(snapshot?.usageLimits).toBeUndefined();
+      };
+      const replacement = yield* makeRegistry(beta);
+      yield* withInstances(
+        replacement.registry,
+        Effect.gen(function* () {
+          const registry = yield* ProviderRegistry.ProviderRegistry;
+          assertPending((yield* registry.getProviders)[0]);
+        }),
+      );
+      yield* withInstances(
+        old.registry,
+        Effect.gen(function* () {
+          const registry = yield* ProviderRegistry.ProviderRegistry;
+          expect((yield* registry.getProviders)[0]).toMatchObject({
+            status: "ready",
+            usageLimits: { refreshing: true, windows: cached.usageLimits?.windows },
+          });
+          const oldProbe = yield* registry.refreshInstance(instanceId).pipe(Effect.forkChild);
+          yield* Deferred.await(probeStarted);
+          const newSnapshot = yield* registry.streamChanges.pipe(
+            Stream.flatMap(Stream.fromIterable),
+            Stream.filter((snapshot) => snapshot.instanceId === instanceId && !snapshot.installed),
+            Stream.runHead,
+            Effect.forkChild({ startImmediately: true }),
+          );
+          yield* old.mutator.reconcile(beta);
+          yield* Fiber.join(newSnapshot);
+          yield* Deferred.succeed(finishOldProbe, undefined);
+          assertPending((yield* Fiber.join(oldProbe))[0]);
+          assertPending((yield* registry.getProviders)[0]);
+          expect(yield* readProviderStatusCache(filePath)).toBeUndefined();
+        }),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
   "serves the reading saved before a restart while probes read nothing, until a live one",
   () =>
     Effect.gen(function* () {
@@ -299,7 +653,10 @@ it.effect(
         [
           { provider: yield* Ref.get(current), refresh: Ref.get(current) },
           { provider: unread, refresh: Effect.succeed(unread) },
-          { provider: pending, refresh: Effect.succeed(pending) },
+          {
+            provider: { ...pending, auth: { status: "unknown" }, refreshing: true },
+            refresh: Effect.succeed(pending),
+          },
         ],
         Effect.gen(function* () {
           const registry = yield* ProviderRegistry.ProviderRegistry;
@@ -315,9 +672,14 @@ it.effect(
             ["weekly", 40],
           ]);
           expect(limitsOf(booted, "codex_work")).toEqual(unread.usageLimits);
+          expect(limitsOf(booted, "codex_pending")).toBeUndefined();
+          yield* registry.setProviderRecentUse(new Map([[pending.instanceId, 1]]));
+          expect(limitsOf(yield* registry.getProviders, "codex_pending")).toBeUndefined();
           // A second restart before the first probe still finds the saved reading.
           const onDisk = yield* readProviderStatusCache(`${caches}/codex_pending.json`);
           expect(onDisk?.usageLimits?.windows).toHaveLength(2);
+          const identified = yield* registry.refreshInstance(pending.instanceId);
+          expect(limitsOf(identified, "codex_pending")?.windows).toHaveLength(1);
 
           const live = provider("codex", iso(2 * HOUR));
           yield* Ref.set(current, live);

@@ -13,7 +13,7 @@ function renderInlineCodeText(text: string) {
       return (
         <code
           key={`${index}-${part}`}
-          className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground"
+          className="rounded-md border border-border/60 bg-muted/65 px-1.5 py-0.5 font-mono text-2xs text-foreground"
         >
           {part.slice(1, -1)}
         </code>

@@ -45,6 +45,7 @@ export function useThreadHeaderOptions(props: {
   readonly onReturnToThread?: () => void;
   readonly sideChat?: ThreadHeaderSideChat | null;
   readonly onOpenMedia?: (() => void) | undefined;
+  readonly onFindInChat?: (() => void) | undefined;
 }) {
   const privateLabel = usePrivacyLabel();
   const privacy = usePrivacyMode();
@@ -160,6 +161,18 @@ export function useThreadHeaderOptions(props: {
             },
           ]
         : []),
+      ...(props.onFindInChat
+        ? [
+            {
+              accessibilityLabel: "Find in chat",
+              label: "Find in chat",
+              identifier: "thread-find",
+              icon: { name: "text.magnifyingglass", type: "sfSymbol" },
+              type: "button",
+              onPress: props.onFindInChat,
+            },
+          ]
+        : []),
       ...(discord
         ? [
             {
@@ -197,6 +210,7 @@ export function useThreadHeaderOptions(props: {
       computerUseStatus,
       onMergeBack,
       props.onOpenMedia,
+      props.onFindInChat,
       pinnedHeaderItem,
       sideChatHeaderItem,
       discord,

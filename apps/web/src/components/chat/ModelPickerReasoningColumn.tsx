@@ -89,11 +89,11 @@ export function ModelPickerColumnHeader(props: {
   readonly detail?: string | null;
 }) {
   return (
-    <div className="shrink-0 px-3 pt-2">
-      <div className="flex h-8 items-center gap-2 border-b border-border/70 pb-1.5 text-sm">
-        <span className="text-muted-foreground">{props.label}</span>
+    <div className="shrink-0 px-3 pt-2.5">
+      <div className="flex -translate-y-px items-center gap-2 border-b border-border/70 pb-1.5 text-sm">
+        <span className="flex h-6.5 items-center text-muted-foreground">{props.label}</span>
         {props.detail ? (
-          <span className="ms-auto min-w-0 truncate text-muted-foreground text-xs">
+          <span className="ms-auto min-w-0 truncate text-xs text-muted-foreground">
             {props.detail}
           </span>
         ) : null}
@@ -227,7 +227,7 @@ function EffortSlider(props: {
                   key={level.id}
                   aria-hidden="true"
                   className={cn(
-                    "absolute top-[9px] flex -translate-x-1/2 flex-col items-center gap-[7px] text-3xs leading-4",
+                    "absolute top-[9px] flex -translate-x-1/2 flex-col items-center gap-1.75 text-3xs leading-4",
                     index === activeIndex ? "font-medium text-foreground" : "text-muted-foreground",
                   )}
                   style={{ left: `${(100 * index) / last}%` }}

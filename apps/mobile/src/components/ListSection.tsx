@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { Platform, View } from "react-native";
+import { Children, Fragment, isValidElement, type ReactNode } from "react";
+import { Platform, StyleSheet, View } from "react-native";
 
 import { AppText as Text } from "./AppText";
 
@@ -9,6 +9,8 @@ export function ListSection(props: {
   readonly trailing?: ReactNode;
   readonly children: ReactNode;
   readonly footer?: string;
+  /** Inset hairlines between direct rows on iOS. */
+  readonly separated?: boolean;
 }) {
   return (
     <View className="gap-2">
@@ -22,7 +24,10 @@ export function ListSection(props: {
             }
           >
             {props.titleIcon}
-            <Text className="shrink text-sm font-t3-medium text-foreground-muted">
+            <Text
+              accessibilityRole="header"
+              className="shrink text-sm font-t3-medium text-foreground-muted"
+            >
               {props.title}
             </Text>
           </View>
@@ -36,7 +41,20 @@ export function ListSection(props: {
             : "overflow-hidden rounded-[24px] border-continuous bg-grouped-card"
         }
       >
-        {props.children}
+        {props.separated && Platform.OS === "ios"
+          ? Children.toArray(props.children).map((child, index) => (
+              <Fragment key={isValidElement(child) ? (child.key ?? index) : index}>
+                {index > 0 ? (
+                  <View
+                    pointerEvents="none"
+                    className="bg-border-subtle"
+                    style={{ height: StyleSheet.hairlineWidth, marginStart: 55, marginEnd: 14 }}
+                  />
+                ) : null}
+                {child}
+              </Fragment>
+            ))
+          : props.children}
       </View>
       {props.footer ? (
         // Same inset as the section title above, and as the footnotes that

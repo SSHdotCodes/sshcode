@@ -25,6 +25,7 @@ import { useResolveClassNames } from "uniwind";
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
 import { ChoiceRow } from "./ThreadSettingsRows";
+import { ThreadSettingsRowDivider } from "./ThreadSettingsRows.shared";
 
 const THUMB = 26;
 const TRACK = 6;
@@ -242,7 +243,7 @@ export function ThreadSettingsEffort(props: {
   }));
 
   return (
-    <View className={cn(!props.isLast && "border-b border-border-subtle")}>
+    <View className={cn(!props.isLast && "android:border-b android:border-border-subtle")}>
       <View className={cn("px-4 pt-2 pb-1", disabled && "opacity-50")}>
         <View className="flex-row items-center justify-between gap-2">
           <Text className="text-sm font-t3-medium text-foreground">{props.label}</Text>
@@ -426,6 +427,7 @@ export function ThreadSettingsEffort(props: {
             </View>
           </GestureDetector>
         ) : null}
+        {otherChoices.length > 0 ? <ThreadSettingsRowDivider /> : null}
       </View>
       {otherChoices.map((choice, index) => (
         <ChoiceRow
@@ -436,6 +438,7 @@ export function ThreadSettingsEffort(props: {
           onPress={() => select(choice.id)}
         />
       ))}
+      {props.isLast ? null : <ThreadSettingsRowDivider />}
     </View>
   );
 }

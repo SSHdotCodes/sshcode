@@ -162,7 +162,7 @@ export function OverviewComposer(props: {
         </div>
       ) : null}
       <form
-        className="relative flex items-end gap-2 rounded-3xl border border-border bg-background py-2 pr-2 pl-4 shadow-xs focus-within:border-ring"
+        className="relative flex items-end gap-2 rounded-3xl border border-border/80 bg-card/85 py-2 pr-2 pl-4 shadow-xs transition-colors focus-within:border-ring dark:bg-card dark:inset-shadow-card-highlight"
         onSubmit={(event) => {
           event.preventDefault();
           send();
@@ -232,6 +232,8 @@ export function OverviewComposer(props: {
         <Button
           type="submit"
           size="icon-sm"
+          // Same resting look as the chat composer's send button: grey until there's a question.
+          className="rounded-full disabled:border-transparent disabled:bg-foreground/12 disabled:text-muted-foreground disabled:opacity-100"
           disabled={draft.text.trim().length === 0 || draft.text.length > 4_000}
           aria-label="Send"
         >

@@ -83,7 +83,12 @@ const handlers = {
             grade.taskId === taskId,
         );
       // Grading a task means its result was read, even if the grade itself was skipped.
-      const result = rated ? { ...status, summary: null, latestTerminalSummary: null } : status;
+      const {
+        summary: _readSummary,
+        latestTerminalSummary: _readTerminalSummary,
+        ...withoutResult
+      } = status;
+      const result = rated ? withoutResult : status;
       return feedback.skipped.length ? { ...result, grades: feedback } : result;
     }),
   ),

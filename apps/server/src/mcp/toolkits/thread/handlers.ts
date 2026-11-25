@@ -173,7 +173,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       // outside a thread searches every project.
       const projectId = requested ?? caller?.projectId;
       const threadSearch = yield* ThreadSearch.ThreadSearch;
-      const result = yield* threadSearch
+      const { nextCursor: _nextCursor, ...result } = yield* threadSearch
         .search({ ...query, mode: query.mode ?? "hybrid" })
         .pipe(Effect.mapError(unavailable));
       return {

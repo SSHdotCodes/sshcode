@@ -1267,7 +1267,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   attachments={stripAttachments}
                   imageSize={56}
                   imageBorderRadius={12}
-                  onRemove={isSubmissionLocked ? () => undefined : props.onRemoveDraftImage}
+                  onRemove={isSubmissionLocked ? undefined : props.onRemoveDraftImage}
                   onPressPreview={isSubmissionLocked ? undefined : onPressPreview}
                   onPressVideo={isSubmissionLocked ? undefined : onPressVideo}
                   onPressDocument={
@@ -1486,7 +1486,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 paddingBottom={0}
                 paddingHorizontal={0}
                 paddingTop={0}
-                style={{ gap: 0 }}
+                style={{ gap: Platform.OS === "ios" ? 4 : 0 }}
               >
                 <ComposerDictationCancelAction
                   presentation={voicePresentation}
@@ -1501,7 +1501,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     onDismissError={voiceInput.cancel}
                   />
                 ) : (
-                  <View className="min-w-0 flex-1 flex-row items-center justify-between">
+                  <View className="min-w-0 flex-1 flex-row items-center justify-between ios:gap-1">
                     <ComposerAttachmentButton
                       disabled={isSubmissionLocked}
                       onScheduleMessage={() => {

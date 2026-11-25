@@ -648,16 +648,12 @@ function PoolSection({
   const label = pool.label ?? providerClients.get(pool.driver)?.label ?? String(pool.driver);
   const windows = displayLimitWindows(pool);
   const clock = (ms: number) => formatClockTime(ms, timestampFormat);
-  // Readings a failed probe left behind are dated, so they never pass as live.
-  const older = pool.accounts.flatMap((account) =>
-    account.asOf === undefined
-      ? []
-      : [
-          pool.accounts.length > 1
-            ? `${account.displayName ?? label} ${formatAsOf(account.asOf, now, clock)}`
-            : `Reading ${formatAsOf(account.asOf, now, clock)}`,
-        ],
-  );
+  const older = pool.accounts.flatMap((account) => {
+    if (account.asOf === undefined) return [];
+    const name = pool.accounts.length > 1 ? `${account.displayName ?? label} · ` : "";
+    const status = account.limits.refreshing ? "Refreshing · reading" : "Reading";
+    return [`${name}${status} ${formatAsOf(account.asOf, now, clock)}`];
+  });
   return (
     <section className="flex flex-col gap-3">
       <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">

@@ -159,7 +159,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
               >
                 <StarIcon className="size-5 shrink-0 fill-current" aria-hidden />
               </RailButton>
-              <div className="border-b border-border/70" aria-hidden="true" />
+              <div className="mx-1 border-b border-border/60" aria-hidden="true" />
             </>
           ) : null}
           {props.makers.map((maker) => {

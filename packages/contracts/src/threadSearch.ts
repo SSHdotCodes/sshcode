@@ -12,11 +12,30 @@ import {
 export const OrchestrationThreadSearchSource = Schema.Literals(["user", "assistant"]);
 export type OrchestrationThreadSearchSource = typeof OrchestrationThreadSearchSource.Type;
 
+const MessageSearchPosition = Schema.Struct({
+  before: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+  skip: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 511 }))),
+});
+const NameSearchPosition = Schema.Struct({
+  score: Schema.Int,
+  archived: Schema.Int,
+  updatedAt: Schema.String.check(Schema.isMaxLength(32)),
+  threadId: ThreadId,
+});
+const ThreadSearchCursor = Schema.Struct({
+  names: Schema.optionalKey(NameSearchPosition),
+  exact: Schema.optionalKey(MessageSearchPosition),
+  words: Schema.optionalKey(MessageSearchPosition),
+  fragments: Schema.optionalKey(MessageSearchPosition),
+  corrections: Schema.optionalKey(Schema.NullOr(NameSearchPosition)),
+});
+
 // Bound input and payload size for remote clients as well as local search.
 export const OrchestrationSearchThreadsInput = Schema.Struct({
   query: TrimmedString.check(Schema.isMinLength(2), Schema.isMaxLength(200)),
   limit: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 }))),
   mode: Schema.optionalKey(Schema.Literals(["keyword", "hybrid"])),
+  cursor: Schema.optionalKey(ThreadSearchCursor),
 });
 export type OrchestrationSearchThreadsInput = typeof OrchestrationSearchThreadsInput.Type;
 
@@ -29,6 +48,9 @@ export const OrchestrationThreadSearchMatch = Schema.Struct({
   messageId: Schema.optionalKey(Schema.NullOr(MessageId)),
   title: Schema.optionalKey(Schema.String),
   archived: Schema.optionalKey(Schema.Boolean),
+  matchedModel: Schema.optionalKey(Schema.String),
+  matchedHarness: Schema.optionalKey(Schema.String),
+  titleCorrection: Schema.optionalKey(Schema.String),
 });
 export type OrchestrationThreadSearchMatch = typeof OrchestrationThreadSearchMatch.Type;
 
@@ -47,6 +69,7 @@ export const OrchestrationSearchThreadsResult = Schema.Struct({
   matches: Schema.Array(OrchestrationThreadSearchMatch),
   status: Schema.optionalKey(ThreadSearchStatus),
   complete: Schema.optionalKey(Schema.Boolean),
+  nextCursor: Schema.optionalKey(ThreadSearchCursor),
 });
 export type OrchestrationSearchThreadsResult = typeof OrchestrationSearchThreadsResult.Type;
 

@@ -51,6 +51,8 @@ export function PaintedIcon({
   );
 }
 
+export type SessionBoxPaint = Pick<SessionBoxPresentation, "hue" | "face" | "badge" | "tone">;
+
 /**
  * A chat's painting for the start of a list row: its topic face, which never changes, and
  * a badge with what it is doing now. The same art as the boxes, at a size that reads.
@@ -59,7 +61,7 @@ export function SessionBoxPainting({
   box,
   size,
 }: {
-  readonly box: SessionBoxPresentation;
+  readonly box: SessionBoxPaint;
   readonly identity?: string;
   readonly size: number;
 }) {

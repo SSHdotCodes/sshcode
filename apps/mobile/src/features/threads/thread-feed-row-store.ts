@@ -9,6 +9,7 @@ import type { WorktreeSetupCardProps } from "./worktree-setup-card";
 
 export interface ThreadFeedRowStoreState {
   readonly copiedRowId: string | null;
+  readonly searchJumpRowId: string | null;
   readonly expandedWorkRows: Record<string, boolean>;
   readonly editingMessageId?: MessageId | null;
   readonly editingQueuedMessageIds?: Readonly<Record<MessageId, true>>;
@@ -35,6 +36,7 @@ export interface ThreadFeedRowStore {
 function sameRowStoreState(a: ThreadFeedRowStoreState, b: ThreadFeedRowStoreState): boolean {
   return (
     a.copiedRowId === b.copiedRowId &&
+    a.searchJumpRowId === b.searchJumpRowId &&
     a.expandedWorkRows === b.expandedWorkRows &&
     a.editingMessageId === b.editingMessageId &&
     a.editingQueuedMessageIds === b.editingQueuedMessageIds &&
@@ -80,6 +82,7 @@ export interface ThreadFeedRowVolatileSlice {
   readonly decorationGrouped: boolean;
   readonly avatar: ReturnType<typeof discordAvatarIdentity> | undefined;
   readonly copiedRowId: string | null;
+  readonly searchJumpHighlighted: boolean;
   readonly expandedRowsKey: string;
   readonly userMessageExpanded: boolean;
   readonly isEditingUserMessage: boolean;
@@ -123,6 +126,7 @@ export function selectRowVolatileSlice(
     decorationGrouped: decoration?.grouped ?? false,
     avatar: isMessage ? state.agentAvatars?.get(item.message.runId ?? "") : undefined,
     copiedRowId,
+    searchJumpHighlighted: state.searchJumpRowId === item.id,
     expandedRowsKey,
     userMessageExpanded:
       isMessage &&
@@ -166,6 +170,7 @@ export function sameRowVolatileSlice(
     a.decorationGrouped === b.decorationGrouped &&
     a.avatar === b.avatar &&
     a.copiedRowId === b.copiedRowId &&
+    a.searchJumpHighlighted === b.searchJumpHighlighted &&
     a.expandedRowsKey === b.expandedRowsKey &&
     a.userMessageExpanded === b.userMessageExpanded &&
     a.isEditingUserMessage === b.isEditingUserMessage &&

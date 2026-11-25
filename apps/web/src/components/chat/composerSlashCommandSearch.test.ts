@@ -233,3 +233,68 @@ it("offers the built-in debug workflow only at the start of a message", () => {
     searchSlashCommandItems(slashCommandItemsForPromptPosition([item], true), "debug"),
   ).toEqual([item]);
 });
+
+describe("searchSlashCommandItems recent use", () => {
+  const claudeDriver = ProviderDriverKind.make("claudeAgent");
+  const items = [
+    {
+      id: "slash:debug",
+      type: "slash-command",
+      command: "debug",
+      label: "/debug",
+      description: "Find runtime bugs with evidence",
+    },
+    {
+      id: "slash:model",
+      type: "slash-command",
+      command: "model",
+      label: "/model",
+      description: "Switch response model",
+    },
+    {
+      id: "provider-slash-command:claudeAgent:compact",
+      type: "provider-slash-command",
+      provider: claudeDriver,
+      command: { name: "compact" },
+      label: "/compact",
+      description: "Compact conversation",
+    },
+    {
+      id: "skill:claudeAgent:compose",
+      type: "skill",
+      provider: claudeDriver,
+      skill: {
+        name: "compose",
+        path: "/skills/compose/SKILL.md",
+        enabled: true,
+      },
+      label: "/compose",
+      description: "Compose a release note",
+    },
+  ] satisfies Array<
+    Extract<ComposerCommandItem, { type: "slash-command" | "provider-slash-command" | "skill" }>
+  >;
+
+  it("puts recently used commands and skills first for an empty query", () => {
+    expect(
+      searchSlashCommandItems(items, "", ["skill:compose", "slash:model"]).map((item) => item.id),
+    ).toEqual([
+      "skill:claudeAgent:compose",
+      "slash:model",
+      "slash:debug",
+      "provider-slash-command:claudeAgent:compact",
+    ]);
+  });
+
+  it("breaks equal-score query ties by recent use without overriding stronger matches", () => {
+    // Both /compact and /compose prefix-match "comp" with the same score; recent use wins.
+    expect(
+      searchSlashCommandItems(items, "comp", ["skill:compose"]).map((item) => item.id),
+    ).toEqual(["skill:claudeAgent:compose", "provider-slash-command:claudeAgent:compact"]);
+
+    // Exact match (/model) still beats a recently used non-exact item.
+    expect(
+      searchSlashCommandItems(items, "model", ["skill:compose"]).map((item) => item.id),
+    ).toEqual(["slash:model"]);
+  });
+});

@@ -11,7 +11,6 @@ import {
   type OrchestrationV2ThreadShell,
   ThreadId,
 } from "@t3tools/contracts";
-import * as Option from "effect/Option";
 import {
   CircleAlertIcon,
   CircleCheckIcon,
@@ -28,6 +27,7 @@ import {
 import { splitPaneIndex, useSplitChatStore } from "../splitChatStore";
 import { useEnvironmentIds } from "../state/environments";
 import { environmentShell } from "../state/shell";
+import { threadFamilies } from "../state/threads";
 import {
   hasDesktopNotifications,
   hasNotificationSound,
@@ -146,11 +146,10 @@ function EnvironmentNotifications({
     notification: ThreadNotificationHandle,
   ) => () => void;
 }) {
-  const shell = useAtomValue(environmentShell.stateValueAtom(environmentId));
-  // The shell reducer keeps the thread list and unchanged thread objects
-  // stable, so this only rescans when a thread actually changed.
-  const threads =
-    shell.status === "live" && Option.isSome(shell.snapshot) ? shell.snapshot.value.threads : null;
+  const { status: shellStatus } = useAtomValue(environmentShell.stateValueAtom(environmentId));
+  const snapshot = useAtomValue(threadFamilies.snapshotAtom(environmentId));
+  // The merged rows include idle ancestors needed to route a nested subagent's request.
+  const threads = shellStatus === "live" ? (snapshot?.threads ?? null) : null;
   const mode = useClientSettings((settings) => settings.notificationMode);
   const notificationSoundEvents = useClientSettings((settings) => settings.notificationSoundEvents);
   const inAppNotificationsEnabled = useClientSettings(

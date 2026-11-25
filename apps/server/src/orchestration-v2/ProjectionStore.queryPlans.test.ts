@@ -546,9 +546,10 @@ const HOT_READ_PLAN_GUARDS: ReadonlyArray<QueryPlanGuard> = [
           position: 1_000,
         }),
       ),
-    selectStatement: (q) => q.includes("WITH identities AS MATERIALIZED"),
+    // Pages seek from the cursor item through the ordinal index, then read rows by rowid.
+    selectStatement: (q) => q.includes("WITH page AS MATERIALIZED"),
     requiredPlans: [
-      /SEARCH orchestration_v2_projection_turn_items USING COVERING INDEX orchestration_v2_projection_turn_items_thread_ordinal_idx \(thread_id=\?\)/,
+      /SEARCH orchestration_v2_projection_turn_items USING (COVERING )?INDEX orchestration_v2_projection_turn_items_thread_ordinal_idx \(thread_id=\?/,
       /SEARCH item USING INTEGER PRIMARY KEY \(rowid=\?\)/,
     ],
   },

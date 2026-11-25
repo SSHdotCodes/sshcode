@@ -45,11 +45,11 @@ describe("orchestrator MCP tool guidance", () => {
       "fromEnd=false",
       "~30k chars",
       "beforePosition=prevPosition",
-      "all whitespace-separated words",
+      "all-words match",
       "newest first",
       "snippet",
       "at most 1000 items",
-      "null when the scan bound",
+      "null unknown past search.scanLimitReached",
     ]) {
       assert.include(tool.description ?? "", guidance);
     }

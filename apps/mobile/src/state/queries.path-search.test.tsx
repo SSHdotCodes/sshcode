@@ -76,6 +76,26 @@ const target = {
   query: "src",
 };
 
+it("browses workspace entries on a bare mention and stops when the trigger is gone", () => {
+  using harness = setup();
+  harness.render({ ...target, query: null });
+  expect(mocks.searchEntries).not.toHaveBeenCalled();
+
+  harness.render({ ...target, query: "" });
+  act(() => vi.advanceTimersByTime(200));
+  expect(mocks.searchEntries).toHaveBeenLastCalledWith({
+    environmentId: target.environmentId,
+    input: { cwd: target.cwd, query: "", limit: 20 },
+  });
+  expect(harness.result?.entries).toHaveLength(1);
+
+  harness.render({ ...target, query: null });
+  expect(harness.result?.entries).toEqual([]);
+  mocks.searchEntries.mockClear();
+  act(() => vi.advanceTimersByTime(200));
+  expect(mocks.searchEntries).not.toHaveBeenCalled();
+});
+
 it.each([
   { field: "environment", changed: { ...target, environmentId: EnvironmentId.make("other") } },
   { field: "project directory", changed: { ...target, cwd: "/other" } },

@@ -16,6 +16,7 @@ import { useThreadShells } from "../../state/entities";
 import { DitherHeatmap, DitherPaceChart, useReveal, type HeatmapDay } from "../home/ditherViews";
 
 const PACE_HEIGHT = 40;
+const COMPACT_PACE_HEIGHT = 30;
 /** The least space kept under the last card when the cards need the home indicator's inset. */
 const MIN_BOTTOM_INSET = 12;
 
@@ -34,6 +35,7 @@ export function NewChatDashboard({
   acceptsAccount,
   onPickAccount,
   maxHeight,
+  compact,
   bottomInset,
   onHeight,
 }: {
@@ -51,6 +53,7 @@ export function NewChatDashboard({
   /** Starts this chat on another of the user's accounts. */
   onPickAccount: (instanceId: string) => void;
   maxHeight: number;
+  compact: boolean;
   bottomInset: number;
   /** The height the dashboard takes on screen, for laying out what sits above it. */
   onHeight?: (height: number) => void;
@@ -91,11 +94,8 @@ export function NewChatDashboard({
     () => newChatAccounts(config, selection, now, acceptsAccount),
     [acceptsAccount, config, selection, now],
   );
-  const cardStyle = {
-    borderRadius: 18,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: 12,
-  };
+  const cardStyle = [styles.card, compact && styles.compactCard];
+  const bottomRowCardStyle = [...cardStyle, styles.bottomRowCard];
   return (
     <ScrollView
       style={{ maxHeight, flexGrow: 0 }}
@@ -109,7 +109,7 @@ export function NewChatDashboard({
       onLayout={(event) => onHeight?.(event.nativeEvent.layout.height)}
     >
       <View
-        style={styles.dashboard}
+        style={[styles.dashboard, compact && styles.compactDashboard]}
         onLayout={(event) => setCardsHeight(event.nativeEvent.layout.height)}
       >
         <View className="border-border bg-card" style={cardStyle}>
@@ -128,15 +128,21 @@ export function NewChatDashboard({
             progress={reveal}
             accessibilityLabel={`${activity.total} ${activity.total === 1 ? "chat" : "chats"} started across ${activity.activeDays} active ${activity.activeDays === 1 ? "day" : "days"} in the last 26 weeks, from loaded chats on this machine`}
           />
-          <Text className="text-foreground-muted" style={[styles.caption, { marginTop: 10 }]}>
+          <Text
+            className="text-foreground-muted"
+            style={[styles.caption, { marginTop: compact ? 7 : 10 }]}
+          >
             {activity.total.toLocaleString()} {activity.total === 1 ? "chat" : "chats"} ·{" "}
             {activity.activeDays} active {activity.activeDays === 1 ? "day" : "days"}
           </Text>
         </View>
-        <View style={styles.bottomRow}>
+        <View style={[styles.bottomRow, compact && styles.compactBottomRow]}>
           {accounts ? (
-            <View className="border-border bg-card" style={[cardStyle, { flex: 1 }]}>
-              <Text className="text-foreground" style={[styles.title, { marginBottom: 10 }]}>
+            <View className="border-border bg-card" style={bottomRowCardStyle}>
+              <Text
+                className="text-foreground"
+                style={[styles.title, { marginBottom: compact ? 7 : 10 }]}
+              >
                 Usage
               </Text>
               {accounts.rows.map((account) => {
@@ -158,9 +164,9 @@ export function NewChatDashboard({
                     <View style={[styles.heading, { marginBottom: 6 }]}>
                       <Text className={ink} numberOfLines={1} style={[styles.caption, { flex: 1 }]}>
                         {account.name}
-                        {account.current ? " · this chat" : ""}
+                        {account.current && !compact ? " · this chat" : ""}
                       </Text>
-                      <Text className={ink} style={styles.caption}>
+                      <Text className={ink} style={styles.caption} numberOfLines={1}>
                         {account.limit ? `${used}% used` : "No limits"}
                       </Text>
                     </View>
@@ -186,12 +192,15 @@ export function NewChatDashboard({
               ) : null}
             </View>
           ) : windows.length > 0 ? (
-            <View className="border-border bg-card" style={[cardStyle, { flex: 1 }]}>
-              <Text className="text-foreground" style={[styles.title, { marginBottom: 10 }]}>
+            <View className="border-border bg-card" style={bottomRowCardStyle}>
+              <Text
+                className="text-foreground"
+                style={[styles.title, { marginBottom: compact ? 7 : 10 }]}
+              >
                 Usage
               </Text>
               {windows.slice(0, 1).map((window) => (
-                <View key={window.key} style={{ marginBottom: 8 }}>
+                <View key={window.key} style={{ marginBottom: compact ? 5 : 8 }}>
                   <View style={styles.heading}>
                     <Text
                       className="text-foreground-muted"
@@ -235,18 +244,21 @@ export function NewChatDashboard({
               ) : null}
             </View>
           ) : null}
-          <View className="border-border bg-card" style={[cardStyle, { flex: 1 }]}>
-            <Text className="text-foreground" style={[styles.title, { marginBottom: 10 }]}>
+          <View className="border-border bg-card" style={bottomRowCardStyle}>
+            <Text
+              className="text-foreground"
+              style={[styles.title, { marginBottom: compact ? 7 : 10 }]}
+            >
               This month
             </Text>
-            <View style={{ marginBottom: 8 }}>
+            <View style={{ marginBottom: compact ? 5 : 8 }}>
               <Text className="text-foreground-muted" style={styles.caption}>
                 Chats started
               </Text>
               <View style={{ flexDirection: "row", alignItems: "baseline", gap: 8 }}>
                 <Text
                   className="text-foreground"
-                  style={{ fontSize: 24, fontVariant: ["tabular-nums"] }}
+                  style={{ fontSize: compact ? 22 : 24, fontVariant: ["tabular-nums"] }}
                 >
                   {activity.month.chats.toLocaleString()}
                 </Text>
@@ -263,7 +275,7 @@ export function NewChatDashboard({
               <DitherPaceChart
                 pace={activity.pace}
                 tint={ink}
-                height={PACE_HEIGHT}
+                height={compact ? COMPACT_PACE_HEIGHT : PACE_HEIGHT}
                 progress={reveal}
               />
             </View>
@@ -279,6 +291,15 @@ export function NewChatDashboard({
 
 const styles = StyleSheet.create({
   dashboard: { paddingHorizontal: 12, paddingTop: 10, gap: 10 },
+  compactDashboard: { paddingTop: 6, gap: 8 },
+  card: {
+    borderRadius: 18,
+    borderCurve: "continuous",
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 12,
+  },
+  compactCard: { padding: 10 },
+  bottomRowCard: { minWidth: 0, flex: 1 },
   heading: {
     flexDirection: "row",
     alignItems: "center",
@@ -290,5 +311,6 @@ const styles = StyleSheet.create({
   caption: { fontSize: 12, fontVariant: ["tabular-nums"] },
   source: { fontSize: 11, marginTop: 5, lineHeight: 14 },
   bottomRow: { flexDirection: "row", gap: 10 },
+  compactBottomRow: { gap: 8 },
   track: { height: 4, borderRadius: 4, overflow: "hidden" },
 });

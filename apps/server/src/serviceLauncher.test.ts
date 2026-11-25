@@ -28,6 +28,24 @@ import {
 
 const spawnedChildren = vi.hoisted((): Array<NodeChildProcess.ChildProcess> => []);
 
+const slowRm = vi.hoisted(() => ({
+  path: undefined as string | undefined,
+  started: undefined as (() => void) | undefined,
+  wait: undefined as Promise<void> | undefined,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const rm: typeof actual.rm = async (path, options) => {
+    if (path === slowRm.path) {
+      slowRm.started?.();
+      await slowRm.wait;
+    }
+    return actual.rm(path, options);
+  };
+  return { ...actual, rm };
+});
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof NodeChildProcess>();
   const spawn = (...args: Parameters<typeof actual.spawn>) => {
@@ -387,6 +405,97 @@ if (context.update?.status === "pending") {
       const state = yield* Effect.promise(() => readServiceState(statePath));
       assert.equal(state.activeVersion, "1.1.0");
       assert.equal(state.update?.status, "committed");
+    }),
+  );
+
+  it.effect("confirms a committed update before dropping its backup", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-slow-discard-" });
+      const statePath = path.join(root, "runtime", "service-state.json");
+      const databasePath = path.join(root, "userdata", "state.sqlite");
+      const backupPath = path.join(root, "runtime", "db-backup", "update-1");
+      const resultPath = path.join(root, "committed-backup-present");
+      yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
+      yield* fs.writeFileString(databasePath, "before trial");
+      const childSource = `
+import { existsSync, writeFileSync } from "node:fs";
+const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+let answered = false;
+process.on("message", (message) => {
+  if (message.type !== "committed" || answered) return;
+  answered = true;
+  writeFileSync(${JSON.stringify(resultPath)}, String(existsSync(${JSON.stringify(backupPath)})));
+});
+setTimeout(() => {
+  if (!answered) writeFileSync(${JSON.stringify(resultPath)}, "false");
+}, 2_000);
+process.send({ type: "prepared", updateId: context.update.id });
+setInterval(() => {}, 1_000);
+`;
+      for (const version of ["1.0.0", "1.1.0"]) {
+        yield* writeFakeRuntime(
+          fs,
+          path,
+          path.join(root, "runtime", "versions", version),
+          childSource,
+        );
+      }
+      yield* Effect.promise(() =>
+        writeServiceState(statePath, {
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "1.0.0",
+          update: {
+            id: "update-1",
+            fromVersion: "1.0.0",
+            targetVersion: "1.1.0",
+            dbPath: databasePath,
+            status: "pending",
+          },
+        }),
+      );
+      const discardStarted = Promise.withResolvers<void>();
+      const releaseDiscard = Promise.withResolvers<void>();
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          slowRm.path = backupPath;
+          slowRm.started = () => discardStarted.resolve();
+          slowRm.wait = releaseDiscard.promise;
+        }),
+        () =>
+          Effect.sync(() => {
+            releaseDiscard.resolve();
+            slowRm.path = undefined;
+            slowRm.started = undefined;
+            slowRm.wait = undefined;
+          }),
+      );
+      const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
+      const running = launcher.run();
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(async () => {
+          releaseDiscard.resolve();
+          await launcher.stop("SIGTERM");
+          await running;
+        }),
+      );
+
+      yield* Effect.promise(() => discardStarted.promise);
+      const backupPresentWhenCommitted = yield* Effect.promise(() =>
+        vi.waitFor(
+          async () => {
+            const { readFile } = await import("node:fs/promises");
+            return readFile(resultPath, "utf8");
+          },
+          { interval: 10, timeout: 4_000 },
+        ),
+      );
+      assert.equal(backupPresentWhenCommitted, "true");
+      releaseDiscard.resolve();
+      yield* Effect.promise(() => launcher.stop("SIGTERM"));
+      yield* Effect.promise(() => running);
+      assert.isFalse(yield* fs.exists(backupPath));
     }),
   );
 

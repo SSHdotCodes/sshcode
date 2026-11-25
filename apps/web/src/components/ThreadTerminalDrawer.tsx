@@ -124,6 +124,14 @@ export function writeTerminalOutputUpdate(
   }
 }
 
+export function terminalPromptNavigationData(
+  terminal: Pick<GhosttyTerminalSurface, "isAlternateScreen">,
+  event: KeyboardEvent,
+  platform?: string,
+): string | null {
+  return terminal.isAlternateScreen() ? null : terminalNavigationShortcutData(event, platform);
+}
+
 export function synchronizeTerminalOutput(
   terminal: Pick<GhosttyTerminalSurface, "resetAndWrite" | "write" | "clearSelection">,
   session: Pick<TerminalSessionState, "output" | "version">,
@@ -881,7 +889,10 @@ export function TerminalViewport({
           return false;
         }
 
-        const navigationData = terminalNavigationShortcutData(event);
+        const activeTerminal = terminalRef.current;
+        const navigationData = activeTerminal
+          ? terminalPromptNavigationData(activeTerminal, event)
+          : null;
         if (navigationData !== null) {
           event.preventDefault();
           event.stopPropagation();
@@ -1106,11 +1117,14 @@ export function TerminalViewport({
     };
   }, [drawerHeight, environmentId, resizeEpoch, terminalId, threadId]);
   return (
-    <div
-      ref={containerRef}
-      tabIndex={-1}
-      className="relative h-full w-full overflow-hidden bg-(--terminal-background)"
-    />
+    // The inset keeps the first column off the pane edge, which sits flush against the sidebar.
+    <div className="h-full w-full bg-(--terminal-background) px-2.5 pt-2">
+      <div
+        ref={containerRef}
+        tabIndex={-1}
+        className="relative h-full w-full overflow-hidden bg-(--terminal-background)"
+      />
+    </div>
   );
 }
 
@@ -1470,11 +1484,13 @@ export default function ThreadTerminalDrawer({
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     didResizeDuringDragRef.current = false;
+    const drawer = event.currentTarget.parentElement;
+    drawer?.setAttribute("data-terminal-resizing", "true");
     resizeStateRef.current = {
       pointerId: event.pointerId,
       startY: event.clientY,
       startHeight: drawerHeightRef.current,
-      drawer: event.currentTarget.parentElement,
+      drawer,
     };
   }, []);
 
@@ -1500,6 +1516,7 @@ export default function ThreadTerminalDrawer({
       const resizeState = resizeStateRef.current;
       if (!resizeState || resizeState.pointerId !== event.pointerId) return;
       resizeStateRef.current = null;
+      resizeState.drawer?.removeAttribute("data-terminal-resizing");
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
@@ -1569,7 +1586,7 @@ export default function ThreadTerminalDrawer({
       >
         {!isPanel ? (
           <div
-            className="absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize"
+            className="absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize transition-colors hover:bg-primary/25"
             onPointerDown={handleResizePointerDown}
             onPointerMove={handleResizePointerMove}
             onPointerUp={handleResizePointerEnd}
@@ -1606,7 +1623,7 @@ export default function ThreadTerminalDrawer({
     >
       {!isPanel ? (
         <div
-          className="absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize"
+          className="absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize transition-colors hover:bg-primary/25"
           onPointerDown={handleResizePointerDown}
           onPointerMove={handleResizePointerMove}
           onPointerUp={handleResizePointerEnd}
@@ -1616,62 +1633,57 @@ export default function ThreadTerminalDrawer({
       ) : null}
 
       {!hasTerminalSidebar && (
-        <div className="pointer-events-none absolute right-2 top-2 z-20">
-          <div className="pointer-events-auto inline-flex items-center overflow-hidden rounded-md border border-border/80 bg-background shadow-xs">
+        <div className="pointer-events-none absolute right-2.5 top-2 z-20">
+          <div className="pointer-events-auto inline-flex items-center overflow-hidden rounded-lg border border-border/70 bg-popover/90 shadow-xs backdrop-blur-xs dark:inset-shadow-card-highlight">
             <TerminalActionButton
               disabled={!canOperateTerminal}
-              className={`p-1 text-foreground/90 transition-colors ${
+              className={`p-1.5 text-muted-foreground transition-colors ${
                 hasReachedSplitLimit
                   ? "cursor-not-allowed opacity-64 hover:bg-transparent"
-                  : "hover:bg-accent"
+                  : "hover:bg-accent/70 hover:text-foreground"
               }`}
               onClick={onSplitTerminalAction}
               label={splitTerminalActionLabel}
             >
-              <SquareSplitHorizontal className="size-3.25" />
+              <SquareSplitHorizontal className="size-3.5" />
             </TerminalActionButton>
-            <div className="h-4 w-px bg-border/80" />
+            <div className="h-4 w-px bg-border/60" />
             <TerminalActionButton
               disabled={!canOperateTerminal}
-              className={`p-1 text-foreground/90 transition-colors ${
+              className={`p-1.5 text-muted-foreground transition-colors ${
                 hasReachedSplitLimit
                   ? "cursor-not-allowed opacity-64 hover:bg-transparent"
-                  : "hover:bg-accent"
+                  : "hover:bg-accent/70 hover:text-foreground"
               }`}
               onClick={onSplitTerminalVerticalAction}
               label={splitTerminalVerticalActionLabel}
             >
-              <SquareSplitVertical className="size-3.25" />
+              <SquareSplitVertical className="size-3.5" />
             </TerminalActionButton>
-            <div className="h-4 w-px bg-border/80" />
+            <div className="h-4 w-px bg-border/60" />
             <TerminalActionButton
               disabled={!canOperateTerminal}
-              className="p-1 text-foreground/90 transition-colors hover:bg-accent"
+              className="p-1.5 text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground"
               onClick={onNewTerminalAction}
               label={newTerminalActionLabel}
             >
-              <Plus className="size-3.25" />
+              <Plus className="size-3.5" />
             </TerminalActionButton>
-            <div className="h-4 w-px bg-border/80" />
+            <div className="h-4 w-px bg-border/60" />
             <TerminalActionButton
               disabled={!canOperateTerminal}
-              className="p-1 text-foreground/90 transition-colors hover:bg-accent"
+              className="p-1.5 text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground"
               onClick={() => confirmCloseTerminal(resolvedActiveTerminalId)}
               label={closeTerminalActionLabel}
             >
-              <Trash2 className="size-3.25" />
+              <Trash2 className="size-3.5" />
             </TerminalActionButton>
           </div>
         </div>
       )}
 
       <div className="min-h-0 w-full flex-1">
-        <div
-          className={cn(
-            "flex h-full min-h-0 bg-(--terminal-background)",
-            hasTerminalSidebar && "gap-1.5",
-          )}
-        >
+        <div className="flex h-full min-h-0 bg-(--terminal-background)">
           <div className="min-w-0 flex-1">
             {isSplitView ? (
               <div
@@ -1764,53 +1776,53 @@ export default function ThreadTerminalDrawer({
           </div>
 
           {hasTerminalSidebar && (
-            <aside className="flex w-36 min-w-36 flex-col border border-border/70 bg-muted/10">
-              <div className="flex h-[22px] items-stretch justify-end border-b border-border/70">
+            <aside className="flex w-40 min-w-40 flex-col border-l border-border/60 bg-card/45">
+              <div className="flex h-7 items-stretch justify-end border-b border-border/60">
                 <div className="inline-flex h-full items-stretch">
                   <TerminalActionButton
                     disabled={!canOperateTerminal}
-                    className={`inline-flex h-full items-center px-1 text-foreground/90 transition-colors ${
+                    className={`inline-flex h-full items-center px-1.5 text-muted-foreground transition-colors ${
                       hasReachedSplitLimit
                         ? "cursor-not-allowed opacity-64 hover:bg-transparent"
-                        : "hover:bg-accent/70"
+                        : "hover:bg-accent/70 hover:text-foreground"
                     }`}
                     onClick={onSplitTerminalAction}
                     label={splitTerminalActionLabel}
                   >
-                    <SquareSplitHorizontal className="size-3.25" />
+                    <SquareSplitHorizontal className="size-3.5" />
                   </TerminalActionButton>
                   <TerminalActionButton
                     disabled={!canOperateTerminal}
-                    className={`inline-flex h-full items-center border-l border-border/70 px-1 text-foreground/90 transition-colors ${
+                    className={`inline-flex h-full items-center border-l border-border/60 px-1.5 text-muted-foreground transition-colors ${
                       hasReachedSplitLimit
                         ? "cursor-not-allowed opacity-64 hover:bg-transparent"
-                        : "hover:bg-accent/70"
+                        : "hover:bg-accent/70 hover:text-foreground"
                     }`}
                     onClick={onSplitTerminalVerticalAction}
                     label={splitTerminalVerticalActionLabel}
                   >
-                    <SquareSplitVertical className="size-3.25" />
+                    <SquareSplitVertical className="size-3.5" />
                   </TerminalActionButton>
                   <TerminalActionButton
                     disabled={!canOperateTerminal}
-                    className="inline-flex h-full items-center border-l border-border/70 px-1 text-foreground/90 transition-colors hover:bg-accent/70"
+                    className="inline-flex h-full items-center border-l border-border/60 px-1.5 text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground"
                     onClick={onNewTerminalAction}
                     label={newTerminalActionLabel}
                   >
-                    <Plus className="size-3.25" />
+                    <Plus className="size-3.5" />
                   </TerminalActionButton>
                   <TerminalActionButton
                     disabled={!canOperateTerminal}
-                    className="inline-flex h-full items-center border-l border-border/70 px-1 text-foreground/90 transition-colors hover:bg-accent/70"
+                    className="inline-flex h-full items-center border-l border-border/60 px-1.5 text-muted-foreground transition-colors hover:bg-accent/70 hover:text-foreground"
                     onClick={() => confirmCloseTerminal(resolvedActiveTerminalId)}
                     label={closeTerminalActionLabel}
                   >
-                    <Trash2 className="size-3.25" />
+                    <Trash2 className="size-3.5" />
                   </TerminalActionButton>
                 </div>
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-1 py-1">
+              <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
                 {resolvedTerminalGroups.map((terminalGroup) => {
                   const isGroupActive =
                     terminalGroup.terminalIds.includes(resolvedActiveTerminalId);
@@ -1831,11 +1843,11 @@ export default function ThreadTerminalDrawer({
                       : SquareSplitHorizontal;
 
                   return (
-                    <div key={terminalGroup.id} className="pb-0.5">
+                    <div key={terminalGroup.id} className="pb-1">
                       {showGroupHeaders && (
                         <button
                           type="button"
-                          className={`flex h-[22px] w-full cursor-pointer items-center gap-1 rounded px-1.5 text-2xs ${
+                          className={`flex h-6 w-full cursor-pointer items-center gap-1.5 rounded-md px-2 text-2xs transition-colors ${
                             isGroupActive
                               ? "bg-accent/50 text-foreground"
                               : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
@@ -1861,7 +1873,7 @@ export default function ThreadTerminalDrawer({
                             <div
                               key={terminalId}
                               className={cn(
-                                "group/tab flex h-6 w-full items-center gap-0.5 rounded-md pr-2 pl-1.5 text-xs",
+                                "group/tab flex h-7 w-full items-center gap-1 rounded-md pr-2 pl-1.5 text-xs transition-colors",
                                 isActive
                                   ? "bg-accent text-foreground"
                                   : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",

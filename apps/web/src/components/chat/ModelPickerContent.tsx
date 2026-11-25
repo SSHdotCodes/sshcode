@@ -19,6 +19,7 @@ import {
   modelRouteHasSlug,
   modelVendorFamily,
   makerUsesOf,
+  orderMakerModelsByUse,
   orderMakersByUse,
   OTHER_MAKER_ID,
 } from "@t3tools/client-runtime/model-makers";
@@ -588,20 +589,24 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     [accountStep, activeMakerModel, activeRef, routeDisabledReason, routeMemory],
   );
 
-  // Read once per opening: the rail must not reorder under the pointer while chats update.
+  // Read once per opening: the rail and model lists must not reorder under the pointer while chats update.
   const [makerUses] = useState(() => ({
     uses: makerUsesOf(readThreadShells()),
     now: Date.now(),
   }));
+  const orderedMakerGroups = useMemo(
+    () => orderMakerModelsByUse(makerGroups, makerUses.uses, allRouteSources, makerUses.now),
+    [allRouteSources, makerGroups, makerUses],
+  );
   const makers = useMemo(
     () =>
       orderMakersByUse(
-        makerGroups.map((group) => group.maker),
+        orderedMakerGroups.map((group) => group.maker),
         makerUses.uses,
         allRouteSources,
         makerUses.now,
       ),
-    [allRouteSources, makerGroups, makerUses],
+    [allRouteSources, makerUses, orderedMakerGroups],
   );
   const railOrder = useMemo(
     (): ReadonlyArray<ModelPickerRailSelection> => [
@@ -802,7 +807,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
 
   // A maker's list: one row per model, picking its best route.
   const makerModels = useMemo(() => {
-    const group = makerGroups.find((candidate) => candidate.maker.id === selectedMakerId);
+    const group = orderedMakerGroups.find((candidate) => candidate.maker.id === selectedMakerId);
     if (!group) return [];
     return group.models.flatMap((model): ModelPickerItem[] => {
       const route = rowRouteFor(model);
@@ -829,7 +834,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         },
       ];
     });
-  }, [itemForRoute, makerGroups, routeDisabledReason, rowRouteFor, selectedMakerId]);
+  }, [itemForRoute, orderedMakerGroups, routeDisabledReason, rowRouteFor, selectedMakerId]);
 
   const isSearching = searchQuery.trim().length > 0;
   // A pasted model page searches by its id; "Add <id> to …" appears when no harness lists it.
@@ -1537,7 +1542,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                   placeholder="Search models..."
                   trailing={
                     props.environmentId !== null ? (
-                      <span className="flex items-center">
+                      <span className="flex items-center gap-0.5">
                         {props.autoModelEnabled !== undefined && props.onAutoModelEnabledChange ? (
                           <Tooltip>
                             <TooltipTrigger
@@ -1691,28 +1696,32 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                           renderItem={({ item: modelKey, index }) => {
                             if (legacySection?.key === modelKey) {
                               return (
-                                <ComboboxItem
-                                  hideIndicator
-                                  index={index}
-                                  value={modelKey}
-                                  aria-expanded={legacySection.isExpanded}
-                                  className="group w-full cursor-pointer"
+                                <div
+                                  className={cn(index > 0 && "mt-1 border-t border-border/60 pt-1")}
                                 >
-                                  <div className="min-w-0 flex-1 text-left">
-                                    <div className="text-xs font-medium leading-snug">
-                                      Legacy models
+                                  <ComboboxItem
+                                    hideIndicator
+                                    index={index}
+                                    value={modelKey}
+                                    aria-expanded={legacySection.isExpanded}
+                                    className="group w-full cursor-pointer"
+                                  >
+                                    <div className="min-w-0 flex-1 text-left">
+                                      <div className="text-xs font-medium leading-snug">
+                                        Legacy models
+                                      </div>
+                                      <div className="mt-1 text-xs font-normal leading-snug text-muted-foreground/70">
+                                        {legacySection.legacyModels.length} models
+                                      </div>
                                     </div>
-                                    <div className="mt-1 text-xs font-normal leading-snug text-muted-foreground/70">
-                                      {legacySection.legacyModels.length} models
-                                    </div>
-                                  </div>
-                                  <ChevronRightIcon
-                                    className={cn(
-                                      "size-4 transition-transform",
-                                      legacySection.isExpanded && "rotate-90",
-                                    )}
-                                  />
-                                </ComboboxItem>
+                                    <ChevronRightIcon
+                                      className={cn(
+                                        "size-4 transition-transform",
+                                        legacySection.isExpanded && "rotate-90",
+                                      )}
+                                    />
+                                  </ComboboxItem>
+                                </div>
                               );
                             }
                             const model = filteredModelByKey.get(modelKey);

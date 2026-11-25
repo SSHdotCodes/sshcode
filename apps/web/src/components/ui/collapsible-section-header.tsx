@@ -29,7 +29,7 @@ export function CollapsibleSectionHeader({
       type="button"
       aria-expanded={expanded}
       className={cn(
-        "flex h-8 w-full cursor-pointer items-center gap-2 rounded-md text-left text-xs font-medium transition-[background-color,color,scale] duration-100 ease-out motion-reduce:transition-none active:scale-[0.99] motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
+        "flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg text-left text-xs font-medium transition-[background-color,color,scale] duration-100 ease-out motion-reduce:transition-none active:scale-[0.99] motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
         variant === "panel"
           ? "ps-2 pe-2.5 hover:bg-black/[0.035] dark:hover:bg-white/[0.08]"
           : "px-2 hover:bg-sidebar-row-hover",

@@ -1,8 +1,29 @@
-import { focusThreadSearchSnippet, splitThreadSearchText } from "@t3tools/shared/threadSearch";
-import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
+import { focusThreadSearchSnippet, splitThreadSearchExcerpt } from "@t3tools/shared/threadSearch";
+import type {
+  EnvironmentThreadSearchMatch,
+  ThreadSearchResultsState,
+} from "@t3tools/client-runtime/state/thread-search";
+import { Pressable } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
+
+export function ThreadSearchTitleText(props: {
+  readonly title: string;
+  readonly query?: string | undefined;
+  readonly correction?: string | undefined;
+}) {
+  if (!props.query) return props.title;
+  return splitThreadSearchExcerpt(props.title, props.query, props.correction).map((part) =>
+    part.highlighted ? (
+      <Text className="font-t3-bold" key={part.start}>
+        {part.text}
+      </Text>
+    ) : (
+      part.text
+    ),
+  );
+}
 
 export function ThreadSearchMatchExcerpt(props: {
   readonly match: EnvironmentThreadSearchMatch;
@@ -11,11 +32,12 @@ export function ThreadSearchMatchExcerpt(props: {
   readonly compact?: boolean;
   readonly sidebar?: boolean;
 }) {
-  if (props.match.messageId === null) return null;
+  const { matchedModel, matchedHarness, messageId } = props.match;
+  if (messageId === null && !matchedModel && !matchedHarness) return null;
+  const context = [matchedHarness, matchedModel].filter(Boolean).join(" · ");
   const isUser = props.match.source === "user";
-  // One line shows about 35 characters: start near the match, not at the snippet's first word.
-  const parts = splitThreadSearchText(
-    focusThreadSearchSnippet(props.match.snippet, props.query),
+  const parts = splitThreadSearchExcerpt(
+    context || focusThreadSearchSnippet(props.match.snippet, props.query),
     props.query,
   );
   return (
@@ -28,23 +50,9 @@ export function ThreadSearchMatchExcerpt(props: {
             ? "text-drawer-foreground-muted"
             : "text-foreground-muted",
       )}
-      numberOfLines={1}
+      numberOfLines={2}
     >
-      <Text
-        className={cn(
-          props.compact ? "text-sm font-t3-medium" : "text-xs font-t3-medium",
-          props.selected
-            ? "text-thread-selected-foreground"
-            : isUser
-              ? props.sidebar
-                ? "text-drawer-foreground-muted"
-                : "text-foreground-secondary"
-              : "text-adaptive-emerald-600-400",
-        )}
-      >
-        {isUser ? "You:" : "Agent:"}{" "}
-      </Text>
-      {props.match.archived ? "Archived · " : ""}
+      {matchedHarness ? "Harness:" : matchedModel ? "Model:" : isUser ? "You:" : "Agent:"}{" "}
       {parts.map((part) => (
         <Text
           className={cn(
@@ -66,5 +74,29 @@ export function ThreadSearchMatchExcerpt(props: {
         </Text>
       ))}
     </Text>
+  );
+}
+
+export function ThreadSearchMoreButton(props: {
+  readonly pagination: ThreadSearchResultsState["pagination"];
+}) {
+  const { pagination } = props;
+  if (!pagination) return null;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled: pagination.isLoading, busy: pagination.isLoading }}
+      className="min-h-11 justify-center px-4"
+      disabled={pagination.isLoading}
+      onPress={pagination.loadMore}
+    >
+      <Text className="text-sm text-foreground-muted">
+        {pagination.isLoading
+          ? "Searching more…"
+          : pagination.failed
+            ? "Retry more results"
+            : "More results"}
+      </Text>
+    </Pressable>
   );
 }

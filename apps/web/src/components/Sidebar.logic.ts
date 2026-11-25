@@ -1220,10 +1220,14 @@ type SidebarSessionOrderInput = SidebarThreadStatusInput &
     SidebarThreadSummary,
     "id" | "environmentId" | "createdAt" | "updatedAt" | "latestUserMessageAt" | "latestRun"
   > & {
+    readonly hasActionableProposedPlan?: boolean | undefined;
+    readonly lineage?: SidebarThreadSummary["lineage"] | undefined;
     readonly lastVisitedAt?: string | null | undefined;
     readonly latestUserAuthoredMessageAt?: string | null | undefined;
     readonly unsettledAt?: string | null | undefined;
   };
+
+const TOP_LEVEL_LINEAGE = { relationshipToParent: null } as const;
 
 /** A turn in flight, work that will wake it, or a request for the user. */
 export function isSidebarSessionBusy(thread: SidebarThreadStatusInput): boolean {
@@ -1289,25 +1293,48 @@ export function sidebarSessionActivityMs(thread: SidebarSessionOrderInput): numb
  */
 export const SIDEBAR_FINISHED_SETTLE_MS = 2 * 60_000;
 
-function finishedWithin(thread: SidebarSessionOrderInput, nowMs: number | undefined): boolean {
-  if (nowMs === undefined) return false;
+function finishedWithin(
+  thread: SidebarSessionOrderInput,
+  status: SidebarThreadStatus,
+  nowMs: number | undefined,
+): boolean {
+  if (nowMs === undefined || status === "failed" || status === "limited") return false;
   const completedAt = toSortableTimestamp(thread.latestRun?.completedAt ?? undefined);
   return completedAt !== null && nowMs - completedAt < SIDEBAR_FINISHED_SETTLE_MS;
 }
 
 /**
- * Waiting on the user: an approval or an answer, or a finished turn they have
- * not opened since. A failure or plan counts only until it is seen, so a read
- * one doesn't stay on top, and a turn that just finished waits to settle.
+ * Waiting on the user: an approval, an answer, an unseen failure/limit, an
+ * actionable plan, or a finished turn they have not opened since. Failures and
+ * requests rise immediately without the 2-minute settle delay; once opened, a
+ * failure drops back to idle.
  */
-export function sidebarSessionNeedsYou(thread: SidebarSessionOrderInput, nowMs?: number): boolean {
+export function sidebarSessionNeedsYou(
+  thread: SidebarSessionOrderInput,
+  nowMs?: number,
+  localLastVisitedAt?: string | undefined,
+): boolean {
   const status = resolveSidebarThreadStatus(thread);
   if (status === "approval" || status === "input") return true;
+  const lastVisitedAt = resolveThreadLastVisitedAt(thread.lastVisitedAt, localLastVisitedAt);
+  if (status === "failed" || status === "limited") {
+    const failedAt = toSortableTimestamp(thread.latestRun?.completedAt ?? thread.updatedAt) ?? 0;
+    return failureNeedsYou(
+      {
+        runtime: thread.runtime,
+        latestRun: thread.latestRun,
+        updatedAt: thread.updatedAt,
+        lineage: thread.lineage ?? (TOP_LEVEL_LINEAGE as SidebarThreadSummary["lineage"]),
+        lastVisitedAt,
+      },
+      nowMs ?? failedAt,
+    );
+  }
+  if (status === "working" || status === "waiting") return false;
+  if (thread.hasActionableProposedPlan === true) return true;
   return (
-    status !== "working" &&
-    status !== "waiting" &&
-    hasUnseenCompletion(thread) &&
-    !finishedWithin(thread, nowMs)
+    hasUnseenCompletion({ latestRun: thread.latestRun, lastVisitedAt }) &&
+    !finishedWithin(thread, status, nowMs)
   );
 }
 
@@ -1323,11 +1350,11 @@ function sidebarSessionAskedMs(thread: SidebarSessionOrderInput): number {
 
 /**
  * Chats waiting on the user lead, so a long-running chat can't bury one that
- * needs an answer. Then threads with a turn in flight (or one that finished
- * moments ago), ordered by what the user last asked, then everything else by
- * most recent activity. A settled turn held by a subagent or monitor sorts
- * with the working chats. A dev server does not hold the thread, so that chat
- * stays with the ready ones.
+ * needs an answer, approval, or attention on a failure. Then threads with a
+ * turn in flight (or one that finished moments ago), ordered by what the user
+ * last asked, then everything else by most recent activity. A settled turn
+ * held by a subagent or monitor sorts with the working chats. A dev server
+ * does not hold the thread, so that chat stays with the ready ones.
  */
 export function sortSidebarSessions<T extends SidebarSessionOrderInput>(
   threads: readonly T[],
@@ -1336,14 +1363,20 @@ export function sortSidebarSessions<T extends SidebarSessionOrderInput>(
     readonly holdsNeedsYou?: (thread: T) => boolean;
     /** Enables the settle delay; without it a finished turn counts at once. */
     readonly nowMs?: number;
+    /** Browser-local visit fallback for pre-tracking servers where `lastVisitedAt` is absent. */
+    readonly localLastVisitedAt?: (thread: T) => string | undefined;
   },
 ): T[] {
-  const tier = (thread: T) =>
-    sidebarSessionNeedsYou(thread, options?.nowMs) || options?.holdsNeedsYou?.(thread) === true
-      ? 0
-      : isSidebarSessionBusy(thread) || finishedWithin(thread, options?.nowMs)
-        ? 1
-        : 2;
+  const tier = (thread: T) => {
+    const status = resolveSidebarThreadStatus(thread);
+    if (
+      sidebarSessionNeedsYou(thread, options?.nowMs, options?.localLastVisitedAt?.(thread)) ||
+      options?.holdsNeedsYou?.(thread) === true
+    ) {
+      return 0;
+    }
+    return isSidebarSessionBusy(thread) || finishedWithin(thread, status, options?.nowMs) ? 1 : 2;
+  };
   return threads
     .map((thread) => {
       const threadTier = tier(thread);
@@ -1364,22 +1397,7 @@ export function sortSidebarSessions<T extends SidebarSessionOrderInput>(
     .map(({ thread }) => thread);
 }
 
-/**
- * The previous order, kept while the pointer is over the list so a row can't
- * move under it. Rows that weren't shown before take their sorted place, and
- * the others fill the remaining places in the order they had.
- */
-export function holdSidebarOrder<T>(
-  sorted: readonly T[],
-  previousKeys: readonly string[],
-  keyOf: (item: T) => string,
-): T[] {
-  const byKey = new Map(sorted.map((item) => [keyOf(item), item]));
-  const kept = previousKeys.filter((key) => byKey.has(key));
-  const keptSet = new Set(kept);
-  let next = 0;
-  return sorted.map((item) => (keptSet.has(keyOf(item)) ? byKey.get(kept[next++]!)! : item));
-}
+export { holdOrderedItems as holdSidebarOrder } from "@t3tools/client-runtime/state/thread-sort";
 
 export type SidebarV2TopStatusKind =
   | "approval"

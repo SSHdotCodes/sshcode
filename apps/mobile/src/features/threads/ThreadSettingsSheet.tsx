@@ -50,6 +50,7 @@ import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanim
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SymbolView } from "../../components/AppSymbol";
+import { EmptyState } from "../../components/EmptyState";
 import { AppText as Text } from "../../components/AppText";
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { AutoModelToggle } from "../autoModel/AutoModelToggle";
@@ -102,6 +103,7 @@ import {
 } from "../layout/native-mail-search-toolbar";
 import { useNativeMailSearchToolbar } from "../../native/use-native-mail-search-toolbar";
 import { ModelRow, ChoiceRow } from "./ThreadSettingsRows";
+import { ThreadSettingsRowDivider } from "./ThreadSettingsRows.shared";
 import { ThreadSettingsEffort } from "./ThreadSettingsEffort";
 import {
   findMakerModel,
@@ -216,12 +218,16 @@ function ProviderHeader(props: {
           size={15}
         />
       )}
-      <Text className="text-sm font-t3-medium text-foreground-muted">{props.label}</Text>
+      <Text
+        className="min-w-0 flex-1 text-sm font-t3-medium text-foreground-muted"
+        numberOfLines={1}
+      >
+        {props.label}
+      </Text>
       {props.collapsible ? (
         <>
-          <View className="flex-1" />
           {props.collapsed ? (
-            <Text className="text-2xs font-t3-medium text-foreground-muted">
+            <Text className="shrink-0 text-xs tabular-nums text-foreground-muted">
               {props.modelCount}
             </Text>
           ) : null}
@@ -272,14 +278,18 @@ function DisclosureRow(props: {
       onPress={props.onPress}
       className={cn(
         "min-h-[44px] flex-row items-center gap-2 bg-grouped-card px-4 py-2 active:bg-subtle android:min-h-14",
-        !props.isLast && "border-b border-border-subtle",
+        !props.isLast && "android:border-b android:border-border-subtle",
       )}
     >
-      <Text className="text-sm font-t3-medium text-foreground">{props.label}</Text>
+      <Text className="min-w-0 shrink text-sm font-t3-medium text-foreground">{props.label}</Text>
       {props.fast ? <FastModeBolt lit={props.fastLit ?? true} /> : null}
       <View className="flex-1" />
       {props.value ? (
-        <Text className="text-sm text-foreground-muted" numberOfLines={1}>
+        <Text
+          className="max-w-[44%] shrink text-right text-sm text-foreground-muted"
+          numberOfLines={1}
+          ellipsizeMode="middle"
+        >
           {props.value}
         </Text>
       ) : null}
@@ -289,6 +299,7 @@ function DisclosureRow(props: {
         tintColorClassName="accent-icon-subtle"
         type="monochrome"
       />
+      {props.isLast ? null : <ThreadSettingsRowDivider />}
     </Pressable>
   );
 }
@@ -306,12 +317,14 @@ function SwitchRow(props: {
     <View
       className={cn(
         "min-h-[44px] flex-row items-center justify-between bg-grouped-card px-4 py-1",
-        !props.isLast && "border-b border-border-subtle",
+        !props.isLast && "android:border-b android:border-border-subtle",
       )}
     >
       <View className="flex-1 pr-3">
         <View className="flex-row items-center gap-2">
-          <Text className="text-sm font-t3-medium text-foreground">{props.label}</Text>
+          <Text className="min-w-0 shrink text-sm font-t3-medium text-foreground">
+            {props.label}
+          </Text>
           {props.fast ? <FastModeBolt lit={props.value} /> : null}
         </View>
         {props.description ? (
@@ -340,6 +353,7 @@ function SwitchRow(props: {
           value={props.value}
         />
       )}
+      {props.isLast ? null : <ThreadSettingsRowDivider />}
     </View>
   );
 }
@@ -1095,6 +1109,7 @@ function ThreadSettingsOptionsItem(props: {
   const hasRunsIn =
     session.displayedMakerModel !== null && session.displayedMakerModel.routes.length > 1;
   const lastDescriptor = session.displayedDescriptors.length - 1;
+  const hasOptions = hasRunsIn || lastDescriptor >= 0 || !session.runtimeHidden;
 
   return (
     <View className="pb-4">
@@ -1106,22 +1121,22 @@ function ThreadSettingsOptionsItem(props: {
         Current model
       </Text>
       <Animated.View
-        className="mx-4 overflow-hidden rounded-2xl bg-grouped-card"
+        className="mx-4 overflow-hidden rounded-2xl bg-grouped-card ios:rounded-[24px] ios:border-continuous"
         layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}
       >
         <View
           className={cn(
             "min-h-11 justify-center px-4 py-2",
-            (hasRunsIn || lastDescriptor >= 0 || !session.runtimeHidden) &&
-              "border-b border-border-subtle",
+            hasOptions && "android:border-b android:border-border-subtle",
           )}
         >
-          <Text className="text-sm font-t3-medium text-foreground" numberOfLines={2}>
+          <Text className="text-base font-t3-medium text-foreground" numberOfLines={2}>
             {session.displayedMakerModel?.name ??
               session.displayedOption?.label ??
               session.displayedModelSelection?.model ??
               "No model selected"}
           </Text>
+          {hasOptions ? <ThreadSettingsRowDivider /> : null}
         </View>
         {hasRunsIn ? (
           <DisclosureRow
@@ -1246,7 +1261,7 @@ function ThreadSettingsCatalogSettingsItem() {
   return (
     <View>
       <Text className="px-5 pb-2 pt-7 text-sm font-t3-medium text-foreground-muted">Catalog</Text>
-      <View className="mx-4 overflow-hidden rounded-2xl bg-grouped-card">
+      <View className="mx-4 overflow-hidden rounded-2xl bg-grouped-card ios:rounded-[24px] ios:border-continuous">
         <SwitchRow
           label="Manage hidden models"
           value={session.manageHidden}
@@ -1384,18 +1399,27 @@ function ThreadSettingsMainContent(props: {
       } else if (item.kind === "notice") {
         content = <Text className="mx-8 mt-2 text-xs text-foreground-muted">{item.text}</Text>;
       } else if (item.kind === "empty") {
-        content = (
-          <View className="items-center px-8 py-14">
-            <Text className="text-center text-sm text-foreground-muted">
-              {session.providerFilter === FAVORITES_PROVIDER_FILTER &&
-              session.searchQuery.trim().length === 0
-                ? "No favorite models"
-                : hasActiveCatalogFilter
-                  ? "No matching models"
-                  : "No available models"}
-            </Text>
-          </View>
-        );
+        const noFavorites =
+          session.providerFilter === FAVORITES_PROVIDER_FILTER &&
+          session.searchQuery.trim().length === 0;
+        content =
+          hasActiveCatalogFilter && !noFavorites ? (
+            <View className="items-center px-8 py-14">
+              <Text className="text-center text-sm text-foreground-muted">No matching models</Text>
+            </View>
+          ) : (
+            <View className="px-4 py-3">
+              <EmptyState
+                variant="plain"
+                title={noFavorites ? "No favorite models" : "No available models"}
+                detail={
+                  noFavorites
+                    ? "Star a model to keep it here."
+                    : "Check the environment’s provider accounts in Settings."
+                }
+              />
+            </View>
+          );
       } else if (item.kind === "options") {
         content = (
           <ThreadSettingsOptionsItem
@@ -1629,7 +1653,7 @@ function ThreadSettingsChoiceContent(props: {
       contentInsetAdjustmentBehavior="automatic"
       showsVerticalScrollIndicator={false}
     >
-      <View className="overflow-hidden rounded-2xl bg-grouped-card">
+      <View className="overflow-hidden rounded-2xl bg-grouped-card ios:rounded-[24px] ios:border-continuous">
         {submenuContent.rows.map((row, index) => (
           <ChoiceRow
             key={row.id}

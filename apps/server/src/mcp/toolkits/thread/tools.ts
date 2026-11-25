@@ -200,12 +200,16 @@ const ThreadTransferTool = Tool.make("t3_thread_transfer", {
   ]),
 }).annotate(Tool.Destructive, true);
 
+// The cursor pages the app's own search lists; agents get one ranked page.
+const { cursor: _searchCursor, ...threadSearchInputFields } =
+  OrchestrationSearchThreadsInput.fields;
+
 const ThreadSearchTool = Tool.make("t3_thread_search", {
   ...commandTool,
   description:
     "Search this environment's chat titles and finished messages by keyword and meaning, including archived chats. Results include snippets and message IDs. Use mode keyword to skip the local model; hybrid waits briefly for meaning results. Matches are limited to one project (projectId, else the calling thread's project) out of the global top matches, so this may return fewer than limit. A caller outside a SSHCode thread that omits projectId searches every project. No pagination or exhaustive-result guarantee.",
   parameters: Schema.Struct({
-    ...OrchestrationSearchThreadsInput.fields,
+    ...threadSearchInputFields,
     projectId: Schema.optional(ProjectId),
   }),
   success: OrchestrationSearchThreadsResult,

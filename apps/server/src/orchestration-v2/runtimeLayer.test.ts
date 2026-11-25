@@ -5548,6 +5548,202 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       }),
   );
 
+  it.effect("marks a legacy pending queued user message completed when its run starts", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const threadId = ThreadId.make("runtime-layer-legacy-pending-queued-message");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make(`${threadId}:create`),
+        threadId,
+        projectId: ProjectId.make(`${threadId}:project`),
+        title: "Legacy pending queued message",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: process.cwd(),
+      });
+      for (const [index, text] of ["Active", "Queued"].entries()) {
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${threadId}:message:${index}`),
+          threadId,
+          messageId: MessageId.make(`${threadId}:message:${index}`),
+          text,
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: index === 0 ? "start_immediately" : "queue_after_active" },
+        });
+      }
+      const before = yield* orchestrator.getThreadProjection(threadId);
+      const activeRun = before.runs[0]!;
+      const queuedRun = before.runs[1]!;
+      const now = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make(`${threadId}:legacy-pending-user-item`),
+            type: "turn-item.updated",
+            threadId,
+            runId: queuedRun.id,
+            nodeId: queuedRun.rootNodeId ?? undefined,
+            providerInstanceId: queuedRun.providerInstanceId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make(`${threadId}:legacy-pending-user-item`),
+              threadId,
+              runId: queuedRun.id,
+              nodeId: queuedRun.rootNodeId,
+              providerThreadId: queuedRun.providerThreadId,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 41,
+              status: "pending",
+              title: null,
+              startedAt: null,
+              completedAt: null,
+              updatedAt: now,
+              type: "user_message",
+              messageId: queuedRun.userMessageId,
+              inputIntent: "queued_turn",
+              text: "Queued",
+              attachments: [],
+              createdBy: "user",
+              creationSource: "web",
+            },
+          },
+          {
+            id: EventId.make(`${threadId}:active-completed`),
+            type: "run.updated",
+            threadId,
+            runId: activeRun.id,
+            nodeId: activeRun.rootNodeId ?? undefined,
+            providerInstanceId: activeRun.providerInstanceId,
+            occurredAt: now,
+            payload: { ...activeRun, status: "completed", startedAt: now, completedAt: now },
+          },
+        ],
+      });
+      yield* orchestrator.dispatch({
+        type: "queue.resume",
+        commandId: CommandId.make(`${threadId}:resume`),
+        threadId,
+      });
+
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      const queuedItem = after.turnItems.find(
+        (item) => item.type === "user_message" && item.messageId === queuedRun.userMessageId,
+      );
+      assert.equal(queuedItem?.status, "completed");
+      assert.isNotNull(queuedItem?.startedAt);
+      assert.isNotNull(queuedItem?.completedAt);
+    }),
+  );
+
+  it.effect.each([false, true] as const)(
+    "terminalizes a legacy pending user item when its queued run is cancelled (retain: %s)",
+    (retainMessage) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const threadId = ThreadId.make(
+          `runtime-layer-legacy-cancelled-queued-message:${retainMessage}`,
+        );
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${threadId}:create`),
+          threadId,
+          projectId: ProjectId.make(`${threadId}:project`),
+          title: "Legacy cancelled queued message",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: process.cwd(),
+        });
+        for (const [index, text] of ["Active", "Queued"].entries()) {
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make(`${threadId}:message:${index}`),
+            threadId,
+            messageId: MessageId.make(`${threadId}:message:${index}`),
+            text,
+            attachments: [],
+            modelSelection,
+            dispatchMode: { type: index === 0 ? "start_immediately" : "queue_after_active" },
+          });
+        }
+        const before = yield* orchestrator.getThreadProjection(threadId);
+        const queuedRun = before.runs[1]!;
+        const now = yield* DateTime.now;
+        yield* eventSink.write({
+          events: [
+            {
+              id: EventId.make(`${threadId}:legacy-pending-user-item`),
+              type: "turn-item.updated",
+              threadId,
+              runId: queuedRun.id,
+              nodeId: queuedRun.rootNodeId ?? undefined,
+              providerInstanceId: queuedRun.providerInstanceId,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make(`${threadId}:legacy-pending-user-item`),
+                threadId,
+                runId: queuedRun.id,
+                nodeId: queuedRun.rootNodeId,
+                providerThreadId: queuedRun.providerThreadId,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 41,
+                status: "pending",
+                title: null,
+                startedAt: null,
+                completedAt: null,
+                updatedAt: now,
+                type: "user_message",
+                messageId: queuedRun.userMessageId,
+                inputIntent: "queued_turn",
+                text: "Queued",
+                attachments: [],
+                createdBy: "user",
+                creationSource: "web",
+              },
+            },
+          ],
+        });
+        yield* orchestrator.dispatch({
+          type: "queued-run.cancel",
+          commandId: CommandId.make(`${threadId}:cancel`),
+          threadId,
+          runId: queuedRun.id,
+          ...(retainMessage ? { retainMessage: true as const } : {}),
+        });
+
+        const after = yield* orchestrator.getThreadProjection(threadId);
+        const queuedItem = after.turnItems.find(
+          (item) => item.type === "user_message" && item.messageId === queuedRun.userMessageId,
+        );
+        assert.equal(queuedItem?.status, retainMessage ? "completed" : "cancelled");
+        assert.isNotNull(queuedItem?.completedAt);
+        assert.equal(
+          after.visibleTurnItems.some((row) => row.item.id === queuedItem?.id),
+          retainMessage,
+        );
+      }),
+  );
+
   it.effect("keeps the queue after a user interrupts the active run", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

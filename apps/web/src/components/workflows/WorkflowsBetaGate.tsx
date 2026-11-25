@@ -1,5 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import type { EnvironmentId } from "@t3tools/contracts";
+import { WorkflowIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { isElectron } from "../../env";
@@ -23,10 +24,19 @@ export function WorkflowsBetaGate({
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden">
       <WorkspacePageHeader electron={isElectron}>
+        <WorkflowIcon className="size-4 text-muted-foreground" />
         <h1 className="text-sm font-medium">Workflows</h1>
       </WorkspacePageHeader>
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
-        <p className="text-sm text-muted-foreground">Workflows is a Beta and it’s turned off.</p>
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+        <div className="flex size-10 items-center justify-center rounded-xl border border-border/60 bg-card text-muted-foreground dark:inset-shadow-card-highlight">
+          <WorkflowIcon className="size-5" />
+        </div>
+        <div className="flex flex-col gap-1">
+          <p className="text-sm font-medium text-foreground">Workflows beta is turned off</p>
+          <p className="max-w-sm text-xs leading-5 text-muted-foreground">
+            Turn on Workflows in Beta settings to draw and run multi-agent teams.
+          </p>
+        </div>
         <Button
           variant="outline"
           size="sm"

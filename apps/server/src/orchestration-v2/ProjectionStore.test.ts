@@ -343,6 +343,78 @@ it.effect("runtime recovery finds retained runs without scanning completed tool 
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("subagent history uses index order with unstarted tasks first", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const sql = yield* SqlClient.SqlClient;
+    const threadId = yield* addRolledBackRecoveryCandidate("subagent-history-order");
+    const now = yield* DateTime.now;
+    for (const [suffix, startedAt] of [
+      ["started-b", now],
+      ["pending-b", null],
+      ["started-a", now],
+      ["pending-a", null],
+    ] as const) {
+      const id = NodeId.make(`node:subagent-history:${suffix}`);
+      yield* store.apply({
+        id: EventId.make(`event:subagent-history:${suffix}`),
+        type: "subagent.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id,
+          threadId,
+          runId: null,
+          parentNodeId: NodeId.make("node:subagent-history:parent"),
+          origin: "app_owned",
+          createdBy: "agent",
+          driver,
+          providerInstanceId,
+          providerThreadId: null,
+          childThreadId: null,
+          nativeTaskRef: null,
+          prompt: "Review the work",
+          title: null,
+          model: null,
+          status: startedAt === null ? "pending" : "running",
+          result: null,
+          startedAt,
+          completedAt: null,
+          updatedAt: now,
+        },
+      });
+    }
+    const expected = ["pending-a", "pending-b", "started-a", "started-b"].map(
+      (suffix) => `node:subagent-history:${suffix}`,
+    );
+    for (const read of [
+      store.getThreadRecords(threadId, ["subagents"]),
+      store
+        .getThreadSnapshotWindow(threadId, { rowLimit: 10 })
+        .pipe(Effect.map((snapshot) => snapshot.projection)),
+    ]) {
+      const { statements, tracer } = traceSqlStatements();
+      const projection = yield* read.pipe(Effect.withTracer(tracer));
+      assert.deepEqual(
+        projection.subagents.map((subagent) => subagent.id),
+        expected,
+      );
+      const query = statements.find((statement) =>
+        /SELECT payload_json\s+FROM orchestration_v2_projection_subagents\s/.test(statement),
+      );
+      assert.isDefined(query);
+      const plan = (yield* sql.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`)).map(
+        (row) => row.detail,
+      );
+      assert.include(
+        plan,
+        "SEARCH orchestration_v2_projection_subagents USING INDEX orchestration_v2_projection_subagents_thread_idx (thread_id=?)",
+      );
+      assert.notInclude(plan, "USE TEMP B-TREE FOR ORDER BY");
+    }
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("record reads restrict provider histories to delivery identities", () =>
   Effect.gen(function* () {
     const store = yield* ProjectionStore.ProjectionStoreV2;
@@ -376,9 +448,9 @@ it.effect("record reads restrict provider histories to delivery identities", () 
       });
     }
     for (const [suffix, attempt] of [
+      ["runless", null],
       ["selected", "current"],
       ["history", "old"],
-      ["runless", null],
     ] as const) {
       yield* store.apply({
         id: EventId.make(`event:delivery-turn:${suffix}`),
@@ -387,7 +459,9 @@ it.effect("record reads restrict provider histories to delivery identities", () 
         occurredAt: now,
         payload: {
           id: ProviderTurnId.make(`turn:${suffix}`),
-          providerThreadId: ProviderThreadId.make("provider-thread:selected"),
+          providerThreadId: ProviderThreadId.make(
+            suffix === "history" ? "provider-thread:history" : "provider-thread:selected",
+          ),
           nodeId: NodeId.make("node:delivery"),
           runAttemptId: attempt === null ? null : RunAttemptId.make(attempt),
           nativeTurnRef: null,
@@ -397,6 +471,35 @@ it.effect("record reads restrict provider histories to delivery identities", () 
           completedAt: now,
         },
       });
+    }
+    for (const read of [
+      store.getThreadRecords(threadId, ["providerTurns"]),
+      store.getTurnStartContext(threadId, RunId.make("new-run")),
+    ]) {
+      const { statements, tracer } = traceSqlStatements();
+      const projection = yield* read.pipe(Effect.withTracer(tracer));
+      assert.deepEqual(
+        projection.providerTurns.map((turn) => turn.id),
+        ["turn:history", "turn:selected", "turn:runless"],
+      );
+      const query = statements.find(
+        (statement) =>
+          statement.includes("payload_json") &&
+          statement.includes("FROM orchestration_v2_projection_provider_turns"),
+      );
+      assert.isDefined(query);
+      const plan = (yield* sql.unsafe<{ detail: string }>(`EXPLAIN QUERY PLAN ${query}`)).map(
+        (row) => row.detail,
+      );
+      assert.include(
+        plan,
+        "SEARCH orchestration_v2_projection_provider_turns USING INDEX orchestration_v2_projection_provider_turns_thread_idx (thread_id=?)",
+      );
+      assert.include(
+        plan,
+        "SEARCH orchestration_v2_projection_provider_turns USING INTEGER PRIMARY KEY (rowid=?)",
+        "Look up provider turn payloads after sorting row ids.",
+      );
     }
     assert.deepEqual(
       (yield* store.getThreadRecords(threadId, ["providerTurns"], {
@@ -2288,6 +2391,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       for (let pages = 0; cursor !== null; pages += 1) {
         assert.isBelow(pages, allIds.length);
         const page = yield* projectionStore.getThreadHistoryPage(threadId, cursor);
+        const indexPage = yield* projectionStore.getThreadHistoryPage(threadId, cursor, "missing");
+        assert.deepEqual(page, indexPage);
         assert.isAbove(page.items.length, 0);
         assert.isAtMost(page.items.length, THREAD_HISTORY_PAGE_POLICY.maxTurnItems);
         loaded.unshift(...page.items.map((row) => String(row.sourceItemId)));
@@ -2731,6 +2836,9 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           cursor,
           snapshotSequence: 0,
         });
+        const localPage = yield* projectionStore.getThreadHistoryPage(threadId, cursor);
+        const indexPage = yield* projectionStore.getThreadHistoryPage(threadId, cursor, "missing");
+        assert.deepEqual(localPage, indexPage);
         loaded.unshift(...page.items.map((row) => String(row.sourceItemId)));
         cursor = page.nextCursor;
       }

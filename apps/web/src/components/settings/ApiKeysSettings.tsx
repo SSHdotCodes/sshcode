@@ -8,6 +8,7 @@ import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ApiKeyExpiryPicker } from "../chat/ApiKeyExpiryPicker";
 import { Button } from "../ui/button";
+import { ListState } from "../ui/list-state";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useSettingsScope } from "./SettingsScopeContext";
 
@@ -53,11 +54,12 @@ function EnvironmentApiKeys({
     );
   }
   if (keys.data === null) {
-    return <SettingsRow title="API keys" description="Loading saved keys…" />;
+    return <ListState loading size="compact" title="Loading saved keys…" />;
   }
   if (keys.data.length === 0) {
     return (
-      <SettingsRow
+      <ListState
+        size="compact"
         title={`No saved keys${where}`}
         description="Agents ask for a key when they need one. Keys stay in the Keychain and are never shown here."
       />
@@ -120,7 +122,7 @@ function ApiKeyRow(props: {
         ) : undefined
       }
       control={
-        <>
+        <div className="flex items-center gap-1.5">
           <Button
             size="sm"
             variant="outline"
@@ -142,7 +144,7 @@ function ApiKeyRow(props: {
           >
             <Trash2Icon />
           </Button>
-        </>
+        </div>
       }
     >
       {editing ? (

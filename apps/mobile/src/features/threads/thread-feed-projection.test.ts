@@ -532,8 +532,8 @@ describe("streaming feed projection", () => {
     const project = pipeline();
     for (const replacement of [
       {
-        type: "todo_list",
-        todos: [{ title: "a", status: "pending" }],
+        type: "checkpoint",
+        files: [],
       },
       {
         type: "reasoning",

@@ -288,7 +288,7 @@ it.effect.each(stores)(
         expect(result.items[0]?.text).toBe(
           message.kind === "command_execution" ? "$ enable developer mode" : message.text,
         );
-        expect(result.items[0]?.nextTextOffset).toBeNull();
+        expect(result.items[0]?.nextTextOffset).toBeUndefined();
       }
     }).pipe(Effect.provide(layerStore)),
 );
@@ -534,9 +534,9 @@ it.effect.each(stores)(
       expect(continued.items).toHaveLength(1);
       expect(continued.items[0]).toMatchObject({
         text: splitText.slice(4_000),
-        textTruncated: false,
-        nextTextOffset: null,
       });
+      expect(continued.items[0]?.textTruncated).toBeUndefined();
+      expect(continued.items[0]?.nextTextOffset).toBeUndefined();
       expect(`${first.items[0]?.text ?? ""}${continued.items[0]?.text ?? ""}`).toBe(splitText);
       expect(continued.hasMore).toBe(false);
 
@@ -560,8 +560,6 @@ it.effect.each(stores)(
       expect(JSON.stringify(contractMaxPage).length).toBeLessThan(31_000);
       expect(contractMaxPage.items[0]).toMatchObject({
         text: splitText,
-        textTruncated: false,
-        nextTextOffset: null,
       });
       expect(
         contractMaxPage.items.slice(1).every((row) => row.text === pageText && !row.textTruncated),
@@ -588,8 +586,6 @@ it.effect.each(stores)(
       const toolRest = yield* read({ itemId: tool.id, textOffset: 4_000 });
       expect(toolRest.items[0]).toMatchObject({
         text: compactToolText.slice(4_000),
-        textTruncated: false,
-        nextTextOffset: null,
       });
       expect(`${toolChunk.items[0]?.text ?? ""}${toolRest.items[0]?.text ?? ""}`).toBe(
         compactToolText,
@@ -597,8 +593,6 @@ it.effect.each(stores)(
       const toolFull = yield* read({ itemId: tool.id, maxCharsPerItem: 20_000 });
       expect(toolFull.items[0]).toMatchObject({
         text: compactToolText,
-        textTruncated: false,
-        nextTextOffset: null,
       });
       const toolContractMax = yield* read({ itemId: tool.id, maxCharsPerItem: 50_000 });
       expect(toolContractMax.items[0]?.text).toBe(compactToolText);

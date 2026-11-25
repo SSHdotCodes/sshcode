@@ -121,6 +121,16 @@ describe("spoken thread state", () => {
     expect(threadRowAccessibilityLabel({ ...ready, status })).toBe(`Fix the toolbar, ${spoken}`);
   });
 
+  it("speaks the waiting detail and gives connection state priority", () => {
+    const waitingLabel = "Waiting on 3 monitors";
+    expect(threadRowAccessibilityLabel({ ...ready, waitingLabel })).toBe(
+      "Fix the toolbar, Waiting on 3 monitors",
+    );
+    expect(threadRowAccessibilityLabel({ ...ready, waitingLabel, status: "reconnecting" })).toBe(
+      "Fix the toolbar, Reconnecting",
+    );
+  });
+
   it("distinguishes a running goal without announcing a completed goal as working", () => {
     expect(threadRowAccessibilityLabel({ ...ready, status: "working", goalActive: true })).toBe(
       "Fix the toolbar, Working toward goal",

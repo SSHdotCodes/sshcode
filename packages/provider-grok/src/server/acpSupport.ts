@@ -201,6 +201,52 @@ export function resolveGrokAcpBaseModelId(model: string | null | undefined): str
   return normalizeModelSlug(base, GROK_DRIVER_KIND) ?? GROK_DEFAULT_MODEL_SLUG;
 }
 
+const GROK_FAST_VARIANT_SUFFIXES = ["-build-fast", "-fast"] as const;
+
+/**
+ * The model a Grok fast variant speeds up ("grok-4.7-build-fast" -> "grok-4.7") when that model is
+ * offered too. Grok sells the same model faster at twice the price; SSHCode shows that as a Fast
+ * mode switch on the model instead of a second model.
+ */
+export function grokFastVariantBase(
+  modelId: string,
+  offeredModelIds: ReadonlySet<string>,
+): string | undefined {
+  for (const suffix of GROK_FAST_VARIANT_SUFFIXES) {
+    if (!modelId.endsWith(suffix)) continue;
+    const base = modelId.slice(0, -suffix.length);
+    if (base.length > 0 && offeredModelIds.has(base)) return base;
+  }
+  return undefined;
+}
+
+/** The fast variant of each offered Grok model that has one, by base model id. */
+export function grokFastVariants(
+  offeredModelIds: ReadonlySet<string>,
+): ReadonlyMap<string, string> {
+  const variants = new Map<string, string>();
+  for (const id of offeredModelIds) {
+    const base = grokFastVariantBase(id, offeredModelIds);
+    if (base !== undefined && !variants.has(base)) variants.set(base, id);
+  }
+  return variants;
+}
+
+/**
+ * The Grok model to run for a selection's Fast mode switch: its fast variant when on, the model
+ * itself when off. Without the switch (an older chat that picked the fast model by name) the
+ * model runs as picked.
+ */
+export function grokModelIdForSpeed(
+  modelId: string,
+  fast: boolean | undefined,
+  offeredModelIds: ReadonlySet<string>,
+): string {
+  if (fast === undefined) return modelId;
+  const base = grokFastVariantBase(modelId, offeredModelIds) ?? modelId;
+  return fast ? (grokFastVariants(offeredModelIds).get(base) ?? modelId) : base;
+}
+
 const GROK_REASONING_EFFORT_TOKEN = /^[a-z0-9][a-z0-9._-]{0,31}$/i;
 
 export function isValidGrokReasoningEffortToken(value: string): boolean {

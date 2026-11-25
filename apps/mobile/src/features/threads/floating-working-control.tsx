@@ -403,7 +403,9 @@ function FloatingStatusLabel(props: {
         className="gap-2"
         onLayout={props.onLayout}
       >
-        <AppActivityIndicator size="small" colorClassName="accent-icon-muted" />
+        {props.status.showSpinner ? (
+          <AppActivityIndicator size="small" colorClassName="accent-icon-muted" />
+        ) : null}
         <Text className="shrink font-t3-medium text-xs text-foreground" numberOfLines={1}>
           {props.status.label}
         </Text>

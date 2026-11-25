@@ -1347,7 +1347,7 @@ export function ProviderInstanceCard({
               inert={readOnly}
               aria-disabled={readOnly || undefined}
               className={cn(
-                "flex w-full min-w-0 items-center justify-end gap-2 @min-[32rem]/settings-row:w-auto",
+                "mt-1.5 flex w-full min-w-0 items-center justify-end gap-2 @min-[32rem]/settings-row:mt-0 @min-[32rem]/settings-row:w-auto",
                 readOnly && "opacity-50 select-none",
               )}
             >

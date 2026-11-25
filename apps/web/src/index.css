@@ -188,7 +188,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
      (composer context, pills). */
   --inset-shadow-control-highlight: 0 1px rgb(255 255 255 / 16%);
   --inset-shadow-control-pressed: 0 1px rgb(0 0 0 / 8%);
+  --inset-shadow-card-highlight: 0 1px rgb(255 255 255 / 4%);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-motion: cubic-bezier(0.22, 1, 0.36, 1);
   /* The composer's elevation: a soft drop pulled in under the surface, shared
      by the composer, its context strip and attached banners. */
   --shadow-composer: 0 1px 2px rgb(0 0 0 / 5%);
@@ -2183,7 +2185,7 @@ code {
 @media (prefers-reduced-motion: no-preference) {
   .chat-markdown[data-streaming] > *,
   .chat-markdown[data-streaming] .chat-markdown-shiki {
-    transition: opacity 220ms ease-out;
+    transition: opacity 180ms var(--ease-motion);
 
     @starting-style {
       opacity: 0;
@@ -2191,28 +2193,20 @@ code {
   }
 }
 
-/* A row that arrives while its chat is open rises into place; a sent prompt lifts off the
-   composer. Opening a chat, paging history and switching chats never play it (see
-   timelineArrivals.ts). Transform and opacity only, so the virtual list measures nothing new;
-   `backwards` leaves no transform behind once it ends. The speed follows the app's animation
-   setting and stops with it. */
+/* A row that arrives while its chat is open fades up calmly into place. Opening
+   a chat, paging history, and switching chats never play it (see timelineArrivals.ts).
+   Transform and opacity only, so the virtual list measures nothing new; `backwards`
+   leaves no transform behind once it ends. */
 @media (prefers-reduced-motion: no-preference) {
   [data-timeline-row-id][data-arrived] {
-    animation: timeline-row-arrive calc(var(--panel-animation-duration, 180ms) * 1.4)
-      cubic-bezier(0.22, 0.9, 0.3, 1) backwards;
-  }
-
-  [data-timeline-row-id][data-arrived][data-message-role="user"] {
-    animation-name: timeline-row-send;
-    transform-origin: 100% 100%;
+    animation: timeline-row-arrive 160ms var(--ease-motion) backwards;
   }
 }
 
 /* A divider that arrives (a handoff, a compaction) draws its rule outward from the label. */
 @media (prefers-reduced-motion: no-preference) {
   [data-timeline-row-id][data-arrived] [data-timeline-system] > span[aria-hidden="true"] {
-    animation: timeline-divider-draw calc(var(--panel-animation-duration, 180ms) * 2.8)
-      cubic-bezier(0.22, 0.9, 0.3, 1) backwards;
+    animation: timeline-divider-draw 200ms var(--ease-motion) backwards;
     transform-origin: 100% 50%;
   }
 
@@ -2225,8 +2219,8 @@ code {
   /* The offer to continue on another model eases in under the failed run. */
   .continue-on-model {
     transition:
-      opacity calc(var(--panel-animation-duration, 180ms) * 1.4) ease-out,
-      transform calc(var(--panel-animation-duration, 180ms) * 1.4) cubic-bezier(0.22, 0.9, 0.3, 1);
+      opacity 160ms var(--ease-motion),
+      transform 160ms var(--ease-motion);
 
     @starting-style {
       opacity: 0;
@@ -2245,15 +2239,77 @@ code {
 @keyframes timeline-row-arrive {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(4px);
   }
 }
 
-@keyframes timeline-row-send {
+@utility work-log-reveal {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: work-log-reveal 150ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  }
+}
+
+@keyframes work-log-reveal {
   from {
     opacity: 0;
-    transform: translateY(14px) scale(0.97);
+    transform: translateY(-3px);
   }
+}
+
+@keyframes status-crossfade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes status-crossfade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@utility status-crossfade-in {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: status-crossfade-in 160ms var(--ease-motion) backwards;
+  }
+}
+
+@utility status-crossfade-out {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: status-crossfade-out 120ms ease-in forwards;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    display: none;
+  }
+}
+
+@keyframes composer-send-clear-fade {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+@utility composer-send-clear-fade {
+  @media (prefers-reduced-motion: no-preference) {
+    animation: composer-send-clear-fade 120ms ease-in forwards;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    display: none;
+  }
+}
+
+[data-send-clearing="true"] .composer-tiptap p.is-editor-empty::before {
+  opacity: 0 !important;
 }
 
 /* Diagnostics-style tables: row separators only, uppercase headers, and a

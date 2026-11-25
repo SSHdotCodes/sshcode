@@ -62,6 +62,8 @@ type HistoryRow = Pick<
   OrchestrationV2ProjectedTurnItem,
   "position" | "visibility" | "sourceThreadId" | "sourceItemId"
 > & {
+  /** A bounded metadata read knows whether a notification started its run. */
+  readonly startsTurn?: boolean;
   readonly item: Pick<OrchestrationV2TurnItem, "type"> & {
     readonly id?: string;
     readonly messageId?: string;
@@ -251,7 +253,7 @@ function selectOlderTimelinePage<Row extends HistoryRow>(input: {
     selected.push(row);
     encodedBytes += rowBytes;
     if (isThreadHistoryUserTurn(row.item)) userTurns += 1;
-    if (turnStarts[index]) rawTurns += 1;
+    if (row.startsTurn ?? turnStarts[index]) rawTurns += 1;
   }
   // Inside a turn longer than the window, no selected row starts a user turn.
   // Later pages and the snapshot query see only such rows and use `maxItems`,
@@ -284,12 +286,12 @@ function selectOlderTimelinePage<Row extends HistoryRow>(input: {
   };
 }
 
-export function selectRecentTimelineWindow(input: {
-  readonly items: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
+export function selectRecentTimelineWindow<Row extends HistoryRow>(input: {
+  readonly items: ReadonlyArray<Row>;
   readonly snapshotSequence: number;
   readonly policy?: ThreadHistoryPagePolicy | undefined;
-  readonly rowEncodedBytes?: ((row: OrchestrationV2ProjectedTurnItem) => number) | undefined;
-}): SelectTimelinePageResult {
+  readonly rowEncodedBytes?: ((row: Row) => number) | undefined;
+}): SelectTimelinePageResult<Row> {
   return selectOlderTimelinePage({
     items: input.items,
     exclusiveEndIndex: input.items.length,

@@ -15,6 +15,13 @@ import {
   OrchestrationV2ThreadBoundedSnapshot,
   OrchestrationV2ThreadHistoryPage,
   MessageId,
+  NodeId,
+  ProviderDriverKind,
+  ProviderSessionId,
+  ProviderThreadId,
+  ProviderTurnId,
+  RunId,
+  RuntimeRequestId,
   TurnItemId,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   ThreadId,
@@ -164,7 +171,16 @@ it.effect("exports full history with size, scope, and missing-thread checks", ()
         ),
       ),
       Layer.provide(Layer.succeedContext(services)),
-      Layer.provide(Layer.mock(ProjectEnrichmentService)({})),
+      Layer.provide(
+        Layer.mock(ProjectEnrichmentService)({
+          getAvailable: () =>
+            Effect.succeed({
+              repositoryIdentity: null,
+              faviconPath: null,
+              repositoryIdentityResolved: false,
+            }),
+        }),
+      ),
       Layer.provide(HttpPlatform.layer),
       Layer.provide(Etag.layerWeak),
       Layer.provide(NodeServices.layer),
@@ -336,11 +352,46 @@ it.effect("shell HTTP selects full, legacy, and app-owned omission independently
       ),
     );
     const store = Context.get(dependencies, ProjectionStore.ProjectionStoreV2);
+    const projectStore = Context.get(dependencies, ProjectStore.ProjectStoreV2);
+    const providerThreadId = ProviderThreadId.make("shell-provider-thread");
+    const providerSessionId = ProviderSessionId.make("shell-provider-session");
+    const providerTurnId = ProviderTurnId.make("shell-provider-turn");
+    const nodeId = NodeId.make("shell-node");
+    const runId = RunId.make("shell-run");
+    const requestId = RuntimeRequestId.make("shell-runtime-request");
+    const shellFixtureOccurredAt = DateTime.subtract(now, { seconds: 2 });
+    const modelSelection = {
+      ...thread.modelSelection,
+      options: [{ id: "reasoningEffort", value: "high" }],
+    };
+    yield* projectStore.apply({
+      sequence: 1,
+      eventId: EventId.make("shell-project-created"),
+      aggregateKind: "project",
+      aggregateId: thread.projectId,
+      occurredAt: DateTime.formatIso(now),
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      type: "project.created",
+      payload: {
+        projectId: thread.projectId,
+        title: "Source project",
+        workspaceRoot: "/work/source-project",
+        defaultModelSelection: modelSelection,
+        projectIcon: { kind: "emoji", emoji: "🚀" },
+        scripts: [],
+        createdAt: DateTime.formatIso(now),
+        updatedAt: DateTime.formatIso(now),
+      },
+    });
     for (const [id, source] of [
       [thread.id, "web"],
       [ThreadId.make("idle-native"), "provider"],
       [ThreadId.make("idle-delegated"), "mcp"],
     ] as const) {
+      const updatedAt = id === thread.id ? DateTime.subtract(now, { seconds: 1 }) : now;
       yield* store.apply({
         id: EventId.make(`shell-create-${id}`),
         type: "thread.created",
@@ -349,8 +400,18 @@ it.effect("shell HTTP selects full, legacy, and app-owned omission independently
         payload: {
           ...thread,
           id,
+          updatedAt,
           createdBy: id === thread.id ? "user" : "agent",
           creationSource: source,
+          ...(id === thread.id
+            ? {
+                activeProviderThreadId: providerThreadId,
+                modelSelection,
+                pinnedMessages: [
+                  { messageId: MessageId.make("pinned"), pinnedAt: now, preview: "Pinned 界" },
+                ],
+              }
+            : {}),
           lineage:
             id === thread.id
               ? thread.lineage
@@ -362,6 +423,84 @@ it.effect("shell HTTP selects full, legacy, and app-owned omission independently
         },
       });
     }
+    yield* store.apply({
+      id: EventId.make("shell-provider-thread"),
+      type: "provider-thread.updated",
+      threadId: thread.id,
+      occurredAt: shellFixtureOccurredAt,
+      payload: {
+        id: providerThreadId,
+        driver: ProviderDriverKind.make("codex"),
+        providerInstanceId: thread.providerInstanceId,
+        providerSessionId,
+        appThreadId: thread.id,
+        ownerNodeId: null,
+        nativeThreadRef: null,
+        nativeConversationHeadRef: null,
+        status: "active",
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        pendingBackgroundTasks: [
+          {
+            taskId: "background-build",
+            kind: "command",
+            description: "Build watcher",
+            wakesAgent: true,
+          },
+        ],
+        goal: {
+          objective: "Finish the migration",
+          status: "active",
+          tokensUsed: 128,
+          tokenBudget: 4_000,
+          timeUsedSeconds: 90,
+        },
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+    yield* store.apply({
+      id: EventId.make("shell-run"),
+      type: "run.created",
+      threadId: thread.id,
+      occurredAt: shellFixtureOccurredAt,
+      payload: {
+        id: runId,
+        threadId: thread.id,
+        ordinal: 1,
+        providerInstanceId: thread.providerInstanceId,
+        modelSelection,
+        providerThreadId,
+        userMessageId: MessageId.make("shell-message"),
+        rootNodeId: nodeId,
+        activeAttemptId: null,
+        status: "completed",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: now,
+        checkpointId: null,
+        contextHandoffId: null,
+      },
+    });
+    yield* store.apply({
+      id: EventId.make("shell-runtime-request"),
+      type: "runtime-request.updated",
+      threadId: thread.id,
+      occurredAt: shellFixtureOccurredAt,
+      payload: {
+        id: requestId,
+        nodeId,
+        providerTurnId,
+        nativeRequestRef: null,
+        kind: "user_input",
+        status: "pending",
+        responseCapability: { type: "live", providerSessionId },
+        createdAt: now,
+        resolvedAt: null,
+      },
+    });
     const services = Context.add(
       dependencies,
       ThreadManagementService.ThreadManagementService,
@@ -395,17 +534,28 @@ it.effect("shell HTTP selects full, legacy, and app-owned omission independently
         ),
       ),
       Layer.provide(Layer.succeedContext(services)),
-      Layer.provide(Layer.mock(ProjectEnrichmentService)({})),
+      Layer.provide(
+        Layer.mock(ProjectEnrichmentService)({
+          getAvailable: () =>
+            Effect.succeed({
+              repositoryIdentity: null,
+              faviconPath: null,
+              repositoryIdentityResolved: false,
+            }),
+        }),
+      ),
       Layer.provide(HttpPlatform.layer),
       Layer.provide(Etag.layerWeak),
       Layer.provide(NodeServices.layer),
     );
     const { handler, dispose } = HttpRouter.toWebHandler(routes, { disableLogger: true });
     yield* Effect.addFinalizer(() => Effect.promise(dispose));
-    const decode = Schema.decodeUnknownEffect(Schema.toCodecJson(OrchestrationV2ShellSnapshot));
+    const codec = Schema.toCodecJson(OrchestrationV2ShellSnapshot);
+    const decode = Schema.decodeUnknownEffect(codec, { onExcessProperty: "error" });
+    const encode = Schema.encodeEffect(codec);
     for (const [query, ids, native, all] of [
-      ["", ["idle-delegated", "idle-native", "source-thread"], undefined, undefined],
-      ["?omitIdleSubagents=1", ["idle-delegated", "source-thread"], true, undefined],
+      ["", ["source-thread", "idle-delegated", "idle-native"], undefined, undefined],
+      ["?omitIdleSubagents=1", ["source-thread", "idle-delegated"], true, undefined],
       ["?omitIdleSubagents=2", ["source-thread"], true, true],
     ] as const) {
       const response = yield* Effect.promise(() =>
@@ -416,8 +566,27 @@ it.effect("shell HTTP selects full, legacy, and app-owned omission independently
         ),
       );
       expect(response.status).toBe(200);
-      const snapshot = yield* decode(yield* Effect.promise(() => response.json()));
+      const body = yield* Effect.promise(() => response.json());
+      const snapshot = yield* decode(body);
+      expect(body).toEqual(yield* encode(snapshot));
       expect(snapshot.threads.map(({ id }) => id)).toEqual(ids);
+      expect(snapshot.threads.find(({ id }) => id === thread.id)).toMatchObject({
+        modelSelection: { options: [{ id: "reasoningEffort", value: "high" }] },
+        pendingRuntimeRequest: { id: requestId, kind: "user_input" },
+        pendingBackgroundTasks: [
+          {
+            taskId: "background-build",
+            kind: "command",
+            description: "Build watcher",
+            wakesAgent: true,
+          },
+        ],
+        goal: { objective: "Finish the migration", status: "active" },
+      });
+      expect(snapshot.projects.find(({ id }) => id === thread.projectId)).toMatchObject({
+        defaultModelSelection: { options: [{ id: "reasoningEffort", value: "high" }] },
+        projectIcon: { kind: "emoji", emoji: "🚀" },
+      });
       expect(snapshot.idleSubagentsOmitted).toBe(native);
       expect(snapshot.idleAppOwnedSubagentsOmitted).toBe(all);
     }

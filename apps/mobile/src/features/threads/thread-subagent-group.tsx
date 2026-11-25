@@ -31,7 +31,7 @@ import { serverEnvironment } from "../../state/server";
 import { environmentThreadDetails } from "../../state/threads";
 import { subagentCardElapsed } from "./subagent-card-presentation";
 import { liveSubagentThreadId, shouldOverlaySubagentStatus } from "./subagentLiveStatus";
-import { SubagentRow } from "./SubagentRow";
+import { SUBAGENT_TRANSCRIPT_CARD_CLASS_NAME, SubagentRow } from "./SubagentRow";
 import { WorkLogBlock } from "./work-log-layout";
 
 const EMPTY_LIVE_SUBAGENTS = Atom.make<ReadonlyArray<OrchestrationV2Subagent> | undefined>(
@@ -154,7 +154,10 @@ export function ThreadSubagentGroup(props: {
           accessibilityLabel={`${label}, ${summary}`}
           accessibilityState={{ expanded }}
           onPress={() => props.onToggleRow(props.anchorKey, props.anchorKey)}
-          className="min-h-14 flex-row items-center gap-3 rounded-lg py-2 active:bg-subtle"
+          className={cn(
+            "min-h-14 flex-row items-center gap-3 rounded-xl border-continuous px-2.5 py-2 active:bg-subtle-strong",
+            expanded && "mb-1.5 bg-subtle",
+          )}
         >
           <View className="flex-row items-center">
             {agents.slice(0, 3).map((agent, index) => (
@@ -198,7 +201,7 @@ export function ThreadSubagentGroup(props: {
         </Pressable>
       ) : null}
       {!grouped || expanded ? (
-        <View className="mb-1 gap-px">
+        <View className="mb-1 gap-1.5">
           {agents.map((agent) => {
             const threadId = agent.childThreadId;
             return (
@@ -221,7 +224,7 @@ export function ThreadSubagentGroup(props: {
                         }),
                       );
                   }}
-                  className="min-h-[44px] rounded-md px-0.5 py-1.5 active:bg-subtle"
+                  className={SUBAGENT_TRANSCRIPT_CARD_CLASS_NAME}
                 >
                   <SubagentRow
                     environmentId={props.environmentId}

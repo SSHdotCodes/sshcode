@@ -166,3 +166,29 @@ it.each([
     expect((annotation as { elements: Array<{ rect: unknown }> }).elements[0]?.rect).toEqual(rect);
   },
 );
+
+it("drops a straddling surrogate pair when falling back to outerHTML preview", async () => {
+  const card = document.body.appendChild(document.createElement("div"));
+  card.textContent = `${"a".repeat(494)}🚀tail`;
+  document.elementsFromPoint = () => [card];
+  card.dispatchEvent(
+    new PointerEvent("pointerdown", { button: 0, clientX: 100, clientY: 100, bubbles: true }),
+  );
+  const attach = Array.from(shadow.querySelectorAll("button")).find(
+    (button) => button.textContent === "Attach",
+  );
+  if (!attach) throw new Error("Attach button not found");
+  attach.click();
+
+  await vi.waitFor(() =>
+    expect(ipc.send.mock.calls.some(([channel]) => channel === ELEMENT_PICKED_CHANNEL)).toBe(true),
+  );
+  const [, annotation] =
+    ipc.send.mock.calls.find(([channel]) => channel === ELEMENT_PICKED_CHANNEL) ?? [];
+  const element = (
+    annotation as { elements: Array<{ element: { htmlPreview?: string } }> } | undefined
+  )?.elements[0]?.element;
+
+  expect(card.outerHTML.charCodeAt(499)).toBe(0xd83d);
+  expect(element?.htmlPreview).toBe(card.outerHTML.slice(0, 499));
+});

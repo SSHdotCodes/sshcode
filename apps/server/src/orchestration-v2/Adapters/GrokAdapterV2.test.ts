@@ -20,6 +20,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import type * as EffectAcpSchema from "effect-acp/compat";
@@ -44,7 +47,14 @@ import {
   makeGrokAcpAdapterFlavor,
   makeGrokAdapterV2,
   GrokProviderCapabilitiesV2,
+  GROK_PROVIDER,
 } from "@t3tools/provider-grok/testing";
+import {
+  decodeAcpReplayTranscript,
+  makeAcpReplayCompletenessAssertion,
+  makeAcpReplayRuntime,
+  makeTurnInput,
+} from "./AcpAdapterV2.testkit.ts";
 
 const LAUNCH_TEST_GROK_SETTINGS = Schema.decodeSync(GrokSettings)({
   binaryPath: "grok-launch-test",
@@ -528,5 +538,118 @@ describe("Grok launch permission mode", () => {
         asking,
       );
     }),
+  );
+
+  it.effect("treats an unfinished ACP checklist update as a completed snapshot", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const replayDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-grok-todo-snapshot-",
+      });
+      const statusPath = path.join(replayDir, "status.json");
+      const outbound = (method: string, params: unknown = "<any>") => ({
+        type: "expect_outbound",
+        frame: { kind: "request", method, params },
+      });
+      const answer = (method: string, result: unknown) => ({
+        type: "emit_inbound",
+        frame: { kind: "response", method, result },
+      });
+      const notification = (method: string, params: unknown) => ({
+        type: "emit_inbound",
+        frame: { kind: "notification", method, params },
+      });
+      const transcript = yield* decodeAcpReplayTranscript(
+        {
+          provider: GROK_PROVIDER,
+          protocol: "acp.ndjson-jsonrpc",
+          version: "1",
+          scenario: "grok-unfinished-todo-snapshot",
+          entries: [
+            outbound("initialize"),
+            answer("initialize", {
+              protocolVersion: 1,
+              agentCapabilities: { loadSession: false },
+              authMethods: [{ id: "test", name: "Test" }],
+            }),
+            outbound("session/new"),
+            answer("session/new", { sessionId: "agent-session" }),
+            outbound("session/prompt"),
+            notification("session/update", {
+              sessionId: "agent-session",
+              update: {
+                sessionUpdate: "plan",
+                entries: [
+                  { content: "Started step", priority: "medium", status: "in_progress" },
+                  { content: "Later step", priority: "medium", status: "pending" },
+                ],
+              },
+            }),
+            answer("session/prompt", { stopReason: "end_turn" }),
+          ] as never,
+        },
+        GROK_PROVIDER,
+      );
+      const instanceId = ProviderInstanceId.make("grok-todo-snapshot");
+      const adapter = yield* makeGrokAdapterV2({
+        instanceId,
+        settings: LAUNCH_TEST_GROK_SETTINGS,
+        environment: {},
+        hostPlatform: "darwin",
+        selfInvocation: yield* resolveSelfInvocation(),
+        makeRuntime: makeAcpReplayRuntime({
+          transcript,
+          statusPath,
+          scriptPath: yield* path.fromFileUrl(
+            new URL("../../../scripts/acp-replay-agent.ts", import.meta.url),
+          ),
+          childProcessSpawner,
+          fileSystem,
+        }),
+      });
+      const threadId = ThreadId.make("thread-grok-todo-snapshot");
+      const modelSelection = { instanceId, model: "grok-build" } as const;
+      const runtimePolicy = policy("full-access", { cwd: replayDir });
+      const events = yield* Effect.gen(function* () {
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-grok-todo-snapshot"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId,
+            runtimePolicy,
+            modelSelection,
+            now: yield* DateTime.now,
+            ordinal: 1,
+          }),
+        );
+        return Array.from(
+          yield* runtime.events.pipe(
+            Stream.takeUntil((event) => event.type === "turn.terminal"),
+            Stream.runCollect,
+          ),
+        );
+      }).pipe(Effect.scoped);
+      const todoItem = events.find(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "todo_list",
+      );
+      assert.equal(
+        todoItem?.type === "turn_item.updated" ? todoItem.turnItem.status : undefined,
+        "completed",
+      );
+      yield* makeAcpReplayCompletenessAssertion(fileSystem, statusPath, transcript);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 });

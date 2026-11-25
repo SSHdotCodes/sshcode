@@ -101,7 +101,7 @@ export function FileSurfaceAction(props: {
               onPressedChange={props.onPress}
               aria-label={props.label}
               variant="ghost"
-              size="sm"
+              size="compact"
             >
               {props.children}
             </Toggle>
@@ -124,10 +124,13 @@ export function FileSurfaceNotice(props: { readonly children: ReactNode }) {
   );
 }
 
-export function FileSurfaceLoading(props: { readonly className?: string }) {
+export function FileSurfaceLoading(props: {
+  readonly className?: string;
+  readonly label?: string;
+}) {
   return (
     <div className={cn("flex min-h-0 flex-1", props.className)}>
-      <PanelLoading label="Loading file…" toolbar={false} />
+      <PanelLoading label={props.label ?? "Loading file…"} toolbar={false} />
     </div>
   );
 }
@@ -143,13 +146,9 @@ export function FileSurfaceFailure(props: {
     >
       <p className="text-destructive">{props.message}</p>
       {props.onRetry ? (
-        <button
-          type="button"
-          onClick={props.onRetry}
-          className="rounded-md border border-input px-2.5 py-1 text-xs text-foreground hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-        >
+        <Button type="button" variant="outline" size="xs" onClick={props.onRetry}>
           Try again
-        </button>
+        </Button>
       ) : null}
     </div>
   );

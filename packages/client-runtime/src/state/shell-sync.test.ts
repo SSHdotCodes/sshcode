@@ -3,6 +3,7 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ShellStreamItem,
+  type OrchestrationV2SubscribeShellInput,
   ThreadId,
   type ThreadPullRequestLink,
 } from "@t3tools/contracts";
@@ -768,17 +769,11 @@ describe("environment shell synchronization", () => {
       const events = yield* Queue.unbounded<OrchestrationV2ShellStreamItem>();
       const wakeups = yield* Queue.unbounded<ConnectionWakeups.ConnectionWakeup>();
       const loaderCalls = yield* Ref.make(0);
-      const capturedAfterSequences = yield* Ref.make<ReadonlyArray<number | undefined>>([]);
+      const inputs = yield* Queue.unbounded<OrchestrationV2SubscribeShellInput>();
+      const decorationCursor = (revision: number) => ({ epoch: "server-epoch", revision });
       const client = {
-        [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: (input: {
-          readonly afterSequence?: number;
-        }) =>
-          Stream.unwrap(
-            Ref.update(capturedAfterSequences, (captured) => [
-              ...captured,
-              input.afterSequence,
-            ]).pipe(Effect.as(Stream.fromQueue(events))),
-          ),
+        [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: (input: OrchestrationV2SubscribeShellInput) =>
+          Stream.unwrap(Queue.offer(inputs, input).pipe(Effect.as(Stream.fromQueue(events)))),
       } as unknown as WsRpcProtocolClient;
       const supervisorState = yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE);
       const activeSession = yield* SubscriptionRef.make<Option.Option<RpcSession.RpcSession>>(
@@ -811,7 +806,11 @@ describe("environment shell synchronization", () => {
         load: () =>
           Ref.updateAndGet(loaderCalls, (count) => count + 1).pipe(
             Effect.map((count) =>
-              Option.some({ ...LIVE_SHELL_SNAPSHOT, snapshotSequence: count * 10 }),
+              Option.some({
+                ...LIVE_SHELL_SNAPSHOT,
+                snapshotSequence: count * 10,
+                decorationCursor: decorationCursor(count),
+              }),
             ),
           ),
       });
@@ -826,11 +825,10 @@ describe("environment shell synchronization", () => {
       );
 
       // A new session starts from an authoritative HTTP snapshot.
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(capturedAfterSequences)).length >= 1) break;
-        yield* Effect.yieldNow;
-      }
-      expect(yield* Ref.get(capturedAfterSequences)).toEqual([10]);
+      expect(yield* Queue.take(inputs)).toMatchObject({
+        afterSequence: 10,
+        decorationCursor: decorationCursor(1),
+      });
       yield* Queue.offer(events, { kind: "synchronized" });
       yield* SubscriptionRef.changes(shellState).pipe(
         Stream.filter((value) => value.status === "live"),
@@ -840,7 +838,11 @@ describe("environment shell synchronization", () => {
       // A newer snapshot arrives on the stream and advances the cursor.
       yield* Queue.offer(events, {
         kind: "snapshot",
-        snapshot: { ...LIVE_SHELL_SNAPSHOT, snapshotSequence: 40 },
+        snapshot: {
+          ...LIVE_SHELL_SNAPSHOT,
+          snapshotSequence: 40,
+          decorationCursor: decorationCursor(3),
+        },
       });
       yield* SubscriptionRef.changes(shellState).pipe(
         Stream.filter(
@@ -851,40 +853,42 @@ describe("environment shell synchronization", () => {
 
       yield* TestClock.adjust("3 seconds");
       yield* Queue.offer(wakeups, "application-active");
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(capturedAfterSequences)).length >= 2) break;
-        yield* Effect.yieldNow;
-      }
-      expect(yield* Ref.get(capturedAfterSequences)).toEqual([10, 40]);
-      yield* Queue.offer(events, { kind: "synchronized" });
+      expect(yield* Queue.take(inputs)).toMatchObject({
+        afterSequence: 40,
+        decorationCursor: decorationCursor(3),
+      });
+      yield* Queue.offer(events, { kind: "synchronized", decorationCursor: decorationCursor(4) });
+      yield* SubscriptionRef.changes(shellState).pipe(
+        Stream.filter(
+          (value) => Option.getOrNull(value.snapshot)?.decorationCursor?.revision === 4,
+        ),
+        Stream.runHead,
+      );
 
       yield* TestClock.adjust("3 seconds");
       yield* Queue.offer(wakeups, "network-changed");
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(capturedAfterSequences)).length >= 3) break;
-        yield* Effect.yieldNow;
-      }
-      expect(yield* Ref.get(capturedAfterSequences)).toEqual([10, 40, 40]);
+      expect(yield* Queue.take(inputs)).toMatchObject({
+        afterSequence: 40,
+        decorationCursor: decorationCursor(4),
+      });
 
       // A long resume keeps a session that answers its probe, so the shell
       // catches up on it from the in-memory cursor without an HTTP refresh.
       yield* TestClock.adjust("3 seconds");
       yield* Queue.offer(wakeups, "application-active-reconnect");
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(capturedAfterSequences)).length >= 4) break;
-        yield* Effect.yieldNow;
-      }
-      expect(yield* Ref.get(capturedAfterSequences)).toEqual([10, 40, 40, 40]);
+      expect(yield* Queue.take(inputs)).toMatchObject({
+        afterSequence: 40,
+        decorationCursor: decorationCursor(4),
+      });
       expect(yield* Ref.get(loaderCalls)).toBe(1);
 
       // A replacement socket resumes the synchronized snapshot from its
       // cursor too, instead of downloading the whole list again.
       yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(capturedAfterSequences)).length >= 5) break;
-        yield* Effect.yieldNow;
-      }
-      expect(yield* Ref.get(capturedAfterSequences)).toEqual([10, 40, 40, 40, 40]);
+      expect(yield* Queue.take(inputs)).toMatchObject({
+        afterSequence: 40,
+        decorationCursor: decorationCursor(4),
+      });
       expect(yield* Ref.get(loaderCalls)).toBe(1);
       yield* Queue.offer(events, {
         kind: "thread.updated",
@@ -903,11 +907,7 @@ describe("environment shell synchronization", () => {
 
       // An older server without a completion marker keeps the authoritative refresh.
       yield* SubscriptionRef.set(activeSession, Option.some(session(client, false)));
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(capturedAfterSequences)).length >= 6) break;
-        yield* Effect.yieldNow;
-      }
-      expect(yield* Ref.get(capturedAfterSequences)).toEqual([10, 40, 40, 40, 40, 20]);
+      expect(yield* Queue.take(inputs)).toMatchObject({ afterSequence: 20 });
       expect(yield* Ref.get(loaderCalls)).toBe(2);
     }),
   );

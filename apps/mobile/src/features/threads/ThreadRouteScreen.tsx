@@ -1,5 +1,7 @@
 import { describeThreadHelpers } from "@t3tools/client-runtime/stop-helpers";
 import { useThreadMonitors } from "./ThreadMonitors";
+import { ThreadFindBar } from "./ThreadFindBar";
+import { threadFindEntryId, threadFindMode, type ThreadFindAnchorReader } from "./thread-find";
 import {
   pendingThreadSearchJumpAtom,
   searchJumpTarget,
@@ -7,7 +9,7 @@ import {
 import { appAtomRegistry } from "../../state/atom-registry";
 import {
   matchesTimelineJump,
-  type TimelineJumpTarget,
+  type TimelineJumpRequest,
 } from "@t3tools/client-runtime/state/thread-search";
 import {
   threadHasMedia,
@@ -49,10 +51,11 @@ import {
   AuthTerminalReadScope,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  MessageId,
   ThreadId,
+  TurnItemId,
   sideChatKindForDriver,
   type ProjectScript,
-  type TurnItemId,
 } from "@t3tools/contracts";
 import {
   deriveSteerWait,
@@ -136,6 +139,7 @@ import { threadRouteIsHydrating } from "./thread-route-hydration";
 import { useThreadPromptLink } from "../prompt-links/useThreadPromptLink";
 import { ThreadHeader } from "./ThreadHeader";
 import { ThreadMediaGallery } from "./ThreadMediaGallery";
+import { useUiMode } from "../discord/useUiMode";
 import {
   useAndroidWorkspaceBack,
   useWorkspaceListNavigation,
@@ -255,13 +259,18 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
     }, [threadIdRaw, environmentIdRaw]),
   );
   const environmentId = environmentIdRaw ? EnvironmentId.make(environmentIdRaw) : null;
+  const [uiMode] = useUiMode();
+  const routeLineage =
+    selectedThread?.id === threadIdRaw && selectedThread.environmentId === environmentId
+      ? selectedThread.lineage
+      : null;
+  // The Agents sheet reads the full family on demand. The parent transcript
+  // uses live children from the shell and looks up individual linked chats.
   useThreadFamily(
     environmentId,
-    selectedThread?.id === threadIdRaw && selectedThread.environmentId === environmentId
-      ? selectedThread.lineage.rootThreadId
-      : threadIdRaw
-        ? ThreadId.make(threadIdRaw)
-        : null,
+    routeLineage && (uiMode === "discord" || routeLineage.relationshipToParent === "subagent")
+      ? routeLineage.rootThreadId
+      : null,
   );
   const routeEnvironmentRuntime = useRemoteEnvironmentRuntime(environmentId);
   const routeEnvironmentShellState = useEnvironmentShellReadiness(environmentId);
@@ -384,12 +393,22 @@ function ThreadRouteContent(
     mediaSearchKey.current = currentMediaThreadKey;
   }, [currentMediaThreadKey]);
   const loadMediaPage = useAtomCommand(threadMediaPageCommand, { reportFailure: false });
-  const [mediaJump, setMediaJump] = useState<{
-    item: TimelineJumpTarget;
-    sequence: number;
-    threadKey: string;
-  } | null>(null);
+  const [mediaJump, setMediaJump] = useState<
+    (TimelineJumpRequest & { readonly threadKey: string }) | null
+  >(null);
   const mediaJumpSequence = useRef(0);
+  const [findOpen, setFindOpen] = useState(false);
+  const findAnchorReader = useRef<ThreadFindAnchorReader | null>(null);
+  const findContent = selectedThreadDetail?.visibleTurnItems;
+  const readFindAnchor = useCallback(() => {
+    const viewport = findAnchorReader.current?.();
+    if (viewport) return viewport;
+    const entry = findContent?.findLast((row) => threadFindEntryId(row) !== undefined);
+    const entryId = threadFindEntryId(entry);
+    return entryId ? { entryId, occurrence: 0 } : undefined;
+  }, [findContent]);
+  const openFindInChat = useCallback(() => setFindOpen(true), []);
+  const closeFindInChat = useCallback(() => setFindOpen(false), []);
   const hasThreadMedia = useMemo(
     () =>
       selectedThreadDetail !== null &&
@@ -455,11 +474,24 @@ function ThreadRouteContent(
     [selectedThread],
   );
   useEffect(() => {
+    setFindOpen(false);
     setMediaOpen(false);
     setMediaSearch(false);
     setMediaSeed(null);
     setMediaJump(null);
   }, [selectedThread?.id, selectedThread?.environmentId]);
+  const revealFindEntry = useCallback(
+    (entryId: string) => {
+      if (!selectedThread) return;
+      setMediaJump({
+        item: { sourceItemId: TurnItemId.make(entryId), messageId: MessageId.make(entryId) },
+        highlight: true,
+        sequence: ++mediaJumpSequence.current,
+        threadKey: scopedThreadKey(selectedThread.environmentId, selectedThread.id),
+      });
+    },
+    [selectedThread],
+  );
 
   const composer = useThreadComposerState();
   const selectedThreadGitTarget = useMemo(
@@ -493,6 +525,7 @@ function ThreadRouteContent(
     if (item)
       setMediaJump({
         item,
+        highlight: true,
         sequence: ++mediaJumpSequence.current,
         threadKey: scopedThreadKey(selectedThread.environmentId, selectedThread.id),
       });
@@ -1362,6 +1395,7 @@ function ThreadRouteContent(
   }
 
   const serverConfig = routeEnvironmentRuntime?.serverConfig ?? null;
+  const findMode = threadFindMode(serverConfig);
   const renderThreadRouteBody = () => (
     <>
       <GitActionProgressOverlay
@@ -1390,6 +1424,21 @@ function ThreadRouteContent(
               : null
           }
           onMediaJumpHandled={handleMediaJumpHandled}
+          findAnchorReader={findOpen && findMode ? findAnchorReader : undefined}
+          findBar={
+            findOpen && selectedThreadDetailRef && findMode ? (
+              <ThreadFindBar
+                key={scopedThreadKey(selectedThread.environmentId, selectedThread.id)}
+                environmentId={selectedThread.environmentId}
+                threadId={selectedThread.id}
+                progressive={findMode === "progressive"}
+                contentRevision={findContent ?? null}
+                readAnchor={readFindAnchor}
+                onReveal={revealFindEntry}
+                onClose={closeFindInChat}
+              />
+            ) : null
+          }
           contentPresentation={contentPresentation}
           screenTone={connectionTone(routeConnectionState)}
           connectionError={routeConnectionError}
@@ -1499,6 +1548,7 @@ function ThreadRouteContent(
         onOpenFilesInspector={handleOpenFilesInspector}
         onReturnToThread={props.onReturnToThread}
         sideChat={headerSideChat}
+        onFindInChat={selectedThreadDetailRef && findMode ? openFindInChat : undefined}
         onOpenMedia={
           !mediaSearch && (hasThreadMedia || selectedThreadDetailState.history.historyCursor)
             ? () => void openMedia()

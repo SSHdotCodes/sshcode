@@ -1,6 +1,7 @@
 import { AuthTerminalOperateScope } from "@t3tools/contracts";
 import { lazy, Suspense, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 
+import { cn } from "../lib/utils";
 import { useEnvironmentScope } from "../state/session";
 
 import { Spinner } from "./ui/spinner";
@@ -23,7 +24,10 @@ function TerminalLoadingShell({ mode, height, threadRef, visible = true, focusRe
       tabIndex={-1}
       aria-label="Loading terminal"
       aria-busy="true"
-      className="flex min-h-0 min-w-0 shrink-0 items-center justify-center overflow-hidden bg-background"
+      className={cn(
+        "flex min-h-0 min-w-0 shrink-0 items-center justify-center overflow-hidden bg-background",
+        mode !== "panel" && "border-t border-border/80",
+      )}
       style={
         mode === "panel"
           ? { height: "100%", flex: 1 }

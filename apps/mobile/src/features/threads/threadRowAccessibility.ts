@@ -68,6 +68,7 @@ export function threadRowAccessibilityLabel(input: {
   readonly pinned: boolean;
   readonly settled: boolean;
   readonly snoozed: boolean;
+  readonly waitingLabel?: string | null | undefined;
   readonly wakeLabel?: string | undefined;
   readonly pullRequestLabel?: string | undefined;
 }): string {
@@ -76,7 +77,9 @@ export function threadRowAccessibilityLabel(input: {
     input.providerName,
     input.status === "working" && input.goalActive
       ? "Working toward goal"
-      : SPOKEN_STATUS[input.status],
+      : input.status === "waiting" || input.status === "ready"
+        ? (input.waitingLabel ?? SPOKEN_STATUS[input.status])
+        : SPOKEN_STATUS[input.status],
     input.unread ? "Unread" : null,
     input.queued ? "Messages queued to send" : null,
     input.pinned ? "Pinned" : null,

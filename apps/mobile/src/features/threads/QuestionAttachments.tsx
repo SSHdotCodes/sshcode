@@ -155,9 +155,7 @@ export function QuestionAttachments(props: {
       <ComposerAttachmentStrip
         environmentId={environmentId}
         attachments={attachments}
-        onRemove={(id) => {
-          if (!props.disabled) removeComposerDraftAttachment(key, id);
-        }}
+        onRemove={props.disabled ? undefined : (id) => removeComposerDraftAttachment(key, id)}
         onPressPreview={setPreviewFile}
         onPressVideo={(attachment, sourceIdentifier) =>
           setPreviewVideo({ type: "local", attachment, sourceIdentifier })

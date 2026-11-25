@@ -154,7 +154,6 @@ describe("orchestrator MCP contracts", () => {
       childNodeId: "node-task-1",
       status: "completed",
       workState: "result_available",
-      hasPendingChildRuns: false,
       providerInstanceId: "claudeAgent",
       model: "claude-sonnet-4-6",
       summary: "Workspace inspected.",
@@ -163,9 +162,16 @@ describe("orchestrator MCP contracts", () => {
       latestTerminalStatus: "completed",
       latestTerminalSummary: "Workspace inspected.",
       latestTerminalResultContextTransferId: "context-transfer-result-1",
-      hasPendingQuestion: false,
-      waitTimedOut: false,
     });
+    // A running task omits every field with no value yet.
+    const running = decodeDelegateTaskResult({
+      taskId: "node-task-2",
+      status: "running",
+      workState: "working",
+      providerInstanceId: "claudeAgent",
+    });
+    expect(running.summary).toBeUndefined();
+    expect(running.hasPendingQuestion).toBeUndefined();
 
     expect(request.target?.providerInstanceId).toBe("claudeAgent");
     expect(result.status).toBe("completed");

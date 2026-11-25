@@ -290,6 +290,7 @@ function compactWorkEntryText(value: string): string {
 export function workEntryRowLabel(entry: WorkLogPresentationEntry, expanded = false): string {
   if (expanded && entry.itemType === "reasoning")
     return entry.toolLifecycleStatus === "inProgress" ? "Thinking" : "Thought";
+  if (entry.itemType === "todo_list") return entry.detail ? `Plan · ${entry.detail}` : "Plan";
   const presentation = resolveWorkEntryToolPresentation(entry);
   if (presentation) return presentation.displayName;
   if (entry.command?.trim()) return compactWorkEntryText(commandDisplayText(entry.command));
@@ -501,6 +502,7 @@ function itemIsProminent(item: OrchestrationV2TurnItem): boolean {
     item.type === "fork" ||
     item.type === "thread_created" ||
     item.type === "system_notice" ||
+    item.type === "todo_list" ||
     // An answerable card: it must stand alone and never fold away with the run.
     item.type === "secret_request"
   );
@@ -2095,7 +2097,8 @@ export function buildThreadFeed(
     const item = row.item;
     if (turnItemIsWorkspacePreparation(item)) continue;
     if (resumedRestartNotices.has(item.id)) continue;
-    if (item.type === "todo_list" || item.type === "checkpoint") continue;
+    if (item.type === "checkpoint" || (item.type === "todo_list" && item.steps.length === 0))
+      continue;
     if (
       item.type === "user_message" &&
       item.inputIntent === "queued_turn" &&

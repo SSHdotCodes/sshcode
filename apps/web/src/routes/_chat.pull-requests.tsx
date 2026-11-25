@@ -1,5 +1,4 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-import { Spinner } from "~/components/ui/spinner";
 import { useShortcutModifierState } from "~/shortcutModifierState";
 import type { PullRequestSpeedActionResult } from "~/components/pullRequest/PullRequestSpeedActions";
 import { usePullRequestCloseBatch } from "~/components/pullRequest/usePullRequestActions";
@@ -521,8 +520,11 @@ function PullRequestsRouteView() {
   const selectedPullRequestSurface =
     selectedRightPanelSurface?.kind === "pull-request" ? selectedRightPanelSurface : null;
   const activePullRequestSurface = rightPanelState.isOpen ? selectedPullRequestSurface : null;
-  const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
-    usePanelAnimationSettings();
+  const {
+    active: panelAnimationsActive,
+    durationMs: panelAnimationDurationMs,
+    exitDurationMs: panelExitDurationMs,
+  } = usePanelAnimationSettings();
   const rightPanelPresenceValue = useMemo(
     () => ({
       activeSurface: selectedPullRequestSurface,
@@ -535,7 +537,7 @@ function PullRequestsRouteView() {
     rightPanelPresenceValue,
     panelAnimationsActive,
     rightPanelRef?.threadId ?? null,
-    panelAnimationDurationMs,
+    panelExitDurationMs,
   );
   const rightPanelPresent = rightPanelPresence.present;
   const renderedPullRequestSurface = rightPanelPresence.value?.activeSurface ?? null;
@@ -2022,25 +2024,31 @@ function PullRequestsRouteView() {
         </div>
       ) : null}
       {listData?.truncated && entries.length > 0 ? (
-        <div className="flex justify-center py-3 text-xs text-muted-foreground">
-          {loadingMore ? (
-            <span className="flex items-center gap-2">
-              <Spinner aria-hidden size="sm" />
-              {sentCursors === null ? "Updating pull requests" : "Loading more"}
-            </span>
-          ) : canContinue || pageSize < MAX_PAGE_SIZE ? (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={loadMore}
-              disabled={listQuery.isPending || showingCarried}
-            >
-              Load more pull requests
-            </Button>
-          ) : (
-            <span>Narrow your search to find more pull requests.</span>
-          )}
-        </div>
+        loadingMore ? (
+          <div className="pt-1">
+            <PullRequestListGhost
+              rows={2}
+              caption={
+                sentCursors === null ? "Updating pull requests" : "Loading more pull requests"
+              }
+            />
+          </div>
+        ) : (
+          <div className="flex justify-center py-3 text-xs text-muted-foreground">
+            {canContinue || pageSize < MAX_PAGE_SIZE ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={loadMore}
+                disabled={listQuery.isPending || showingCarried}
+              >
+                Load more pull requests
+              </Button>
+            ) : (
+              <span>Narrow your search to find more pull requests.</span>
+            )}
+          </div>
+        )
       ) : null}
     </>
   );
@@ -2151,11 +2159,16 @@ function PullRequestsRouteView() {
           className={cn(
             "shrink-0",
             rightPanelState.isOpen ? "-ml-3 w-0" : "w-7 sm:w-5",
-            panelAnimationsActive && "transition-[width,margin] ease-out",
+            panelAnimationsActive &&
+              (rightPanelState.isOpen
+                ? "motion-safe:transition-[width,margin] motion-safe:ease-motion"
+                : "motion-safe:transition-[width,margin] motion-safe:ease-in"),
           )}
           style={
             panelAnimationsActive
-              ? { transitionDuration: `${panelAnimationDurationMs}ms` }
+              ? {
+                  transitionDuration: `${rightPanelState.isOpen ? panelAnimationDurationMs : panelExitDurationMs}ms`,
+                }
               : undefined
           }
         />

@@ -2493,6 +2493,75 @@ describe("UsageService", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("serves the last dashboard summary and shares its refresh with waiting readers", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-08-02T00:00:00Z"));
+      const { transcript, settings, home } = yield* setup;
+      let scans = 0;
+      const service = yield* UsageService.make.pipe(
+        Effect.provide(
+          layerService({
+            prefix: "usage-summary-cache",
+            home,
+            settings,
+            onRatesFetch: () => scans++,
+          }),
+        ),
+      );
+      const options = { preferCached: true } as const;
+      yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
+      const original = yield* service.readSummary(WINDOW, options);
+      assert.strictEqual(totalOutputTokens(original), 5);
+      assert.strictEqual(yield* service.readSummary(WINDOW, options), original);
+      assert.strictEqual(scans, 1);
+
+      yield* Effect.promise(() => NodeFSP.appendFile(transcript, claudeLine(2, 7)));
+      yield* TestClock.adjust("16 seconds");
+      const stale = yield* service.readSummary(WINDOW, options);
+      assert.strictEqual(stale.readAt, original.readAt);
+      assert.strictEqual(totalOutputTokens(stale), 5);
+      assert.isTrue(stale.sources.some((source) => source.refreshing === true));
+
+      const fresh = yield* service.readSummary({ ...WINDOW, awaitRefresh: true }, options);
+      assert.strictEqual(totalOutputTokens(fresh), 12);
+      assert.isFalse(fresh.sources.some((source) => source.refreshing === true));
+      assert.strictEqual(scans, 2);
+
+      yield* Effect.promise(() => NodeFSP.appendFile(transcript, claudeLine(3, 8)));
+      yield* service.refreshRates;
+      assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW, options)), 20);
+      yield* service.awaitPersisted;
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("keeps the last matching dashboard reading available after a server restart", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-08-02T00:00:00Z"));
+      const { transcript, settings, home } = yield* setup;
+      const make = UsageService.make.pipe(
+        Effect.provide(layerService({ prefix: "usage-summary-restart", home, settings })),
+      );
+      const options = { preferCached: true } as const;
+      yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
+      const before = yield* make;
+      const original = yield* before.readSummary(WINDOW, options);
+      yield* before.awaitPersisted;
+
+      yield* Effect.promise(() => NodeFSP.appendFile(transcript, claudeLine(2, 7)));
+      yield* TestClock.adjust("1 second");
+      const restarted = yield* make;
+      const cached = yield* restarted.readSummary(WINDOW, options);
+      assert.strictEqual(cached.readAt, original.readAt);
+      assert.strictEqual(totalOutputTokens(cached), 5);
+      assert.isTrue(cached.sources.some((source) => source.refreshing === true));
+
+      const updated = yield* restarted.readSummary({ ...WINDOW, awaitRefresh: true }, options);
+      assert.strictEqual(totalOutputTokens(updated), 12);
+      assert.isFalse(updated.sources.some((source) => source.refreshing === true));
+      yield* restarted.awaitPersisted;
+    }).pipe(Effect.scoped),
+  );
+
   it.live("shares one scan between concurrent identical requests", () =>
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;

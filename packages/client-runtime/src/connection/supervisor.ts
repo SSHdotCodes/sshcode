@@ -1422,12 +1422,12 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         continue;
       }
 
-      if (failedProbe) {
-        // A probe found a dead transport, or the transport closed while a probe
-        // waited for an answer (the user returned to the app, asked to retry,
-        // or the network changed), so reconnect immediately instead
-        // of sleeping the first backoff rung. Only this first attempt skips the
-        // ladder; if it fails too, normal backoff resumes.
+      const lostStableDirectTransport =
+        outcome.established && outcome.stable && !liveOverRelay && error.reason === "transport";
+      if (failedProbe || lostStableDirectTransport) {
+        // A failed probe or a dropped, previously stable direct socket gets one
+        // prompt redial. A flapping connection then backs off, and ordinary
+        // relay closes keep their jitter so clients do not all redial together.
         resetRetryLadder();
         replacing = failedLongResumeProbe;
         yield* setState(connectingState(yield* Ref.get(intent), generation, 1, latestFailure));

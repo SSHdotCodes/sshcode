@@ -103,9 +103,9 @@ export function DeviceHostsSettings(props: { environmentId: EnvironmentId | null
         </Button>
       }
     >
-      <div className="pt-3 pb-2">
+      <div className="mt-2.5 pb-1">
         {!props.environmentId ? (
-          <p className="text-sm text-muted-foreground">
+          <p className="rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground">
             Connect a selected environment to manage device hosts.
           </p>
         ) : (
@@ -191,7 +191,9 @@ function DeviceHostList({
   return (
     <>
       {hosts.length === 0 ? (
-        <p className="py-2 text-sm text-muted-foreground">No device hosts.</p>
+        <p className="rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground">
+          No remote device hosts added yet.
+        </p>
       ) : null}
       {hosts.map((host) => {
         const status = state.hostStatuses[host.id];
@@ -217,7 +219,10 @@ function DeviceHostList({
                 ? status.detail
                 : undefined;
         return (
-          <div key={host.id} className="flex items-center gap-2 border-t border-border/50 py-2.5">
+          <div
+            key={host.id}
+            className="flex min-h-12 items-center gap-2 border-t border-border/50 py-2.5"
+          >
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-2">
                 <p className="truncate text-sm font-medium">{host.label}</p>

@@ -1,5 +1,5 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-import { Spinner } from "~/components/ui/spinner";
+import { Skeleton } from "~/components/ui/skeleton";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { ArrowLeftIcon, ChevronRightIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -122,10 +122,21 @@ function BreadcrumbMenuContent(props: {
       ) : null}
       <MenuGroup key={props.directoryPath}>
         {entriesQuery.isPending && entriesQuery.data === null ? (
-          <MenuItem disabled>
-            <Spinner />
-            Loading folder…
-          </MenuItem>
+          <div
+            role="status"
+            aria-label="Loading folder…"
+            className="flex min-w-40 flex-col gap-2 px-2 py-2"
+          >
+            <span className="sr-only">Loading folder…</span>
+            <div aria-hidden="true" className="flex items-center gap-2">
+              <Skeleton className="size-3.5 shrink-0" />
+              <Skeleton shape="pill" className="h-2.5 w-24" />
+            </div>
+            <div aria-hidden="true" className="flex items-center gap-2">
+              <Skeleton className="size-3.5 shrink-0" />
+              <Skeleton shape="pill" className="h-2.5 w-32" />
+            </div>
+          </div>
         ) : entriesQuery.error && entriesQuery.data === null ? (
           <MenuItem closeOnClick={false} onClick={entriesQuery.refresh}>
             <RefreshIcon refreshing={entriesQuery.isPending} />

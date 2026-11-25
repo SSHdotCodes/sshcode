@@ -574,6 +574,117 @@ describe("buildThreadListV2Items", () => {
     ).toEqual(["asked", "woken"]);
   });
 
+  it("rises unseen failures and actionable plans above working chats immediately", () => {
+    const working = makeThread({
+      id: ThreadId.make("working"),
+      title: "working",
+      latestUserMessageAt: "2026-06-01T09:00:25.000Z",
+      runtime: RUNNING,
+    });
+    const unopenedFailure = makeThread({
+      id: ThreadId.make("failed-unopened"),
+      title: "failed-unopened",
+      updatedAt: "2026-06-01T09:00:10.000Z",
+      latestRun: {
+        ...finishedRun("failed-unopened", "2026-06-01T09:00:10.000Z"),
+        status: "failed",
+      },
+      runtime: { ...RUNNING, status: "failed", activeRunId: null },
+      lastVisitedAt: null,
+    });
+    const seenFailure = makeThread({
+      id: ThreadId.make("failed-seen"),
+      title: "failed-seen",
+      updatedAt: "2026-06-01T09:00:20.000Z",
+      latestRun: {
+        ...finishedRun("failed-seen", "2026-06-01T09:00:20.000Z"),
+        status: "failed",
+      },
+      runtime: { ...RUNNING, status: "failed", activeRunId: null },
+      lastVisitedAt: "2026-06-01T09:00:22.000Z",
+    });
+    const planReady = makeThread({
+      id: ThreadId.make("plan-ready"),
+      title: "plan-ready",
+      latestRun: finishedRun("plan-ready", "2026-06-01T08:55:00.000Z"),
+      hasActionableProposedPlan: true,
+      lastVisitedAt: "2026-06-01T08:56:00.000Z",
+    });
+
+    expect(
+      buildThreadListV2Items({
+        threads: [working, seenFailure, planReady, unopenedFailure],
+        searchQuery: "",
+        now: "2026-06-01T09:00:30.000Z",
+      }).items.map((item) => item.thread.id),
+    ).toEqual(["failed-unopened", "plan-ready", "working", "failed-seen"]);
+
+    // Pre-tracking server (lastVisitedAt === undefined): mobile cannot record visits,
+    // so failures do not get stuck above working chats for 24 hours.
+    const oldServerFailure = makeThread({
+      id: ThreadId.make("failed-old-server"),
+      title: "failed-old-server",
+      updatedAt: "2026-06-01T09:00:15.000Z",
+      latestRun: {
+        ...finishedRun("failed-old-server", "2026-06-01T09:00:15.000Z"),
+        status: "failed",
+      },
+      runtime: { ...RUNNING, status: "failed", activeRunId: null },
+      lastVisitedAt: undefined,
+    });
+    expect(
+      buildThreadListV2Items({
+        threads: [working, oldServerFailure],
+        searchQuery: "",
+        now: "2026-06-01T09:00:30.000Z",
+      }).items.map((item) => item.thread.id),
+    ).toEqual(["working", "failed-old-server"]);
+  });
+
+  it("holds main order during touch/scroll and holds an opened needs-you chat in place", () => {
+    const openedRead = makeThread({
+      id: ThreadId.make("opened-read"),
+      title: "opened-read",
+      latestRun: finishedRun("opened-read", "2026-06-01T05:00:00.000Z"),
+      lastVisitedAt: "2026-06-01T05:05:00.000Z",
+    });
+    const working = makeThread({
+      id: ThreadId.make("working"),
+      title: "working",
+      latestUserMessageAt: "2026-06-01T08:00:00.000Z",
+      runtime: RUNNING,
+    });
+    const idle = makeThread({
+      id: ThreadId.make("idle"),
+      title: "idle",
+      latestRun: finishedRun("idle", "2026-06-01T04:00:00.000Z"),
+    });
+
+    // Holding an opened Needs-you chat keeps it above working until navigated away.
+    expect(
+      buildThreadListV2Items({
+        threads: [working, openedRead, idle],
+        searchQuery: "",
+        now: NOW,
+        heldNeedsYouKey: `${openedRead.environmentId}:${openedRead.id}`,
+      }).items.map((item) => item.thread.id),
+    ).toEqual(["opened-read", "working", "idle"]);
+
+    // Holding main order while touching/scrolling prevents rows from jumping.
+    expect(
+      buildThreadListV2Items({
+        threads: [working, idle, openedRead],
+        searchQuery: "",
+        now: NOW,
+        heldMainOrderKeys: [
+          `${idle.environmentId}:${idle.id}`,
+          `${openedRead.environmentId}:${openedRead.id}`,
+          `${working.environmentId}:${working.id}`,
+        ],
+      }).items.map((item) => item.thread.id),
+    ).toEqual(["idle", "opened-read", "working"]);
+  });
+
   it("moves a finished thread out of the live block to the top of the rest", () => {
     const working = makeThread({
       id: ThreadId.make("was-working"),

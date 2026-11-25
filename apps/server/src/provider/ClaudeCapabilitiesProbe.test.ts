@@ -24,6 +24,7 @@ import {
   buildClaudeCapabilitiesProbeQueryOptions,
   spawnClaudeProbeThroughEnv,
   CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES,
+  CLAUDE_USAGE_TIMEOUT_MS,
   makeClaudeWorkspaceSnapshots,
   probeClaudeCapabilities,
 } from "./ClaudeProvider.ts";
@@ -508,7 +509,7 @@ it.effect("preserves initialized capabilities when optional usage times out", ()
       decodeClaudeSettings({ binaryPath: "claude" }),
     ).pipe(Effect.forkChild);
     yield* Deferred.await(usageStarted);
-    yield* TestClock.adjust("4 seconds");
+    yield* TestClock.adjust(CLAUDE_USAGE_TIMEOUT_MS);
     const capabilities = yield* Fiber.join(probe);
     assert.equal(capabilities?.email, "dev@example.com");
     assert.equal(capabilities?.subscriptionType, "pro");

@@ -3129,6 +3129,79 @@ describe("OpenCodeAdapterV2", () => {
     });
   });
 
+  it.effect("treats each todo update as a completed snapshot", () =>
+    Effect.gen(function* () {
+      const nativeEvents = asyncEventStream();
+      const harness = yield* makeOpenCodeRuntimeHarness("todo-snapshot", "root", {
+        event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+        session: {
+          create: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
+          promptAsync: async () => ({ data: true }),
+          abort: async () => ({ data: true }),
+          children: async () => ({ data: [] }),
+        },
+      });
+      yield* harness.startTurn();
+      const received = yield* harness.runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* Effect.promise(() =>
+        nativeEvents.push({
+          type: "todo.updated",
+          properties: {
+            sessionID: "root",
+            todos: [
+              { content: "Inspect the harness state", status: "in_progress", priority: "high" },
+              { content: "Verify the projection", status: "pending", priority: "medium" },
+            ],
+          },
+        }),
+      );
+      yield* Effect.promise(() =>
+        nativeEvents.push({
+          type: "message.updated",
+          properties: {
+            sessionID: "root",
+            info: {
+              id: "assistant",
+              sessionID: "root",
+              role: "assistant",
+              time: { created: 1, completed: 2 },
+            },
+          },
+        }),
+      );
+      yield* Effect.promise(() =>
+        nativeEvents.push({
+          type: "session.status",
+          properties: { sessionID: "root", status: { type: "busy" } },
+        }),
+      );
+      yield* Effect.promise(() =>
+        nativeEvents.push({
+          type: "session.status",
+          properties: { sessionID: "root", status: { type: "idle" } },
+        }),
+      );
+      const events = yield* Fiber.join(received);
+      const item = events.flatMap((event) =>
+        event.type === "turn_item.updated" && event.turnItem.type === "todo_list"
+          ? [event.turnItem]
+          : [],
+      )[0];
+      assert.equal(item?.status, "completed");
+      assert.deepEqual(
+        item?.steps.map((step) => step.status),
+        ["running", "pending"],
+      );
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
   it("preserves OpenCode's recursion guard on task-created child sessions", () => {
     const childRules = openCodeChildPermissionRules(runtimePolicy("full-access"), [
       { permission: "task", pattern: "*", action: "deny" },

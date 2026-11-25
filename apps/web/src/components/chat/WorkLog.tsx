@@ -40,11 +40,13 @@ export function WorkLogBlock({
   );
 }
 
-/** Expanded members align with the header and use the same compact row geometry. */
+/** Expanded members nest under their group header on a quiet hairline rail. */
 export function WorkLogList({ children }: { children: ReactNode }) {
   return (
     <GroupedRows value>
-      <div className="flex min-w-0 flex-col">{children}</div>
+      <div className="work-log-reveal ms-3.5 mt-0.5 flex min-w-0 flex-col border-l border-border/55 ps-2">
+        {children}
+      </div>
     </GroupedRows>
   );
 }
@@ -56,7 +58,13 @@ type RowContent = {
   wrapLabel?: boolean;
 };
 
-function WorkLogLine({ icon, label, trailing, wrapLabel }: RowContent) {
+function WorkLogLine({
+  icon,
+  label,
+  trailing,
+  wrapLabel,
+  interactive,
+}: RowContent & { interactive: boolean }) {
   return (
     <div
       className={cn(
@@ -77,6 +85,8 @@ function WorkLogLine({ icon, label, trailing, wrapLabel }: RowContent) {
         <div
           className={cn(
             "min-w-0 flex-1 text-secondary-label",
+            interactive &&
+              "transition-colors duration-100 ease-out motion-reduce:transition-none group-hover/timeline-row:text-foreground",
             !wrapLabel && "truncate [&_*]:whitespace-nowrap",
           )}
         >
@@ -89,12 +99,13 @@ function WorkLogLine({ icon, label, trailing, wrapLabel }: RowContent) {
 }
 
 const interactionClassName =
-  "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70";
+  "cursor-pointer hover:bg-accent/40 active:scale-[0.995] active:bg-accent/55 motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70";
 
 function useRowClassName(interactive: boolean) {
   const grouped = use(GroupedRows);
   return cn(
-    "group/timeline-row relative w-full min-w-0 rounded-md px-0.5 text-left transition-colors",
+    "group/timeline-row relative w-full min-w-0 rounded-lg px-1 text-left transition-[background-color,color,scale] duration-100 ease-out motion-reduce:transition-none",
+    // Grouped rows stay 24 px: the virtualized group list estimates rows at that height.
     grouped ? "py-0" : "py-0.5",
     interactive && interactionClassName,
   );
@@ -111,7 +122,13 @@ export function WorkLogButton({
   const className = useRowClassName(true);
   return (
     <button {...buttonProps} type="button" className={className}>
-      <WorkLogLine icon={icon} label={label} trailing={trailing} wrapLabel={wrapLabel} />
+      <WorkLogLine
+        icon={icon}
+        label={label}
+        trailing={trailing}
+        wrapLabel={wrapLabel}
+        interactive
+      />
     </button>
   );
 }
@@ -125,10 +142,17 @@ export function WorkLogRow({
   children,
   ...rowProps
 }: RowContent & Omit<ComponentProps<"div">, "className" | "style">) {
-  const className = useRowClassName(rowProps.onClick !== undefined);
+  const interactive = rowProps.onClick !== undefined;
+  const className = useRowClassName(interactive);
   return (
     <div {...rowProps} className={className}>
-      <WorkLogLine icon={icon} label={label} trailing={trailing} wrapLabel={wrapLabel} />
+      <WorkLogLine
+        icon={icon}
+        label={label}
+        trailing={trailing}
+        wrapLabel={wrapLabel}
+        interactive={interactive}
+      />
       {children}
     </div>
   );
@@ -165,7 +189,7 @@ export function WorkLogDetails({
         atLiveEdgeRef.current = scrollHeight - scrollTop - clientHeight <= LIVE_EDGE_PX;
       }}
       className={cn(
-        "cursor-auto",
+        "work-log-reveal cursor-auto",
         kind === "text"
           ? "ms-7 flex max-h-96 flex-col gap-3 overflow-auto px-0.5 py-1 select-text"
           : kind === "panel"

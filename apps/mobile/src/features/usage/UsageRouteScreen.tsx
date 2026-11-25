@@ -391,13 +391,15 @@ export function UsageRouteScreen() {
                 </Text>
               ) : null}
               {isPending ? (
-                <Text className="py-16 text-center text-base text-foreground-muted">
-                  {!waitingForConnection
-                    ? "Scanning provider transcripts…"
-                    : selectedEnvironments.length === 1
+                waitingForConnection ? (
+                  <Text className="py-16 text-center text-base text-foreground-muted">
+                    {selectedEnvironments.length === 1
                       ? `Waiting for ${selectedEnvironments[0]!.label} to connect…`
                       : "Waiting for your environments to connect…"}
-                </Text>
+                  </Text>
+                ) : (
+                  <UsageChartSkeleton />
+                )
               ) : selectedEnvironments.length === 0 ? (
                 <Text className="py-16 text-center text-base text-foreground-muted">
                   {environments.length === 0
@@ -605,6 +607,33 @@ function CursorEnableLimits({
             />
           ))}
         </View>
+      </View>
+    </View>
+  );
+}
+
+function UsageChartSkeleton() {
+  return (
+    <View
+      accessible
+      accessibilityLabel="Scanning provider transcripts"
+      accessibilityState={{ busy: true }}
+      className="gap-4 rounded-[24px] border-continuous bg-grouped-card p-4"
+    >
+      <View className="gap-2">
+        <Text className="text-sm text-foreground-muted">Scanning provider transcripts…</Text>
+        <View className="h-8 w-28 rounded-lg bg-foreground/10" />
+        <View className="h-3 w-24 rounded-full bg-foreground/5" />
+      </View>
+      <View style={{ height: CHART_HEIGHT }} className="justify-evenly">
+        <View className="h-px bg-border-subtle" />
+        <View className="h-px bg-border-subtle" />
+        <View className="h-px bg-border-subtle" />
+        <View className="h-px bg-border-subtle" />
+      </View>
+      <View className="flex-row justify-between">
+        <View className="h-2.5 w-8 rounded-full bg-foreground/5" />
+        <View className="h-2.5 w-8 rounded-full bg-foreground/5" />
       </View>
     </View>
   );

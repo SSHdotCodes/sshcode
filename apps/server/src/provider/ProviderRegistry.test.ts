@@ -649,6 +649,7 @@ it.layer(
 
         const status = yield* Fiber.join(statusFiber);
         assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.refreshing, true);
         assert.strictEqual(
           status.message,
           "Timed out while checking Codex app-server provider status.",
@@ -1080,8 +1081,9 @@ it.layer(
       );
     });
 
-    for (const driver of ["muse", "cursor", "grok"]) {
-      it(`drops ${driver} models a successful discovery no longer lists`, () => {
+    it.each(["muse", "cursor", "grok"])(
+      "drops %s models a successful discovery no longer lists",
+      (driver) => {
         const model = (slug: string) => ({ slug, name: slug, isCustom: false, capabilities: null });
         const previousProvider = {
           instanceId: ProviderInstanceId.make(driver),
@@ -1117,8 +1119,42 @@ it.layer(
           ProviderRegistry.mergeProviderSnapshot(previousProvider, failed).models,
           [...previousProvider.models],
         );
-      });
-    }
+      },
+    );
+
+    it("keeps Grok ready with its last options when ACP discovery is incomplete", () => {
+      const saved: ServerProvider = {
+        instanceId: ProviderInstanceId.make("grok"),
+        driver: ProviderDriverKind.make("grok"),
+        enabled: true,
+        installed: true,
+        status: "ready",
+        auth: { status: "authenticated" },
+        version: "1.4.20",
+        models: [
+          { slug: "grok", name: "Grok", isCustom: false, capabilities: codexModelCapabilities },
+        ],
+        checkedAt: "2026-11-15T00:00:00.000Z",
+        slashCommands: [],
+        skills: [],
+      };
+      const partial: ServerProvider = {
+        ...saved,
+        status: "warning",
+        refreshing: true,
+        models: [{ ...saved.models[0]!, capabilities: null }],
+      };
+      const retained = ProviderRegistry.mergeProviderSnapshot(saved, partial);
+      expect(retained).toMatchObject({ status: "ready", refreshing: true, models: saved.models });
+      expect(
+        ProviderRegistry.mergeProviderSnapshot(retained, {
+          ...saved,
+          status: "error",
+          auth: { status: "unauthenticated" },
+          models: [],
+        }),
+      ).toMatchObject({ status: "error", auth: { status: "unauthenticated" }, models: [] });
+    });
 
     it("drops Muse models when its sign-in lists none", () => {
       const previousProvider = {
@@ -4633,6 +4669,7 @@ it.layer(
           noClaudeCapabilities,
         );
         assert.strictEqual(status.status, "warning");
+        assert.strictEqual(status.refreshing, true);
         assert.strictEqual(status.installed, true);
         assert.strictEqual(status.auth.status, "unknown");
         assert.strictEqual(

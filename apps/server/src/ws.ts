@@ -172,7 +172,11 @@ import {
 } from "./orchestration-v2/ShellStream.ts";
 import { ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION } from "./orchestration-v2/ProjectionStore.ts";
 import { bufferLiveStream, resyncLiveTailOnOverflow } from "./orchestration-v2/LiveStreamBudget.ts";
-import { subscribeBoxNamed } from "./sessionBoxes/boxNamerCache.ts";
+import {
+  shellDecorationChangesAfter,
+  shellDecorationCursor,
+  subscribeBoxNamed,
+} from "./sessionBoxes/boxNamerCache.ts";
 import { appMonitorThreadIds } from "./monitors/appMonitorCounts.ts";
 import * as ChatTabs from "./sessionBoxes/chatTabs.ts";
 import * as ChatControls from "./sessionBoxes/chatControls.ts";
@@ -611,16 +615,12 @@ const ServerWsRpcGroup = ServerOperationsRpcGroup.merge(
   ServerWorkspaceRpcGroup,
   ServerSessionRpcGroup,
 );
-// When a resuming client's cursor is more than this many events behind the
-// current head, skip the per-event catch-up replay and send a fresh shell
-// snapshot instead. Replaying each intervening event costs a shell refetch;
-// past this gap a single O(active-threads) snapshot is cheaper and bounded.
-// Matches the event store's default page size (DEFAULT_READ_FROM_SEQUENCE_LIMIT).
-const SHELL_RESUME_MAX_GAP = 1_000;
-// Row count alone does not bound replay memory: a few events with large tool
-// payloads can decode to gigabytes. Before replaying, sum the serialized
-// payload bytes of the range in SQL and reset with a snapshot past this budget.
-const ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES = 8 * 1024 * 1024;
+// Catch-up reads event headers. Bound the range scanned, then bound the number
+// of shell rows fetched, so a burst in one chat still costs one shell read.
+const SHELL_RESUME_MAX_GAP = 5_000;
+const SHELL_RESUME_MAX_CHANGED_ROWS = 512;
+const LEGACY_SHELL_RESUME_MAX_GAP = 1_000;
+const LEGACY_SHELL_RESUME_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
 
 function toAuthAccessStreamEvent(
   change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
@@ -750,39 +750,6 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
     ...(isClientConnectionMethod(connectionMethod) ? { connectionMethod } : {}),
   };
 }
-
-const canReplayPersistedRange = Effect.fnUntraced(function* (
-  afterSequence: number,
-  headSequence: number,
-  maxGap: number,
-) {
-  const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
-
-  const replayGap = headSequence - afterSequence;
-  if (
-    replayGap < 0 ||
-    replayGap > maxGap ||
-    !(yield* EventLogCompaction.canReplayAfter(afterSequence))
-  ) {
-    return false;
-  }
-  const stats = yield* applicationEvents.getReplayStats({
-    afterSequence,
-    throughSequence: headSequence,
-  });
-  if (stats.rawPayloadBytes > ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES) {
-    yield* Effect.logDebug("orchestration replay replaced by snapshot", {
-      afterSequence,
-      headSequence,
-      replayGap,
-      eventCount: stats.eventCount,
-      payloadBytes: stats.rawPayloadBytes,
-      payloadBudgetBytes: ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES,
-    });
-    return false;
-  }
-  return true;
-});
 
 const enrichProjectShells = Effect.fn("ws.orchestrationV2.enrichProjectShells")(
   (projects: ReadonlyArray<OrchestrationProjectShell>) =>
@@ -1135,6 +1102,16 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
 
     const enrichmentChanges = yield* projectEnrichment.subscribeChanges;
+    // Non-event changes have no sequence in the live tail. Listen before any
+    // snapshot or replay read, including while the client acknowledges its prefix.
+    const decorationNotifications = yield* Queue.unbounded<string>();
+    yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        subscribeBoxNamed((threadId) => Queue.offerUnsafe(decorationNotifications, threadId)),
+      ),
+      (unsubscribe) =>
+        Effect.sync(unsubscribe).pipe(Effect.andThen(Queue.shutdown(decorationNotifications))),
+    );
     const loadProjectMetadataSnapshot = Effect.fn("ws.orchestrationV2.loadProjectMetadataSnapshot")(
       function* (snapshotSequence: number) {
         const enriched = yield* enrichProjectShells(yield* projects.listShells());
@@ -1151,6 +1128,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       },
     );
     const loadSnapshot = Effect.fn("ws.orchestrationV2.loadShellSnapshot")(function* () {
+      const decorationCursor = shellDecorationCursor();
       const base = buildActiveShellSnapshot(
         yield* loadShellSnapshotParts({
           sql,
@@ -1167,6 +1145,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
         snapshot: {
           ...base,
           ...idleSubagentOmissionMarkers(omitIdleSubagents),
+          decorationCursor,
           projects: enriched.projects,
         } as OrchestrationV2ShellSnapshot,
         resolvedRepositoryIdentityRoots: enriched.resolvedRepositoryIdentityRoots,
@@ -1205,7 +1184,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       events: ReadonlyArray<ShellApplicationEvent>,
     ) {
       return yield* Effect.forEach(
-        coalesceShellApplicationEvents(events),
+        events,
         (stored) =>
           Effect.gen(function* () {
             if ("aggregateKind" in stored) {
@@ -1225,7 +1204,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     const toShellStream = <E, R>(stream: Stream.Stream<ShellApplicationEvent, E, R>) =>
       stream.pipe(
         Stream.groupedWithin(512, Duration.millis(50)),
-        Stream.mapEffect((events) => projectShellItems(Array.from(events))),
+        Stream.mapEffect((events) => projectShellItems(coalesceShellApplicationEvents(events))),
         Stream.flatMap(Stream.fromIterable),
         skipUnchangedThreadShells,
       );
@@ -1289,20 +1268,17 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       ),
     );
 
-    // Box names from the local model arrive after the shell rows that asked for them.
-    // They ride the enrichment path as patch-only frames: the client copies just the box
-    // fields onto threads it already has, and clients that predate them ignore threads in
-    // enrichment frames, so no sequence moves and no domain event is written.
-    /** A patch-only frame with the current rows of these chats. */
-    const threadPatchFrame = (threadIds: Iterable<string>) =>
+    // Tab filing, schedules and other non-event fields ride the enrichment path.
+    // The client patches existing rows without advancing the application sequence.
+    const threadPatchFrame = (threadIds: Iterable<string>, requireAll = false) =>
       Effect.gen(function* () {
         const snapshotSequence = yield* applicationEvents.latestApplicationSequence;
         const shells = yield* Effect.forEach(
           new Set(threadIds),
-          (threadId) =>
-            threadManagement
-              .getThreadShell(ThreadId.make(threadId))
-              .pipe(Effect.orElseSucceed(() => null)),
+          (threadId) => {
+            const read = threadManagement.getThreadShell(ThreadId.make(threadId));
+            return requireAll ? read : read.pipe(Effect.orElseSucceed(() => null));
+          },
           { concurrency: 4 },
         );
         return {
@@ -1320,12 +1296,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
           resolvedRepositoryIdentityRoots: [],
         };
       });
-    const boxNamerRefreshes = Stream.callback<string>((queue) =>
-      Effect.acquireRelease(
-        Effect.sync(() => subscribeBoxNamed((threadId) => Queue.offerUnsafe(queue, threadId))),
-        (unsubscribe) => Effect.sync(unsubscribe),
-      ),
-    ).pipe(
+    const boxNamerRefreshes = Stream.fromQueue(decorationNotifications).pipe(
       Stream.groupedWithin(64, Duration.millis(250)),
       Stream.mapEffect((threadIds) => threadPatchFrame(threadIds)),
     );
@@ -1369,41 +1340,60 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     // Enrichment merges only with the post-prefix tail so a ready marked
     // refresh cannot interleave before the authoritative initial frame.
     const stream = yield* Effect.gen(function* () {
-      if (input.afterSequence === undefined) {
+      const snapshotAndFollow = Effect.gen(function* () {
         const loaded = yield* loadSnapshot();
         return composeShellStreamWithEnrichment({
           initial: initialSnapshotItems(loaded),
           tail: liveFrom(loaded.snapshot.snapshotSequence),
           enrichment: metadataRefreshes,
         });
-      }
+      });
+      if (input.afterSequence === undefined) return yield* snapshotAndFollow;
 
       const highWater = yield* applicationEvents.latestApplicationSequence;
-      if (!(yield* canReplayPersistedRange(input.afterSequence, highWater, SHELL_RESUME_MAX_GAP))) {
-        const loaded = yield* loadSnapshot();
-        return composeShellStreamWithEnrichment({
-          initial: initialSnapshotItems(loaded),
-          tail: liveFrom(loaded.snapshot.snapshotSequence),
-          enrichment: metadataRefreshes,
-        });
+      const gap = highWater - input.afterSequence;
+      const decorationChanges = shellDecorationChangesAfter(input.decorationCursor);
+      if (
+        gap < 0 ||
+        gap > SHELL_RESUME_MAX_GAP ||
+        decorationChanges === null ||
+        !(yield* EventLogCompaction.canReplayAfter(input.afterSequence))
+      ) {
+        return yield* snapshotAndFollow;
       }
-
-      const loaded = yield* loadProjectMetadataSnapshot(highWater);
-      // Bounded by SHELL_RESUME_MAX_GAP, so it is read whole and joins the prefix.
-      const replay = yield* toShellStream(
-        applicationEvents.readApplicationEvents({
+      // A legacy cursor cannot identify the last decoration the client saw,
+      // especially across a server restart. Keep its original replay bounds.
+      if (input.decorationCursor === undefined && gap > 0) {
+        if (gap > LEGACY_SHELL_RESUME_MAX_GAP) return yield* snapshotAndFollow;
+        const stats = yield* applicationEvents.getReplayStats({
           afterSequence: input.afterSequence,
           throughSequence: highWater,
-          // A row a newer build wrote (e.g. after a downgrade) must not fail
-          // every shell resubscribe. The live tail below resumes from
-          // highWater, so a dropped row never hides later events.
-          skipUnknownEventTypes: true,
-        }),
-      ).pipe(Stream.runCollect);
-      // App monitors start and end outside the event log. Refresh both currently
-      // monitored chats and chats the client may still show as waiting.
-      const monitored = [...appMonitorThreadIds(), ...(input.refreshMonitorThreadIds ?? [])];
-      const monitoredPatch = monitored.length === 0 ? [] : [yield* threadPatchFrame(monitored)];
+        });
+        if (stats.rawPayloadBytes > LEGACY_SHELL_RESUME_MAX_PAYLOAD_BYTES) {
+          return yield* snapshotAndFollow;
+        }
+      }
+
+      const changes =
+        gap === 0
+          ? []
+          : coalesceShellApplicationEvents(
+              yield* applicationEvents.readShellChanges({
+                afterSequence: input.afterSequence,
+                throughSequence: highWater,
+              }),
+            );
+      const patchIds = new Set([
+        ...decorationChanges.threadIds,
+        ...appMonitorThreadIds(),
+        ...(input.refreshMonitorThreadIds ?? []),
+      ]);
+      if (changes.length + patchIds.size > SHELL_RESUME_MAX_CHANGED_ROWS) {
+        return yield* snapshotAndFollow;
+      }
+      const loaded = yield* loadProjectMetadataSnapshot(highWater);
+      const replay = yield* projectShellItems(changes);
+      const patches = patchIds.size === 0 ? [] : [yield* threadPatchFrame(patchIds, true)];
       return composeShellStreamWithEnrichment({
         initial: rpcInitialItems([
           ...shellStreamItemsFromResumeSnapshot({
@@ -1411,8 +1401,11 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
             resolvedRepositoryIdentityRoots: loaded.resolvedRepositoryIdentityRoots,
           }),
           ...replay,
-          ...monitoredPatch,
-          ...completionItems,
+          ...patches,
+          ...completionItems.map((item) => ({
+            ...item,
+            decorationCursor: decorationChanges.cursor,
+          })),
         ]),
         tail: liveFrom(highWater),
         enrichment: metadataRefreshes,
@@ -2791,7 +2784,8 @@ export const layerWsRpc = (
           processResourceMonitor.readHistory(input),
         [WS_METHODS.serverGetResourceTelemetryHistory]: (input) =>
           resourceTelemetry.readHistory(input),
-        [WS_METHODS.serverGetUsageSummary]: (input) => usage.readSummary(input),
+        [WS_METHODS.serverGetUsageSummary]: (input) =>
+          usage.readSummary(input, { preferCached: true }),
         [WS_METHODS.serverGetThreadUsage]: (input) => threadUsage.read(input),
         [WS_METHODS.serverRefreshUsageRates]: (_input) => usage.refreshRates,
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) => resourceTelemetry.retry,

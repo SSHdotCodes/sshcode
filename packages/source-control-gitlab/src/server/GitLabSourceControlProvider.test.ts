@@ -302,6 +302,38 @@ it.effect.each(["merge_requests", "issues"])(
     }),
 );
 
+it.effect("resolves incident links as their underlying issue", () =>
+  Effect.gen(function* () {
+    const provider = yield* makeProvider({
+      execute: (input) => {
+        assert.deepStrictEqual(input.args, [
+          "api",
+          "--hostname",
+          "gitlab.com",
+          "projects/group%2Fproject/issues/12",
+        ]);
+        return Effect.succeed({
+          exitCode: ChildProcessSpawner.ExitCode(0),
+          stdout: JSON.stringify({ title: "Database incident", description: "Failover notes" }),
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        });
+      },
+    });
+    const lookup = provider.resolveLink?.({
+      cwd: "/unrelated",
+      url: new URL("https://gitlab.com/group/project/-/issues/incident/12"),
+    });
+
+    assert.ok(lookup);
+    assert.deepStrictEqual(yield* lookup, {
+      title: "Database incident",
+      body: "Failover notes",
+    });
+  }),
+);
+
 it.effect.each(["read", "decode"] as const)(
   "retains the %s failure without exposing its raw contents",
   (stage) =>

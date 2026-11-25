@@ -14,6 +14,7 @@ import {
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
+import { ListState } from "../ui/list-state";
 import { SecretInput } from "./SecretInput";
 import { searchableSetting } from "./settingsSearch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -91,7 +92,8 @@ export function SharedKeysSettings({
       }
     >
       {entries.length === 0 && !adding ? (
-        <SettingsRow
+        <ListState
+          size="compact"
           title="No shared keys"
           description="Add an API key once, then pick it in any provider's variables instead of pasting it again."
         />

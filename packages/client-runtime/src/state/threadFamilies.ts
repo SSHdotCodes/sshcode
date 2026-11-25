@@ -11,7 +11,7 @@ import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type * as EnvironmentRegistry from "../connection/registry.ts";
@@ -26,6 +26,7 @@ const encodeFamilyKey = Schema.encodeSync(FamilyKeyJson);
 
 const EMPTY_FAMILY: OrchestrationV2ThreadFamily = { snapshotSequence: 0, threads: [] };
 const EMPTY_MOUNTS: ReadonlyMap<ThreadId, number> = new Map();
+const AUTOMATIC_RETRY_DELAYS = ["1 second", "3 seconds", "10 seconds"] as const;
 // Generation 0 is the cached shell from before this session's first authoritative snapshot. A read
 // for it would be thrown away once that snapshot lands, so it waits instead.
 const AWAITING_AUTHORITATIVE_SHELL = AsyncResult.initial<never, never>(true);
@@ -69,9 +70,9 @@ export function threadFamilyRowsMissingFromShell(input: {
 /**
  * Shells that omit idle subagent children (`omitIdleSubagents`) leave those rows to thread
  * families: the active subagent tree that shares a thread's `lineage.rootThreadId`. A view, or a
- * queued message, mounts the family it needs; it is read once per shell generation. Family rows
- * merge behind shell rows and are never persisted. Shell deltas still carry every change, so a
- * changed child always arrives as a shell row, which wins.
+ * queued message, mounts the family it needs. Reads are shared for a shell generation. Family
+ * rows merge behind shell rows and are never persisted. Shell deltas still carry every change,
+ * so a changed child always arrives as a shell row, which wins.
  */
 export function createThreadFamilyAtoms<R, ER, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>,
@@ -92,6 +93,8 @@ export function createThreadFamilyAtoms<R, ER, E>(
   const familyQueryAtom = createEnvironmentQueryAtomFamily(runtime, {
     label: "environment-data:orchestration:thread-family",
     staleTimeMs: Number.POSITIVE_INFINITY,
+    // Family mounts and missing-ancestor recovery own their failure retries.
+    revalidateOnMount: false,
     idleTtlMs: 60_000,
     execute: Effect.fn("ThreadFamilies.read")(function* (input: {
       readonly threadId: ThreadId | null;
@@ -183,15 +186,17 @@ export function createThreadFamilyAtoms<R, ER, E>(
     Atom.make((get) => {
       const state = shellStateValue(get(shellStateAtom(environmentId)));
       const snapshot = state && Option.getOrNull(state.snapshot);
-      return snapshot?.idleAppOwnedSubagentsOmitted ? snapshot.threads : null;
+      return snapshot?.idleAppOwnedSubagentsOmitted || snapshot?.idleSubagentsOmitted
+        ? snapshot.threads
+        : null;
     }),
   );
   const removedAtAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => shellStateValue(get(shellStateAtom(environmentId)))?.removedAt),
   );
-  const missingRootsAtom = Atom.family((environmentId: EnvironmentId) =>
+  const missingParentsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
-      const roots = new Set<ThreadId>();
+      const roots = new Map<ThreadId, Set<ThreadId>>();
       const threads = get(omittedThreadsAtom(environmentId));
       if (threads === null) return roots;
       const removedAt = get(removedAtAtom(environmentId));
@@ -209,13 +214,55 @@ export function createThreadFamilyAtoms<R, ER, E>(
           byId ??= new Map(threads.map((row) => [row.id, row]));
           const parent = byId.get(parentThreadId);
           if (parent === undefined) {
-            if (!removedAt?.has(parentThreadId)) roots.add(current.lineage.rootThreadId);
+            if (!removedAt?.has(parentThreadId)) {
+              const rootId = current.lineage.rootThreadId;
+              const missing = roots.get(rootId) ?? new Set<ThreadId>();
+              missing.add(parentThreadId);
+              roots.set(rootId, missing);
+            }
             break;
           }
           current = parent;
         }
       }
       return roots;
+    }),
+  );
+
+  const automaticRetryAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.family((threadId: ThreadId) => {
+      const gapAtom = Atom.make((get): ReadonlySet<ThreadId> | undefined => {
+        const next = get(missingParentsAtom(environmentId)).get(threadId);
+        const previous = Option.getOrUndefined(get.self<ReadonlySet<ThreadId>>());
+        return next &&
+          previous &&
+          next.size === previous.size &&
+          Array.from(next).every((id) => previous.has(id))
+          ? previous
+          : next;
+      });
+      // The retry budget belongs to one gap in one generation. An unrelated shell update
+      // leaves it alone, and a changed gap or generation interrupts the old backoff.
+      return runtime
+        .atom((get) => {
+          const generation = get(generationAtom(environmentId));
+          if (generation === 0 || get(gapAtom) === undefined) return Effect.void;
+          const registry = get.registry;
+          const query = queryFor(environmentId, threadId, generation);
+          const settled = AtomRegistry.getResult(registry, query, { suspendOnWaiting: true });
+          return Effect.gen(function* () {
+            for (const delay of AUTOMATIC_RETRY_DELAYS) {
+              if (yield* Effect.isSuccess(settled)) return;
+              const failed = registry.get(query);
+              yield* Effect.sleep(delay);
+              // A view may have refreshed the same query while we waited.
+              if (registry.get(query) === failed && threadFamilyRead(failed) === "failed") {
+                registry.refresh(query);
+              }
+            }
+          });
+        })
+        .pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-family-retry:${threadId}`));
     }),
   );
 
@@ -231,15 +278,18 @@ export function createThreadFamilyAtoms<R, ER, E>(
       const snapshot = state === null ? null : Option.getOrNull(state.snapshot);
       const mounts = get(mountsAtom(environmentId));
       if (snapshot === null || state === null) return snapshot;
-      const missing = get(missingRootsAtom(environmentId));
-      const roots = mounts.size === 0 ? missing : new Set([...missing, ...mounts.keys()]);
-      if (roots.size === 0) return snapshot;
-      const families = Array.from(roots).flatMap((threadId) => {
+      const missing = get(missingParentsAtom(environmentId));
+      if (missing.size === 0 && mounts.size === 0) return snapshot;
+      const roots =
+        mounts.size === 0 ? missing.keys() : new Set([...missing.keys(), ...mounts.keys()]);
+      const families: OrchestrationV2ThreadFamily[] = [];
+      for (const threadId of roots) {
         const family = Option.getOrNull(
           AsyncResult.value(get(familyAtom(familyKey(environmentId, threadId)))),
         );
-        return family === null ? [] : [family];
-      });
+        if (family !== null) families.push(family);
+        if (missing.has(threadId)) get(automaticRetryAtom(environmentId)(threadId));
+      }
       // Most shell updates move only the cursor. With the same rows, removals and families, keep
       // the merged rows so thread lists skip their rebuild.
       const unchanged =

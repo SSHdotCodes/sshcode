@@ -26,8 +26,9 @@ import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { ListState } from "../ui/list-state";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
-import { Spinner } from "../ui/spinner";
+import { Skeleton } from "../ui/skeleton";
 import { toastManager } from "../ui/toast";
 import { ModelChip, RunStatusBadge, STATUS_DOT, WorkflowMiniPreview } from "./WorkflowStatus";
 import { useNow } from "./useNow";
@@ -82,9 +83,13 @@ export function WorkflowsPage() {
           environmentId={environment.environmentId}
         />
       ) : (
-        <p className="p-6 text-sm text-muted-foreground">
-          Connect to an environment to draw workflows.
-        </p>
+        <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+          <ListState
+            align="center"
+            title="No connected environment"
+            description="Connect to an environment with Workflows enabled to draw and run multi-agent teams."
+          />
+        </div>
       )}
     </>
   );
@@ -150,8 +155,41 @@ function EnvironmentWorkflows({ environmentId }: { readonly environmentId: Envir
 
   if (view.loading) {
     return (
-      <div className="flex flex-1 items-center justify-center">
-        <Spinner />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <WorkspacePageContainer>
+          <div role="status" aria-busy="true" aria-label="Loading workflows…">
+            <span className="sr-only">Loading workflows…</span>
+            <div aria-hidden="true" className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <Skeleton shape="pill" className="h-4 w-24" />
+                <Skeleton className="h-7 w-28" />
+              </div>
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-3">
+                {["wf-skel-1", "wf-skel-2", "wf-skel-3"].map((id) => (
+                  <div
+                    key={id}
+                    className="flex flex-col overflow-hidden rounded-xl border border-border/60 bg-card dark:inset-shadow-card-highlight"
+                  >
+                    <div className="h-32 border-b border-border/50 bg-muted/25 p-4">
+                      <div className="flex h-full flex-col items-center justify-center gap-3">
+                        <Skeleton className="h-7 w-20" />
+                        <div className="flex gap-4">
+                          <Skeleton className="h-7 w-16" />
+                          <Skeleton className="h-7 w-16" />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-2.5 p-3">
+                      <Skeleton shape="pill" className="h-3.5 w-32" />
+                      <Skeleton shape="pill" className="h-3 w-24" />
+                      <Skeleton shape="pill" className="h-3 w-16" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </WorkspacePageContainer>
       </div>
     );
   }
@@ -319,7 +357,7 @@ function WorkflowCard({
     return statuses;
   }, [lastRun]);
   return (
-    <li className="group relative flex flex-col overflow-hidden rounded-xl border border-border/60 bg-card transition-[border-color,box-shadow] duration-200 hover:border-border hover:shadow-md">
+    <li className="group relative flex flex-col overflow-hidden rounded-xl border border-border/60 bg-card transition-[border-color,box-shadow] duration-150 hover:border-border/90 hover:shadow-sm dark:inset-shadow-card-highlight">
       <button
         type="button"
         className="flex flex-col text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
@@ -461,7 +499,7 @@ function RunRow({
     return out;
   }, [run.agents, run.snapshot.nodes]);
   return (
-    <li className="group flex items-center gap-3 bg-card px-3 py-2.5 hover:bg-accent/40">
+    <li className="group flex items-center gap-3 bg-card px-3 py-2.5 transition-colors duration-120 hover:bg-accent/40">
       <button
         type="button"
         className="flex min-w-0 flex-1 items-center gap-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"

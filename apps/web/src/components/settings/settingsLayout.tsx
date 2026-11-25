@@ -252,7 +252,7 @@ export function SettingsSection({
       {...sectionProps}
       ref={targetRef}
       tabIndex={sectionProps.id ? -1 : sectionProps.tabIndex}
-      className={cn(!hideTitle && "space-y-2.5", className)}
+      className={cn(!hideTitle && "space-y-2", className)}
     >
       {hideTitle ? (
         <h2 className="sr-only">{title}</h2>
@@ -262,7 +262,7 @@ export function SettingsSection({
           className="flex min-h-7 items-start justify-between gap-4 px-3 sm:px-4"
         >
           <div className="flex min-w-0 items-center gap-1">
-            <h2 className="flex min-h-7 items-center gap-2 text-sm font-normal text-foreground/70">
+            <h2 className="flex min-h-7 items-center gap-2 text-xs font-medium text-muted-foreground">
               {icon}
               {title}
             </h2>
@@ -538,9 +538,11 @@ export function SettingsRow({
                 {renderedInheritance}
               </span>
             ) : null}
-            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
-              {renderedReset}
-            </span>
+            {renderedReset ? (
+              <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
+                {renderedReset}
+              </span>
+            ) : null}
           </div>
           {description ? (
             <p className="max-w-xl text-xs leading-normal text-muted-foreground">{description}</p>

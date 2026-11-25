@@ -44,6 +44,10 @@ type SubagentRowSubagent = Pick<
   | "seen"
 >;
 
+/** Same frame for live, completed, and created-chat rows in the transcript. */
+export const SUBAGENT_TRANSCRIPT_CARD_CLASS_NAME =
+  "min-h-[44px] rounded-xl border-continuous border border-border-subtle bg-card px-2.5 py-1.5 active:bg-subtle";
+
 /** Callers own the press target and elapsed timer so ticking stays isolated. */
 export function SubagentRow(props: {
   readonly environmentId: EnvironmentId;
@@ -93,9 +97,14 @@ export function SubagentCardRow(props: {
   const preview = subagentCardDetail(props.preview ?? null);
   return (
     <View className="min-h-[44px] flex-row items-center gap-[10px]">
-      <View className="relative h-[28px] w-[28px] shrink-0 items-center justify-center rounded-full bg-subtle">
+      <View
+        className={cn(
+          "relative size-[28px] shrink-0 items-center justify-center rounded-full bg-subtle",
+          (detail || preview) && "mt-0.5 self-start",
+        )}
+      >
         <ProviderIcon provider={props.driver} iconUrl={props.iconUrl} size={15} />
-        <View className="absolute -right-px -bottom-px rounded-full border-2 border-screen">
+        <View className="absolute -right-px -bottom-px rounded-full border-2 border-subtle">
           <SubagentStatusDot tone={presentation.tone} placement="sheet" />
         </View>
         {props.speed ? <SubagentSpeedBadge speed={props.speed} /> : null}
@@ -113,13 +122,14 @@ export function SubagentCardRow(props: {
           <Text
             numberOfLines={1}
             className={cn(
-              "shrink-0 text-2xs text-foreground-muted",
+              "max-w-[55%] shrink text-xs text-foreground-muted",
+              presentation.tone === "working" && SUBAGENT_TONE_TEXT_CLASS.working,
               presentation.tone === "failed" && SUBAGENT_TONE_TEXT_CLASS.failed,
             )}
           >
             {presentation.statusLabel}
           </Text>
-          <Text className="shrink-0 text-2xs text-foreground-muted">·</Text>
+          <Text className="shrink-0 text-xs text-foreground-tertiary">·</Text>
           <View className="min-w-0 flex-1">{props.metadata}</View>
           {props.grade}
         </View>
@@ -127,7 +137,7 @@ export function SubagentCardRow(props: {
           <Text
             numberOfLines={2}
             className={cn(
-              "text-xs text-foreground-muted",
+              "text-xs leading-4 text-foreground-muted",
               presentation.tone === "failed" && SUBAGENT_TONE_TEXT_CLASS.failed,
             )}
           >
@@ -169,7 +179,7 @@ export function SubagentMetadata(props: {
   });
   const speed = subagentSpeed(subagent.modelSelection);
   return (
-    <Text className="text-2xs text-foreground-muted" numberOfLines={1}>
+    <Text className="text-xs text-foreground-muted" numberOfLines={1}>
       {props.createdChat ? "Chat · " : ""}
       {[
         modelLabel,

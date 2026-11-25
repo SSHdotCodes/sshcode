@@ -33,7 +33,11 @@ import { useWorkspaceEnvironments } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
-import { ThreadSearchMatchExcerpt } from "../threads/thread-search-match";
+import {
+  ThreadSearchMatchExcerpt,
+  ThreadSearchMoreButton,
+  ThreadSearchTitleText,
+} from "../threads/thread-search-match";
 import {
   filterCommandPaletteItems,
   nextPaletteIndex,
@@ -110,13 +114,21 @@ function PaletteRow(props: {
       </View>
       <View className="flex-1">
         <Text numberOfLines={1} className={cn("text-base", foregroundClassName)}>
-          {props.item.kind === "thread" || props.item.kind === "project"
-            ? privateLabel(
-                props.item.kind === "thread" ? "Chat" : "Project",
-                props.item.key,
-                props.item.title,
-              )
-            : props.item.title}
+          {props.item.kind === "thread" && !privacy ? (
+            <ThreadSearchTitleText
+              title={props.item.title}
+              query={props.searchQuery}
+              correction={props.searchMatch?.titleCorrection}
+            />
+          ) : props.item.kind === "thread" || props.item.kind === "project" ? (
+            privateLabel(
+              props.item.kind === "thread" ? "Chat" : "Project",
+              props.item.key,
+              props.item.title,
+            )
+          ) : (
+            props.item.title
+          )}
         </Text>
         {props.searchMatch && !privacy ? (
           <ThreadSearchMatchExcerpt
@@ -509,6 +521,7 @@ export function CommandPalette(props: {
               <FlatList
                 ref={listRef}
                 data={results}
+                ListFooterComponent={<ThreadSearchMoreButton pagination={search.pagination} />}
                 extraData={selectedKey}
                 keyboardShouldPersistTaps="handled"
                 keyExtractor={(item) => item.key}

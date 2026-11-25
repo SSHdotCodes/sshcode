@@ -96,27 +96,43 @@ export function fuseSearchResults(
 ) {
   const merged = new Map<
     string,
-    { match: OrchestrationThreadSearchMatch; score: number; exact: boolean; bestScore: number }
+    {
+      match: OrchestrationThreadSearchMatch;
+      score: number;
+      exact: boolean;
+      bestScore: number;
+      nameRank: number;
+    }
   >();
   for (const [kind, matches] of [keyword, semantic].entries()) {
     matches.forEach((match, rank) => {
       const score = 1 / (60 + rank + 1);
+      const nameRank =
+        kind === 0 && match.messageId === null && !match.titleCorrection ? rank : Infinity;
       const exact =
         kind === 0 &&
         (match.snippet.toLowerCase().includes(query.toLowerCase()) ||
           match.title?.toLowerCase().includes(query.toLowerCase()) === true);
       const old = merged.get(match.threadId);
-      const keepOld = old && (old.exact || (!exact && old.bestScore >= score));
+      const keepOld =
+        old && (old.nameRank !== Infinity || old.exact || (!exact && old.bestScore >= score));
       merged.set(match.threadId, {
         match: keepOld ? old.match : match,
         bestScore: keepOld ? old.bestScore : score,
         score: (old?.score ?? 0) + score,
         exact: old?.exact === true || exact,
+        nameRank: old?.nameRank ?? nameRank,
       });
     });
   }
   return [...merged.values()]
-    .sort((a, b) => Number(b.exact) - Number(a.exact) || b.score - a.score)
+    .sort(
+      (a, b) =>
+        a.nameRank - b.nameRank ||
+        Number(b.exact) - Number(a.exact) ||
+        Number(!!a.match.titleCorrection) - Number(!!b.match.titleCorrection) ||
+        b.score - a.score,
+    )
     .slice(0, limit)
     .map((r) => r.match);
 }

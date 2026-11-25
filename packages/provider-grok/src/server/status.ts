@@ -42,6 +42,8 @@ import {
 import {
   GROK_DEFAULT_MODEL_SLUG,
   GROK_SUPPORTED_RUNTIME_MODES,
+  grokFastVariantBase,
+  grokFastVariants,
   isValidGrokReasoningEffortToken,
   makeGrokAcpRuntime,
   resolveGrokAcpBaseModelId,
@@ -63,7 +65,10 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
 // Grok answers initialize after loading settings, discovering skills, and starting
 // file watchers. CLI 1.0.52 measured 9-14s from a home directory.
-const GROK_ACP_INITIALIZE_TIMEOUT_MS = 20_000;
+// Measured 11-25: the ACP initialize probe takes 8-17 s on a busy Mac and timed out at 20 s,
+// which drops the reasoning and Fast mode options until the next probe. It runs in the
+// background with the plain model list as a fallback, so a longer wait costs nothing visible.
+const GROK_ACP_INITIALIZE_TIMEOUT_MS = 45_000;
 const GROK_API_KEY_ENV = "XAI_API_KEY";
 
 const GROK_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
@@ -204,23 +209,46 @@ export function grokReasoningOptionsFromModel(model: EffectAcpSchema.ModelInfo):
   };
 }
 
-export function buildGrokModelCapabilities(model: EffectAcpSchema.ModelInfo): ModelCapabilities {
+/** Grok's Fast mode: the model's fast variant, the same model served faster at a higher price. */
+function grokFastModeDescriptor(on: boolean) {
+  return {
+    id: "fastMode",
+    label: "Fast mode",
+    description: "Runs the fast variant: quicker replies at twice the price.",
+    type: "boolean" as const,
+    currentValue: on,
+  };
+}
+
+/**
+ * `fastMode` is set when the model has a fast variant: true when the session runs that variant.
+ */
+export function buildGrokModelCapabilities(
+  model: EffectAcpSchema.ModelInfo,
+  fastMode?: boolean,
+): ModelCapabilities {
   const reasoning = grokReasoningOptionsFromModel(model);
-  return reasoning.options.length > 0
+  const fast = fastMode === undefined ? [] : [grokFastModeDescriptor(fastMode)];
+  return reasoning.options.length > 0 || fast.length > 0
     ? createModelCapabilities({
         optionDescriptors: [
-          {
-            id: "reasoningEffort",
-            label: "Reasoning",
-            type: "select",
-            options: reasoning.options.map((option) => ({
-              id: option.value,
-              label: option.label,
-              ...(option.description ? { description: option.description } : {}),
-              ...(option.isDefault ? { isDefault: true } : {}),
-            })),
-            ...(reasoning.currentValue ? { currentValue: reasoning.currentValue } : {}),
-          },
+          ...(reasoning.options.length > 0
+            ? [
+                {
+                  id: "reasoningEffort",
+                  label: "Reasoning",
+                  type: "select" as const,
+                  options: reasoning.options.map((option) => ({
+                    id: option.value,
+                    label: option.label,
+                    ...(option.description ? { description: option.description } : {}),
+                    ...(option.isDefault ? { isDefault: true } : {}),
+                  })),
+                  ...(reasoning.currentValue ? { currentValue: reasoning.currentValue } : {}),
+                },
+              ]
+            : []),
+          ...fast,
         ],
       })
     : EMPTY_CAPABILITIES;
@@ -234,20 +262,31 @@ export function buildGrokModelsFromSessionModelState(
     return [];
   }
   const currentModelId = modelState.currentModelId.trim();
+  const offered = new Set(modelState.availableModels.map((model) => model.modelId.trim()));
+  // A fast variant is a Fast mode switch on its model, not a model of its own.
+  const fastVariants = grokFastVariants(offered);
   const seen = new Set<string>();
   return modelState.availableModels.flatMap((model): ServerProviderModel[] => {
+    const modelId = model.modelId.trim();
     const slug = resolveGrokAcpBaseModelId(model.modelId);
-    if (!slug || seen.has(slug)) {
+    if (!slug || seen.has(slug) || grokFastVariantBase(modelId, offered) !== undefined) {
       return [];
     }
     seen.add(slug);
+    const fastVariant = fastVariants.get(modelId);
     return [
       {
         slug,
         name: model.name.trim() || slug,
         isCustom: false,
-        ...(model.modelId.trim() === currentModelId ? { isDefault: true } : {}),
-        capabilities: buildGrokModelCapabilities(model),
+        ...(modelId === currentModelId ||
+        (fastVariant !== undefined && fastVariant === currentModelId)
+          ? { isDefault: true }
+          : {}),
+        capabilities: buildGrokModelCapabilities(
+          model,
+          fastVariant === undefined ? undefined : currentModelId === fastVariant,
+        ),
       },
     ];
   });
@@ -276,23 +315,36 @@ export function parseGrokModelsCliOutput(output: string): GrokModelsCliOutput {
       ? false
       : null;
 
+  const bullets = output.split(/\r?\n/).flatMap((line) => {
+    const bullet = line.match(/^\s*[*-]\s+(\S+)(.*)$/);
+    return bullet?.[1]
+      ? [
+          {
+            slug: resolveGrokAcpBaseModelId(bullet[1]),
+            isDefault: /\(default\)/i.test(bullet[2] ?? ""),
+          },
+        ]
+      : [];
+  });
+  const offered = new Set(bullets.map((bullet) => bullet.slug));
+  // A fast variant is a Fast mode switch on its model, not a model of its own.
+  // These rows carry no options: the registry then keeps the options (reasoning, Fast mode)
+  // the last ACP probe read, which this list knows nothing about.
+  const fastVariants = grokFastVariants(offered);
   const seen = new Set<string>();
   const models: ServerProviderModel[] = [];
-  for (const line of output.split(/\r?\n/)) {
-    const bullet = line.match(/^\s*[*-]\s+(\S+)(.*)$/);
-    if (!bullet?.[1]) {
-      continue;
-    }
-    const slug = resolveGrokAcpBaseModelId(bullet[1]);
-    if (seen.has(slug)) {
+  for (const { slug, isDefault } of bullets) {
+    if (seen.has(slug) || grokFastVariantBase(slug, offered) !== undefined) {
       continue;
     }
     seen.add(slug);
+    const fastVariant = fastVariants.get(slug);
+    const runsFast = bullets.some((bullet) => bullet.isDefault && bullet.slug === fastVariant);
     models.push({
       slug,
       name: displayNameFromGrokModelSlug(slug),
       isCustom: false,
-      ...(/\(default\)/i.test(bullet[2] ?? "") ? { isDefault: true } : {}),
+      ...(isDefault || runsFast ? { isDefault: true } : {}),
       capabilities: EMPTY_CAPABILITIES,
     });
   }
@@ -459,6 +511,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
         version: null,
         status: "error",
         auth: { status: "unknown" },
+        refreshing: true,
         message: "Grok CLI is installed but timed out while running `grok --version`.",
       },
     });
@@ -487,10 +540,24 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
     });
   }
 
-  // `grok models` reports login state and model slugs without starting the agent.
-  const modelsResult = yield* runGrokCliCommand(grokSettings, ["models"], probeEnvironment).pipe(
-    Effect.timeoutOption(AUTH_PROBE_TIMEOUT_MS),
-    Effect.result,
+  // The CLI's login and model list, file-backed skills, and ACP metadata have independent
+  // deadlines. A slow initialize should not start after both other reads have finished.
+  const { modelsResult, skills, acpExit } = yield* Effect.all(
+    {
+      modelsResult: runGrokCliCommand(grokSettings, ["models"], probeEnvironment).pipe(
+        Effect.timeoutOption(AUTH_PROBE_TIMEOUT_MS),
+        Effect.result,
+      ),
+      skills: discoverGrokSkills(grokSettings, environment, cwd).pipe(
+        Effect.tapError((cause) => Effect.logDebug("Grok skill discovery failed.", { cause })),
+        Effect.orElseSucceed(() => []),
+      ),
+      acpExit: discoverGrokMetadataViaAcpInitialize(grokSettings, probeEnvironment).pipe(
+        Effect.timeoutOption(GROK_ACP_INITIALIZE_TIMEOUT_MS),
+        Effect.exit,
+      ),
+    },
+    { concurrency: "unbounded" },
   );
   // Only a clean exit is parsed. Failed invocations print help or error text that
   // must not be read as model slugs or as a login verdict.
@@ -521,16 +588,6 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
         ? { status: "unauthenticated" }
         : { status: "unknown" };
 
-  // Skill discovery applies the probe environment itself.
-  const skills = yield* discoverGrokSkills(grokSettings, environment, cwd).pipe(
-    Effect.tapError((cause) => Effect.logDebug("Grok skill discovery failed.", { cause })),
-    Effect.orElseSucceed(() => []),
-  );
-
-  const acpExit = yield* discoverGrokMetadataViaAcpInitialize(grokSettings, probeEnvironment).pipe(
-    Effect.timeoutOption(GROK_ACP_INITIALIZE_TIMEOUT_MS),
-    Effect.exit,
-  );
   const acpMetadata = Exit.isSuccess(acpExit) ? Option.getOrUndefined(acpExit.value) : undefined;
   const acpModels = acpMetadata?.models ?? [];
   const acpFailed = Exit.isFailure(acpExit) || Option.isNone(acpExit.value);
@@ -578,6 +635,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
       auth,
       ...(acpFailed
         ? {
+            refreshing: true,
             message:
               "Grok CLI is installed but ACP initialize failed. Model options may be incomplete.",
           }

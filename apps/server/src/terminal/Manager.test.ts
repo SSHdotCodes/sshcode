@@ -3008,6 +3008,17 @@ it.layer(
     }),
   );
 
+  it.effect("does not read a backslash in a POSIX shell name as a path separator", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        shellResolver: () => "/opt/team\\zsh",
+      }).pipe(Effect.provide(layerWithHostPlatform("linux")));
+      yield* manager.open(openInput());
+
+      expect(ptyAdapter.spawnInputs[0]?.args).toBeUndefined();
+    }),
+  );
+
   it.effect("bridges PTY callbacks back into Effect-managed event streaming", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter, getEvents } = yield* createManager(5, {

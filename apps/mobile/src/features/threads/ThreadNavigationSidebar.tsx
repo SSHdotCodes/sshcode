@@ -338,7 +338,7 @@ function ThreadNavigationSidebarPane(
       const match = threadSearchMatchByKey.get(
         threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
       );
-      if (match?.messageId) appAtomRegistry.set(pendingThreadSearchJumpAtom, match);
+      appAtomRegistry.set(pendingThreadSearchJumpAtom, match?.messageId ? match : null);
       props.onSelectThread(thread);
       openSwipeableRef.current?.close();
     },
@@ -614,10 +614,13 @@ function ThreadNavigationSidebarPane(
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
-                ListEmptyComponent={extraSearchMatches.length ? null : listEmpty}
+                ListEmptyComponent={
+                  extraSearchMatches.length || threadSearch.pagination ? null : listEmpty
+                }
                 ListFooterComponent={
                   <ThreadSearchExtraMatches
                     matches={extraSearchMatches}
+                    pagination={threadSearch.pagination}
                     query={props.searchQuery}
                     onSelectThread={props.onSelectThread}
                   />
@@ -654,7 +657,10 @@ function ThreadNavigationSidebarPane(
             : { paddingBottom: insets.bottom }
         }
       >
-        {Platform.OS === "android" && listItems.length === 0 && extraSearchMatches.length === 0 ? (
+        {Platform.OS === "android" &&
+        listItems.length === 0 &&
+        extraSearchMatches.length === 0 &&
+        !threadSearch.pagination ? (
           <View className="flex-1 items-center justify-center">{listEmpty}</View>
         ) : (
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
@@ -686,10 +692,13 @@ function ThreadNavigationSidebarPane(
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
-                ListEmptyComponent={extraSearchMatches.length ? null : listEmpty}
+                ListEmptyComponent={
+                  extraSearchMatches.length || threadSearch.pagination ? null : listEmpty
+                }
                 ListFooterComponent={
                   <ThreadSearchExtraMatches
                     matches={extraSearchMatches}
+                    pagination={threadSearch.pagination}
                     query={props.searchQuery}
                     onSelectThread={props.onSelectThread}
                   />

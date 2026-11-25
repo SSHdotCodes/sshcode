@@ -24,7 +24,7 @@ import {
   CommandShortcut,
 } from "./ui/command";
 import { getVirtualizedScrollFadeClassName } from "./ui/scroll-area";
-import { ThreadSearchMatchExcerpt } from "./ThreadSearchMatch";
+import { HighlightedSearchText, ThreadSearchMatchExcerpt } from "./ThreadSearchMatch";
 
 interface CommandPaletteResultsProps {
   emptyStateMessage?: string;
@@ -161,11 +161,12 @@ export function CommandPaletteVirtualizedResults(props: CommandPaletteVirtualize
 function usePrivatePaletteItem(item: CommandPaletteActionItem | CommandPaletteSubmenuItem) {
   const privateLabel = usePrivacyLabel();
   const privacy = usePrivacyMode();
-  const kind = item.value.startsWith("thread:")
-    ? "Chat"
-    : /^(project|new-thread-in):/.test(item.value)
-      ? "Project"
-      : null;
+  const kind =
+    item.value.startsWith("thread:") || item.threadSearchKey !== undefined
+      ? "Chat"
+      : /^(project|new-thread-in):/.test(item.value)
+        ? "Project"
+        : null;
   if (!privacy || kind === null) return presentCommandPaletteItem(item);
   return {
     ...item,
@@ -188,7 +189,17 @@ function DisabledCommandPaletteResultRow(props: {
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex min-w-0 items-center gap-1.5 text-sm text-foreground">
             {item.titleLeadingContent}
-            <span className="truncate">{item.title}</span>
+            <span className="truncate">
+              {item.threadContentMatch && typeof item.title === "string" ? (
+                <HighlightedSearchText
+                  text={item.title}
+                  query={item.threadContentMatch.query}
+                  correction={item.threadContentMatch.titleCorrection}
+                />
+              ) : (
+                item.title
+              )}
+            </span>
           </span>
           {item.threadContentMatch ? (
             <ThreadSearchMatchExcerpt match={item.threadContentMatch} />
@@ -237,7 +248,17 @@ function CommandPaletteResultRow(props: {
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex min-w-0 items-center gap-1.5 text-sm text-foreground">
             {item.titleLeadingContent}
-            <span className="truncate">{item.title}</span>
+            <span className="truncate">
+              {item.threadContentMatch && typeof item.title === "string" ? (
+                <HighlightedSearchText
+                  text={item.title}
+                  query={item.threadContentMatch.query}
+                  correction={item.threadContentMatch.titleCorrection}
+                />
+              ) : (
+                item.title
+              )}
+            </span>
           </span>
           {item.threadContentMatch ? (
             <ThreadSearchMatchExcerpt match={item.threadContentMatch} />

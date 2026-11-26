@@ -238,6 +238,7 @@ export const layer: Layer.Layer<
         (candidate) => candidate.id === providerThread.providerSessionId,
       );
       const session = yield* sessions.open({
+        isSubagent: projection.thread.lineage.relationshipToParent === "subagent",
         threadId: input.threadId,
         providerSessionId: providerThread.providerSessionId,
         modelSelection,

@@ -190,6 +190,22 @@ export function loginAvatarUrl(login: string, host: string): string | null {
 const rendersEmpty = (body: string): boolean =>
   body.replace(/<!--[\s\S]*?-->/g, "").trim().length === 0;
 
+/**
+ * `review-requested:<viewer>` search rows include the viewer's team requests, which name no login,
+ * so record the viewer as requested. Search rows only: the listing fallback cannot tell whether the
+ * viewer belongs to a requested team.
+ */
+function withViewerRequested<T extends { readonly reviewRequestLogins: ReadonlyArray<string> }>(
+  item: T,
+  input: { readonly involvement: string; readonly viewer: string },
+): T {
+  const viewer = input.viewer.toLowerCase();
+  return input.involvement === "reviewing" &&
+    !item.reviewRequestLogins.some((login) => login.toLowerCase() === viewer)
+    ? { ...item, reviewRequestLogins: [...item.reviewRequestLogins, input.viewer] }
+    : item;
+}
+
 export const make = Effect.gen(function* () {
   const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
 
@@ -307,7 +323,7 @@ export const make = Effect.gen(function* () {
                 Effect.map((avatarsByLogin) => ({
                   ...page,
                   items: page.items.map((item) => ({
-                    ...item,
+                    ...(page.continues ? withViewerRequested(item, input) : item),
                     author: withAvatar(item.author, avatarsByLogin, input.host),
                   })),
                 })),
@@ -339,7 +355,7 @@ export const make = Effect.gen(function* () {
           Effect.map((batch) => ({
             truncated: batch.truncated,
             items: batch.items.map((item) => ({
-              ...item,
+              ...withViewerRequested(item, input),
               author: withAvatar(item.author, new Map<string, string>(), input.host),
             })),
           })),

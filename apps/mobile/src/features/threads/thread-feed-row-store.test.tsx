@@ -26,6 +26,7 @@ import {
   createThreadFeedPresentationProjector,
   createThreadFeedProjector,
   threadFeedFailedRunIds,
+  threadFeedFinalAssistantMessageIds,
   threadFeedSummary,
 } from "../../lib/threadFeedProjection";
 import type { PendingThreadFeedEntry } from "../../state/pending-thread-feed";
@@ -299,7 +300,8 @@ describe("ThreadFeed row memoization and volatile store isolation", () => {
         dispatchingMessageId: null,
         steerWait: null,
         unsettledTurnId,
-        terminalAssistantMessageIds: feedSummary.terminalAssistantMessageIds,
+        finalAssistantMessageIds: threadFeedFinalAssistantMessageIds(feedSummary, unsettledTurnId),
+        assistantIdsBeforeUserBubble: presentedSummary.assistantIdsBeforeUserBubble,
         failedRunIds,
         decorations,
         agentAvatars: undefined,
@@ -456,7 +458,7 @@ describe("ThreadFeed row memoization and volatile store isolation", () => {
       }
     }
 
-    // 7. Turn settlement: ONLY the active turn's assistant row re-renders for unsettledTurnId change (older turns stay at 0).
+    // 7. Turn settlement: ONLY the active turn's assistant row re-renders as its reply becomes final (older turns stay at 0).
     renderCounts.clear();
     renderHarness({
       latestRun: {

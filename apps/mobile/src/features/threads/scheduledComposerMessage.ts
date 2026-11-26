@@ -23,6 +23,7 @@ type ScheduledComposerDraft = Pick<ComposerDraft, "text" | "attachments" | "cont
 
 type PendingComposerWork = {
   readonly pastedTextAttachments: number;
+  readonly compressingVideo?: boolean;
   readonly importingContext: boolean;
 };
 
@@ -33,6 +34,8 @@ export function scheduledComposerMessageReason(
 ): string | null {
   if (pending.pastedTextAttachments > 0)
     return "Wait for pasted text to finish attaching before scheduling.";
+  if (pending.compressingVideo)
+    return "Wait for the video to finish compressing before scheduling.";
   if (pending.importingContext) return "Wait for context to finish importing before scheduling.";
   if (!draft.text.trim()) return "Write a message first.";
   if (draft.attachments.length > 0 || draft.context?.records.length) {

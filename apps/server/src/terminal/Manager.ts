@@ -259,6 +259,8 @@ export class TerminalManager extends Context.Service<
      */
     /** A terminal still running a command. */
     readonly hasBusyTerminal?: Effect.Effect<boolean>;
+    /** A live terminal can still write files under this workspace. */
+    readonly hasOpenInWorkspace?: (directory: string) => Effect.Effect<boolean>;
     readonly subscribeMetadata: (
       listener: (event: TerminalMetadataStreamEvent) => Effect.Effect<void>,
     ) => Effect.Effect<() => void>;
@@ -371,7 +373,7 @@ interface TerminalManagerState {
 
 function truncateTerminalWireLabel(value: string): string {
   if (value.length <= MAX_TERMINAL_LABEL_LENGTH) return value;
-  return value.slice(0, MAX_TERMINAL_LABEL_LENGTH);
+  return value.slice(0, MAX_TERMINAL_LABEL_LENGTH).replace(/\p{Surrogate}$/u, "");
 }
 
 function normalizeChildCommandName(raw: string, platform: NodeJS.Platform): string | null {
@@ -2434,13 +2436,28 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       );
     }
 
-    const launch = yield* agentScope.wrap({
-      command: candidate.shell,
-      args: candidate.args ?? [],
-      name: "terminal",
-      env: spawnEnv,
-      survivesRestart: true,
-    });
+    const launch = yield* agentScope
+      .wrap({
+        command: candidate.shell,
+        args: candidate.args ?? [],
+        name: "terminal",
+        env: spawnEnv,
+        survivesRestart: true,
+      })
+      .pipe(
+        Effect.interruptible,
+        Effect.timeoutOrElse({
+          duration: "15 seconds",
+          orElse: () =>
+            Effect.fail(
+              new PtyAdapter.PtySpawnError({
+                adapter: "terminal-manager",
+                shell: candidate.shell,
+                cause: "Shell preparation timed out.",
+              }),
+            ),
+        }),
+      );
     const attempt = yield* Effect.result(
       options.ptyAdapter.spawn({
         shell: launch.command,
@@ -2527,6 +2544,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               }).pipe(
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, path),
+                Effect.interruptible,
+                Effect.timeoutOrElse({ duration: "15 seconds", orElse: () => Effect.succeed([]) }),
               );
               if (managedDirectories.length > 0) {
                 const delimiter = platform === "win32" ? ";" : ":";
@@ -2638,7 +2657,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         ...(startedShell ? { shell: startedShell } : {}),
       });
     }
-  });
+  }, Effect.uninterruptible);
 
   const closeSession = Effect.fn("terminal.closeSession")(function* (
     threadId: string,
@@ -2892,25 +2911,30 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       };
 
       const createdSession = session;
-      yield* modifyManagerState((state) => {
-        const sessions = new Map(state.sessions);
-        sessions.set(sessionKey, createdSession);
-        return [undefined, { ...state, sessions }] as const;
-      });
+      // Once another client can see the session, finish startup even if this opener disconnects.
+      yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          yield* modifyManagerState((state) => {
+            const sessions = new Map(state.sessions);
+            sessions.set(sessionKey, createdSession);
+            return [undefined, { ...state, sessions }] as const;
+          });
 
-      yield* evictInactiveSessionsIfNeeded();
-      yield* startSession(
-        session,
-        {
-          threadId: input.threadId,
-          terminalId,
-          cwd: input.cwd,
-          ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
-          cols,
-          rows,
-          ...(input.env ? { env: input.env } : {}),
-        },
-        "started",
+          yield* evictInactiveSessionsIfNeeded();
+          yield* startSession(
+            session,
+            {
+              threadId: input.threadId,
+              terminalId,
+              cwd: input.cwd,
+              ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
+              cols,
+              rows,
+              ...(input.env ? { env: input.env } : {}),
+            },
+            "started",
+          );
+        }),
       );
       return snapshot(session);
     }
@@ -3463,6 +3487,27 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     closeIdle,
     subscribe,
     subscribeMetadata,
+    hasOpenInWorkspace: (directory) =>
+      Effect.gen(function* () {
+        const state = yield* SynchronizedRef.get(managerStateRef);
+        for (const session of state.sessions.values()) {
+          if (session.status !== "starting" && session.status !== "running") continue;
+          for (const candidate of [session.cwd, session.worktreePath]) {
+            if (candidate === null) continue;
+            const canonical = yield* fileSystem
+              .realPath(candidate)
+              .pipe(Effect.orElseSucceed(() => path.resolve(candidate)));
+            const relative = path.relative(directory, canonical);
+            if (
+              relative !== ".." &&
+              !relative.startsWith(`..${path.sep}`) &&
+              !path.isAbsolute(relative)
+            )
+              return true;
+          }
+        }
+        return false;
+      }),
     hasBusyTerminal: SynchronizedRef.get(managerStateRef).pipe(
       Effect.map((state) =>
         [...state.sessions.values()].some(

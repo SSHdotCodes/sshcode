@@ -79,23 +79,36 @@ function reviewerKey(login: string): string {
 function CommentIdentity({
   comment,
   detail,
+  threadRef,
 }: {
+  threadRef: ScopedThreadRef | null;
   comment: PullRequestComment;
   detail: PullRequestDetailView;
 }) {
+  const openLink = useOpenLink(threadRef);
+  const url = comment.url;
   const actor = comment.author;
   const profileUrl = actor
     ? sourceControlClients.get(detail.provider).authorProfileUrl(actor.login, detail.url)
     : null;
   return (
     <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-      <PullRequestActorLabel actor={actor} profileUrl={profileUrl} className="max-w-full" />
+      <PullRequestActorLabel
+        actor={actor}
+        profileUrl={profileUrl}
+        threadRef={threadRef}
+        className="max-w-full"
+      />
       <Tooltip>
         <TooltipTrigger
           render={
-            comment.url ? (
+            url ? (
               <a
-                href={comment.url}
+                href={url}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void openLink(url, { event }).catch(console.error);
+                }}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-muted-foreground hover:text-foreground hover:underline"
@@ -111,7 +124,7 @@ function CommentIdentity({
         </TooltipTrigger>
         <TooltipPopup>
           {new Date(comment.createdAt).toLocaleString()}
-          {comment.url ? " · Open comment on host" : ""}
+          {url ? " · Open comment on host" : ""}
         </TooltipPopup>
       </Tooltip>
     </div>
@@ -228,7 +241,7 @@ function CollapsedComment({
       <article className="group rounded-lg border border-border/60 [contain-intrinsic-block-size:44px] [content-visibility:auto]">
         <div className="p-3">
           <div className="flex flex-wrap items-start gap-2">
-            <CommentIdentity comment={comment} detail={detail} />
+            <CommentIdentity comment={comment} detail={detail} threadRef={editing.threadRef} />
             <CollapsibleTrigger
               ref={statusTriggerRef}
               className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -623,7 +636,7 @@ export function PullRequestSummaryTab({
       >
         <div className="flex flex-wrap items-start gap-2 rounded-t-lg bg-muted/25 px-3 py-2.5">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <CommentIdentity comment={comment} detail={detail} />
+            <CommentIdentity comment={comment} detail={detail} threadRef={threadRef} />
             {outcome ? (
               <PullRequestReviewOutcomeBadge outcome={outcome} />
             ) : comment.reviewState ? (

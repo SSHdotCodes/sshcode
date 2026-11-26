@@ -29,7 +29,12 @@ describe("knownPlan", () => {
   it("knows a plan by its limit windows or its name when the provider names none", () => {
     expect(
       knownPlan(clues("opencode", undefined, { windowIds: ["go_rolling", "go_weekly"] })),
-    ).toEqual({ label: "OpenCode Go", monthlyUsd: 10, includedMonthlyUsd: 60 });
+    ).toEqual({
+      label: "OpenCode Go",
+      monthlyUsd: 10,
+      includedMonthlyUsd: 60,
+      providerIds: ["opencode-go"],
+    });
     expect(
       knownPlan({ driver: "acpRegistry", displayName: "Mistral Vibe", windowIds: [] }),
     ).toEqual({ label: "Mistral Vibe Pro", monthlyUsd: 14.99 });

@@ -14,7 +14,6 @@ const row: ThreadListV2ListItem = {
   item: { thread: parent, pinned: true, snoozed: false, settled: false },
   timeLabel: "",
   snoozeWakeLabelText: undefined,
-  snoozePresetMinute: undefined,
   face: undefined,
   hasQueuedMessages: false,
   showTrailingDivider: false,

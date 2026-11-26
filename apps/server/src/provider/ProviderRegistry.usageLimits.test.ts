@@ -91,6 +91,70 @@ const withRegistry = <A, E, R>(
   );
 };
 
+it.effect("keeps cached Google models, drops old quota and never retries unsupported limits", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-google-limits-" });
+    yield* fs.makeDirectory(`${baseDir}/caches`, { recursive: true });
+    const previous: ServerProvider = {
+      ...provider("google_pro"),
+      driver: ProviderDriverKind.make("antigravity"),
+      displayName: "Google Pro",
+      auth: { status: "authenticated", type: "oauth-personal" },
+      models: [{ slug: "gemini", name: "Gemini", isCustom: false, capabilities: null }],
+    };
+    yield* writeProviderStatusCache({
+      filePath: `${baseDir}/caches/google_pro.json`,
+      provider: previous,
+    });
+    const limits = {
+      checkedAt: previous.checkedAt,
+      windows: [],
+      unavailable: { reason: "unsupported", message: "Google doesn't share limits with apps yet" },
+    } as const;
+    const pending: ServerProvider = {
+      ...previous,
+      installed: false,
+      refreshing: true,
+      status: "warning",
+      auth: { status: "unknown", type: "oauth-personal" },
+      models: [],
+      usageLimits: limits,
+    };
+    const refreshes = yield* Ref.make(0);
+    yield* TestClock.setTime(60 * 60_000);
+    yield* withRegistry(
+      [
+        {
+          provider: pending,
+          refresh: Ref.update(refreshes, (n) => n + 1).pipe(
+            Effect.as({ ...previous, usageLimits: limits }),
+          ),
+        },
+      ],
+      Effect.gen(function* () {
+        const registry = yield* ProviderRegistry.ProviderRegistry;
+        expect((yield* registry.getProviders)[0]).toMatchObject({
+          models: previous.models,
+          usageLimits: limits,
+        });
+        yield* registry.refreshInstance(previous.instanceId);
+        const before = yield* Ref.get(refreshes);
+        const providers = yield* registry.getProvidersForUsageLimits(previous.instanceId);
+        expect(yield* Ref.get(refreshes)).toBe(before);
+        const reading = collectUsageLimits(providers, [], yield* Clock.currentTimeMillis, {})
+          .providers[0];
+        expect(reading).toMatchObject({
+          windows: [],
+          stale: false,
+          unavailable: limits.unavailable,
+        });
+      }),
+      baseDir,
+    );
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
 it.effect("serves saved models and quota before independently refreshing two providers", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

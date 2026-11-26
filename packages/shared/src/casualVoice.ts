@@ -583,6 +583,7 @@ export function selectSteerReasoningReplies(
       byRun.delete(key);
       if (
         item.status === "completed" &&
+        item.agentWasWaiting !== true &&
         (item.inputIntent === "steer" || item.inputIntent === "promoted_queued_to_steer")
       ) {
         replies.push({ steer: item, items: [], closed: false });

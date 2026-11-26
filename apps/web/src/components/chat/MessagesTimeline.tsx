@@ -2691,17 +2691,21 @@ const TimelineRowContent = memo(function TimelineRowContent({
             ? undefined
             : row.kind === "turn-fold" || row.kind === "working"
               ? "pb-1.5"
-              : (row.kind === "message" &&
-                    row.message.role === "assistant" &&
-                    !row.showAssistantMeta) ||
-                  isAgentMessageRow ||
-                  row.kind === "worktree-setup" ||
-                  row.kind === "event" ||
-                  row.kind === "attempt-fold" ||
-                  row.kind === "html-render" ||
-                  row.kind === "mcp-app"
-                ? "pb-2"
-                : "pb-4",
+              : row.kind === "message" && row.beforeUserBubble && !discord
+                ? // A user bubble sits where it would under the meta row: its
+                  // mt-1.5, the xs buttons (h-7, sm:h-6) and the pb-4 below.
+                  "pb-12.5 sm:pb-11.5"
+                : (row.kind === "message" &&
+                      row.message.role === "assistant" &&
+                      !row.showAssistantMeta) ||
+                    isAgentMessageRow ||
+                    row.kind === "worktree-setup" ||
+                    row.kind === "event" ||
+                    row.kind === "attempt-fold" ||
+                    row.kind === "html-render" ||
+                    row.kind === "mcp-app"
+                  ? "pb-2"
+                  : "pb-4",
           (row.kind === "message" && row.message.role === "assistant") ||
             row.kind === "assistant-meta"
             ? "group/assistant"
@@ -3498,6 +3502,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           <CollapsibleUserMessageBody
             entryId={row.id}
             text={resolvedContext.text}
+            plainValues={isAgentMessage}
             renderContextReference={renderContextReference}
             skills={ctx.skills}
             markdownCwd={ctx.markdownCwd}
@@ -3586,7 +3591,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         <AgentMessageRow
           preview={agentMessagePreview(plainText)}
           senderThreadId={senderThreadId}
-          intent={row.message.inputIntent}
+          intent={row.message.agentWasWaiting ? undefined : row.message.inputIntent}
           deliveryStatus={deliveryStatus}
           createdAt={row.message.createdAt}
           expanded={agentMessageOpen}
@@ -3636,7 +3641,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           Sent by SSHCode
         </p>
       ) : null}
-      {row.message.inputIntent && row.message.inputIntent !== "turn_start" ? (
+      {row.message.inputIntent &&
+      row.message.inputIntent !== "turn_start" &&
+      !row.message.agentWasWaiting ? (
         <UserMessageIntentMarker intent={row.message.inputIntent} />
       ) : null}
       {bubble}
@@ -4091,6 +4098,7 @@ function SteerReplyTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "ste
           cwd={ctx.markdownCwd}
           threadRef={ctx.threadRef ?? undefined}
           lineBreaks
+          plainValues
           skills={ctx.skills}
           headingLevelOffset={MESSAGE_HEADING_LEVEL}
           onImageExpand={ctx.onImageExpand}
@@ -4132,6 +4140,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             // Single line breaks stay, as the Claude and ChatGPT apps show them:
             // post drafts and quoted blocks are written one line per row.
             lineBreaks
+            plainValues
             skills={ctx.skills}
             headingLevelOffset={MESSAGE_HEADING_LEVEL}
             onUseArtifactTemplate={undefined}
@@ -4156,6 +4165,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
               // Single line breaks stay, as the Claude and ChatGPT apps show them:
               // post drafts and quoted blocks are written one line per row.
               lineBreaks
+              plainValues
               skills={ctx.skills}
               headingLevelOffset={MESSAGE_HEADING_LEVEL}
               onUseArtifactTemplate={ctx.onUseArtifactTemplate}
@@ -6409,6 +6419,7 @@ const COLLAPSED_USER_MESSAGE_FADE_MASK = `linear-gradient(to bottom, black calc(
 const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(props: {
   entryId: string;
   text: string;
+  plainValues: boolean;
   renderContextReference: (reference: ChatMarkdownContextReference) => ReactNode;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   markdownCwd: string | undefined;
@@ -6450,6 +6461,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
         >
           <UserMessageBody
             text={props.text}
+            plainValues={props.plainValues}
             renderContextReference={props.renderContextReference}
             skills={props.skills}
             markdownCwd={props.markdownCwd}
@@ -6491,6 +6503,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
 
 const UserMessageBody = memo(function UserMessageBody(props: {
   text: string;
+  plainValues: boolean;
   renderContextReference?: (reference: ChatMarkdownContextReference) => ReactNode;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   markdownCwd: string | undefined;
@@ -6508,6 +6521,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
         skills={props.skills}
         className="text-foreground"
         lineBreaks
+        plainValues={props.plainValues}
         parseRawHtml={false}
         renderContextReference={props.renderContextReference}
         headingLevelOffset={MESSAGE_HEADING_LEVEL}

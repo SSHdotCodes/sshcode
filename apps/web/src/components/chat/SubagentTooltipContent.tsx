@@ -12,7 +12,8 @@ import {
   subagentDetailPreview,
 } from "@t3tools/client-runtime/state/subagent-display";
 import { getExplicitModelEffortLabel, resolveSelectableModel } from "@t3tools/shared/model";
-import { acpSpeedChoices, getTraitsSpeedDisplay, TraitsSpeedIcon } from "./TraitsSpeed";
+import { acpSpeedChoices } from "@t3tools/shared/acpComposer";
+import { getTraitsSpeedDisplay, TraitsSpeedIcon } from "./TraitsSpeed";
 import type { ReactNode } from "react";
 import {
   BotIcon,

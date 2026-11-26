@@ -160,7 +160,7 @@ export function ConnectionsNewRouteScreen({
   );
 
   const connectAndClose = useCallback(
-    async (pairingUrl: string, replaceWithHome: boolean) => {
+    async (pairingUrl: string, returnHome: boolean) => {
       setIsSubmitting(true);
       onChangeConnectionPairingUrl(pairingUrl);
       try {
@@ -171,7 +171,14 @@ export function ConnectionsNewRouteScreen({
             : Haptics.NotificationFeedbackType.Error,
         );
         if (AsyncResult.isSuccess(result)) {
-          if (replaceWithHome || !navigation.canGoBack()) {
+          const homeBelow =
+            navigation.getState()?.routes.some((route) => route.name === "Home") === true;
+          if (returnHome && homeBelow) {
+            // A pairing link ends on the chats it just loaded. Replacing this sheet with Home
+            // left a second Home stuck inside the sheet; going back one step could land on
+            // an Add environment sheet that was already open.
+            navigation.dispatch(StackActions.popTo("Home"));
+          } else if (returnHome || !navigation.canGoBack()) {
             navigation.dispatch(StackActions.replace("Home"));
           } else {
             navigation.goBack();

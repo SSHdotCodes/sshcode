@@ -2560,13 +2560,13 @@ export function claudeRuntimeQueryPolicyForRuntimePolicy(
     readOnlyTools !== undefined && readOnlyPolicyAllowsGlobalReads(runtimePolicy)
       ? readOnlyTools
       : undefined;
-  // acceptEdits approves edits before the callback runs; everything else it
-  // leaves to the callback, which must ask rather than allow.
+  // Auto and acceptEdits return tools their native review did not approve.
   const installPermissionCallback =
-    runtimePolicy.approvalPolicy === undefined
+    permissionMode === "auto" ||
+    (runtimePolicy.approvalPolicy === undefined
       ? runtimePolicy.runtimeMode === "approval-required" ||
         runtimePolicy.runtimeMode === "auto-accept-edits"
-      : runtimePolicy.approvalPolicy !== "never";
+      : runtimePolicy.approvalPolicy !== "never");
 
   if (permissionMode === "plan") {
     return {
@@ -2811,7 +2811,7 @@ function parseClaudeBackgroundTaskEntry(
 
 function fileNameFromClaudeTool(toolName: string, input: ClaudeNativeToolInput): string {
   return (
-    firstStringInputField(input, ["file_path", "path", "filename", "fileName"]) ??
+    firstStringInputField(input, ["file_path", "notebook_path", "path", "filename", "fileName"]) ??
     `${toolName} result`
   );
 }
@@ -10036,7 +10036,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             canApplyClaudeSelectionLive(existing.selection, compiledSelection)
           ) {
             const live = existing;
-            yield* live.query.setModel(compiledSelection.apiModelId).pipe(
+            // An effort change keeps the launcher's model. A failed partial update must resend both.
+            yield* (
+              live.selection.queryIdentity === "" ||
+              live.selection.apiModelId !== compiledSelection.apiModelId
+                ? live.query.setModel(compiledSelection.apiModelId)
+                : Effect.void
+            ).pipe(
               Effect.andThen(
                 live.query.applyFlagSettings(claudeLiveSelectionFlagSettings(compiledSelection)),
               ),

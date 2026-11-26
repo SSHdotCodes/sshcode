@@ -14,6 +14,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
+import * as DesktopLocalActivity from "./DesktopLocalActivity.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
 
 /** Shared DesktopUpdates test harness: a fully stubbed updater layer whose
@@ -42,6 +43,8 @@ export interface UpdatesHarnessOptions {
   /** Contents of the install record a previous run left behind. */
   readonly installRecord?: string | undefined;
   readonly updaterLayer?: Layer.Layer<ElectronUpdater.ElectronUpdater>;
+  /** What the backends report as working chats each time they are asked; 0 by default. */
+  readonly workingChats?: () => Option.Option<number>;
 }
 
 export function makeHarness(options: UpdatesHarnessOptions = {}) {
@@ -252,8 +255,17 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
       }),
   });
 
+  let activityQueries = 0;
   const layer = DesktopUpdates.layer.pipe(
     Layer.provide(layerFileSystem),
+    Layer.provide(
+      Layer.succeed(DesktopLocalActivity.DesktopLocalActivity, {
+        workingChats: Effect.sync(() => {
+          activityQueries += 1;
+          return options.workingChats?.() ?? Option.some(0);
+        }),
+      }),
+    ),
     Layer.provide(
       Layer.mock(DesktopWindow.DesktopWindow)({
         flushMainWindowBounds: options.flushMainWindowBounds ?? Effect.void,
@@ -279,6 +291,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   return {
     layer,
     checkCount: () => checkCount,
+    activityQueries: () => activityQueries,
     quitAndInstalls: () => quitAndInstallCount,
     installSteps,
     updateRestartMarkers,

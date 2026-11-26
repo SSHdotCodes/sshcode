@@ -57,9 +57,10 @@ const search = (
   saved: ReturnType<typeof key>,
   searcher: ReturnType<typeof grok>,
   fetch: typeof globalThis.fetch = async () => new Response("unused", { status: 500 }),
+  deep?: boolean,
 ) =>
   Effect.gen(function* () {
-    return yield* (yield* XSearch.XSearch).search(query);
+    return yield* (yield* XSearch.XSearch).search(query, deep);
   }).pipe(
     Effect.provide(XSearch.layer.pipe(Layer.provide(Layer.merge(saved, searcher)))),
     Effect.provideService(FetchHttpClient.Fetch, fetch),
@@ -91,7 +92,6 @@ it("renders API posts with author, time, counts, full text and link", () => {
       "https://x.com/testingcatalog/status/2120186517435900071",
     ].join("\n"),
   );
-  expect(XSearch.renderXApiPosts(encodeJson({ meta: { result_count: 0 } }))).toBeUndefined();
   expect(XSearch.renderXApiPosts("not json")).toBeUndefined();
 });
 
@@ -111,24 +111,39 @@ it.effect("answers from the X API when a key is saved, without starting Grok", (
   }),
 );
 
-it.effect("falls back to Grok when the API refuses the query, finds nothing or has no key", () =>
+it.effect("returns an empty recent search without starting Grok", () =>
+  Effect.gen(function* () {
+    const callGrok = vi.fn(() => "Grok result");
+    const nothing = async () => new Response(encodeJson({ meta: { result_count: 0 } }));
+    const posts = yield* search("zzqx", key("k"), grok(Effect.sync(callGrok)), nothing);
+    expect(callGrok).toHaveBeenCalledTimes(0);
+    expect(posts).toBe(
+      "No posts in the last 7 days. For older posts, call search_x again with deep: true (slower, 1-4 min).",
+    );
+  }),
+);
+
+it.effect("falls back to Grok when the API refuses, gives no usable answer or has no key", () =>
   Effect.gen(function* () {
     const fromGrok = grok(Effect.succeed("@xai · post from Grok"));
     const refused = async () => new Response("{}", { status: 400 });
-    const nothing = async () => new Response(encodeJson({ meta: { result_count: 0 } }));
     expect(yield* search("min_faves:100 grok", key("k"), fromGrok, refused)).toBe(
       "@xai · post from Grok",
     );
-    expect(yield* search("what do people think", key("k"), fromGrok, nothing)).toBe(
-      "@xai · post from Grok",
-    );
+    const errorReply = encodeJson({ meta: { result_count: 0 }, errors: [{ title: "refused" }] });
+    for (const body of ["invalid json", "{}", errorReply]) {
+      expect(yield* search("grok", key("k"), fromGrok, async () => new Response(body))).toBe(
+        "@xai · post from Grok",
+      );
+    }
+    const offline = vi.fn<typeof globalThis.fetch>().mockRejectedValue(new TypeError("offline"));
+    expect(yield* search("grok", key("k"), fromGrok, offline)).toBe("@xai · post from Grok");
     expect(yield* search("grok", key(undefined), fromGrok)).toBe("@xai · post from Grok");
   }),
 );
 
-it.effect("says plainly when nothing matched or nothing can search", () =>
+it.effect("reports the cause when no provider can answer", () =>
   Effect.gen(function* () {
-    const nothing = async () => new Response(encodeJson({ meta: { result_count: 0 } }));
     const failing = grok(
       Effect.fail(
         new ProviderDriverError({
@@ -138,8 +153,6 @@ it.effect("says plainly when nothing matched or nothing can search", () =>
         }),
       ),
     );
-    expect(yield* search("zzqx", key("k"), noGrok, nothing)).toBe(XSearch.X_SEARCH_EMPTY);
-    expect(yield* search("zzqx", key("k"), failing, nothing)).toBe(XSearch.X_SEARCH_EMPTY);
     expect(yield* search("grok", key(undefined), failing).pipe(Effect.flip)).toMatchObject({
       reason: "failed",
       message: "The X search timed out.",
@@ -152,6 +165,12 @@ it.effect("says plainly when nothing matched or nothing can search", () =>
     expect(yield* search("grok", key(undefined), noGrok).pipe(Effect.flip)).toMatchObject({
       reason: "unavailable",
       message: XSearch.X_SEARCH_UNAVAILABLE,
+    });
+    expect(
+      yield* search("grok", key("k"), noGrok, undefined, true).pipe(Effect.flip),
+    ).toMatchObject({
+      reason: "unavailable",
+      message: "Deep X search needs Grok Build switched on and signed in (Settings > Providers).",
     });
   }),
 );

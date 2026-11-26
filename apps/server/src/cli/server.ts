@@ -59,7 +59,7 @@ export const startCommand = Command.make("start", { ...sharedServerCommandFlags 
 
 export const serveCommand = Command.make("serve", { ...sharedServerCommandFlags }).pipe(
   Command.withDescription(
-    "Run the SSHCode server without opening a browser and print headless pairing details.",
+    "Run SSHCode without opening a browser. To pair with a background service, run sshcode pair on the host.",
   ),
   Command.withHandler((flags) =>
     runServerCommand(flags, {

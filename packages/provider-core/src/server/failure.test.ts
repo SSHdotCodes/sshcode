@@ -131,6 +131,14 @@ it("keeps local failures out of account classification", () => {
   );
 });
 
+it("only exposes OpenCode's fixed goal length rejection for the goal command", () => {
+  const message = "A goal objective is limited to 4000 characters (got 4001).";
+  const cause = { _tag: "CommandExecutionError", command: "goal", message };
+  assert.include(knownProviderFailureMessage(cause) ?? "", message);
+  assert.isUndefined(knownProviderFailureMessage({ ...cause, command: "review" }));
+  assert.isUndefined(knownProviderFailureMessage({ ...cause, message: "arbitrary output" }));
+});
+
 it("redacts credentials and URL secrets from provider failures", () => {
   const failure = makeProviderFailure({
     message:

@@ -24,6 +24,12 @@ function fileUriPath(uri: string): string | null {
   }
 }
 
+export function isAttachmentCacheFile(uri: string, directoryUri: string): boolean {
+  const path = fileUriPath(uri);
+  const directory = fileUriPath(directoryUri)?.replace(/\/+$/, "");
+  return path !== null && directory !== undefined && path.startsWith(`${directory}/`);
+}
+
 function ownedFileLocation(uri: string) {
   const path = fileUriPath(uri);
   if (path === null) {

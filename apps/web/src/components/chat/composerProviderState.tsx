@@ -69,6 +69,8 @@ type TraitsRenderInput = {
   isComposerOwned?: boolean;
   /** The model picker's Reasoning column shows effort; the traits control leaves it out. */
   omitReasoning?: boolean;
+  acpSection?: Parameters<typeof getTraitsSectionVisibility>[0]["acpSection"];
+  acpMode?: Parameters<typeof getTraitsSectionVisibility>[0]["acpMode"];
 };
 
 export function getComposerPromptInjectionState(prompt: string): ComposerPromptInjectionState {
@@ -197,6 +199,8 @@ function renderTraitsControl(
     triggerClassName,
     isComposerOwned,
     omitReasoning,
+    acpSection,
+    acpMode,
   } = input;
   const hasTarget =
     threadRef !== undefined || draftId !== undefined || input.onModelOptionsChange !== undefined;
@@ -214,6 +218,8 @@ function renderTraitsControl(
     modelOptions: resolvedModelOptions,
     prompt,
     planModeEnabled,
+    ...(acpSection ? { acpSection } : {}),
+    ...(acpMode ? { acpMode } : {}),
   });
   if (
     !hasTarget ||
@@ -241,6 +247,8 @@ function renderTraitsControl(
       {...(triggerClassName !== undefined ? { triggerClassName } : {})}
       {...(isComposerOwned ? { isComposerOwned } : {})}
       {...(omitReasoning ? { omitReasoning } : {})}
+      {...(acpSection ? { acpSection } : {})}
+      {...(acpMode ? { acpMode } : {})}
     />
   );
 }

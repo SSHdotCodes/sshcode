@@ -78,7 +78,7 @@ const QaSandboxTool = Tool.make("qa_sandbox", {
 
 const PreviewStatusTool = Tool.make("preview_status", {
   description:
-    "Report tab automation support, owner, dialog, URL, title, visibility, loading state, viewport mode and CSS-pixel size. tabId selects a tab; defaults to your session's tab, then the user's visible tab. Server hosts also list all thread tabs with owners, including user-opened tabs, and profiles for preview_open. Read any listed tab; act only on your own or unclaimed tabs with no human in control.",
+    "Show browser tabs, owners, dialogs, automation, loading and viewport. Server hosts include all thread tabs and profiles. Read any listed tab. Act on your own or unclaimed tabs with no human in control.",
   parameters: PreviewAutomationTabTargetInput,
   success: PreviewAutomationStatus,
   failure: PreviewToolFailure,
@@ -92,7 +92,7 @@ const PreviewStatusTool = Tool.make("preview_status", {
 const PreviewOpenTool = browserTool(
   Tool.make("preview_open", {
     description:
-      "For one-off in-chat charts or visualizers, use html_preview then html_render when available. Use browser tabs for websites, app testing or explicit browser requests. Open a collaborative tab with its thread's inline preview; open=false keeps automation in the background. tabId reuses a tab; reuseExistingTab=false creates one; omit both for your session's tab. Parallel subagents sharing a provider session must each set reuseExistingTab=false and pass their returned tabId on every call. profileId selects saved logins. Read other sessions' tabs, but do not operate them.",
+      "Open a collaborative tab. Parallel subagents sharing a session each set reuseExistingTab=false and use their tabId on every call. Other sessions' tabs are read-only. For standalone charts use html_preview then html_render when available.",
     parameters: PreviewAutomationOpenInput,
     success: PreviewAutomationStatus,
     failure: PreviewToolFailure,
@@ -116,7 +116,7 @@ const PreviewDialogTool = browserTool(
 const PreviewNavigateTool = safeBrowserTool(
   Tool.make("preview_navigate", {
     description:
-      "Navigate a collaborative browser tab. Pass tabId to target a specific tab, plus {url:'https://t3.chat'} for a website or {target:{kind:'environment-port',port:5173}} for a dev server. Exactly one of url or target is required.",
+      "Navigate a tab. Pass exactly one of url for a website or target like {kind:'environment-port',port:5173} for a dev server.",
     parameters: PreviewAutomationNavigateInput,
     success: PreviewAutomationStatus,
     failure: PreviewToolFailure,
@@ -127,7 +127,7 @@ const PreviewNavigateTool = safeBrowserTool(
 const PreviewResizeTool = safeBrowserTool(
   Tool.make("preview_resize", {
     description:
-      "Resize a collaborative browser tab, optionally selected by tabId. Use {mode:'fill'}, {mode:'freeform',width:1024,height:768}, or {mode:'preset',preset:'iphone-12-pro',orientation:'portrait'}. This changes CSS layout breakpoints without changing the desktop browser user agent.",
+      "Resize a tab with {mode:'fill'}, {mode:'freeform',width:1024,height:768}, or {mode:'preset',preset:'iphone-12-pro',orientation:'portrait'}. Changes layout with the desktop user agent.",
     parameters: PreviewAutomationResizeInput,
     success: Schema.Struct({ ...PreviewAutomationResizeResult.fields, ...presentationFields }),
     failure: PreviewToolFailure,
@@ -139,8 +139,7 @@ const PreviewResizeTool = safeBrowserTool(
 
 const PreviewSetAppearanceTool = safeBrowserTool(
   Tool.make("preview_set_appearance", {
-    description:
-      "Emulate prefers-color-scheme in a collaborative browser tab, optionally selected by tabId. Use {colorScheme:'dark'} or {colorScheme:'light'} to preview the page in that appearance, and {colorScheme:'system'} to clear the override and follow the OS appearance.",
+    description: "Set a tab's prefers-color-scheme to light or dark. system clears the override.",
     parameters: PreviewAutomationSetColorSchemeInput,
     success: Schema.Struct({
       ...PreviewAutomationSetColorSchemeResult.fields,
@@ -157,7 +156,7 @@ const PreviewSetAppearanceTool = safeBrowserTool(
 export const PreviewSnapshotTool = safeBrowserTool(
   Tool.make("preview_snapshot", {
     description:
-      "Observe a browser tab. Returns a compact semantic tree with stable refs: act with locator='aria-ref=<ref>', including frames. Pass since=snapshotId for a change-only observation; apply changes last to first: each replaces deleteCount lines at zero-based fromLine in the prior tree. Missing/expired baselines return a full tree. Refresh after navigation or human takeover. Use mode=full for all semantic context, includeDiagnostics for logs, includeImage only for visual inspection. save=true returns a PNG screenshotPath to embed as ![alt](path); images alone are not saved. tabId targets a specific tab; omit for the session's current tab.",
+      "Inspect a semantic tree. Act with locator='aria-ref=<ref>', including in frames. since=snapshotId returns a diff. Apply patches last to first, replacing deleteCount lines at zero-based fromLine. Expired baselines give a full tree. Refresh after navigation or human takeover. Embed saved screenshotPath as ![alt](path).",
     parameters: Schema.Struct({
       ...PreviewAutomationTabTargetInput.fields,
       ...PreviewObservationOptions.fields,
@@ -182,7 +181,7 @@ export const PreviewSnapshotTool = safeBrowserTool(
 const PreviewActTool = browserTool(
   Tool.make("preview_act", {
     description:
-      "Act on the chosen tab. Target with `locator='aria-ref=<ref>'` from `preview_snapshot`; `x` and `y` go together. `timeoutMs` defaults to 15000. click: `button`, `clickCount` 1 to 3. type: literal `text`, `clear=true` replaces it. hover: shows menus or tooltips. select: `values` in one native <select>, by value or label; for a custom dropdown, click it open, then click the option. drag: `source` onto `target`. upload: absolute `paths` answer the file picker `preview_status` reports, [] cancels it, or a `locator` sets an <input type=file>. press: one `key`, such as 'Enter', with `modifiers`, to the focused element; click a field first to focus it. scroll: the tab, or one container with a locator; positive `deltaY` scrolls down, positive `deltaX` right. After a snapshot of the tab, `page` patches it like `since`; no new snapshot needed.",
+      "Act on a tab. Use locator='aria-ref=<ref>' from preview_snapshot or paired x/y. click uses button/clickCount (1–3). type sends text. clear=true replaces. select uses values in a native select. Click custom options. drag uses source/target. upload passes absolute paths to a reported picker ([] cancels) or targets a file input by locator. press sends key/modifiers to the focused element. scroll uses deltaY/deltaX (positive down/right) and optional locator. page patches the last snapshot automatically.",
     parameters: PreviewAutomationActInput,
     success: Schema.Union([
       Schema.Struct({ ...PreviewAutomationSelectResult.fields, ...actFields }),

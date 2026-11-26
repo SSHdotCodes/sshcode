@@ -272,18 +272,33 @@ export function getProviderOptionCurrentValue(
   if (!descriptor) {
     return undefined;
   }
-  const hasExplicitOption = selection?.options?.some((option) => option.id === descriptor.id);
   // Reported values are display-only; callers that build dispatch options omit this context.
   const reportedValue = getReportedOptionValue(descriptor.id, selection, reportedSelection);
-  if (reportedValue !== undefined) return reportedValue;
-  if (descriptor.id === "variant" && selection && !hasExplicitOption) return undefined;
+  if (reportedValue !== undefined) {
+    // OpenCode reports "default" for the base model. Only a named choice can select a stop.
+    if (
+      reportedValue !== "default" ||
+      !isReasoningSelectDescriptor(descriptor) ||
+      descriptor.options.some((choice) => choice.id === "default")
+    ) {
+      return reportedValue;
+    }
+    if (descriptor.nativeValue) return descriptor.nativeValue;
+  }
   if (descriptor.type === "boolean") {
     return descriptor.currentValue;
   }
-  if (descriptor.currentValue) {
-    return descriptor.currentValue;
+  const { currentValue, options } = descriptor;
+  if (
+    currentValue &&
+    (options.length === 0 || options.some((choice) => choice.id === currentValue))
+  ) {
+    return currentValue;
   }
-  return descriptor.options.find((option) => option.isDefault)?.id;
+  return (
+    options.find((choice) => choice.isDefault)?.id ??
+    options.find((choice) => choice.id === descriptor.nativeValue)?.id
+  );
 }
 
 export function getProviderOptionCurrentLabel(
@@ -304,11 +319,10 @@ export function getProviderOptionCurrentLabel(
   const currentValue = getProviderOptionCurrentValue(descriptor, selection, reportedSelection);
   return (
     descriptor.options.find((option) => option.id === currentValue)?.label ??
-    (getReportedOptionValue(descriptor.id, selection, reportedSelection) === "default"
+    (getReportedOptionValue(descriptor.id, selection, reportedSelection) === "default" &&
+    !isReasoningSelectDescriptor(descriptor)
       ? "Default"
-      : descriptor.id === "variant"
-        ? "Unknown"
-        : undefined)
+      : undefined)
   );
 }
 

@@ -368,6 +368,21 @@ it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       assert.isNull(
         (yield* resolveUpdate("v1", NodePath.join(v2Prefix, "bin", "opencode"))).update,
       );
+      const executable = (...segments: ReadonlyArray<string>) => {
+        const path = NodePath.join(root, ...segments);
+        NodeFS.mkdirSync(NodePath.dirname(path), { recursive: true });
+        NodeFS.writeFileSync(path, "#!/bin/sh\n");
+        NodeFS.chmodSync(path, 0o755);
+        return path;
+      };
+      const launcher = executable("launcher", "opencode");
+      const native = executable(".opencode", "bin", "opencode");
+      for (const generation of ["v1", "v2"] as const) {
+        assert.isNull((yield* resolveUpdate(generation, launcher)).update);
+        assert.deepStrictEqual((yield* resolveUpdate(generation, native)).update?.args, [
+          "upgrade",
+        ]);
+      }
     }),
 );
 

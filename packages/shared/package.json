@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./acpComposer": {
+      "types": "./src/acpComposer.ts",
+      "import": "./src/acpComposer.ts"
+    },
     "./guestPrompt": {
       "types": "./src/guestPrompt.ts",
       "import": "./src/guestPrompt.ts"
@@ -586,6 +590,10 @@
     "./markdownLinks": {
       "types": "./src/markdownLinks.ts",
       "import": "./src/markdownLinks.ts"
+    },
+    "./markdownPlainValues": {
+      "types": "./src/markdownPlainValues.ts",
+      "import": "./src/markdownPlainValues.ts"
     },
     "./fileLinks": {
       "types": "./src/fileLinks.ts",

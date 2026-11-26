@@ -18,6 +18,9 @@ import * as MonitorService from "./MonitorService.ts";
  * monitor printing every minute or two cost a turn each time.
  */
 export const MONITOR_IDLE_WAKE_INTERVAL_MS = 120_000;
+// An idle monitor often prints its answer just before exiting. Give its exit
+// two seconds to join that output before spending a turn on progress alone.
+const MONITOR_EXIT_GRACE_MS = 2_000;
 /** Detail kept when held outputs are delivered together; the latest lines win. */
 const MAX_COMBINED_DETAIL = 8_000;
 
@@ -33,7 +36,19 @@ function combineEvents(
 ): MonitorService.MonitorEvent {
   const last = events.at(-1)!;
   if (events.length === 1) return last;
-  // Durable jobs keep the full history on disk; deliver only their latest compact batch.
+  // Durable jobs keep all output in their log. On exit, include the last matched
+  // batch if the final log tail doesn't already show it. Keep the log path intact.
+  if (last.durable && last.notification.outcome !== "updated") {
+    const progress = events.slice(0, -1).findLast((event) => event.notification.detail)
+      ?.notification.detail;
+    const end = last.notification.detail ?? "";
+    if (progress === undefined || end.includes(progress)) return last;
+    return {
+      ...last,
+      text: `${last.text}\n${progress}`,
+      notification: { ...last.notification, detail: [end, progress].filter(Boolean).join("\n") },
+    };
+  }
   let detail = (
     last.durable === true
       ? events.filter((event) => event.notification.detail !== undefined).slice(-1)
@@ -60,10 +75,9 @@ function combineEvents(
  * Hands monitor events to their thread through the notification mailbox,
  * with its active steering and idle queue promotion.
  *
- * A monitor's first output, its end, a stuck-job notice, and anything it
- * prints while the thread is busy go out at once. Output that would wake an idle thread less than
- * MONITOR_IDLE_WAKE_INTERVAL_MS after this monitor's last delivery is held
- * until then and goes out as one wake, along with whatever else it printed.
+ * Ends, urgent notices and output for a busy thread go out immediately.
+ * Idle progress waits briefly for the exit and respects the per-monitor interval.
+ * Further output joins the pending wake without moving its deadline.
  */
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -152,14 +166,6 @@ export const layer = Layer.effectDiscard(
             state.held.push(event);
             return yield* deliverHeld(state, now);
           }
-          const dueAt =
-            state.lastDeliveredAt === null
-              ? now
-              : state.lastDeliveredAt + MONITOR_IDLE_WAKE_INTERVAL_MS;
-          if (timer === null && now >= dueAt) {
-            state.held.push(event);
-            return yield* deliverHeld(state, now);
-          }
           state.held.push(event);
           if (yield* threadIsBusy(event)) {
             // A running turn takes the output as a steer; no new turn starts.
@@ -167,7 +173,14 @@ export const layer = Layer.effectDiscard(
             return yield* deliverHeld(state, now);
           }
           if (timer !== null) return;
-          state.timer = yield* Effect.sleep(dueAt - now).pipe(
+          const delay =
+            state.lastDeliveredAt === null
+              ? MONITOR_EXIT_GRACE_MS
+              : Math.max(
+                  MONITOR_EXIT_GRACE_MS,
+                  state.lastDeliveredAt + MONITOR_IDLE_WAKE_INTERVAL_MS - now,
+                );
+          state.timer = yield* Effect.sleep(delay).pipe(
             Effect.andThen(
               lock.withPermits(1)(
                 Effect.gen(function* () {

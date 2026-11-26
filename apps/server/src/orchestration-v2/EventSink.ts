@@ -1,5 +1,6 @@
 import {
   CommandId,
+  isTerminalRunStatus,
   type OrchestrationV2Run,
   OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
@@ -33,6 +34,7 @@ import {
 } from "./WireProjection.ts";
 import { retrySqliteTransaction } from "../persistence/retrySqliteFull.ts";
 
+import { threadSendCompletionEffects } from "./ThreadSendCompletion.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventStore from "./EventStore.ts";
@@ -378,7 +380,10 @@ const layerBase: Layer.Layer<
       );
     };
 
-    const applyStoredEvents = (storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>) =>
+    const applyStoredEvents = (
+      storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>,
+      effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2> = [],
+    ) =>
       Effect.gen(function* () {
         yield* Effect.forEach(storedEvents, (stored) => projectionStore.apply(stored.event), {
           concurrency: 1,
@@ -407,7 +412,17 @@ const layerBase: Layer.Layer<
           `;
         }
         const events = storedEvents.map((stored) => stored.event);
+        // A steer fallback or restart continuation must run before the original run reports back.
+        const pending = [...effects];
+        for (const event of events) {
+          if (event.type !== "run.updated" || !isTerminalRunStatus(event.payload.status)) continue;
+          for (const completion of yield* threadSendCompletionEffects(sql, event.payload)) {
+            pending.push(completion);
+          }
+        }
+        if (pending.length > 0) yield* effectOutbox.enqueue(pending);
         const saves = [
+          ...(pending.length > 0 ? [effectOutbox.notifyAvailable(pending.length)] : []),
           ...(projectionStore.prepareSubagentRankings
             ? [yield* projectionStore.prepareSubagentRankings(events)]
             : []),
@@ -451,8 +466,7 @@ const layerBase: Layer.Layer<
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             events: normalized,
           });
-          yield* applyStoredEvents(committed);
-          yield* effectOutbox.enqueue(input.effects);
+          yield* applyStoredEvents(committed, input.effects);
           return committed;
         }).pipe(
           // Every streamed agent event is a write, so its statements would
@@ -460,13 +474,7 @@ const layerBase: Layer.Layer<
           // still time each write, including the commit.
           Effect.withTracerEnabled(false),
         ),
-        (storedEvents) =>
-          Effect.gen(function* () {
-            yield* publishStoredEvents(storedEvents);
-            if (input.effects.length > 0) {
-              yield* effectOutbox.notifyAvailable(input.effects.length);
-            }
-          }),
+        publishStoredEvents,
       );
     });
 
@@ -484,10 +492,12 @@ const layerBase: Layer.Layer<
             const rows = yield* sql<{
               readonly status: string;
               readonly active_attempt_id: string | null;
+              readonly work_started_at: string | null;
             }>`
             SELECT
               status,
-              json_extract(payload_json, '$.activeAttemptId') AS active_attempt_id
+              json_extract(payload_json, '$.activeAttemptId') AS active_attempt_id,
+              json_extract(payload_json, '$.workStartedAt') AS work_started_at
             FROM orchestration_v2_projection_runs
             WHERE run_id = ${input.runId}
               AND thread_id = ${input.threadId}
@@ -514,27 +524,36 @@ const layerBase: Layer.Layer<
               };
             }
 
+            // A provider lifecycle update carries the run it started with. A user message
+            // can restart its clock while waiting. Publish the committed start to clients too.
+            const workStartedAt = current.work_started_at;
+            const events =
+              workStartedAt === null
+                ? input.events
+                : input.events.map((event) =>
+                    event.type === "run.updated" && event.payload.id === input.runId
+                      ? {
+                          ...event,
+                          payload: {
+                            ...event.payload,
+                            workStartedAt: DateTime.makeUnsafe(workStartedAt),
+                          },
+                        }
+                      : event,
+                  );
             const normalized = yield* normalizeEvents(
               input.guardPendingUserInputCancellations === true
-                ? yield* guardUserInputCancellations(input.events)
-                : input.events,
+                ? yield* guardUserInputCancellations(events)
+                : events,
             );
             const storedEvents = yield* eventStore.append({
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
               events: normalized,
             });
-            yield* applyStoredEvents(storedEvents);
-            yield* effectOutbox.enqueue(input.effects ?? []);
+            yield* applyStoredEvents(storedEvents, input.effects);
             return { committed: true as const, storedEvents };
           }),
-          (result) =>
-            Effect.gen(function* () {
-              if (!result.committed) return;
-              yield* publishStoredEvents(result.storedEvents);
-              if (input.effects !== undefined && input.effects.length > 0) {
-                yield* effectOutbox.notifyAvailable(input.effects.length);
-              }
-            }),
+          (result) => (result.committed ? publishStoredEvents(result.storedEvents) : Effect.void),
         );
       },
     );
@@ -710,8 +729,7 @@ const layerBase: Layer.Layer<
               new Error(`Command ${input.commandId} produced no orchestration events.`),
             );
           }
-          yield* applyStoredEvents(storedEvents);
-          yield* effectOutbox.enqueue(input.effects);
+          yield* applyStoredEvents(storedEvents, input.effects);
           const receipt: CommandReceiptStore.CommandReceiptV2 = {
             commandId: input.commandId,
             threadId: input.threadId,
@@ -735,9 +753,6 @@ const layerBase: Layer.Layer<
           Effect.gen(function* () {
             yield* effectOutbox.signalCancellations(result.cancelledEffectIds);
             if (result.committed) yield* publishStoredEvents(result.storedEvents);
-            if (result.committed && input.effects.length > 0) {
-              yield* effectOutbox.notifyAvailable(input.effects.length);
-            }
           }),
       );
       return {

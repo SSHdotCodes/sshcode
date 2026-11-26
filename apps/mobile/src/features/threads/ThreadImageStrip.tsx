@@ -18,10 +18,10 @@ export const MESSAGE_IMAGE_STRIP_HEIGHT = 150;
 export const WORK_IMAGE_STRIP_HEIGHT = 120;
 
 const THUMBNAIL_RADIUS = 12;
-const DEFAULT_ASPECT_RATIO = 4 / 3;
-// Wider or taller pictures are cropped to the middle so one cannot crowd out the rest.
-const MIN_ASPECT_RATIO = 0.6;
-const MAX_ASPECT_RATIO = 1.8;
+const THUMBNAIL_GAP = 8;
+// Every tile has this one shape, cropped to the middle, so a strip never reflows as
+// pictures decode or as new ones arrive while the agent is still reading them.
+const TILE_ASPECT_RATIO = 4 / 3;
 
 export type ThreadImageStripItem =
   | {
@@ -36,22 +36,16 @@ export type ThreadImageStripItem =
 
 type LoadedStripItem = Extract<ThreadImageStripItem, { readonly preview: FilePreviewItem }>;
 
-function thumbnailWidth(height: number, size: { width: number; height: number } | undefined) {
-  const ratio =
-    size && size.width > 0 && size.height > 0 ? size.width / size.height : DEFAULT_ASPECT_RATIO;
-  return Math.round(height * Math.min(MAX_ASPECT_RATIO, Math.max(MIN_ASPECT_RATIO, ratio)));
+export function stripTileWidth(height: number) {
+  return Math.round(height * TILE_ASPECT_RATIO);
 }
 
-function ThumbnailPlaceholder(props: {
-  readonly height: number;
-  readonly label?: string;
-  readonly width?: number;
-}) {
+function ThumbnailPlaceholder(props: { readonly height: number; readonly label?: string }) {
   return (
     <View
       className="items-center justify-center gap-1 border border-border bg-subtle px-2"
       style={{
-        width: props.width ?? thumbnailWidth(props.height, undefined),
+        width: stripTileWidth(props.height),
         height: props.height,
         borderRadius: THUMBNAIL_RADIUS,
       }}
@@ -88,16 +82,13 @@ function ThreadImageThumbnail(props: {
       : assetUrl._tag === "Success"
         ? assetUrl.url + (item.preview.srcFragment ?? "")
         : null;
-  const [decodedSize, setDecodedSize] = useState<{ width: number; height: number } | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [failedUri, setFailedUri] = useState<string | null>(null);
   const unavailable =
     (uri !== null && failedUri === uri) || (hosted && assetUrl._tag === "Failure");
-  const width = thumbnailWidth(
-    props.height,
-    decodedSize ?? (assetUrl._tag === "Success" ? assetUrl.imageDimensions : undefined),
-  );
+  const width = stripTileWidth(props.height);
   if (unavailable) {
-    return <ThumbnailPlaceholder height={props.height} width={width} label="Image unavailable" />;
+    return <ThumbnailPlaceholder height={props.height} label="Image unavailable" />;
   }
   return (
     <MediaActionsMenu media={media}>
@@ -123,7 +114,7 @@ function ThreadImageThumbnail(props: {
       >
         {/* Until the picture has drawn: while its signed URL resolves and while its bytes
             arrive, so a slow link shows it is loading rather than an empty box. */}
-        {uri === null || decodedSize === null ? (
+        {uri === null || !loaded ? (
           <View style={StyleSheet.absoluteFill} className="items-center justify-center">
             <AppActivityIndicator />
           </View>
@@ -136,7 +127,7 @@ function ThreadImageThumbnail(props: {
             contentFit="cover"
             transition={150}
             accessible={false}
-            onLoad={(event) => setDecodedSize(event.source)}
+            onLoad={() => setLoaded(true)}
             onError={() => setFailedUri(uri)}
             style={StyleSheet.absoluteFill}
           />
@@ -173,6 +164,7 @@ export function ThreadImageStrip(props: {
       ),
     [props.items],
   );
+  const tileWidth = stripTileWidth(props.height);
   const strip = (
     <FlatList
       horizontal
@@ -180,9 +172,14 @@ export function ThreadImageStrip(props: {
       showsHorizontalScrollIndicator={false}
       className={props.className}
       style={{ flexGrow: 0 }}
-      contentContainerStyle={{ gap: 8, height: props.height }}
+      contentContainerStyle={{ gap: THUMBNAIL_GAP, height: props.height }}
       data={props.items}
       keyExtractor={(item) => item.key}
+      getItemLayout={(_data, index) => ({
+        length: tileWidth,
+        offset: index * (tileWidth + THUMBNAIL_GAP),
+        index,
+      })}
       initialNumToRender={4}
       windowSize={5}
       renderItem={({ item }) =>

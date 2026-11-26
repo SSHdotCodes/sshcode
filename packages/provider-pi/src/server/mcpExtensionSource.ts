@@ -1,7 +1,7 @@
 /**
  * Source for the T3-owned Pi extension that consumes T3's HTTP MCP server.
  *
- * Pi 0.99+ discovers optional HTTP bridge tools on demand, including for
+ * Pi 0.99+ discovers HTTP bridge tool schemas on demand, including for
  * OpenAI-compatible gateways. Older versions keep tools directly available.
  * Pi loads this TypeScript via `--extension`; the
  * server writes it to a cache so packaged builds need no sibling .ts file.
@@ -12,6 +12,7 @@
 import {
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS_SOLO,
+  T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 
 export const PI_T3_MCP_EXTENSION_FILENAME = "pi-t3-mcp-extension.ts";
@@ -19,6 +20,7 @@ export const PI_T3_MCP_EXTENSION_FILENAME = "pi-t3-mcp-extension.ts";
 export const T3_MCP_URL_ENV = "T3_MCP_URL";
 export const T3_MCP_BEARER_ENV = "T3_MCP_BEARER_TOKEN";
 export const T3_PI_RUNTIME_MODE_ENV = "T3_PI_RUNTIME_MODE";
+export const T3_PI_SUBAGENT_ENV = "T3_PI_SUBAGENT";
 export const T3_PI_MCP_EXTENSION_PATH_ENV = "T3_PI_MCP_EXTENSION_PATH";
 /** Set to `1` when this chat has subagents off. Unset keeps the full rules. */
 export const T3_SUBAGENTS_OFF_ENV = "T3_SUBAGENTS_OFF";
@@ -40,6 +42,8 @@ const TOKEN_ENV = ${JSON.stringify(T3_MCP_BEARER_ENV)};
 const RUNTIME_MODE_ENV = ${JSON.stringify(T3_PI_RUNTIME_MODE_ENV)};
 const EXTENSION_PATH_ENV = ${JSON.stringify(T3_PI_MCP_EXTENSION_PATH_ENV)};
 const SUBAGENTS_OFF_ENV = ${JSON.stringify(T3_SUBAGENTS_OFF_ENV)};
+const SUBAGENT_ENV = ${JSON.stringify(T3_PI_SUBAGENT_ENV)};
+const SUBAGENT_INSTRUCTIONS = ${JSON.stringify(T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT.trim())};
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim())};
 const ORCHESTRATION_INSTRUCTIONS_SOLO = ${JSON.stringify(T3_CODE_ORCHESTRATION_INSTRUCTIONS_SOLO.trim())};
 const PROTOCOL = "2025-06-18";
@@ -60,7 +64,7 @@ type McpTool = {
   readonly name: string;
   readonly description?: string;
   readonly inputSchema?: Record<string, unknown>;
-  readonly annotations?: { readonly readOnlyHint?: boolean };
+  readonly annotations?: { readonly readOnlyHint?: boolean; readonly title?: string };
   readonly outputSchema?: Record<string, unknown>;
 };
 
@@ -318,15 +322,14 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     pi.getAllTools().some((tool) => tool.name === "tool_search" && tool.sourceInfo?.path === "builtin:tool-search");
 
   const readOnlyMcpTools = new Set<string>();
-  const isReadOnlyMcpTool = (name: string) => {
-    const extensionPath = env(EXTENSION_PATH_ENV);
-    if (extensionPath === undefined || !readOnlyMcpTools.has(name) || typeof pi.getAllTools !== "function") return false;
-    // A user extension may own the same name. Only our registered HTTP bridge
-    // may inherit the canonical SSHCode server's read-only annotation.
-    return pi.getAllTools().some((tool) => tool.name === name &&
-      typeof tool.sourceInfo?.path === "string" &&
-      NodePath.resolve(tool.sourceInfo.path) === NodePath.resolve(extensionPath));
-  };
+  const extensionPath = env(EXTENSION_PATH_ENV);
+  const isBridgeTool = (tool: { sourceInfo?: { path?: string } }) =>
+    extensionPath !== undefined && typeof tool.sourceInfo?.path === "string" &&
+    NodePath.resolve(tool.sourceInfo.path) === NodePath.resolve(extensionPath);
+  // A same-named tool from a user extension cannot inherit bridge annotations.
+  const isReadOnlyMcpTool = (name: string) =>
+    readOnlyMcpTools.has(name) && typeof pi.getAllTools === "function" &&
+    pi.getAllTools().some((tool) => tool.name === name && isBridgeTool(tool));
 
   pi.on("tool_call", async (event, ctx) => {
     const mode = runtimeMode();
@@ -362,8 +365,7 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   // Tool exposure arrived with registerMcpServer in Pi 0.99. Keep the HTTP
   // bridge as the credential owner: mcp.json overrides native registrations.
   const supportsExposure = "registerMcpServer" in pi && typeof pi.registerMcpServer === "function";
-  const directTools = new Set(["orchestrator_capabilities", "delegate_task", "task_status"]);
-  let deferOptionalTools = supportsExposure;
+  let deferTools = supportsExposure;
   let catalog: ReadonlyArray<McpTool> = [];
 
   const client = createMcpClient(endpoint, token);
@@ -379,7 +381,7 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
       for (const prefix of prefixes) {
         if (tool.annotations?.readOnlyHint === true) readOnlyMcpTools.add(\`\${prefix}\${name}\`);
         const exposure = prefix === "mcp__t3_code__" ? "hidden" :
-          deferOptionalTools && !directTools.has(name) ? "deferred" : "direct";
+          deferTools ? "deferred" : "direct";
         pi.registerTool({
           name: \`\${prefix}\${name}\`,
           label: name,
@@ -433,8 +435,8 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     if (!supportsExposure) return;
     // A disabled or replaced search builtin cannot discover deferred tools.
     const hasToolSearch = hasBuiltinToolSearch();
-    const exposureChanged = deferOptionalTools !== hasToolSearch;
-    deferOptionalTools = hasToolSearch;
+    const exposureChanged = deferTools !== hasToolSearch;
+    deferTools = hasToolSearch;
     if (exposureChanged) registerTools();
     const active = pi.getActiveTools();
     // Pi's search activates matched schemas before the next model request,
@@ -463,10 +465,19 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
   // with "/" and silently break slash-command expansion.
   pi.on("before_agent_start", (event) => {
     reconcileDiscovery();
-    const discovery = deferOptionalTools
-      ? "\\n\\nSome t3-code tools named below are deferred. Before calling a tool absent from your current tool definitions, use tool_search with its name or purpose; call it after search loads its schema."
+    const toolNames = deferTools
+      ? new Set(pi.getAllTools().filter(isBridgeTool).map((tool) => tool.name))
+      : undefined;
+    const entries = toolNames === undefined ? [] : catalog.flatMap((tool) => {
+      const name = "mcp__t3-code__" + tool.name;
+      if (!toolNames.has(name)) return [];
+      const purpose = tool.description?.split(/(?<=[.!?])\\s|\\n/u, 1)[0]?.trim();
+      return [tool.name + " — " + (purpose && purpose.length <= 120 ? purpose : (tool.annotations?.title ?? tool.name))];
+    });
+    const discovery = entries.length > 0
+      ? "\\n\\nAvailable t3-code MCP tools. For a tool absent from your current definitions, use tool_search with its exact name and limit 1, then call it.\\n" + entries.join("\\n")
       : "";
-    const instructions =
+    const instructions = process.env[SUBAGENT_ENV] === "1" ? SUBAGENT_INSTRUCTIONS :
       process.env[SUBAGENTS_OFF_ENV] === "1"
         ? ORCHESTRATION_INSTRUCTIONS_SOLO
         : ORCHESTRATION_INSTRUCTIONS;

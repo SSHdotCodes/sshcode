@@ -73,6 +73,8 @@ export interface ProjectSetupScriptRunnerInput {
    * t3.json, so a repository's setup applies without importing it first.
    */
   readonly useWorktreeProjectFile?: boolean;
+  /** Allows setup scripts to defer optional work in a subagent's worktree. */
+  readonly subagentWorktree?: boolean;
   readonly project?: {
     readonly id: ProjectId;
     readonly workspaceRoot: string;
@@ -130,6 +132,8 @@ export class ProjectSetupScriptRunner extends Context.Service<
     readonly runForThread: (
       input: ProjectSetupScriptRunnerInput,
     ) => Effect.Effect<ProjectSetupScriptRunnerResult, ProjectSetupScriptRunnerError>;
+    /** Foreground setup takes priority over interruptible background preparation. */
+    readonly whenIdle: <A, E, R>(task: Effect.Effect<A, E, R>) => Effect.Effect<void, E, R>;
   }
 >()("t3/project/ProjectSetupScriptRunner") {}
 
@@ -197,20 +201,22 @@ function wrapCommandForCompletion(
   command: string,
   shell: CompletionShell,
   sentinel: string,
+  keepShellState: boolean,
 ): string {
   const body = command.replace(/\r?\n/g, "\r");
   switch (shell) {
     case "powershell":
-      return `$global:LASTEXITCODE = $null; & {\r${body}\r}; if ($null -ne $LASTEXITCODE) { $__t3c = $LASTEXITCODE } elseif ($?) { $__t3c = 0 } else { $__t3c = 1 }; Write-Host "${sentinel}$__t3c"`;
+      return `$global:LASTEXITCODE = $null; ${keepShellState ? "." : "&"} {\r${body}\r}; if ($null -ne $LASTEXITCODE) { $__t3c = $LASTEXITCODE } elseif ($?) { $__t3c = 0 } else { $__t3c = 1 }; Write-Host "${sentinel}$__t3c"`;
     case "fish":
       return `begin\r${body}\rend; printf '\\n${sentinel}%s\\n' $status`;
     case "posix":
-      return `( ${body}\r); printf '\\n${sentinel}%s\\n' "$?"`;
+      return `${keepShellState ? `{ ${body}\r}` : `( ${body}\r)`}; printf '\\n${sentinel}%s\\n' "$?"`;
   }
 }
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
+  const scope = yield* Effect.scope;
   const projects = yield* ProjectService.ProjectService;
   const terminalManager = yield* TerminalManager.TerminalManager;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -221,6 +227,14 @@ export const make = Effect.gen(function* () {
     yield* HostProcess.Platform,
     yield* HostProcess.Environment,
   );
+  let activeSetups = 0;
+  let foregroundStarted = Deferred.makeUnsafe<void>();
+  const whenIdle: ProjectSetupScriptRunner["Service"]["whenIdle"] = (task) =>
+    Effect.suspend(() =>
+      activeSetups === 0
+        ? Effect.raceFirst(task.pipe(Effect.asVoid), Deferred.await(foregroundStarted))
+        : Effect.void,
+    );
 
   /**
    * Watches the setup terminal for the completion sentinel. Terminal output is
@@ -313,12 +327,12 @@ export const make = Effect.gen(function* () {
         return Effect.void;
       });
 
-      const completion = Deferred.await(done).pipe(
+      return {
+        result: Deferred.await(done),
         // A shell with an empty prompt never prints one; do not wait forever.
-        Effect.tap(() => Deferred.await(promptReturned).pipe(Effect.timeoutOption("1 second"))),
-        Effect.ensuring(Effect.sync(() => unsubscribe())),
-      );
-      return { completion, unsubscribe };
+        waitForPrompt: Deferred.await(promptReturned).pipe(Effect.timeoutOption("1 second")),
+        unsubscribe,
+      };
     });
 
   /** The setup script a checkout's t3.json declares; unreadable or invalid files have none. */
@@ -419,23 +433,26 @@ export const make = Effect.gen(function* () {
         project: { cwd: project.workspaceRoot },
         worktreePath: input.worktreePath,
       }),
+      ...(trigger === "setup" && input.subagentWorktree ? { T3CODE_SUBAGENT_WORKTREE: "1" } : {}),
       // Setup can run before a client attaches. Truecolor probes in tools such
       // as Vite+ wait for terminal replies that nobody can send at that point.
       // Keep TERM's 256-color support without advertising truecolor here.
       COLORTERM: "",
     };
     const observe = input.observeCompletion;
-    const completionToken = observe
-      ? (yield* crypto.randomUUIDv4().pipe(Effect.orDie)).replaceAll("-", "")
-      : null;
-    const commandLine =
-      observe && completionToken
-        ? wrapCommandForCompletion(
-            script.command,
-            completionShell,
-            completionSentinel(completionToken),
-          )
-        : script.command;
+    const trackSetup = trigger === "setup";
+    const completionToken =
+      observe || trackSetup
+        ? (yield* crypto.randomUUIDv4().pipe(Effect.orDie)).replaceAll("-", "")
+        : null;
+    const commandLine = completionToken
+      ? wrapCommandForCompletion(
+          script.command,
+          completionShell,
+          completionSentinel(completionToken),
+          observe === undefined,
+        )
+      : script.command;
 
     yield* terminalManager
       .open({
@@ -457,45 +474,75 @@ export const make = Effect.gen(function* () {
         ),
       );
     // Subscribe before writing so the sentinel cannot race past the listener.
-    const observed =
-      observe && completionToken
-        ? yield* observeTerminalCompletion({
+    const observed = completionToken
+      ? yield* observeTerminalCompletion({
+          threadId: input.threadId,
+          terminalId,
+          sentinel: completionSentinel(completionToken),
+          sentinelPattern: completionSentinelPattern(completionToken),
+          echoedWrapperLines: commandLine.split("\r").filter((line) => line.length > 0),
+          onOutputLine: observe?.onOutputLine,
+        })
+      : undefined;
+
+    const completion = yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        if (trackSetup) {
+          activeSetups++;
+          const started = foregroundStarted;
+          foregroundStarted = Deferred.makeUnsafe<void>();
+          yield* Deferred.succeed(started, undefined);
+        }
+        const endSetup = Effect.sync(() => {
+          if (trackSetup) activeSetups--;
+        });
+        yield* restore(
+          terminalManager.write({
             threadId: input.threadId,
             terminalId,
-            sentinel: completionSentinel(completionToken),
-            sentinelPattern: completionSentinelPattern(completionToken),
-            echoedWrapperLines: commandLine.split("\r").filter((line) => line.length > 0),
-            onOutputLine: observe.onOutputLine,
-          })
-        : undefined;
+            data: `${commandLine}\r`,
+          }),
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProjectSetupScriptOperationError({
+                ...errorContext,
+                operation: "writeCommand",
+                cause,
+              }),
+          ),
+          Effect.onError(() =>
+            endSetup.pipe(Effect.andThen(Effect.sync(() => observed?.unsubscribe()))),
+          ),
+        );
+        if (observed === undefined) return undefined;
 
-    yield* terminalManager
-      .write({
-        threadId: input.threadId,
-        terminalId,
-        data: `${commandLine}\r`,
-      })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProjectSetupScriptOperationError({
-              ...errorContext,
-              operation: "writeCommand",
-              cause,
-            }),
-        ),
-        // Nothing will ever settle the completion if the command never ran.
-        Effect.tapError(() => Effect.sync(() => observed?.unsubscribe())),
-      );
-
-    // A clean run leaves only an idle prompt behind; its output stays in the
-    // terminal history. A failed run keeps its shell open for a look.
-    const completion = observed?.completion.pipe(
-      Effect.tap(({ exitCode }) =>
-        exitCode === 0
-          ? terminalManager.closeIdle({ threadId: input.threadId, terminalId })
-          : Effect.void,
-      ),
+        // Track completion even if the caller does not wait. An observed, successful
+        // setup keeps its history and closes the terminal only after the prompt returns.
+        const finalized = yield* Deferred.make<ProjectSetupScriptCompletion>();
+        yield* observed.result.pipe(
+          Effect.ensuring(endSetup),
+          Effect.tap(({ exitCode }) =>
+            observe && exitCode === 0
+              ? observed.waitForPrompt.pipe(
+                  Effect.andThen(() =>
+                    terminalManager.closeIdle({ threadId: input.threadId, terminalId }),
+                  ),
+                )
+              : Effect.void,
+          ),
+          Effect.tap((result) => Deferred.succeed(finalized, result)),
+          Effect.ensuring(Effect.sync(observed.unsubscribe)),
+          Effect.interruptible,
+          Effect.forkIn(scope),
+        );
+        // Prompt redraw and terminal history persistence can finish independently.
+        return observe
+          ? trackSetup && input.subagentWorktree
+            ? observed.result
+            : Deferred.await(finalized)
+          : undefined;
+      }),
     );
 
     return {
@@ -510,7 +557,7 @@ export const make = Effect.gen(function* () {
     } as const;
   });
 
-  return ProjectSetupScriptRunner.of({ runForThread });
+  return ProjectSetupScriptRunner.of({ runForThread, whenIdle });
 });
 
 export const layer = Layer.effect(ProjectSetupScriptRunner, make);

@@ -2,6 +2,16 @@ import type { ProviderApprovalDecision } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 const NonEmptyString = Schema.String.check(Schema.isMinLength(1));
+const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+
+export const MUSE_MAX_PATCH_BYTES = 128 * 1024;
+
+export const MuseStoredOutputPage = Schema.Struct({
+  content: Schema.String,
+  encoding: Schema.Literals(["utf8", "base64"]),
+  eof: Schema.Boolean,
+  offsetBytes: NonNegativeInt,
+});
 
 const MuseUsage = Schema.Struct({
   inputTokens: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -43,6 +53,13 @@ export const MuseItem = Schema.Struct({
   tool: Schema.optional(Schema.String),
   args: Schema.optional(Schema.String),
   visibleOutput: Schema.optional(Schema.String),
+  patchRef: Schema.optional(
+    Schema.Struct({
+      id: NonEmptyString,
+      availability: Schema.String,
+      byteLen: NonNegativeInt,
+    }),
+  ),
   truncated: Schema.optional(Schema.Boolean),
   failureReason: Schema.optional(Schema.String),
   fallbackText: Schema.optional(Schema.String),

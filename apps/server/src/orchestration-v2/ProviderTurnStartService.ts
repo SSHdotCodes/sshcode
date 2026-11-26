@@ -207,16 +207,15 @@ export const layer: Layer.Layer<
         typeof RunExecutionService.selectInheritedBackgroundTurnItems
       >;
     }) => {
-      // Guards and background routing need live execution state, not a fresh
-      // allocation of every completed message and tool output in the thread.
-      // `false` means the run moved on or is gone. A failed read is an error,
-      // so the caller fails the start or the run instead of skipping it.
+      // Recheck ownership at every start and finalization boundary, including
+      // after the provider opens. Read failures must reach the caller.
+      const readAttemptState = () =>
+        projectionStore.getRunAttemptState(input.threadId, input.runId);
       const isCurrentAttemptInStatus = (expectedStatus: OrchestrationV2Run["status"]) =>
-        projectionStore.getRuntimeRecoveryProjection(input.threadId).pipe(
-          Effect.map((current) => {
-            const run = current.runs.find((candidate) => candidate.id === input.runId);
-            return run?.activeAttemptId === input.attemptId && run.status === expectedStatus;
-          }),
+        readAttemptState().pipe(
+          Effect.map(
+            (run) => run?.activeAttemptId === input.attemptId && run.status === expectedStatus,
+          ),
         );
       return {
         isCurrentAttemptInStatus,
@@ -235,14 +234,12 @@ export const layer: Layer.Layer<
           ),
         shouldStartProviderTurn: () => isCurrentAttemptInStatus("running"),
         shouldFinalizeRun: () =>
-          projectionStore.getRuntimeRecoveryProjection(input.threadId).pipe(
-            Effect.map((current) => {
-              const run = current.runs.find((candidate) => candidate.id === input.runId);
-              return (
+          readAttemptState().pipe(
+            Effect.map(
+              (run) =>
                 run?.activeAttemptId === input.attemptId &&
-                (run.status === "starting" || run.status === "running")
-              );
-            }),
+                (run.status === "starting" || run.status === "running"),
+            ),
           ),
         hasUnpairedRunInterruptRequest: () =>
           projectionStore
@@ -655,6 +652,7 @@ export const layer: Layer.Layer<
         );
         const sessionResult = yield* Effect.result(
           providerSessions.open({
+            isSubagent: projection.thread.lineage.relationshipToParent === "subagent",
             threadId: projection.thread.id,
             providerSessionId,
             modelSelection: run.modelSelection,
@@ -793,6 +791,7 @@ export const layer: Layer.Layer<
             yield* providerSessions.release({ providerSessionId, reason: "manual_shutdown" });
             const opened = yield* Effect.result(
               providerSessions.open({
+                isSubagent: projection.thread.lineage.relationshipToParent === "subagent",
                 threadId: projection.thread.id,
                 providerSessionId,
                 modelSelection: run.modelSelection,

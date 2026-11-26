@@ -20,6 +20,7 @@ import { downloadFileName } from "./attachmentDownload";
 import { estimateBase64ByteSize } from "./base64";
 import {
   COMPOSER_ATTACHMENT_DIRECTORY,
+  isAttachmentCacheFile,
   isComposerAttachmentFileRetained,
   resolveOwnedComposerAttachmentFileUri,
 } from "./composerAttachmentFiles";
@@ -29,6 +30,7 @@ import { fitComposerImage, renderPhoto } from "./composerImageFit";
 import { beginForegroundHandoff } from "./foreground-handoff";
 import { uuidv4 } from "./uuid";
 import { writeFileAtomically } from "./atomic-file";
+import { SerializedAsyncQueue } from "./serialized-async-queue";
 
 export interface DraftComposerImageAttachment extends Omit<UploadChatImageAttachment, "dataUrl"> {
   readonly id: string;
@@ -313,7 +315,7 @@ async function createComposerFileAttachment(input: {
       throw new Error(`'${input.name}' is empty or could not be read.`);
     }
     if (sizeBytes > input.maxBytes) {
-      throw new Error(fileAttachmentTooLargeMessage(input.name, input.maxBytes));
+      throw new Error(fileAttachmentTooLargeMessage(input.name, input.maxBytes, sizeBytes));
     }
     return {
       id: uuidv4(),
@@ -329,9 +331,111 @@ async function createComposerFileAttachment(input: {
   }
 }
 
+const videoExports = new SerializedAsyncQueue();
+const VIDEO_EXPORT_DIRECTORY = "t3-composer-video-exports";
+const VIDEO_EXPORT_PRESETS = ["hevc1080", "h264720", "h264480"] as const;
+
+interface ExportedComposerVideo {
+  readonly uri: string;
+  readonly sizeBytes: number;
+  readonly durationSeconds: number;
+}
+
+export type ReportComposerVideoCompression = (name: string) => void;
+
+async function removeCachedVideo(uri: string, directoryName: string): Promise<void> {
+  try {
+    const { Directory, File, Paths } = await import("expo-file-system");
+    const directory = new Directory(Paths.cache, directoryName);
+    if (isAttachmentCacheFile(uri, directory.uri)) {
+      const file = new File(uri);
+      if (file.exists) file.delete();
+    }
+  } catch (error) {
+    console.warn("[composer-attachments] could not remove a temporary video", error);
+  }
+}
+
+export async function createComposerVideoAttachment(input: {
+  readonly uri: string;
+  readonly name: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number | null;
+  readonly maxBytes: number;
+  readonly onCompressing?: ReportComposerVideoCompression;
+}): Promise<DraftComposerFileAttachment> {
+  const { File } = await import("expo-file-system");
+  const measuredSize = new File(input.uri).size;
+  const sizeBytes =
+    measuredSize === null || (measuredSize === 0 && input.uri.startsWith("content:"))
+      ? input.sizeBytes
+      : measuredSize;
+  const maxBytes = clampFileAttachmentUploadBytes(input.maxBytes);
+  if (sizeBytes === null || sizeBytes <= maxBytes) {
+    return createComposerFileAttachment({ ...input, sizeBytes, maxBytes });
+  }
+
+  const sizeError = fileAttachmentTooLargeMessage(input.name, maxBytes, sizeBytes);
+  const { requireOptionalNativeModule } = await import("expo");
+  const native = requireOptionalNativeModule<{
+    exportAttachmentVideo?: (
+      uri: string,
+      preset: (typeof VIDEO_EXPORT_PRESETS)[number],
+    ) => Promise<ExportedComposerVideo>;
+  }>("T3NativeControls");
+  const exportVideo = native?.exportAttachmentVideo;
+  if (exportVideo === undefined || !input.uri.startsWith("file:")) {
+    throw new Error(sizeError);
+  }
+
+  input.onCompressing?.(input.name);
+  const endHandoff = beginForegroundHandoff();
+  return videoExports
+    .run(async () => {
+      let longestFittingSeconds = 0;
+      for (const preset of VIDEO_EXPORT_PRESETS) {
+        let exported: ExportedComposerVideo;
+        try {
+          exported = await exportVideo(input.uri, preset);
+        } catch {
+          // HEVC or a particular resolution can be unavailable for this asset or device.
+          continue;
+        }
+        try {
+          if (exported.sizeBytes <= maxBytes) {
+            return await createComposerFileAttachment({
+              uri: exported.uri,
+              name: `${input.name.replace(/\.[^.]+$/, "") || "video"}.mp4`,
+              mimeType: "video/mp4",
+              sizeBytes: exported.sizeBytes,
+              maxBytes,
+            });
+          }
+          longestFittingSeconds = Math.max(
+            longestFittingSeconds,
+            (exported.durationSeconds * maxBytes) / exported.sizeBytes,
+          );
+        } finally {
+          await removeCachedVideo(exported.uri, VIDEO_EXPORT_DIRECTORY);
+        }
+      }
+      if (longestFittingSeconds <= 0) {
+        throw new Error(`${sizeError} Could not compress this video.`);
+      }
+      const useMinutes = longestFittingSeconds >= 120;
+      const amount = Math.max(1, Math.floor(longestFittingSeconds / (useMinutes ? 60 : 1)));
+      const unit = useMinutes ? "minute" : "second";
+      throw new Error(
+        `${sizeError} Keep it under about ${amount} ${unit}${amount === 1 ? "" : "s"}.`,
+      );
+    })
+    .finally(endHandoff);
+}
+
 export async function pickComposerFiles(input: {
   readonly existingCount: number;
   readonly maxBytes?: number;
+  readonly onCompressing?: ReportComposerVideoCompression;
 }): Promise<{
   readonly files: ReadonlyArray<DraftComposerFileAttachment>;
   readonly error: string | null;
@@ -370,26 +474,31 @@ export async function pickComposerFiles(input: {
   let error: string | null = null;
   let exceededAttachmentLimit = false;
   for (const file of result.assets) {
-    if (attachments.length >= remainingSlots) {
-      exceededAttachmentLimit = true;
-      break;
-    }
     // A SAF/document picker can hand back a blank display name; the wire
     // contract rejects empty names at send time, so fall back before the name
     // reaches storage, errors, or the attachment itself.
     const name = file.name.trim().length > 0 ? file.name : "file";
+    const mimeType = file.mimeType || "application/octet-stream";
+    const video = videoMimeType({ name, mimeType });
     try {
+      if (attachments.length >= remainingSlots) {
+        exceededAttachmentLimit = true;
+        continue;
+      }
       attachments.push(
-        await createComposerFileAttachment({
+        await (video ? createComposerVideoAttachment : createComposerFileAttachment)({
           uri: file.uri,
           name,
-          mimeType: file.mimeType || "application/octet-stream",
+          mimeType: video ?? mimeType,
           sizeBytes: file.size ?? null,
           maxBytes,
+          onCompressing: input.onCompressing,
         }),
       );
     } catch (cause) {
       error = cause instanceof Error ? cause.message : `Could not read '${name}'.`;
+    } finally {
+      if (video) await removeCachedVideo(file.uri, "DocumentPicker");
     }
   }
   if (exceededAttachmentLimit) {
@@ -432,6 +541,7 @@ export async function pickComposerMedia(input: {
   readonly existingCount: number;
   readonly source?: ComposerMediaSource;
   readonly maxVideoBytes?: number;
+  readonly onCompressing?: ReportComposerVideoCompression;
 }): Promise<{
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly error: string | null;
@@ -484,6 +594,14 @@ export async function pickComposerMedia(input: {
         // hand JS a 10 MB+ string, which stalled the composer for seconds.
         base64: false,
         quality: 1,
+        ...(input.maxVideoBytes !== undefined
+          ? {
+              // Automatic can hand back a larger H.264 copy of an HEVC recording.
+              // HEIC photos from the same picker already take the JPEG rendering path below.
+              preferredAssetRepresentationMode:
+                imagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
+            }
+          : {}),
         shouldDownloadFromNetwork: true,
       });
     }
@@ -512,31 +630,39 @@ export async function pickComposerMedia(input: {
   let error: string | null = null;
 
   for (const asset of result.assets) {
+    const mimeType = asset.mimeType?.toLowerCase();
+    const isVideo = asset.type === "video" || mimeType?.startsWith("video/");
     if (attachments.length >= remainingSlots) {
       error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} attachments per message.`;
-      break;
+      if (isVideo) await removeCachedVideo(asset.uri, "ImagePicker");
+      continue;
     }
-    const mimeType = asset.mimeType?.toLowerCase();
-    if (asset.type === "video" || mimeType?.startsWith("video/")) {
-      if (input.maxVideoBytes === undefined) {
-        error = "Video attachments are unavailable here.";
-        continue;
-      }
+    if (isVideo) {
       try {
+        if (input.maxVideoBytes === undefined) {
+          error = "Video attachments are unavailable here.";
+          continue;
+        }
         const { File } = await import("expo-file-system");
         const file = new File(asset.uri);
+        const name = asset.fileName?.trim() || file.name || "video";
         attachments.push(
-          await createComposerFileAttachment({
+          await createComposerVideoAttachment({
             uri: asset.uri,
-            name: asset.fileName?.trim() || file.name || "video",
-            mimeType: mimeType || file.type || "application/octet-stream",
+            name,
+            mimeType:
+              videoMimeType({ name, mimeType: mimeType ?? file.type }) ??
+              "application/octet-stream",
             sizeBytes: asset.fileSize ?? null,
-            maxBytes: clampFileAttachmentUploadBytes(input.maxVideoBytes),
+            maxBytes: input.maxVideoBytes,
+            onCompressing: input.onCompressing,
           }),
         );
       } catch (cause) {
         error =
           cause instanceof Error ? cause.message : `Could not read '${asset.fileName ?? "video"}'.`;
+      } finally {
+        await removeCachedVideo(asset.uri, "ImagePicker");
       }
       continue;
     }

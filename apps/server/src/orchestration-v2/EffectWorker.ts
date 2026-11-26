@@ -1,4 +1,6 @@
 import { secretRequestAnswerCommand } from "./secretRequestAnswer.ts";
+import { deliverThreadSendCompletion } from "./ThreadSendCompletion.ts";
+import { threadSendFields } from "./NotificationMailbox.ts";
 import { createdChatFailureCommand } from "./createdChatFailure.ts";
 import { CommandId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -142,6 +144,22 @@ export const layerExecutor: Layer.Layer<
               ),
             );
           }
+          case "thread-send.complete":
+            return deliverThreadSendCompletion(
+              threads,
+              effect.threadId,
+              effect.commandId,
+              effect.request,
+            ).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
           case "created-chat.failure": {
             const request = effect.request;
             return Effect.gen(function* () {
@@ -205,6 +223,31 @@ export const layerExecutor: Layer.Layer<
                   }),
               ),
             );
+          case "provider-session.runtime-mode.apply": {
+            const request = effect.request;
+            return Effect.gen(function* () {
+              const thread = yield* threads.getThreadShell(effect.threadId);
+              if (
+                thread?.activeProviderThreadId !== request.providerThreadId ||
+                thread.runtimeMode !== request.runtimeMode ||
+                thread.archivedAt !== null ||
+                thread.deletedAt !== null
+              )
+                return;
+              const runtime = yield* providerSessions.get(request.providerSessionId);
+              if (Option.isSome(runtime))
+                yield* runtime.value.setRuntimeMode?.(request) ?? Effect.void;
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: request.type,
+                    cause,
+                  }),
+              ),
+            );
+          }
           case "provider-session.detach": {
             const detach = providerSessions.detach({
               providerSessionId: effect.request.providerSessionId,
@@ -400,9 +443,7 @@ export const layerExecutor: Layer.Layer<
                         ...(message.scheduledTaskId === undefined
                           ? {}
                           : { scheduledTaskId: message.scheduledTaskId }),
-                        ...(message.senderThreadId === undefined
-                          ? {}
-                          : { senderThreadId: message.senderThreadId }),
+                        ...threadSendFields(message),
                       })
                       .pipe(
                         // The turn that just completed leaves no further retry

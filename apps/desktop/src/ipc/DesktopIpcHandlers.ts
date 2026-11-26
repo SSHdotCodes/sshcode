@@ -37,10 +37,12 @@ import {
   resolveSshPasswordPrompt,
 } from "./methods/sshEnvironment.ts";
 import {
+  cancelUpdateWhenIdle,
   checkForUpdate,
   downloadUpdate,
   getUpdateState,
   installUpdate,
+  installUpdateWhenIdle,
   setUpdateChannel,
 } from "./methods/updates.ts";
 import {
@@ -169,6 +171,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setUpdateChannel);
   yield* ipc.handle(downloadUpdate);
   yield* ipc.handle(installUpdate);
+  yield* ipc.handle(installUpdateWhenIdle);
+  yield* ipc.handle(cancelUpdateWhenIdle);
   yield* ipc.handle(checkForUpdate);
   yield* ipc.handle(getCliCommandState);
   yield* ipc.handle(installCliCommand);
@@ -176,6 +180,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   for (const previewMethod of PreviewIpc.methods) {
     yield* ipc.handle(previewMethod);
   }
+  yield* ipc.handle(PreviewIpc.getPreviewConfig);
   yield* ipc.handle(PreviewIpc.listBrowserImportSources);
   yield* ipc.handle(PreviewIpc.importBrowserCookies);
 });

@@ -7,7 +7,12 @@ export type ThreadFeedLiveFollowEvent =
       readonly userScrollSessionActive: boolean;
     }
   | {
-      readonly type: "scroll" | "disclosure-settled";
+      readonly type: "scroll";
+      readonly readIsAtEnd: () => boolean;
+      readonly userScrollSessionActive: boolean;
+    }
+  | {
+      readonly type: "disclosure-settled";
       readonly isAtEnd: boolean;
       readonly userScrollSessionActive: boolean;
     };
@@ -79,13 +84,7 @@ export function resolveThreadFeedLiveFollow(
     case "disclosure-settled":
       return !event.userScrollSessionActive && event.isAtEnd;
     case "scroll":
-      if (event.userScrollSessionActive) {
-        return false;
-      }
-      if (event.isAtEnd) {
-        return true;
-      }
-      return current;
+      return !event.userScrollSessionActive && (current || event.readIsAtEnd());
   }
 }
 

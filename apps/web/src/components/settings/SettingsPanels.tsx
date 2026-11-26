@@ -1,3 +1,9 @@
+import { useAtomValue } from "@effect/atom-react";
+import {
+  useSharedSettingsSyncTargetIds,
+  useUpdateEnvironmentSettings,
+} from "../../hooks/useSettings";
+import { chatListTabsEnabledAtom } from "../../state/server";
 import { useNowMinuteMs } from "../../hooks/useNowMinute";
 import { DiscordProfileSetting } from "../discord/DiscordProfile";
 import { useDesktopMascotPreference } from "../chat/DesktopMascot";
@@ -60,14 +66,17 @@ import { IS_NIGHTLY_BUILD, NightlyMobileBetaRow } from "../NightlyMobileBeta";
 import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import {
   canCheckForUpdate,
+  formatWorkingChats,
   getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateCheckError,
   getDesktopUpdateInstallConfirmationMessage,
+  installDesktopUpdate,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldToastDesktopUpdateActionResult,
 } from "../../components/desktopUpdate.logic";
+import { showDesktopUpdateWaitingToast } from "../../components/desktopUpdate.toast";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import {
@@ -375,6 +384,7 @@ function AboutVersionSection() {
         confirmed = await ensureLocalApi().dialogs.confirm(
           getDesktopUpdateInstallConfirmationMessage(
             updateState ?? { availableVersion: null, downloadedVersion: null },
+            { waitsForIdle: bridge.installUpdateWhenIdle !== undefined },
           ),
         );
       } catch (error) {
@@ -392,12 +402,12 @@ function AboutVersionSection() {
         setIsUpdateActionPending(false);
         return;
       }
-      void bridge
-        .installUpdate()
+      void installDesktopUpdate(bridge, updateState)
         .then((result) => {
           const actionError = shouldToastDesktopUpdateActionResult(result)
             ? getDesktopUpdateActionError(result)
             : null;
+          if (!actionError && result.accepted) showDesktopUpdateWaitingToast(bridge, result.state);
           if (actionError) {
             toastManager.add(
               stackedThreadToast({
@@ -456,7 +466,11 @@ function AboutVersionSection() {
       ? !canCheckForUpdate(updateState)
       : isDesktopUpdateButtonDisabled(updateState);
 
-  const actionLabel: Record<string, string> = { download: "Download", install: "Install" };
+  const waiting = updateState?.installWhenIdle;
+  const actionLabel: Record<string, string> = {
+    download: "Download",
+    install: waiting ? "Restart Now" : "Install",
+  };
   const statusLabel: Record<string, string> = {
     checking: "Checking…",
     downloading: "Downloading…",
@@ -464,8 +478,9 @@ function AboutVersionSection() {
   };
   const buttonLabel =
     actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? "Check for Updates";
-  const description =
-    action === "install"
+  const description = waiting
+    ? `Installs when chats finish (${formatWorkingChats(waiting.working)} working).`
+    : action === "install"
       ? "Update downloaded and ready to install."
       : action === "download"
         ? "Update available."
@@ -478,21 +493,32 @@ function AboutVersionSection() {
         title={<AboutVersionTitle />}
         description={description}
         control={
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={buttonDisabled || isUpdateActionPending}
-                  onClick={handleButtonClick}
-                >
-                  {buttonLabel}
-                </Button>
-              }
-            />
-            {buttonTooltip ? <TooltipPopup>{buttonTooltip}</TooltipPopup> : null}
-          </Tooltip>
+          <div className="flex items-center gap-2">
+            {waiting && window.desktopBridge?.cancelUpdateWhenIdle ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void window.desktopBridge?.cancelUpdateWhenIdle?.()}
+              >
+                Cancel
+              </Button>
+            ) : null}
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={buttonDisabled || isUpdateActionPending}
+                    onClick={handleButtonClick}
+                  >
+                    {buttonLabel}
+                  </Button>
+                }
+              />
+              {buttonTooltip ? <TooltipPopup>{buttonTooltip}</TooltipPopup> : null}
+            </Tooltip>
+          </div>
         }
       />
       {hasDesktopBridge ? (
@@ -575,6 +601,9 @@ export function useSettingsRestore(onRestored?: () => void) {
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
 
+  const chatListTabsEnabled = useAtomValue(chatListTabsEnabledAtom);
+  const updateSharedSettings = useUpdateEnvironmentSettings(null);
+
   const isTextGenerationModelDirty = !Equal.equals(
     settings.textGenerationModelSelection ?? null,
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
@@ -638,6 +667,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.sidebarProjectSortOrder !== DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder
         ? ["Project order"]
         : []),
+      ...(chatListTabsEnabled === false ? ["Chat list tabs"] : []),
       ...(settings.sidebarWorkingShelfEnabled !==
       DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
         ? ["Working section"]
@@ -796,6 +826,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.snoozeLimitedThreads,
       settings.sidebarProjectGroupingMode,
       settings.sidebarProjectSortOrder,
+      chatListTabsEnabled,
       settings.sidebarWorkingShelfEnabled,
       settings.sidebarThreadPreviewCount,
       settings.showSkillsInSlashMenu,
@@ -951,9 +982,12 @@ export function useSettingsRestore(onRestored?: () => void) {
       // rather than discovering it later.
       enableAgentBrowserAccess: DEFAULT_UNIFIED_SETTINGS.enableAgentBrowserAccess,
     });
+    if (chatListTabsEnabled === false) updateSharedSettings({ chatListTabsEnabled: true });
     onRestored?.();
   }, [
     changedSettingLabels,
+    chatListTabsEnabled,
+    updateSharedSettings,
     clearThemeHalves,
     onRestored,
     setFollowSystem,
@@ -2453,7 +2487,7 @@ export function GeneralSettingsPanel() {
               control={
                 <DraftInput
                   size="sm"
-                  className="w-full sm:w-72"
+                  className="w-full sm:w-44"
                   value={mixedAddProjectBaseDirectory ? "" : settings.addProjectBaseDirectory}
                   onCommit={(next) => updateSettings({ addProjectBaseDirectory: next })}
                   placeholder={mixedAddProjectBaseDirectory ? "Mixed" : "~/"}
@@ -2487,11 +2521,11 @@ export function GeneralSettingsPanel() {
           }
           control={
             !hasServerTargets ? (
-              <span className="text-sm text-muted-foreground">
+              <span className="text-xs text-muted-foreground">
                 Connect an environment to choose its text generation model.
               </span>
             ) : !hasTextGenerationProvider ? (
-              <span className="text-sm text-muted-foreground">
+              <span className="text-xs text-muted-foreground">
                 No text generation providers available.
               </span>
             ) : (
@@ -2982,6 +3016,7 @@ export function ChatsSettingsPanel() {
           }
         />
         <SessionBoxesSettingRow />
+        <ChatListTabsSettingRow />
         <SettingsRow
           {...searchableSetting("working-shelf")}
           description="Fold working chats into a Working section. They return to the top when they need you."
@@ -3033,11 +3068,7 @@ export function ChatsSettingsPanel() {
                 if (option) updateSettings({ sendShortcut: option.value });
               }}
             >
-              <SelectTrigger
-                size="sm"
-                className="w-auto min-w-0 max-w-full"
-                aria-label="Send shortcut"
-              >
+              <SelectTrigger size="sm" className="w-full sm:w-44" aria-label="Send shortcut">
                 <SelectValue>
                   {
                     sendShortcutOptions.find((option) => option.value === settings.sendShortcut)
@@ -3087,7 +3118,7 @@ export function ChatsSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger size="sm" className="w-auto min-w-0" aria-label="Follow-up messages">
+              <SelectTrigger size="sm" className="w-full sm:w-44" aria-label="Follow-up messages">
                 <SelectValue>
                   {settings.followUpBehavior === "queue" ? "Queue" : "Steer"}
                 </SelectValue>
@@ -4017,6 +4048,34 @@ function SessionBoxesSettingRow() {
           checked={layout === "boxes"}
           onCheckedChange={(checked) => setLayout(checked ? "boxes" : "list")}
           aria-label="Show chats as boxes"
+        />
+      }
+    />
+  );
+}
+
+function ChatListTabsSettingRow() {
+  const enabled = useAtomValue(chatListTabsEnabledAtom);
+  const canWrite = useSharedSettingsSyncTargetIds().length > 0;
+  const updateSettings = useUpdateEnvironmentSettings(null);
+  return (
+    <SettingsRow
+      {...searchableSetting("chat-list-tabs")}
+      description="Show tabs for your folders above the chat list"
+      resetAction={
+        enabled === false && canWrite ? (
+          <SettingResetButton
+            label="chat list tabs"
+            onClick={() => updateSettings({ chatListTabsEnabled: true })}
+          />
+        ) : null
+      }
+      control={
+        <Switch
+          aria-label="Chat list tabs"
+          disabled={!canWrite}
+          checked={enabled !== false}
+          onCheckedChange={(checked) => updateSettings({ chatListTabsEnabled: checked })}
         />
       }
     />

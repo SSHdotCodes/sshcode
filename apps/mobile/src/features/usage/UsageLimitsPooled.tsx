@@ -88,6 +88,13 @@ function ProviderLimitsCard({
       .join(", ") || account.sourceLabel;
   // Use the same recent-or-average forecast as the web and thread details. A Google plan's
   // headline follows Gemini's limits, not the pool it shares out to Claude and GPT.
+  // With one account, its per-window rows would only repeat the bars above them, so the
+  // card ends in a single row that opens the account instead.
+  const soleAccountWindow =
+    pool.accounts.length === 1 && pool.unread.length === 0
+      ? windows.find((window) => window.members.length === 1)
+      : undefined;
+  const soleMember = soleAccountWindow?.members[0];
   const forecastWindows = headlineWindows(pool.driver, windows);
   const forecast = poolForecast(forecastWindows, now);
   const forecastText = forecast ? describeLimitForecast(forecast, now) : null;
@@ -175,7 +182,7 @@ function ProviderLimitsCard({
                 {describeLimitForecast(shared, now).text}
               </Text>
             ) : null}
-            {window.members.map((member) => (
+            {(soleMember ? [] : window.members).map((member) => (
               <Pressable
                 key={member.account.key}
                 accessibilityRole="button"
@@ -208,6 +215,31 @@ function ProviderLimitsCard({
           </View>
         );
       })}
+      {soleAccountWindow && soleMember ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityHint="Show account details"
+          onPress={() => openAccount(soleAccountWindow, soleMember)}
+          className="flex-row items-center gap-2 border-t border-border-subtle pt-3 active:opacity-60"
+          style={{ minHeight: 44 }}
+        >
+          <View className="shrink-0">
+            <Text className="text-sm text-foreground">Account details</Text>
+            {soleMember.account.asOf === undefined ? null : (
+              <Text className="text-xs text-foreground-muted">
+                {formatAsOf(soleMember.account.asOf, now)}
+              </Text>
+            )}
+          </View>
+          <Text
+            className="min-w-0 flex-1 text-right text-sm text-foreground-muted"
+            numberOfLines={1}
+          >
+            {whereSignedIn(soleMember.account)}
+          </Text>
+          <SymbolView name="chevron.right" size={12} tintColorClassName="accent-icon-muted" />
+        </Pressable>
+      ) : null}
       {pool.unread.map((account) => {
         // A card that is only this plan: its header already names it, so just the notice.
         if (pool.accounts.length === 0 && pool.unread.length === 1)

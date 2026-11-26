@@ -1384,6 +1384,31 @@ describe("DesktopWindow", () => {
     }),
   );
 
+  it.effect("pins the preload on an accepted preview guest", () =>
+    Effect.gen(function* () {
+      const host = makeFakeBrowserWindow();
+      const layer = layerTest({
+        window: host.window,
+        createCount: yield* Ref.make(0),
+        mainWindow: yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none()),
+      });
+      yield* Effect.gen(function* () {
+        const window = yield* DesktopWindow.DesktopWindow;
+        yield* window.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        const attach = host.webContentsListeners.get("will-attach-webview");
+        assert.isDefined(attach);
+        const preferences: Electron.WebPreferences = { preload: "/repo/elsewhere/other.cjs" };
+        const preventDefault = vi.fn();
+        attach({ preventDefault }, preferences, { partition: "persist:t3code-preview-test" });
+        assert.equal(preventDefault.mock.calls.length, 0);
+        assert.equal(
+          preferences.preload,
+          "/repo/apps/desktop/dist-electron/preview-pick-preload.cjs",
+        );
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
   it.effect("recovers killed renderers with a backoff and without reviving closed windows", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();

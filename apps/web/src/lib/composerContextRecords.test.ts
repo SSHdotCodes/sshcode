@@ -73,6 +73,19 @@ const annotation: PreviewAnnotationPayload = {
 };
 
 describe("composerContextRecords", () => {
+  it("shortens a long annotation comment label without splitting an emoji or leaving a space", () => {
+    const record = previewAnnotationContextRecord({
+      ...annotation,
+      comment: `${"a".repeat(46)}😀 and make the button bigger`,
+    });
+    expect(record.label).toBe(`${"a".repeat(46)}…`);
+    const betweenWords = previewAnnotationContextRecord({
+      ...annotation,
+      comment: `${"a".repeat(46)} make the button bigger`,
+    });
+    expect(betweenWords.label).toBe(`${"a".repeat(46)}…`);
+  });
+
   it("copies only ready or persisted server-side attachment IDs", () => {
     const environmentId = EnvironmentId.make("env");
     const image = {

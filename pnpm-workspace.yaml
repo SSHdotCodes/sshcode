@@ -21,7 +21,7 @@ allowBuilds:
   node-pty: true
   # Ships N-API prebuilds; its install script only rebuilds from source.
   objc-js: false
-  "react-native-enriched-markdown@file:apps/mobile/deps/react-native-enriched-markdown-1.2.0-t3.14.tgz": true
+  "react-native-enriched-markdown@file:apps/mobile/deps/react-native-enriched-markdown-1.2.0-t3.15.tgz": true
   sharp: true
   tsc-rs: true
   utf-8-validate: false
@@ -248,6 +248,7 @@ overrides:
   "@expo/dom-webview": 58.0.2
   "@expo/metro-config": 58.0.6
   expo-constants: 58.0.9
+  expo-modules-core: 58.0.11
   expo-router: 58.0.10
   "expo-sharing>@expo/config-plugins": 58.0.4
   "expo-sharing>@expo/config-types": 58.0.2

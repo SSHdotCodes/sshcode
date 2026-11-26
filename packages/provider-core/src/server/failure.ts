@@ -137,6 +137,19 @@ function causeDetails(
             };
           break;
         }
+        case "CommandExecutionError": {
+          const rejection = stringField(cause, "message");
+          if (
+            record.command === "goal" &&
+            rejection !== undefined &&
+            /^A goal objective is limited to \d{1,6} characters \(got \d{1,9}\)\.$/u.test(rejection)
+          ) {
+            return {
+              message: `OpenCode rejected the goal: ${rejection} Shorten it and send /goal again.`,
+            };
+          }
+          break;
+        }
         case "AcpProcessExitedError": {
           const stage = summary === undefined ? "The provider" : `${summary}: the provider`;
           return {

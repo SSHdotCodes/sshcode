@@ -155,7 +155,9 @@ export function mapRemoteEnvironmentError(
     case "EnvironmentAuthInvalidError":
       return new ConnectionBlockedError({
         reason: "authentication",
-        detail: "The environment credential is invalid.",
+        ...(connectionMethod === "direct" && error.pairingExpired === true
+          ? { pairingExpired: true, detail: "The saved pairing has expired." }
+          : { detail: "The environment credential is invalid." }),
         traceId: error.traceId,
       });
     case "EnvironmentScopeRequiredError":

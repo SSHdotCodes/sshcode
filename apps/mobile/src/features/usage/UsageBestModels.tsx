@@ -3,6 +3,7 @@ import {
   describePick,
   describePlan,
   pickBarShare,
+  pickRank,
   pickRouteIcon,
   picksBasis,
   pickTitle,
@@ -125,7 +126,6 @@ function PickCard(props: {
   const { pick, picks } = props;
   const style = KIND_STYLE[pick.kind];
   const description = describePick(pick, picks);
-  const counted = useCountUp(description?.headline.value ?? 0, description?.headline.value != null);
   const gap = mosaicGap(PixelRatio.get());
   const dither = useMemo(
     () => mosaicGlowLayers(props.width, style.color, gap),
@@ -199,9 +199,7 @@ function PickCard(props: {
             </View>
             <View className="gap-0.5">
               <Text className="text-3xl font-t3-bold tabular-nums text-foreground">
-                {description.headline.value === null
-                  ? description.headline.text
-                  : description.headline.format(counted)}
+                {description.headline.text}
               </Text>
               <Text className="text-sm text-foreground-muted">{description.headline.unit}</Text>
             </View>
@@ -217,11 +215,8 @@ function PickCard(props: {
                 {runners.map((candidate, runnerIndex) => (
                   <View key={candidate.key} className="gap-1">
                     <View className="flex-row items-baseline justify-between gap-2">
-                      <Text
-                        className="min-w-0 flex-1 text-xs text-foreground-muted"
-                        numberOfLines={1}
-                      >
-                        {runnerIndex + 2}. {candidate.label}
+                      <Text className="min-w-0 flex-1 text-xs text-foreground-muted">
+                        {pickRank(pick, runnerIndex + 1)}. {candidate.label}
                       </Text>
                       <Text className="text-xs tabular-nums text-foreground-muted">
                         {pickValueText(pick.kind, candidate, pick)}

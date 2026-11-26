@@ -1,3 +1,5 @@
+import type { ScopedThreadRef } from "@t3tools/contracts";
+import { useOpenLink } from "~/browser/useOpenLink";
 import { Fragment } from "react";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { ExternalLinkIcon } from "lucide-react";
@@ -29,13 +31,16 @@ export function PullRequestsUnavailableState({
   onRetry,
   refreshing = false,
   gitHubUrl,
+  threadRef,
 }: {
   title?: string;
   error: string;
   onRetry?: () => void;
   refreshing?: boolean;
   gitHubUrl?: string;
+  threadRef?: ScopedThreadRef | null;
 }) {
+  const openLink = useOpenLink(threadRef);
   return (
     <Empty className="scrollbar-gutter-both min-h-0 justify-center-safe overflow-y-auto [&>*]:shrink-0">
       <EmptyMedia variant="icon">
@@ -65,7 +70,17 @@ export function PullRequestsUnavailableState({
             <Button
               size="sm"
               variant="outline"
-              render={<a href={gitHubUrl} target="_blank" rel="noopener noreferrer" />}
+              render={
+                <a
+                  href={gitHubUrl}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void openLink(gitHubUrl, { event }).catch(console.error);
+                  }}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                />
+              }
             >
               <ExternalLinkIcon aria-hidden className="size-3.5" />
               Open on GitHub

@@ -1907,24 +1907,25 @@ function PullRequestsRouteView() {
       onToggleRightPanel={toggleRightPanel}
     />
   );
-  const openPanelControls = (
-    <div
-      // The bare workspace-titlebar-controls inset plus mr-px: the same
-      // anchor the thread view's controls and the sidebar trigger use, so
-      // every titlebar cluster in the app sits one shared inset from its
-      // edge.
-      className="absolute top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] z-50 mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]"
-      data-workspace-titlebar-controls
-    >
-      {rightPanelState.isOpen ? (
-        <RightPanelMaximizeControl
-          maximized={rightPanelMaximized}
-          onToggle={toggleRightPanelMaximized}
-        />
-      ) : null}
-      {panelToggleControls}
-    </div>
-  );
+  const openPanelControls =
+    rightPanelAvailable || rightPanelState.isOpen ? (
+      <div
+        // The bare workspace-titlebar-controls inset plus mr-px: the same
+        // anchor the thread view's controls and the sidebar trigger use, so
+        // every titlebar cluster in the app sits one shared inset from its
+        // edge.
+        className="absolute top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] z-50 mr-px flex h-[var(--workspace-topbar-height)] items-center gap-1 [-webkit-app-region:no-drag]"
+        data-workspace-titlebar-controls
+      >
+        {rightPanelState.isOpen ? (
+          <RightPanelMaximizeControl
+            maximized={rightPanelMaximized}
+            onToggle={toggleRightPanelMaximized}
+          />
+        ) : null}
+        {panelToggleControls}
+      </div>
+    ) : null;
   // The rows carried over from the last filters can also narrow to nothing one step further on,
   // where involvement is applied against the viewers of the answer they came from. "Nothing under
   // these filters" is a claim, and it is the wrong one to make about a question still in flight,

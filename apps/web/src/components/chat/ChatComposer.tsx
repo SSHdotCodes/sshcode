@@ -8,6 +8,8 @@ import type { AutoModelFeedback } from "@t3tools/contracts";
 import { DEBUG_COMMAND } from "@t3tools/shared/debugCommand";
 import { useSplitChatPane } from "./SplitChatPaneContext";
 import { useKeptChatPaneHidden } from "./KeptChatPane";
+import { acpSpeedChoices, findAcpApprovalModes } from "@t3tools/shared/acpComposer";
+import { getProviderModelCapabilities } from "../../providerModels";
 import { formatModelLink } from "@t3tools/shared/modelLinks";
 import { useEnvironmentModelPreferences } from "../../hooks/useSettings";
 import { matchComposerModelItems } from "./composerModelMentions";
@@ -2389,20 +2391,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // disabled.
   const selectedProvider: ProviderDriverKind =
     selectedProviderEntry?.driverKind ?? requestedDriverKind;
-  const supportedRuntimeModes = selectedProviderEntry?.snapshot.supportedRuntimeModes;
-  const compatibleRuntimeModeOptions =
-    supportedRuntimeModes && supportedRuntimeModes.length > 0
-      ? runtimeModeOptions.filter((option) => supportedRuntimeModes.includes(option.mode))
-      : runtimeModeOptions;
-  // Older threads can contain a mode their current provider no longer offers.
-  // Display the provider's first supported mode, which is also its safe legacy
-  // fallback, without mutating persisted state until the user makes a choice.
-  const compatibleRuntimeMode = compatibleRuntimeModeOptions.some(
-    (option) => option.mode === runtimeMode,
-  )
-    ? runtimeMode
-    : (compatibleRuntimeModeOptions[0]?.mode ?? runtimeMode);
-
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     isServerThread: _isServerThread,
     threadRef: composerDraftTarget,
@@ -2592,6 +2580,28 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       settings.planModeEnabled,
     ],
   );
+
+  const modelDescriptors =
+    getProviderModelCapabilities(
+      selectedProviderModels,
+      selectedModel,
+      selectedProvider,
+      settings.planModeEnabled,
+    ).optionDescriptors ?? [];
+  const approvalModes = findAcpApprovalModes(modelDescriptors);
+  const hasAcpSpeed = modelDescriptors.some(acpSpeedChoices);
+  const supportedRuntimeModes = selectedProviderEntry?.snapshot.supportedRuntimeModes;
+  const compatibleRuntimeModeOptions = runtimeModeOptions.flatMap((option) => {
+    if (supportedRuntimeModes?.length && !supportedRuntimeModes.includes(option.mode)) return [];
+    if (!approvalModes) return [option];
+    const native = approvalModes.approvals[option.mode];
+    return native ? [{ ...option, description: native.description ?? option.description }] : [];
+  });
+  const compatibleRuntimeMode = compatibleRuntimeModeOptions.some(
+    (option) => option.mode === runtimeMode,
+  )
+    ? runtimeMode
+    : (compatibleRuntimeModeOptions[0]?.mode ?? runtimeMode);
 
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
@@ -3423,21 +3433,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         focusComposer: false,
       }),
   );
-  const providerTraitsMenuContent = renderProviderTraitsMenuContent({
-    provider: selectedProvider,
-    instanceId: selectedInstanceId,
-    ...(routeKind === "server" ? { threadRef: routeThreadRef } : {}),
-    ...(_isServerThread ? { onModelOptionsChange: onSharedModelOptionsChange } : {}),
-    ...(routeKind === "draft" && draftId ? { draftId } : {}),
-    model: selectedModel,
-    models: selectedProviderModels,
-    modelOptions: composerModelOptions?.[selectedInstanceId],
-    reportedModelSelection,
-    prompt,
-    onPromptChange: setPromptFromTraitsStable,
-    planModeEnabled: settings.planModeEnabled,
-    omitReasoning: reasoningColumnShown,
-  });
   const providerTraitsPickerInput = {
     provider: selectedProvider,
     instanceId: selectedInstanceId,
@@ -3454,8 +3449,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isComposerOwned: true,
     // The model picker's Reasoning column holds effort, except while comparing models.
     omitReasoning: reasoningColumnShown,
+    ...(hasAcpSpeed || approvalModes
+      ? {
+          acpSection: "traits" as const,
+          acpMode: { interactionMode, onInteractionModeChange: handleInteractionModeChange },
+        }
+      : {}),
   } satisfies Parameters<typeof renderProviderTraitsPicker>[0];
-  const providerTraitsPicker = renderProviderTraitsPicker(providerTraitsPickerInput);
+  const providerTraitsMenuContent = renderProviderTraitsMenuContent({
+    ...providerTraitsPickerInput,
+    ...(providerTraitsPickerInput.acpSection ? { acpSection: "all" } : {}),
+  });
   const modelReasoningColumn = reasoningColumnShown
     ? renderProviderReasoningColumn({
         ...providerTraitsPickerInput,
@@ -6055,8 +6059,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     size: composerControlsCollapsed ? "xs" : "sm",
     hidden: composerControlsHidden || restingHiddenBlockCount > 1,
   });
+  const restingAcpSpeedPicker = hasAcpSpeed
+    ? renderProviderTraitsPicker({
+        ...providerTraitsPickerInput,
+        acpSection: "speed",
+        size: composerControlsCollapsed ? "xs" : "sm",
+        hidden: composerControlsHidden || restingHiddenBlockCount > 1,
+      })
+    : null;
   const restingBlockDefs = [
-    ...(providerTraitsPicker
+    ...(restingProviderTraitsPicker || restingAcpSpeedPicker
       ? [
           {
             id: "traits",
@@ -6064,6 +6076,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               <>
                 <ComposerControlSeparator size={composerControlsCollapsed ? "xs" : "sm"} />
                 {restingProviderTraitsPicker}
+                {restingAcpSpeedPicker}
               </>
             ),
           },
@@ -6073,7 +6086,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       id: "mode",
       content: (
         <ComposerFooterModeControls
-          showInteractionModeToggle={planModeUiEnabled}
+          showInteractionModeToggle={planModeUiEnabled && !approvalModes?.plan}
           interactionMode={interactionMode}
           runtimeMode={compatibleRuntimeMode}
           runtimeModeOptions={compatibleRuntimeModeOptions}
@@ -6350,7 +6363,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             runtimeModeOptions={compatibleRuntimeModeOptions}
             size={composerControlsCollapsed ? "xs" : "sm"}
             hidden={composerControlsHidden || hiddenRestingBlockIds.length === 0}
-            showInteractionModeToggle={planModeUiEnabled && hiddenRestingBlockIds.includes("mode")}
+            showInteractionModeToggle={
+              planModeUiEnabled && !approvalModes?.plan && hiddenRestingBlockIds.includes("mode")
+            }
             traitsMenuContent={
               hiddenRestingBlockIds.includes("traits") ? providerTraitsMenuContent : undefined
             }

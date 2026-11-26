@@ -34,6 +34,8 @@ export function qaConfigOptions(state: {
   reasoning: string;
   context: string;
   fast: boolean;
+  speed: string;
+  mode: string;
 }): Array<AcpSchema.SessionConfigOption> {
   return [
     {
@@ -54,6 +56,39 @@ export function qaConfigOptions(state: {
         { value: "low", name: "Low" },
         { value: "medium", name: "Medium" },
         { value: "high", name: "High" },
+      ],
+    },
+    {
+      configId: "mode",
+      name: "Session Mode",
+      category: "mode",
+      type: "select",
+      currentValue: state.mode,
+      options: [
+        { value: "code", name: "Code", description: "Write and edit code" },
+        {
+          value: "smart",
+          name: "Smart",
+          description: "Auto-approve actions the model judges safe",
+        },
+        { value: "ask", name: "Ask", description: "Answer questions without code changes" },
+        { value: "plan", name: "Plan", description: "Plan changes before implementing" },
+        {
+          value: "bypassPermissions",
+          name: "Bypass Permissions",
+          description: "Auto-approve all tool calls unless organization policy requires approval",
+        },
+      ],
+    },
+    {
+      configId: "speed",
+      name: "Speed",
+      category: "model_config",
+      type: "select",
+      currentValue: state.speed,
+      options: [
+        { value: "standard", name: "Standard" },
+        { value: "fast", name: "Ultrafast" },
       ],
     },
     {

@@ -86,6 +86,16 @@ export const agentToolCatalog: ReadonlyArray<AgentToolDescriptorShape> = AGENT_T
   return groupDelta === 0 ? left.name.localeCompare(right.name) : groupDelta;
 });
 
+/** The native discovery prompt uses the purpose of each tool as its index. */
+export const agentToolDiscoveryCatalog = (visible: (name: string) => boolean) =>
+  agentToolCatalog
+    .filter(({ name }) => visible(name))
+    .map(({ name, description, title }) => {
+      const purpose = description.split(/(?<=[.!?])\s|\n/u, 1)[0]?.trim();
+      return `${name} — ${purpose && purpose.length <= 120 ? purpose : title}`;
+    })
+    .join("\n");
+
 /**
  * Policy is the user's tool toggle. Device and preview capabilities stay the
  * credential gate (`enableAgentBrowserAccess`, project overrides, device
@@ -159,6 +169,7 @@ export const toolsListRequestIds = (raw: string): ReadonlySet<string> | undefine
 
 /** Changes one listed tool; returns the same object when nothing changes. */
 export type ToolsListTransform = (tool: Record<string, unknown>) => Record<string, unknown>;
+export type ToolsCatalogTransform = (tools: ReadonlyArray<unknown>) => ReadonlyArray<unknown>;
 
 /** The tools whose input carries `grades` (Settings' grading switch). */
 const GRADED_TOOLS: ReadonlySet<string> = new Set([
@@ -236,11 +247,12 @@ const rewriteToolsListValue = (
   ids: ReadonlySet<string>,
   visible: (name: string) => boolean,
   transform?: ToolsListTransform,
+  transformCatalog?: ToolsCatalogTransform,
 ): { readonly value: unknown; readonly changed: boolean } => {
   if (Array.isArray(value)) {
     let changed = false;
     const next = value.map((item) => {
-      const rewritten = rewriteToolsListValue(item, ids, visible, transform);
+      const rewritten = rewriteToolsListValue(item, ids, visible, transform, transformCatalog);
       changed ||= rewritten.changed;
       return rewritten.value;
     });
@@ -263,8 +275,9 @@ const rewriteToolsListValue = (
     if (next !== tool) changed = true;
     return [next];
   });
-  if (!changed) return { value, changed: false };
-  return { value: { ...value, result: { ...result, tools } }, changed: true };
+  const catalog = transformCatalog?.(tools) ?? tools;
+  if (!changed && catalog === tools) return { value, changed: false };
+  return { value: { ...value, result: { ...result, tools: catalog } }, changed: true };
 };
 
 const rewriteJsonDocument = (
@@ -272,11 +285,18 @@ const rewriteJsonDocument = (
   ids: ReadonlySet<string>,
   visible: (name: string) => boolean,
   transform?: ToolsListTransform,
+  transformCatalog?: ToolsCatalogTransform,
 ): string | undefined => {
   const body = raw.trim();
   if (body.length === 0) return undefined;
   try {
-    const rewritten = rewriteToolsListValue(JSON.parse(body), ids, visible, transform);
+    const rewritten = rewriteToolsListValue(
+      JSON.parse(body),
+      ids,
+      visible,
+      transform,
+      transformCatalog,
+    );
     if (!rewritten.changed) return raw;
     const prefix = raw.slice(0, raw.indexOf(body));
     const suffix = raw.slice(raw.indexOf(body) + body.length);
@@ -296,6 +316,7 @@ export const rewriteToolsListBody = (
   ids: ReadonlySet<string>,
   visible: (name: string) => boolean,
   transform?: ToolsListTransform,
+  transformCatalog?: ToolsCatalogTransform,
 ): string => {
   // A JSON tool description can contain the letters "data:", so only a body
   // that begins as an event stream is framed that way.
@@ -314,7 +335,13 @@ export const rewriteToolsListBody = (
           .map((line) => {
             if (!line.startsWith("data:")) return line;
             const payload = line.slice("data:".length).trimStart();
-            const rewritten = rewriteJsonDocument(payload, ids, visible, transform);
+            const rewritten = rewriteJsonDocument(
+              payload,
+              ids,
+              visible,
+              transform,
+              transformCatalog,
+            );
             if (rewritten === undefined || rewritten === payload) return line;
             changed = true;
             return `data: ${rewritten.trim()}`;
@@ -324,13 +351,13 @@ export const rewriteToolsListBody = (
       .join("\n\n");
     return changed ? next : text;
   }
-  const whole = rewriteJsonDocument(text, ids, visible, transform);
+  const whole = rewriteJsonDocument(text, ids, visible, transform, transformCatalog);
   if (whole !== undefined) return whole;
   if (!text.includes("\n")) return text;
   let changed = false;
   const lines = text.split("\n").map((line) => {
     if (line.trim().length === 0) return line;
-    const rewritten = rewriteJsonDocument(line, ids, visible, transform);
+    const rewritten = rewriteJsonDocument(line, ids, visible, transform, transformCatalog);
     if (rewritten === undefined || rewritten === line) return line;
     changed = true;
     return rewritten.trim();

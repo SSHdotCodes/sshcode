@@ -15,6 +15,12 @@ const entry = (prompt: string) => ({
 });
 
 describe("stashEntrySnippet", () => {
+  it("cuts a long prompt on a whole character with no space before the ellipsis", () => {
+    expect(stashEntrySnippet(entry(`${"a".repeat(89)}😀 and more`))).toBe(`${"a".repeat(89)}…`);
+    expect(stashEntrySnippet(entry(`${"a".repeat(88)}😀 and more`))).toBe(`${"a".repeat(88)}😀…`);
+    expect(stashEntrySnippet(entry(`${"a".repeat(89)} word`))).toBe(`${"a".repeat(89)}…`);
+  });
+
   it("shows context chips by their label", () => {
     const file = formatComposerContextReference({
       kind: "file",

@@ -38,8 +38,10 @@ vi.mock("react-native", () => ({
     ),
 }));
 vi.mock("./ThreadSettingsRows", () => ({
-  ChoiceRow: (props: { label: string; onPress: () => void }) => (
-    <button onClick={props.onPress}>{props.label}</button>
+  ChoiceRow: (props: { label: string; selected: boolean; onPress: () => void }) => (
+    <button role="radio" aria-checked={props.selected} onClick={props.onPress}>
+      {props.label}
+    </button>
   ),
 }));
 // The shared rows load native symbol views this test doesn't need.
@@ -129,6 +131,48 @@ it("puts Ultracode at the top of the slider, leaves Ultrathink out, and steps be
       ),
     );
     expect(host.querySelector("[role=slider]")!.getAttribute("aria-valuetext")).toBe("Ultracode");
+  } finally {
+    act(() => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});
+
+it("offers the route's choices when no ranked effort is selected", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const onPick = vi.fn();
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  const options = [
+    { id: "low", label: "Low" },
+    { id: "high", label: "High" },
+    { id: "none", label: "None" },
+  ];
+  const show = (value?: string) =>
+    act(() =>
+      root.render(
+        <ThreadSettingsEffort
+          label="Reasoning"
+          options={options}
+          value={value}
+          onPick={onPick}
+          isLast
+        />,
+      ),
+    );
+  try {
+    show("high");
+    expect(host.querySelector("[role=slider]")?.getAttribute("aria-valuetext")).toBe("High");
+    for (const value of ["none", undefined]) {
+      show(value);
+      expect(host.querySelector("[role=slider]")).toBeNull();
+      expect(host.querySelector("[role=radio][aria-checked=true]")?.textContent).toBe(
+        value === "none" ? "None" : undefined,
+      );
+      const rows = [...host.querySelectorAll("button")];
+      expect(rows.map((row) => row.textContent)).toEqual(["Low", "High", "None"]);
+      act(() => rows[0]!.click());
+      expect(onPick).toHaveBeenLastCalledWith("low");
+    }
   } finally {
     act(() => root.unmount());
     vi.unstubAllGlobals();

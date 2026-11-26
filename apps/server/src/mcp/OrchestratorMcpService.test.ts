@@ -1,3 +1,4 @@
+import * as LocalFiles from "../assets/LocalFileAttachments.ts";
 import { modelRankingSelectionKey } from "@t3tools/shared/modelRankings";
 import { formatOutOfCredit } from "@t3tools/client-runtime/providerHealth";
 import * as WorkflowsService from "../workflows/WorkflowsService.ts";
@@ -101,9 +102,11 @@ const layerNoScratchFolders = Layer.mock(ManagedProjectFolders.ManagedProjectFol
   folderForThread: () => Effect.succeedNone,
 });
 const layerOrchestratorMcpWithoutScratch = OrchestratorMcpService.layer.pipe(
+  Layer.provide(Layer.mock(LocalFiles.LocalFileAttachments)({})),
   Layer.provide(layerNoScratchFolders),
 );
 const layerWithProviderStubs = OrchestratorMcpService.layer.pipe(
+  Layer.provide(Layer.mock(LocalFiles.LocalFileAttachments)({})),
   Layer.provide(Layer.mock(UsageLimitSources.UsageLimitSources)({ current: Effect.succeed([]) })),
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
@@ -180,6 +183,10 @@ const makeHeldParentHarness = Effect.gen(function* () {
               yield* Queue.offer(accepted, input);
             }).pipe(
               Effect.as({
+                message: {
+                  id: input.messageId,
+                  notifySenderOnCompletion: input.notifySenderOnCompletion,
+                },
                 run: { id: RunId.make("run:mcp-held-parent"), status: "queued" },
                 delivery: "queued",
               } as never),
@@ -237,15 +244,17 @@ describe("OrchestratorMcpService", () => {
               clientRequestId: `held-update-${index}`,
             });
             assert.equal(result.delivery, "held");
+            assert.isUndefined(result.notice);
             assert.isNull(result.runId);
           }
           // An explicit mode still wakes the parent at once.
-          yield* service.sendToThread(childScope, {
+          const urgent = yield* service.sendToThread(childScope, {
             threadId: parentThreadId,
             message: "Blocked on the reference fixture.",
             mode: "queue",
             clientRequestId: "held-update-urgent",
           });
+          assert.isUndefined(urgent.notice);
           assert.deepEqual(
             (yield* Ref.get(sent)).map((input) => input.text),
             ["Blocked on the reference fixture."],
@@ -2996,7 +3005,10 @@ describe("OrchestratorMcpService provider resolution", () => {
         yield* Effect.gen(function* () {
           const service = yield* OrchestratorMcpService.OrchestratorMcpService;
           const usage = yield* service.usageLimits(scope, { providerInstanceId: codexInstanceId });
-          assert.equal(usage.providers[0]?.summary, formatOutOfCredit(creditFailure));
+          assert.equal(
+            usage.providers[0]?.accountUnavailable?.reason,
+            formatOutOfCredit(creditFailure),
+          );
           const capabilities = yield* service.capabilities(scope, {
             providerInstanceId: codexInstanceId,
           });
@@ -3072,8 +3084,12 @@ describe("OrchestratorMcpService provider resolution", () => {
           const result = yield* service.capabilities(scope);
           assert.deepEqual(result.providers[0]?.accountUnavailable, account);
           assert.isFalse(result.providers[0]?.canRunChildTask);
+          assert.deepEqual(result.providers[0]?.models, []);
+          const detail = yield* service.capabilities(scope, {
+            providerInstanceId: codexInstanceId,
+          });
           assert.deepEqual(
-            result.providers[0]?.models.map((model) => model.id),
+            detail.providers[0]?.models.map((model) => model.id),
             ["gpt-5.4"],
           );
           const error = yield* service
@@ -3899,7 +3915,9 @@ describe("OrchestratorMcpService provider resolution", () => {
           for (const provider of providers) {
             assert.deepEqual(
               byId.get(provider.instanceId)?.models.map((model) => model.id),
-              provider.models.map((model) => model.slug),
+              provider.enabled && provider.instanceId !== forkOnlyInstanceId
+                ? provider.models.map((model) => model.slug)
+                : [],
             );
           }
 
@@ -3921,7 +3939,9 @@ describe("OrchestratorMcpService provider resolution", () => {
               refreshed.providers
                 .find((entry) => entry.providerInstanceId === provider.instanceId)
                 ?.models.map((model) => model.id),
-              provider.models.map((model) => model.slug),
+              provider.enabled && provider.instanceId !== forkOnlyInstanceId
+                ? provider.models.map((model) => model.slug)
+                : [],
             );
           }
 
@@ -3947,7 +3967,11 @@ describe("OrchestratorMcpService provider resolution", () => {
           const fork = byId.get(forkOnlyInstanceId);
           assert.isDefined(fork);
           assert.isFalse(fork!.canRunChildTask);
-          const forkConstraints = fork!.constraints ?? [];
+          assert.lengthOf(fork!.constraints ?? [], 1);
+          const detailedFork = yield* service.capabilities(scope, {
+            providerInstanceId: forkOnlyInstanceId,
+          });
+          const forkConstraints = detailedFork.providers[0]?.constraints ?? [];
           assert.isTrue(
             forkConstraints.includes("No V2 provider adapter is registered."),
             `expected missing-adapter constraint, got ${forkConstraints.join(" | ")}`,
@@ -4049,43 +4073,35 @@ describe("OrchestratorMcpService provider resolution", () => {
         ),
       );
 
-    it.effect(
-      "reads cached windows, relative resets and credits without credential identities",
-      () =>
-        Effect.gen(function* () {
-          yield* TestClock.setTime(Date.parse(now));
-          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-          const result = yield* service.usageLimits(scope, {});
-          assert.equal(result.createdAt, now);
-          assert.lengthOf(result.providers, 1);
-          const provider = result.providers[0]!;
-          assert.equal(provider.providerInstanceId, codexInstanceId);
-          assert.equal(provider.driver, "codex");
-          assert.equal(provider.displayName, "Personal Codex");
-          assert.equal(provider.checkedAt, limits.checkedAt);
-          assert.isFalse(provider.stale);
-          assert.isNull(provider.unavailable);
-          assert.deepEqual(
-            provider.windows.map((window) => [
-              window.label,
-              window.usedPercent,
-              window.resetsAt,
-              window.resetsIn,
-            ]),
-            [
-              ["5-hour", 35, "2026-10-16T14:10:00.000Z", "resets in 2h 10m"],
-              ["Weekly", 70, "2026-10-18T12:00:00.000Z", "resets in 2d 0h"],
-              ["Extra usage", 5, null, null],
-            ],
-          );
-          assert.deepEqual(provider.resetCredits, {
-            availableCount: 2,
-            nextExpiresAt: "2026-11-01T00:00:00.000Z",
-          });
-          assert.include(provider.summary, "5-hour: 35% used (resets in 2h 10m)");
-          assert.notInclude(JSON.stringify(result), "private-credential-identity");
-          assert.notInclude(JSON.stringify(result), "redemption-id");
-        }).pipe(Effect.provide(usageLayer([codex]))),
+    it.effect("reads cached windows, reset times and credits without credential identities", () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(now));
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const result = yield* service.usageLimits(scope, {});
+        assert.equal(result.createdAt, now);
+        assert.lengthOf(result.providers, 1);
+        const provider = result.providers[0]!;
+        assert.equal(provider.providerInstanceId, codexInstanceId);
+        assert.equal(provider.driver, "codex");
+        assert.equal(provider.displayName, "Personal Codex");
+        assert.equal(provider.checkedAt, limits.checkedAt);
+        assert.isFalse(provider.stale);
+        assert.isUndefined(provider.unavailable);
+        assert.deepEqual(
+          provider.windows.map((window) => [window.label, window.usedPercent, window.resetsAt]),
+          [
+            ["5-hour", 35, "2026-10-16T14:10:00.000Z"],
+            ["Weekly", 70, "2026-10-18T12:00:00.000Z"],
+            ["Extra usage", 5, undefined],
+          ],
+        );
+        assert.deepEqual(provider.resetCredits, {
+          availableCount: 2,
+          nextExpiresAt: "2026-11-01T00:00:00.000Z",
+        });
+        assert.notInclude(JSON.stringify(result), "private-credential-identity");
+        assert.notInclude(JSON.stringify(result), "redemption-id");
+      }).pipe(Effect.provide(usageLayer([codex]))),
     );
 
     it.effect("keeps unavailable readings and excludes disabled or unreported instances", () =>
@@ -4100,7 +4116,6 @@ describe("OrchestratorMcpService provider resolution", () => {
         });
         assert.equal(result.providers[0]?.checkedAt, "2026-10-16T11:00:00.000Z");
         assert.isTrue(result.providers[0]?.stale);
-        assert.include(result.providers[0]!.summary, "unavailable (Cached probe failed.); stale");
       }).pipe(
         Effect.provide(
           usageLayer([
@@ -4152,7 +4167,10 @@ describe("OrchestratorMcpService provider resolution", () => {
           assert.equal(result.sources[0]?.sourceId, "hub");
           assert.isFalse(result.sources[0]?.stale);
           assert.equal(result.sources[0]?.accounts[0]?.accountId, "pooled-codex");
-          assert.equal(result.sources[0]?.accounts[0]?.windows[0]?.resetsIn, "resets in 2h 10m");
+          assert.equal(
+            result.sources[0]?.accounts[0]?.windows[0]?.resetsAt,
+            "2026-10-16T14:10:00.000Z",
+          );
           assert.equal(result.sources[0]?.accounts[0]?.resetCredits?.availableCount, 2);
           assert.equal(result.sources[1]?.unavailable, "Hub unreachable.");
           assert.isTrue(result.sources[1]?.stale);
@@ -4182,7 +4200,7 @@ describe("OrchestratorMcpService provider resolution", () => {
         const result = yield* service.usageLimits(scope, {});
         assert.isTrue(result.providers[0]?.stale);
         assert.equal(result.providers[0]?.windows[0]?.usedPercent, 35);
-        assert.equal(result.providers[0]?.windows[0]?.resetsIn, "reset time passed");
+        assert.equal(result.providers[0]?.windows[0]?.resetsAt, "2026-10-16T11:59:00.000Z");
         assert.isTrue(result.providers[1]?.stale);
       }).pipe(
         Effect.provide(
@@ -4337,7 +4355,7 @@ describe("OrchestratorMcpService provider resolution", () => {
       yield* Effect.gen(function* () {
         const service = yield* OrchestratorMcpService.OrchestratorMcpService;
         const first = yield* service.capabilities(scope);
-        assert.lengthOf(first.providers[0]!.models, 20);
+        assert.lengthOf(first.providers[0]!.models, 6);
         assert.isUndefined(first.providers[0]!.models[0]!.options);
         assert.equal(first.providers[0]!.totalModels, 125);
         assert.isBelow(JSON.stringify(first).length, 10_000);
@@ -6964,27 +6982,35 @@ describe("OrchestratorMcpService provider resolution", () => {
       }),
     );
 
-    it.effect("delivers webhook setup mechanics only with webhook tasks", () =>
+    it.effect("delivers webhook setup mechanics when reading a specific webhook task", () =>
       Effect.gen(function* () {
         const upserted = yield* Ref.make(0);
-        const listed = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
-          Effect.flatMap((mcp) => mcp.listScheduledTasks(supervisedClient, { projectId })),
-          Effect.provide(
-            service(
-              [
-                task({}),
-                task({
-                  id: ScheduledTaskId.make("scheduled-task:interval"),
-                  schedule: { type: "interval", everyMs: 3_600_000 },
-                  webhook: undefined,
+        const webhookTask = task({});
+        const intervalTask = task({
+          id: ScheduledTaskId.make("scheduled-task:interval"),
+          schedule: { type: "interval", everyMs: 3_600_000 },
+          webhook: undefined,
+        });
+        const [listed, webhookDetail, intervalDetail] =
+          yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
+            Effect.flatMap((mcp) =>
+              Effect.all([
+                mcp.listScheduledTasks(supervisedClient, { projectId }),
+                mcp.listScheduledTasks(supervisedClient, {
+                  projectId,
+                  scheduledTaskId: webhookTask.id,
                 }),
-              ],
-              null,
-              upserted,
+                mcp.listScheduledTasks(supervisedClient, {
+                  projectId,
+                  scheduledTaskId: intervalTask.id,
+                }),
+              ]),
             ),
-          ),
-        );
-        const [webhook, interval] = listed.tasks;
+            Effect.provide(service([webhookTask, intervalTask], null, upserted)),
+          );
+        assert.isTrue(listed.tasks.every((entry) => entry.webhookSetup === undefined));
+        const webhook = webhookDetail.tasks[0];
+        const interval = intervalDetail.tasks[0];
         assert.include(webhook?.webhookSetup ?? "", "{{body.path}}");
         assert.include(webhook?.webhookSetup ?? "", "{{request}} (method, redacted headers, body)");
         assert.include(webhook?.webhookSetup ?? "", "request_secret");

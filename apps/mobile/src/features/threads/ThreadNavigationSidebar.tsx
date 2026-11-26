@@ -289,7 +289,6 @@ function ThreadNavigationSidebarPane(
       settledShelfExpanded,
       snoozedShelfExpanded,
       snoozeLabelNow: `${nowMinute}:00.000Z`,
-      snoozeEnvironmentIds,
       queuedThreadKeys,
       moveAvailability: threadMoveAvailability,
       shelfPreferencesLoading: !shelfPreferencesLoaded,
@@ -303,7 +302,6 @@ function ThreadNavigationSidebarPane(
     shelfPreferencesLoaded,
     settledShelfExpanded,
     snoozedShelfExpanded,
-    snoozeEnvironmentIds,
     threadListV2Layout,
   ]);
 
@@ -417,7 +415,6 @@ function ThreadNavigationSidebarPane(
               onUnsettleThread={unsettleThread}
               pinned={item.item.pinned}
               longRunningStatus={item.item.longRunningStatus}
-              snoozePresetMinute={item.snoozePresetMinute ?? ""}
               snoozeWakeLabelText={item.snoozeWakeLabelText}
               timeLabel={item.timeLabel}
               providerInstance={resolveProviderInstance(thread)}

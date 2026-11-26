@@ -1,4 +1,8 @@
-import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
+import type {
+  DesktopBridge,
+  DesktopUpdateActionResult,
+  DesktopUpdateState,
+} from "@t3tools/contracts";
 import { TriangleAlertIcon } from "lucide-react";
 import { type ComponentProps, useCallback, useEffect, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
@@ -16,12 +20,16 @@ import {
   getDesktopUpdateCheckError,
   getDesktopUpdateDownloadedVersion,
   getDesktopUpdateInstallConfirmationMessage,
+  installDesktopUpdate,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
   shouldToastDesktopUpdateActionResult,
 } from "../desktopUpdate.logic";
-import { showDesktopUpdateDownloadedToast } from "../desktopUpdate.toast";
+import {
+  showDesktopUpdateDownloadedToast,
+  showDesktopUpdateWaitingToast,
+} from "../desktopUpdate.toast";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Popover, PopoverCreateHandle, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { SidebarMenuItem } from "../ui/sidebar";
@@ -165,15 +173,16 @@ async function downloadLocalUpdate(
 }
 
 /** Installs this app's downloaded update, which relaunches the app. Resolves
-    true when the relaunch is under way. Failures go to `reportError` (a toast
-    by default). A refused install (the download is not marked ready yet)
-    leaves the restart to the user. */
+    true when the relaunch, or the wait for working chats before it, is under
+    way. Failures go to `reportError` (a toast by default). A refused install
+    (the download is not marked ready yet) leaves the restart to the user. */
 async function installLocalUpdate(
   bridge: DesktopBridge,
   reportError: ReportLocalUpdateError = toastUpdateError,
+  install: () => Promise<DesktopUpdateActionResult> = () => bridge.installUpdate(),
 ): Promise<boolean> {
   try {
-    const result = await bridge.installUpdate();
+    const result = await install();
     if (!result.accepted) {
       showDesktopUpdateDownloadedToast(bridge, result.state);
       return false;
@@ -181,7 +190,10 @@ async function installLocalUpdate(
     const actionError = shouldToastDesktopUpdateActionResult(result)
       ? getDesktopUpdateActionError(result)
       : null;
-    if (!actionError) return true;
+    if (!actionError) {
+      showDesktopUpdateWaitingToast(bridge, result.state);
+      return true;
+    }
     reportError("Could not install update", actionError);
     return false;
   } catch (error) {
@@ -301,7 +313,9 @@ function SidebarUpdateControl() {
       let confirmed = false;
       try {
         confirmed = await ensureLocalApi().dialogs.confirm(
-          getDesktopUpdateInstallConfirmationMessage(state),
+          getDesktopUpdateInstallConfirmationMessage(state, {
+            waitsForIdle: bridge.installUpdateWhenIdle !== undefined,
+          }),
         );
       } catch (error) {
         setIsActionPending(false);
@@ -318,7 +332,9 @@ function SidebarUpdateControl() {
         setIsActionPending(false);
         return;
       }
-      void installLocalUpdate(bridge).finally(() => setIsActionPending(false));
+      void installLocalUpdate(bridge, toastUpdateError, () =>
+        installDesktopUpdate(bridge, state),
+      ).finally(() => setIsActionPending(false));
       return;
     }
 

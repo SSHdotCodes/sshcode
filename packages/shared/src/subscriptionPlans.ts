@@ -20,6 +20,8 @@ export interface KnownPlan {
   readonly monthlyUsd: number;
   /** A month of work at API rates the plan promises, where it says so. */
   readonly includedMonthlyUsd?: number;
+  /** Gateway model IDs must explicitly name a provider this plan pays for. */
+  readonly providerIds?: readonly string[];
 }
 
 export interface PlanClues {
@@ -65,7 +67,12 @@ export function knownPlan(clues: PlanClues): KnownPlan | undefined {
     if (rule) return { label: name, monthlyUsd: rule.monthlyUsd };
   }
   if (clues.driver === "opencode" && clues.windowIds.some((id) => id.startsWith("go_"))) {
-    return { label: "OpenCode Go", monthlyUsd: 10, includedMonthlyUsd: 60 };
+    return {
+      label: "OpenCode Go",
+      monthlyUsd: 10,
+      includedMonthlyUsd: 60,
+      providerIds: ["opencode-go"],
+    };
   }
   if (/\bmistral\b.*\bvibe\b/i.test(clues.displayName ?? "")) {
     return { label: "Mistral Vibe Pro", monthlyUsd: 14.99 };

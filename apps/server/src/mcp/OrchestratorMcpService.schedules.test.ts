@@ -1,3 +1,4 @@
+import * as LocalFiles from "../assets/LocalFileAttachments.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProjectId, ProviderInstanceId } from "@t3tools/contracts";
@@ -23,6 +24,7 @@ import * as Mcp from "./OrchestratorMcpService.ts";
 
 const dependencies = Layer.mergeAll(
   NodeServices.layer,
+  Layer.mock(LocalFiles.LocalFileAttachments)({}),
   ScheduleState.layer,
   Sqlite.layerMemory,
   ServerSettings.layerTest(),

@@ -12,6 +12,23 @@ const item = (fields: Partial<MuseItem>): MuseItem => ({
 });
 
 describe("Muse item presentation", () => {
+  it("renders a dispatched MCP call as the target with its arguments and result", () => {
+    expect(
+      museToolPresentation(
+        item({
+          tool: "mcp__t3_code__t3_tool",
+          args: JSON.stringify({ name: "preview_open", input: { reuseExistingTab: false } }),
+          visibleOutput: '{"tabId":"test-tab"}',
+        }),
+      ),
+    ).toMatchObject({
+      type: "dynamic_tool",
+      toolName: "t3-code.preview_open",
+      input: { reuseExistingTab: false },
+      output: '{"tabId":"test-tab"}',
+    });
+  });
+
   it("preserves an edit's file and exact old/new text for the shared diff UI", () => {
     expect(
       museToolPresentation(

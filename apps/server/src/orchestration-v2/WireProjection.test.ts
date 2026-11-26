@@ -483,7 +483,16 @@ describe("orchestration V2 wire projection", () => {
     expect(projected).not.toHaveProperty("diffStr");
     expect(projected).not.toHaveProperty("oldStr");
     expect(projected).not.toHaveProperty("newStr");
-    expect(projected).toMatchObject({ fileName: "src/main.ts", additions: 3, deletions: 1 });
+    expect(projected).toMatchObject({
+      fileName: "src/main.ts",
+      additions: 3,
+      deletions: 1,
+      diffOmitted: true,
+    });
+    const detail = projectTurnItemForDetail(item);
+    expect(detail).toMatchObject({ diffStr: "+new code" });
+    expect(detail).not.toHaveProperty("diffOmitted");
+    expect(detail).not.toHaveProperty("oldStr");
     expect(item.diffStr).toBe("+new code");
     // A failed edit keeps the provider's error so expanding the row can show it.
     const failed = projectTurnItemForWire({

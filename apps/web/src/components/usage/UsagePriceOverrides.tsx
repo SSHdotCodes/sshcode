@@ -97,6 +97,8 @@ type SaveAttempt = {
  * Edits custom model prices and mappings. A mapped model's usage counts as its
  * target model. `initialModel` opens with a new row for that model.
  */
+const INITIAL_ROW_ID = "new:initial";
+
 export function UsagePriceOverrides({
   usage,
   initialSelectedEnvironmentIds,
@@ -122,7 +124,7 @@ export function UsagePriceOverrides({
         Object.hasOwn(environment.aliases ?? {}, initialModel),
     )
       ? []
-      : [{ id: "new:initial", model: initialModel, isNew: true, values: {} }],
+      : [{ id: INITIAL_ROW_ID, model: initialModel, isNew: true, values: {} }],
   );
   const [pending, setPending] = useState(false);
   const [attempt, setAttempt] = useState<SaveAttempt | null>(null);
@@ -177,6 +179,12 @@ export function UsagePriceOverrides({
     )
       errors.set(draft.id, "This model already has a row. Edit its prices there.");
   }
+  // A row speaks up once the user has typed in it. The row "Set price" opens
+  // with already names its model, so it stays quiet until a price is entered.
+  const showsRowError = (row: UsagePriceDraft) =>
+    errors.has(row.id) &&
+    (Object.values(row.values).some((value) => value !== "") ||
+      (row.model.trim() !== "" && !(row.id === INITIAL_ROW_ID && row.model === initialModel)));
   const failedDestinations =
     attempt?.destinations.filter(
       (destination) => attempt.results.get(destination.environmentId)?.status === "failed",
@@ -414,9 +422,7 @@ export function UsagePriceOverrides({
                                     }
                                   }}
                                   aria-label="New model ID"
-                                  aria-invalid={
-                                    (row.model.trim() !== "" && errors.has(row.id)) || undefined
-                                  }
+                                  aria-invalid={showsRowError(row) || undefined}
                                   list="usage-price-models"
                                   placeholder="Model ID"
                                   autoComplete="off"
@@ -436,9 +442,7 @@ export function UsagePriceOverrides({
                                   {row.model}
                                 </span>
                               )}
-                              {errors.has(row.id) &&
-                              (row.model.trim() !== "" ||
-                                Object.values(row.values).some((value) => value !== "")) ? (
+                              {showsRowError(row) ? (
                                 <p role="alert" className="mt-1 text-xs text-destructive">
                                   {errors.get(row.id)}
                                 </p>

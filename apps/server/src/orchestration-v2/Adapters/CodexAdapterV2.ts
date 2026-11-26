@@ -510,17 +510,21 @@ export function codexBackgroundCommandDetail(item: {
   readonly exitCode?: number | null | undefined;
   readonly aggregatedOutput?: string | null | undefined;
 }): string {
+  // Codex rejects a turn/start with a lone surrogate and never answers it, so cut on code points.
+  let commandEnd = BACKGROUND_COMMAND_DETAIL_COMMAND_MAX_LENGTH;
+  const finalCommandUnit = item.command.charCodeAt(commandEnd - 1);
+  if (finalCommandUnit >= 0xd800 && finalCommandUnit <= 0xdbff) commandEnd -= 1;
   const command =
     item.command.length > BACKGROUND_COMMAND_DETAIL_COMMAND_MAX_LENGTH
-      ? `${item.command.slice(0, BACKGROUND_COMMAND_DETAIL_COMMAND_MAX_LENGTH)}...`
+      ? `${item.command.slice(0, commandEnd)}...`
       : item.command;
   const exit =
     item.exitCode === null || item.exitCode === undefined ? "" : ` (exit ${item.exitCode})`;
   const output = (item.aggregatedOutput ?? "").trimEnd();
-  const outputTail =
-    output.length > BACKGROUND_COMMAND_DETAIL_OUTPUT_TAIL_MAX_LENGTH
-      ? `...${output.slice(-BACKGROUND_COMMAND_DETAIL_OUTPUT_TAIL_MAX_LENGTH)}`
-      : output;
+  let outputStart = output.length - BACKGROUND_COMMAND_DETAIL_OUTPUT_TAIL_MAX_LENGTH;
+  const firstOutputUnit = output.charCodeAt(outputStart);
+  if (firstOutputUnit >= 0xdc00 && firstOutputUnit <= 0xdfff) outputStart += 1;
+  const outputTail = outputStart > 0 ? `...${output.slice(outputStart)}` : output;
   const header = `Background command completed${exit}: ${command}`;
   return outputTail.length === 0 ? header : `${header}\n\nOutput tail:\n${outputTail}`;
 }
@@ -893,6 +897,7 @@ export function buildCodexTurnStartParams(input: {
   readonly chatTempDir?: string | undefined;
   readonly browserToolsAvailable?: boolean;
   readonly deviceToolsAvailable?: boolean;
+  readonly toolDiscoveryCatalog?: string | undefined;
   /** The Mac's default browser for Codex's Computer Use; omitted off macOS. */
   readonly hostBrowser?: CodexHostBrowser | null | undefined;
   /** ChatGPT token sharing does not accept service tiers. */
@@ -952,12 +957,24 @@ export function buildCodexTurnStartParams(input: {
         : undefined;
     const browserContext =
       input.hostBrowser === undefined ? undefined : buildCodexBrowserContext(input.hostBrowser);
+    const toolCatalogContext =
+      input.hasT3Mcp === true && input.toolDiscoveryCatalog !== undefined
+        ? {
+            t3_code_tool_catalog: {
+              kind: "application" as const,
+              value: input.toolDiscoveryCatalog
+                ? `Available t3-code MCP tools. For a deferred schema, use tool_search with its exact name and limit 1, or filter ALL_TOOLS by name in Code Mode.\n${input.toolDiscoveryCatalog}`
+                : "No t3-code MCP tools are currently enabled.",
+            },
+          }
+        : undefined;
     const additionalContext =
       t3Context === undefined &&
       browserContext === undefined &&
+      toolCatalogContext === undefined &&
       Object.keys(appContext).length === 0
         ? undefined
-        : { ...t3Context, ...browserContext, ...appContext };
+        : { ...t3Context, ...browserContext, ...toolCatalogContext, ...appContext };
     // Sent on every turn, with no instructions in Default mode, so a thread
     // leaving Plan mode returns to Codex's own Default mode.
     const collaborationEffort = effort ?? input.configuredReasoningEffort ?? undefined;
@@ -1377,6 +1394,7 @@ function isCodexCapacityFailure(code: string | null | undefined, message?: strin
 }
 
 interface ActiveCodexTurnContext {
+  closedCommandItemIds?: ReadonlySet<string>;
   latestProviderFailure?: {
     readonly nativeMessage: string;
     readonly failure: OrchestrationV2ProviderFailure;
@@ -4402,7 +4420,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   : "Image generation failed";
               output = [{ type: "text", text: note }];
             } else if (status === "completed") {
-              const result = item.result.trim();
+              const result = item.result?.trim() ?? "";
               const path = codexViewedImagePath(item.savedPath ?? result);
               const dataUrl = /^data:(image\/(?:png|jpeg|gif|webp));base64,/i.exec(result);
               const data = dataUrl ? result.slice(dataUrl[0].length) : result;
@@ -5623,6 +5641,35 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           });
         });
 
+        // Unloading an idle thread kills its terminals without completing
+        // their command items, while the shared provider session stays alive.
+        yield* client.handleServerNotification("thread/closed", (payload) =>
+          Effect.gen(function* () {
+            const completedAt = yield* DateTime.now;
+            for (const context of (yield* Ref.get(settledTurns)).values()) {
+              if (context.providerThread.nativeThreadRef?.nativeId !== payload.threadId) continue;
+              const commands = (yield* Ref.get(runningCommandItemsByTurn)).get(
+                context.nativeTurnId,
+              );
+              if (commands !== undefined) {
+                context.closedCommandItemIds = new Set(commands.keys());
+              }
+              yield* terminalizeRunningCommandItems(
+                context,
+                context.nativeTurnId,
+                "interrupted",
+                completedAt,
+              );
+              yield* Ref.update(runningCommandItemsByTurn, (current) => {
+                const updated = new Map(current);
+                updated.delete(context.nativeTurnId);
+                return updated;
+              });
+              yield* releaseSettledTurnIfIdle(context.nativeTurnId);
+            }
+          }).pipe(Effect.orDie, turnTerminalizationPermit.withPermits(1)),
+        );
+
         yield* client.handleServerNotification("item/started", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
@@ -5843,6 +5890,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
 
             if (payload.item.type === "commandExecution") {
+              // Other tools can retain the context after thread closure.
+              if (context.closedCommandItemIds?.has(payload.item.id)) return;
               const turnDrained = yield* clearRunningCommandItem(payload.turnId, payload.item.id);
               const artifacts = yield* buildCommandExecutionArtifacts(context, payload.item);
               yield* emitProviderEvent({
@@ -7441,6 +7490,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 : undefined,
               browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
+              toolDiscoveryCatalog: yield* (
+                mcpSession?.toolDiscoveryCatalog ?? Effect.succeed(undefined)
+              ),
               hostBrowser: yield* hostBrowser,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
@@ -8945,6 +8997,9 @@ const openCodexSideChat = Effect.fn("CodexAdapterV2.openSideChat")(
               : undefined,
             browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
             deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
+            toolDiscoveryCatalog: yield* (
+              mcpSession?.toolDiscoveryCatalog ?? Effect.succeed(undefined)
+            ),
             hostBrowser: yield* hostBrowser,
             omitServiceTier: adapterOptions.resolveRuntime !== undefined,
             threadId: sideInput.threadId,

@@ -73,7 +73,9 @@ export function ThreadSettingsEffort(props: {
   if (pendingIndex !== null && pendingIndex === selectedIndex) setPendingIndex(null);
   const restingIndex = pendingIndex ?? selectedIndex;
   const activeIndex = dragIndex ?? restingIndex;
-  const active = levels[activeIndex];
+  const showSlider = selectedIndex >= 0;
+  const rows = showSlider ? otherChoices : [...levels, ...otherChoices];
+  const active = showSlider ? levels[activeIndex] : undefined;
   const currentChoice = active ?? options.find((option) => option.id === value);
   const currentLabel = currentChoice ? effortChoiceLabel(currentChoice) : null;
   const count = levels.length;
@@ -251,7 +253,7 @@ export function ThreadSettingsEffort(props: {
             <Text className="text-sm text-foreground-muted">{currentLabel}</Text>
           ) : null}
         </View>
-        {count > 0 ? (
+        {showSlider ? (
           <GestureDetector gesture={gesture}>
             <View
               accessible
@@ -427,14 +429,14 @@ export function ThreadSettingsEffort(props: {
             </View>
           </GestureDetector>
         ) : null}
-        {otherChoices.length > 0 ? <ThreadSettingsRowDivider /> : null}
+        {rows.length > 0 ? <ThreadSettingsRowDivider /> : null}
       </View>
-      {otherChoices.map((choice, index) => (
+      {rows.map((choice, index) => (
         <ChoiceRow
           key={choice.id}
           label={effortChoiceLabel(choice)}
           selected={choice.id === value}
-          isLast={index === otherChoices.length - 1}
+          isLast={index === rows.length - 1}
           onPress={() => select(choice.id)}
         />
       ))}

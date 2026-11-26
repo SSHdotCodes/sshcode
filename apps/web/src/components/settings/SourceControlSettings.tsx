@@ -301,7 +301,7 @@ function DiscoveryItemRow({
               {version ? <code className="text-xs text-muted-foreground">{version}</code> : null}
               {isVcsNotReady(item) ? (
                 <Badge variant="warning" size="sm">
-                  Coming Soon
+                  Coming soon
                 </Badge>
               ) : null}
               {authStatus?.badge ? (
@@ -310,7 +310,7 @@ function DiscoveryItemRow({
                 </Badge>
               ) : null}
             </div>
-            <p className="flex min-w-0 flex-wrap items-center gap-x-1 text-xs leading-normal text-muted-foreground/80">
+            <p className="flex max-w-xl min-w-0 flex-wrap items-center gap-x-1 text-xs leading-normal text-muted-foreground">
               {itemSummary({ item, auth, authAccount })}
             </p>
           </div>

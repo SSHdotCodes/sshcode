@@ -167,6 +167,8 @@ export function turnItemNeedsDetailFetch(item: OrchestrationV2TurnItem): boolean
       return item.outputOmitted === true;
     case "dynamic_tool":
       return item.outputOmitted === true || isSummarizedValue(item.input);
+    case "file_change":
+      return item.diffOmitted === true;
     default:
       return false;
   }
@@ -194,6 +196,8 @@ export function turnItemOutputText(item: OrchestrationV2TurnItem): string | null
   switch (item.type) {
     case "command_execution":
       return item.output?.trim() ? commandOutputText(item.output) || null : null;
+    case "file_change":
+      return item.diffStr?.trim() ? item.diffStr : null;
     case "dynamic_tool":
       return item.outputOmitted === true
         ? null

@@ -1,4 +1,4 @@
-// @effect-diagnostics globalDate:off - CLI boundary supplies the default report timestamp.
+// @effect-diagnostics globalDate:off - Standalone Node CLI defaults its reporting window to the invocation time.
 // Usage: node scripts/usage-report/cli.ts --db <path> [--days N] [--until <ISO time>] [--top N] [--json]
 import { readRows } from "./db.ts";
 import { buildReport, parseTime } from "./report.ts";

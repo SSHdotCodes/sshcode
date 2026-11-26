@@ -4,6 +4,7 @@ import {
   UsageLimitSourceId,
   type ServerProvider,
 } from "@t3tools/contracts";
+import { unavailableGoogleLimits } from "@t3tools/shared/usageLimits";
 import { describe, expect, it } from "vite-plus/test";
 
 import { formatOutOfCredit } from "@t3tools/client-runtime/providerHealth";
@@ -37,19 +38,17 @@ describe("usage limits report", () => {
   };
 
   it.each([
-    [13, "~1h"],
-    [26, "~30m"],
-    [13 / 3, "~3h"],
-  ])("appends a short run-out estimate at %s points per hour", (recentPercentPerHour, text) => {
+    [13, 60],
+    [26, 30],
+    [13 / 3, 180],
+  ])("reports a run-out estimate at %s points per hour", (recentPercentPerHour, minutes) => {
     const result = collectUsageLimits(
       [{ ...provider, usageLimits: { checkedAt, windows: [{ ...window, recentPercentPerHour }] } }],
       [],
       now,
       {},
     );
-    expect(result.providers[0]?.summary).toContain(
-      `Weekly Fable: 87% used (resets in 1d 0h); ${text} left at current pace`,
-    );
+    expect(result.providers[0]?.windows[0]).toMatchObject({ runOutInMinutes: minutes });
     expect(result.providers[0]?.windows[0]?.recentPercentPerHour).toBe(recentPercentPerHour);
   });
 
@@ -66,14 +65,43 @@ describe("usage limits report", () => {
         [],
         now,
         {},
-      ).providers[0]?.summary,
-    ).not.toContain("left at current pace");
+      ).providers[0]?.windows[0]?.runOutInMinutes,
+    ).toBeUndefined();
   });
 
   it("does not present a stale estimate as current pace", () => {
-    const summary = collectUsageLimits([provider], [], now + 11 * 60_000, {}).providers[0]?.summary;
-    expect(summary).toContain("; stale");
-    expect(summary).not.toContain("left at current pace");
+    const row = collectUsageLimits([provider], [], now + 11 * 60_000, {}).providers[0];
+    expect(row?.stale).toBe(true);
+    expect(row?.windows[0]?.runOutInMinutes).toBeUndefined();
+  });
+
+  it("reports why native and hub Google plans have no windows, even after a day", () => {
+    const driver = ProviderDriverKind.make("antigravity");
+    const usageLimits = unavailableGoogleLimits(checkedAt);
+    const report = collectUsageLimits(
+      [{ ...provider, driver, instanceId: ProviderInstanceId.make("google_pro"), usageLimits }],
+      [
+        {
+          id: UsageLimitSourceId.make("hub"),
+          kind: "cliproxy",
+          label: "Hub",
+          checkedAt,
+          accounts: [{ id: "Google Ultra", driver, usageLimits }],
+        },
+      ],
+      now + 24 * 60 * 60_000,
+      {},
+    );
+    for (const plan of [report.providers[0], report.sources[0]?.accounts[0]]) {
+      expect(plan).toMatchObject({
+        stale: false,
+        windows: [],
+        unavailable: {
+          reason: "unsupported",
+          message: "Google doesn't share limits with apps yet",
+        },
+      });
+    }
   });
 
   it("includes the estimate in extra usage source accounts too", () => {
@@ -93,7 +121,7 @@ describe("usage limits report", () => {
       now,
       {},
     );
-    expect(result.sources[0]?.accounts[0]?.summary).toContain("; ~1h left at current pace");
+    expect(result.sources[0]?.accounts[0]?.windows[0]?.runOutInMinutes).toBe(60);
   });
 
   it("reports account failure even without a quota reading", () => {
@@ -123,9 +151,10 @@ describe("usage limits report", () => {
       Date.parse("2026-11-08T12:00:00.000Z"),
       {},
     );
-    expect(report.providers[0]?.summary).toBe(
-      "Account unavailable: Budget exhausted. Recheck 2026-11-08T18:00:00.000Z.",
-    );
+    expect(report.providers[0]?.accountUnavailable).toEqual({
+      reason: "Budget exhausted.",
+      recheckAt: "2026-11-08T18:00:00.000Z",
+    });
     expect(report.providers[0]?.windows).toEqual([]);
     const original = report.providers[0]!;
     const failure = {
@@ -142,7 +171,8 @@ describe("usage limits report", () => {
       recentFailure: failure,
     } as ServerProvider;
     expect(
-      collectUsageLimits([provider], [], Date.parse("2030-01-01"), {}).providers[0]?.summary,
+      collectUsageLimits([provider], [], Date.parse("2030-01-01"), {}).providers[0]
+        ?.accountUnavailable?.reason,
     ).toBe(formatOutOfCredit(failure));
     expect(accountUnavailable(provider, Date.parse("2030-01-01"))).toEqual({
       reason: formatOutOfCredit(failure),
@@ -178,32 +208,36 @@ describe("usage limits report", () => {
     };
     const nextDay = Date.parse("2026-11-23T19:57:50.479Z");
     expect(accountUnavailable(provider, nextDay)).toEqual({ reason });
-    const summary = collectUsageLimits([provider], [], nextDay, {}).providers[0]?.summary;
-    expect(summary).toBe(reason);
-    expect(summary).not.toContain("unsupported");
+    expect(
+      collectUsageLimits([provider], [], nextDay, {}).providers[0]?.accountUnavailable,
+    ).toEqual({ reason });
   });
 
-  it.each([false, true])("carries the %s verdict and honest summary to agents", (limited) => {
-    const checkedAt = "2026-10-27T12:00:00.000Z";
-    const provider: ServerProvider = {
-      instanceId: ProviderInstanceId.make("claudeAgent"),
-      driver: ProviderDriverKind.make("claudeAgent"),
-      enabled: true,
-      installed: true,
-      version: null,
-      status: "ready",
-      auth: { status: "authenticated" },
-      checkedAt,
-      models: [],
-      slashCommands: [],
-      skills: [],
-      usageLimits: {
+  it.each([false, true])(
+    "carries the %s provider verdict even when the used percentage rounds to 100",
+    (limited) => {
+      const checkedAt = "2026-10-27T12:00:00.000Z";
+      const provider: ServerProvider = {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        driver: ProviderDriverKind.make("claudeAgent"),
+        enabled: true,
+        installed: true,
+        version: null,
+        status: "ready",
+        auth: { status: "authenticated" },
         checkedAt,
-        windows: [{ id: "seven_day", kind: "weekly", label: "Weekly", usedPercent: 100, limited }],
-      },
-    };
-    const report = collectUsageLimits([provider], [], Date.parse(checkedAt), {});
-    expect(report.providers[0]?.windows[0]).toMatchObject({ usedPercent: 100, limited });
-    expect(report.providers[0]?.summary).toContain(limited ? "100% used" : "<1% left");
-  });
+        models: [],
+        slashCommands: [],
+        skills: [],
+        usageLimits: {
+          checkedAt,
+          windows: [
+            { id: "seven_day", kind: "weekly", label: "Weekly", usedPercent: 100, limited },
+          ],
+        },
+      };
+      const report = collectUsageLimits([provider], [], Date.parse(checkedAt), {});
+      expect(report.providers[0]?.windows[0]).toMatchObject({ usedPercent: 100, limited });
+    },
+  );
 });

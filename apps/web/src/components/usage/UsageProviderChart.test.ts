@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  axisTickLabels,
   buildChart,
   buildPeriodColumns,
   chartScale,
@@ -27,6 +28,22 @@ describe("chartScale", () => {
       max: 40,
       labeled: true,
     });
+  });
+});
+
+describe("axisTickLabels", () => {
+  const usd = (value: number) => `$${value.toFixed(2)}`;
+
+  it("drops cents when every step is a whole dollar", () => {
+    expect(axisTickLabels([0, 1, 2, 3], usd)).toEqual(["0", "$1", "$2", "$3"]);
+  });
+
+  it("keeps cents when a step needs them", () => {
+    expect(axisTickLabels([0, 0.5, 1, 1.5], usd)).toEqual(["0", "$0.50", "$1.00", "$1.50"]);
+  });
+
+  it("leaves labels without cents alone", () => {
+    expect(axisTickLabels([0, 1e6, 2e6], (value) => `${value / 1e6}M`)).toEqual(["0", "1M", "2M"]);
   });
 });
 

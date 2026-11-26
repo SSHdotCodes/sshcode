@@ -19,6 +19,7 @@ import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { useComposerHandleContext } from "~/composerHandleContext";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { useTheme } from "~/hooks/useTheme";
 import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh";
 import { useFileContextMenu, type FileContextMenuAction } from "~/fileContextMenu";
@@ -30,6 +31,7 @@ import { createFileTreeDragMentionController } from "./fileTreeDragMention";
 import {
   areAllDirectoriesExpanded,
   coalesceReentrantCalls,
+  onlyChildren,
   readExpandedDirectories,
   setAllDirectoriesExpanded,
   writeExpandedDirectories,
@@ -104,6 +106,9 @@ function FileSearchField(props: {
   );
 }
 
+// A symlink to its own parent lists itself as an only child without end.
+const MAX_FOLDERS_OPENED_WITH_PARENT = 16;
+
 export default function FileBrowserPanel({
   environmentId,
   cwd,
@@ -121,6 +126,7 @@ export default function FileBrowserPanel({
     entries: directoryEntries,
     load,
     refresh,
+    revalidate,
     ready,
     error,
     isPending,
@@ -252,6 +258,7 @@ export default function FileBrowserPanel({
   // The tree reads decorations at render time; a folder still loading its
   // children shows a spinner in its row instead of a banner that shifts the tree.
   const loadingDirectoriesRef = useRef(loadingDirectories);
+  const revalidateDirectory = useStableCallback(revalidate);
   const treeModelRef = useRef<ReturnType<typeof useFileTree>["model"] | null>(null);
   const dragMention = useMemo(
     () =>
@@ -296,12 +303,15 @@ export default function FileBrowserPanel({
       }
     },
     paths: [],
-    renderRowDecoration: ({ item, row }) =>
-      row.kind === "directory" &&
-      row.isExpanded &&
-      loadingDirectoriesRef.current.has(item.path.replace(/\/$/, ""))
+    renderRowDecoration: ({ item, row }) => {
+      const path = item.path.replace(/\/$/, "");
+      const open = row.kind === "directory" && row.isExpanded;
+      // Pierre calls this for the rows it renders, which is the only sign of what is on screen.
+      revalidateDirectory(open ? path : path.slice(0, Math.max(0, path.lastIndexOf("/"))));
+      return open && loadingDirectoriesRef.current.has(path)
         ? { icon: "t3-tree-icon-loading", title: "Loading…" }
-        : null,
+        : null;
+    },
     search: false,
     onSearchChange: (value) => setQuery(value ?? ""),
     unsafeCSS: PIERRE_TREE_UNSAFE_CSS,
@@ -340,28 +350,62 @@ export default function FileBrowserPanel({
   const expansionRoot = `${environmentId}:${cwd}`;
   // Folders expanded when the panel last unmounted; each reopens once lazy loading lists it.
   const [pendingExpandedPaths] = useState(() => new Set(readExpandedDirectories(expansionRoot)));
+  // Folders just opened and not listed yet, with how many only-child folders may open below each.
+  // Pierre merges such a chain into one row that takes its open state from the last folder.
+  const openingPathsRef = useRef(new Map<string, number>());
   useEffect(() => {
     const currentPaths = new Set(directoryPaths);
     for (const path of expandedPathsRef.current) {
       if (!currentPaths.has(path)) expandedPathsRef.current.delete(path);
     }
+    for (const path of openingPathsRef.current.keys()) {
+      if (!currentPaths.has(path)) openingPathsRef.current.delete(path);
+    }
+    let childrenByParent: ReadonlyMap<string, ProjectEntry | null> | null = null;
+    const openOnlyChild = (path: string) => {
+      const remaining = openingPathsRef.current.get(path);
+      if (remaining === undefined) return;
+      if (childrenByParent === null) childrenByParent = onlyChildren(directoryEntries);
+      const child = childrenByParent.get(path.replace(/\/$/, ""));
+      if (child === undefined) return;
+      // An ignored subtree opens only when the user has already opened an ignored parent.
+      const opensChild =
+        child?.kind === "directory" &&
+        (!child.ignored ||
+          directoryEntries.some((entry) => entry.ignored && treePath(entry) === path));
+      if (!opensChild || remaining === 0) {
+        openingPathsRef.current.delete(path);
+        return;
+      }
+      const childItem = model.getItem(treePath(child));
+      // The listing reaches the tree after this effect, which notifies again.
+      if (!childItem || !("expand" in childItem)) return;
+      openingPathsRef.current.delete(path);
+      if (childItem.isExpanded()) return;
+      openingPathsRef.current.set(treePath(child), remaining - 1);
+      childItem.expand();
+    };
     // Restoring calls item.expand(), which notifies subscribers synchronously.
     const loadExpanded = coalesceReentrantCalls(() => {
       if (model.isSearchOpen()) return;
       let changed = false;
       for (const path of directoryPaths) {
         const item = model.getItem(path);
-        if (item?.isDirectory() && pendingExpandedPaths.delete(path) && "expand" in item) {
-          item.expand();
-        }
+        const restored = item?.isDirectory() && pendingExpandedPaths.delete(path);
+        if (restored && item && "expand" in item) item.expand();
         if (item?.isDirectory() && "isExpanded" in item && item.isExpanded()) {
           if (!expandedPathsRef.current.has(path)) {
             expandedPathsRef.current.add(path);
             changed = true;
+            if (!restored && !openingPathsRef.current.has(path)) {
+              openingPathsRef.current.set(path, MAX_FOLDERS_OPENED_WITH_PARENT);
+            }
             void load(path.replace(/\/$/, ""));
           }
+          openOnlyChild(path);
         } else {
           if (item?.isDirectory() && expandedPathsRef.current.has(path)) setExpandAll(false);
+          openingPathsRef.current.delete(path);
           if (expandedPathsRef.current.delete(path)) changed = true;
         }
       }
@@ -374,7 +418,7 @@ export default function FileBrowserPanel({
     });
     loadExpanded();
     return model.subscribe(loadExpanded);
-  }, [directoryPaths, expansionRoot, load, model, pendingExpandedPaths]);
+  }, [directoryEntries, directoryPaths, expansionRoot, load, model, pendingExpandedPaths]);
   useEffect(() => {
     model.setGitStatus(
       entries
@@ -406,15 +450,20 @@ export default function FileBrowserPanel({
     }
     search.setValue(value);
   };
-  const handleRefresh = () => {
+  const refreshDirectories = () => {
     refresh();
+    // Renders the rows again, so each one on screen revalidates the folders it comes from.
+    model.setComposition(model.getComposition());
+  };
+  const handleRefresh = () => {
+    refreshDirectories();
     if (query.trim()) pathSearch.refresh();
     onRefreshSelectedFile?.();
   };
   useWorkspaceMutationRefresh({
     mutationId: workspaceMutationId,
     refresh: () => {
-      refresh();
+      refreshDirectories();
       if (query.trim()) pathSearch.refresh();
     },
     resourceKey: `files:${environmentId}:${cwd}`,
@@ -540,7 +589,7 @@ export default function FileBrowserPanel({
       data-file-browser-panel={`${environmentId}:${cwd}`}
     >
       <div
-        className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 in-data-[preview-panel-mode=inline]:mb-1 in-data-[preview-panel-mode=inline]:h-9 in-data-[preview-panel-mode=inline]:min-h-9 in-data-[preview-panel-mode=inline]:border-b-transparent"
+        className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 in-data-[preview-panel-mode=inline]:h-9 in-data-[preview-panel-mode=inline]:min-h-9"
         data-surface-subheader
       >
         <RefreshFilesButton isPending={isPending} onRefresh={handleRefresh} />

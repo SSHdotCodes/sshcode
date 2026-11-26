@@ -60,6 +60,7 @@ function OverviewMessage({
         text={entry.text}
         cwd={undefined}
         threadRef={threadRef}
+        plainValues
         isStreaming={entry.streaming}
       />
     </div>

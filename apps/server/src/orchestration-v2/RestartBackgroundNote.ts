@@ -1,3 +1,4 @@
+import { MessageId, type RunId } from "@t3tools/contracts";
 import type {
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderTurn,
@@ -7,6 +8,9 @@ import type {
   OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
+
+export const restartContinuationMessageId = (sourceRunId: RunId) =>
+  MessageId.make(`message:restart-continuation:${sourceRunId}`);
 
 type Work = OrchestrationV2RestartCancelledBackgroundWork;
 type Attempt = Pick<OrchestrationV2RunAttempt, "id" | "runId">;

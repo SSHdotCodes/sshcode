@@ -729,6 +729,7 @@ export function DiagnosticsSettingsPanel() {
   );
   const diagnosticsAccess = resolveUsageAccess({
     connectionPhase: environment?.connection.phase ?? "available",
+    connectionError: environment?.connection.error ?? null,
     session: session.data,
     hasSessionError: session.error !== null,
   });

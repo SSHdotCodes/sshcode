@@ -2,6 +2,7 @@ import { parseModelLinkHref } from "@t3tools/shared/modelLinks";
 import { emojiMessageTypography } from "../lib/typography";
 import { hasEmojiShortcode, isEmojiOnlyMessage } from "@t3tools/shared/emoji";
 import { compactGithubMarkdownLinks } from "@t3tools/shared/githubLinks";
+import { MARKDOWN_PLAIN_VALUE_PATTERN } from "@t3tools/shared/markdownPlainValues";
 import { decodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
 import {
   collectComposerContextReferences,
@@ -55,6 +56,7 @@ const MathBlockView = lazy(() =>
 function enrichedStyle(
   style: SelectableMarkdownTextProps["textStyle"],
   dark: boolean,
+  plainValues = false,
 ): MarkdownStyle {
   const monospace = Platform.OS === "ios" ? "Menlo" : "monospace";
   // Keep the radius modest: iOS clips square table-cell borders without stroking the corner arcs.
@@ -84,6 +86,14 @@ function enrichedStyle(
       marginTop: 8,
     };
   };
+  const code = {
+    fontFamily: monospace,
+    color: style.inlineCodeColor,
+    backgroundColor: "transparent",
+    borderColor: "transparent",
+    fontSize: style.fontSize * 0.9,
+    plainValuePattern: plainValues ? MARKDOWN_PLAIN_VALUE_PATTERN.source : "",
+  };
   return {
     paragraph: body,
     h1: heading(1),
@@ -94,13 +104,7 @@ function enrichedStyle(
     h6: heading(6),
     strong: { color: style.strongColor, fontFamily: style.boldFontFamily, fontWeight: "normal" },
     link: { color: style.linkColor, underline: false },
-    code: {
-      fontFamily: monospace,
-      color: style.inlineCodeColor,
-      backgroundColor: "transparent",
-      borderColor: "transparent",
-      fontSize: style.fontSize * 0.9,
-    },
+    code,
     codeBlock: {
       ...body,
       color: style.codeColor,
@@ -206,12 +210,25 @@ export function MobileEnrichedMarkdownText(
   const mathBlocks = useMemo(
     () =>
       mathParser && mayContainMath
-        ? mathParser.findMathBlocks(sourceMarkdown, !!props.onLinkPress, {
-            text: enrichedTextLinkRegex(props.skills, props.models),
-            inlineCode: ENRICHED_INLINE_FILE_LINK_REGEX,
-          })
+        ? mathParser.findMathBlocks(
+            sourceMarkdown,
+            !!props.onLinkPress,
+            {
+              text: enrichedTextLinkRegex(props.skills, props.models),
+              inlineCode: ENRICHED_INLINE_FILE_LINK_REGEX,
+            },
+            props.plainValues,
+          )
         : [],
-    [mathParser, mayContainMath, sourceMarkdown, props.onLinkPress, props.skills, props.models],
+    [
+      mathParser,
+      mayContainMath,
+      sourceMarkdown,
+      props.onLinkPress,
+      props.skills,
+      props.models,
+      props.plainValues,
+    ],
   );
   useEffect(() => {
     if (!mathBlocks.length || mathTypesetter) return;
@@ -404,10 +421,11 @@ export function MobileEnrichedMarkdownText(
           ? { ...props.textStyle, ...emojiMessageTypography(props.textStyle) }
           : props.textStyle,
         themeAppearance === "dark",
+        props.plainValues,
       ),
       linkVariants,
     }),
-    [emojiOnly, props.textStyle, themeAppearance, linkVariants],
+    [emojiOnly, props.textStyle, themeAppearance, props.plainValues, linkVariants],
   );
   const renderMedia = useCallback(
     (asset: MarkdownMediaAsset) => {

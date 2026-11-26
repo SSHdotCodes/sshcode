@@ -7,6 +7,7 @@ import * as NodeVM from "node:vm";
 import { assert, describe, expect, it } from "@effect/vitest";
 
 import { PI_T3_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
+import { T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { loadMcpBridge } from "./mcpBridge.testkit.ts";
 
 type RequestHook = (
@@ -117,7 +118,7 @@ describe("Pi MCP tool exposure", () => {
   };
 
   it.each(["session_start", "session_tree", "model_select", "before_agent_start"])(
-    "keeps optional T3 schemas deferred for OpenAI-compatible gateways at %s",
+    "keeps T3 schemas deferred for OpenAI-compatible gateways at %s",
     async (hookName) => {
       const bridge = await loadMcpBridge({ modern: true, toolSearchAvailable: true });
       const hook = bridge.handlers.get(hookName);
@@ -140,13 +141,29 @@ describe("Pi MCP tool exposure", () => {
     },
   );
 
-  it("keeps orchestration direct and optional bridge tools discoverable on modern Pi", async () => {
+  it("sends delegated Pi chats their subagent instructions and tool catalog", async () => {
+    const bridge = await loadMcpBridge({ modern: true, toolSearchAvailable: true, subagent: true });
+    const prompt = await bridge.handlers.get("before_agent_start")!(
+      { systemPrompt: "Pi system prompt" },
+      discoveryContext,
+    );
+    assert.isTrue(prompt.systemPrompt.endsWith(T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT.trim()));
+    assert.include(prompt.systemPrompt, "delegate_task — Delegate work to another agent.");
+  });
+
+  it("lists every tool's purpose before Pi loads any T3 schemas", async () => {
     const bridge = await loadMcpBridge({ modern: true, toolSearchAvailable: true });
     await bridge.handlers.get("session_start")!({ systemPrompt: "" }, discoveryContext);
     const start = bridge.handlers.get("before_agent_start");
     assert.isDefined(start);
     const prompt = await start!({ systemPrompt: "Pi system prompt" }, discoveryContext);
-    assert.include(prompt.systemPrompt, "orchestrator_capabilities");
+    assert.include(
+      prompt.systemPrompt,
+      "orchestrator_capabilities — Discover available providers and models.",
+    );
+    assert.include(prompt.systemPrompt, "delegate_task — Delegate work to another agent.");
+    assert.include(prompt.systemPrompt, "task_status — Check delegated work.");
+    assert.include(prompt.systemPrompt, "preview_snapshot — Inspect the collaborative browser.");
     assert.include(prompt.systemPrompt, "use tool_search");
     assert.equal(bridge.servers.length, 0);
     assert.equal(bridge.tools.length, 8);
@@ -156,9 +173,9 @@ describe("Pi MCP tool exposure", () => {
         .filter((tool) => tool.exposure !== "hidden")
         .map((tool) => [tool.name, tool.exposure]),
       [
-        ["mcp__t3-code__orchestrator_capabilities", "direct"],
-        ["mcp__t3-code__delegate_task", "direct"],
-        ["mcp__t3-code__task_status", "direct"],
+        ["mcp__t3-code__orchestrator_capabilities", "deferred"],
+        ["mcp__t3-code__delegate_task", "deferred"],
+        ["mcp__t3-code__task_status", "deferred"],
         ["mcp__t3-code__preview_snapshot", "deferred"],
       ],
     );
@@ -202,6 +219,8 @@ describe("Pi MCP tool exposure", () => {
     );
     assert.include(bridge.getActiveTools(), "mcp__t3-code__preview_snapshot");
     assert.notInclude(bridge.getActiveTools(), "mcp__t3-code__delegate_task");
+    const prompt = await bridge.handlers.get("before_agent_start")!(event, discoveryContext);
+    assert.notInclude(prompt.systemPrompt, "delegate_task —");
   });
 
   it.each(["legacy Pi", "disabled tool search", "replaced tool search"])(
@@ -258,7 +277,7 @@ describe("Pi MCP tool exposure", () => {
     });
     await bridge.handlers.get("session_start")!({ systemPrompt: "" }, discoveryContext);
     assert.equal(bridge.tools.length, 4);
-    assert.equal(bridge.tools.filter((tool) => tool.exposure === "direct").length, 3);
+    assert.equal(bridge.tools.filter((tool) => tool.exposure === "deferred").length, 4);
     const tool = bridge.tools.find((tool) => tool.name === "mcp__t3-code__preview_snapshot");
     assert.isDefined(tool);
     assert.equal((await tool!.execute("selected", {})).content[0]?.text, "browser snapshot");

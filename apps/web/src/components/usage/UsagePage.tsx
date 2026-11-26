@@ -80,6 +80,7 @@ import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { UsageBestModels } from "./UsageBestModels";
 import { UsageLimitsSection } from "./UsageLimits";
+import { useUsageLimitsFocus } from "./usageLimitsFocus";
 import { UsagePriceOverrides } from "./UsagePriceOverrides";
 import { UsageProviderChart } from "./UsageProviderChart";
 import { SpeedPremium, UsageModelDialog } from "./UsageModelDialog";
@@ -139,6 +140,11 @@ export function UsagePage() {
   }));
   const metric = preferences.metric;
   const showingLimits = metric === "limits";
+  // A ring in the sidebar's status dock asks for its plan while this page shows another tab.
+  const focusedLimitsPlan = useUsageLimitsFocus();
+  if (focusedLimitsPlan !== null && preferences.metric !== "limits") {
+    setPreferences({ ...preferences, metric: "limits" });
+  }
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [limitsNow, setLimitsNow] = useState(() => Date.now());
   useEffect(() => {
@@ -320,6 +326,7 @@ export function UsagePage() {
     row.kind === "usage" && isProviderLoading(row.provider) ? null : rowShare(row),
   );
   const smallRowsShare = smallRows.reduce((sum, row) => sum + (rowShare(row) ?? 0), 0);
+  const soleUsageRow = summaryRows.filter((row) => row.kind === "usage").length === 1;
   // Two machines can each have an instance called "Claude": name the machine on those rows.
   const labelOf = (row: (typeof summaryRows)[number]) =>
     row.kind !== "usage"
@@ -808,9 +815,13 @@ export function UsagePage() {
                                 awaitingData && "invisible",
                               )}
                             >
+                              {/* A lone provider skips its share: it is the whole total. */}
+                              {!soleUsageRow
+                                ? `${formatPercent(share)} of ${metric === "cost" ? "cost" : "tokens"} · `
+                                : null}
                               {metric === "cost"
-                                ? `${formatPercent(share)} of cost · ${formatTokens(totals?.totalTokens ?? 0)} tokens`
-                                : `${formatPercent(share)} of tokens · ${formatUsd(totals?.costUsd ?? 0)}`}
+                                ? `${formatTokens(totals?.totalTokens ?? 0)} tokens`
+                                : formatUsd(totals?.costUsd ?? 0)}
                             </span>
                           </div>
                         );
@@ -821,7 +832,7 @@ export function UsagePage() {
                         type="button"
                         aria-expanded={showSmallProviders}
                         onClick={() => setShowSmallProviders((shown) => !shown)}
-                        className="flex items-center justify-between gap-4 rounded-sm text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                        className="flex items-center justify-between gap-4 rounded-sm text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                       >
                         <span className="flex items-center gap-1.5">
                           <ChevronDownIcon
@@ -1061,7 +1072,11 @@ export function UsagePage() {
                                   <td
                                     className={cn("hidden py-2.5 pl-6 sm:table-cell", rowFigures)}
                                   >
-                                    {share === null ? "" : formatPercent(share)}
+                                    {share === null ? (
+                                      <span aria-label="No share">–</span>
+                                    ) : (
+                                      formatPercent(share)
+                                    )}
                                   </td>
                                   <td className={cn("py-2.5 pl-6 pr-4", rowFigures)}>
                                     {formatTokens(model.totalTokens)}

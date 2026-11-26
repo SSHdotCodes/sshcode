@@ -146,6 +146,17 @@ describe("deriveSteerWait", () => {
     });
   });
 
+  it("never waits for a message that reached an agent only waiting on a timer", () => {
+    const steer = prompt("steer", 3, "steer");
+    expect(
+      deriveSteerWait([
+        prompt("start", 1),
+        command("timer", 2, "sleep 300"),
+        steer.type === "user_message" ? { ...steer, agentWasWaiting: true } : steer,
+      ]),
+    ).toBeNull();
+  });
+
   it("clears once the agent produces anything after the steer", () => {
     expect(
       deriveSteerWait([

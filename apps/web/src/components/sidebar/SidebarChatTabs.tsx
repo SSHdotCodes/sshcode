@@ -41,6 +41,7 @@ function chatTabStripKeys(tabs: ReadonlyArray<ChatTabView>): readonly string[] {
  */
 export function SidebarChatTabs({
   ref,
+  enabled,
   tabs,
   selected,
   dropTarget,
@@ -51,6 +52,7 @@ export function SidebarChatTabs({
   onRenameEnd,
 }: {
   readonly ref: Ref<HTMLDivElement>;
+  readonly enabled: boolean;
   readonly tabs: ReadonlyArray<ChatTabView>;
   readonly selected: string;
   readonly dropTarget: string | null;
@@ -91,6 +93,7 @@ export function SidebarChatTabs({
 
   // Ctrl+Tab and Ctrl+Shift+Tab step through the tabs, wrapping around.
   useEffect(() => {
+    if (!enabled) return;
     const keys = chatTabStripKeys(tabs);
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.key !== "Tab" || !event.ctrlKey) return;
@@ -102,7 +105,7 @@ export function SidebarChatTabs({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onSelect, selected, tabs]);
+  }, [enabled, onSelect, selected, tabs]);
 
   const keys = chatTabStripKeys(tabs);
   return (

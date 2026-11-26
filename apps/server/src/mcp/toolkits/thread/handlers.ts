@@ -115,7 +115,7 @@ const pendingRequestHandlers: McpToolAccess.Handlers<(typeof PendingRequestToolk
   t3_pending_request_read: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const { item } = yield* readQuestion(input);
-      return { requestId: input.requestId, questions: item.questions };
+      return { questions: item.questions };
     }),
   ),
   t3_pending_request_respond: writesThread((input) =>

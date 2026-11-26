@@ -1,6 +1,8 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Signs a real DPoP proof for the HTTP regression.
 import * as NodeCrypto from "node:crypto";
 import * as PlatformError from "effect/PlatformError";
+import * as Duration from "effect/Duration";
+import * as TestClock from "effect/testing/TestClock";
 import * as DateTime from "effect/DateTime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -9,6 +11,7 @@ import {
   AuthEnvironmentBootstrapTokenType,
   AuthAccessTokenType,
   EnvironmentAuthenticatedAuth,
+  EnvironmentAuthInvalidError,
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
 import { RelayClientTracer } from "@t3tools/shared/relayTracing";
@@ -390,4 +393,43 @@ it.live("validates the bootstrap credential before persisting DPoP replay state"
     expect(replay.headers.get("www-authenticate")).toContain("DPoP");
     expect(created).toHaveLength(1);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "only reports renewable expiry for an unrevoked paired bearer on the ticket endpoint",
+  () =>
+    Effect.gen(function* () {
+      const auth = yield* EnvironmentAuth.EnvironmentAuth;
+      const issue = (subject: string) => auth.issueSession({ subject, ttl: Duration.seconds(1) });
+      const paired = yield* issue("one-time-token");
+      const revoked = yield* issue("one-time-token");
+      const guest = yield* issue("guest:test");
+      const relay = yield* issue("cloud-connect");
+      yield* auth.revokeClientSession(paired.sessionId, revoked.sessionId);
+      yield* TestClock.adjust("2 seconds");
+      const middleware = yield* Layer.build(AuthHttp.layerAuthenticatedAuth).pipe(
+        Effect.map(Context.get(EnvironmentAuthenticatedAuth)),
+      );
+      const rejected = (token: string) =>
+        (
+          middleware as unknown as (
+            effect: Effect.Effect<void>,
+          ) => Effect.Effect<void, EnvironmentAuthInvalidError, HttpServerRequest.HttpServerRequest>
+        )(Effect.void).pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(
+              postJson("/api/auth/websocket-ticket/rpc", {}, { authorization: `Bearer ${token}` }),
+            ),
+          ),
+          Effect.flip,
+        );
+      expect((yield* rejected(paired.token)).pairingExpired).toBe(true);
+      for (const token of [revoked.token, guest.token, relay.token, "malformed"]) {
+        expect((yield* rejected(token)).pairingExpired).toBeUndefined();
+      }
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(layerEnvironmentAuth.pipe(Layer.provideMerge(NodeServices.layer))),
+    ),
 );

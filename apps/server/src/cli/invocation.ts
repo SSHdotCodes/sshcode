@@ -134,10 +134,10 @@ export function formatCliCommand(input: {
 }
 
 /** `formatCliCommand` against this process's real entry path and version. */
-export const resolveCliCommand = (subcommand: string) =>
+export const resolveCliCommand = (subcommand: string, args: ReadonlyArray<string> = []) =>
   Effect.map(HostProcess.Arguments, (processArguments) =>
     formatCliCommand({
-      subcommand,
+      subcommand: [subcommand, ...args.map(shellWord)].join(" "),
       entryPath: processArguments[1] ?? "",
       version: packageJson.version,
     }),

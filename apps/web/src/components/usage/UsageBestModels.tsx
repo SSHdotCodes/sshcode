@@ -6,6 +6,7 @@ import {
   pickBarShare,
   pickRouteIcon,
   pickRule,
+  pickRank,
   picksBasis,
   PICKS_WINDOW_DAYS,
   pickTitle,
@@ -30,7 +31,6 @@ import { Skeleton } from "../ui/skeleton";
 import { UsageDither } from "./UsageDither";
 import { UsagePlans } from "./UsagePlans";
 import { PROVIDER_PRESENTATION } from "./usageProviders";
-import { useCountUp } from "./useCountUp";
 
 const KIND_STYLE: Record<
   ModelPickKind,
@@ -85,7 +85,6 @@ function PickCard({
   const style = KIND_STYLE[pick.kind];
   const Icon = style.icon;
   const description = describePick(pick, picks);
-  const counted = useCountUp(description?.headline.value ?? 0, description?.headline.value != null);
   const winner = pick.winner;
   const runners = pick.ranked.slice(1, 3);
 
@@ -140,9 +139,7 @@ function PickCard({
             </div>
             <div className="flex flex-wrap items-baseline gap-x-1.5">
               <span className="text-3xl font-semibold text-foreground tabular-nums">
-                {description.headline.value === null
-                  ? description.headline.text
-                  : description.headline.format(counted)}
+                {description.headline.text}
               </span>
               <span className="text-xs text-muted-foreground">{description.headline.unit}</span>
             </div>
@@ -177,8 +174,9 @@ function PickCard({
                 {runners.map((candidate, runnerIndex) => (
                   <li key={candidate.key} className="flex flex-col gap-1">
                     <span className="flex items-baseline justify-between gap-2 text-2xs">
-                      <span className="min-w-0 truncate text-muted-foreground">
-                        <span className="tabular-nums">{runnerIndex + 2}.</span> {candidate.label}
+                      <span className="min-w-0 text-muted-foreground">
+                        <span className="tabular-nums">{pickRank(pick, runnerIndex + 1)}.</span>{" "}
+                        {candidate.label}
                       </span>
                       <span className="shrink-0 text-muted-foreground tabular-nums">
                         {pickValueText(pick.kind, candidate, pick)}
@@ -233,9 +231,9 @@ function HowPicked({ table }: { readonly table: ModelBenchmarkTable }) {
             </div>
           ))}
           <p className="border-t border-border/60 pt-2 text-muted-foreground">
-            Every model in your connected providers competes, as long as it has public scores or
-            your own grades. Usage is your last {PICKS_WINDOW_DAYS} days. Plan prices are list
-            prices unless you enter what you pay under Your plans.
+            Quality combines public benchmarks with rated subagent tasks where available. Usage is
+            your last {PICKS_WINDOW_DAYS} days. Plan prices are list prices unless you enter what
+            you pay under Your plans.
             {metrics.length > 0
               ? ` Benchmarks: ${metrics
                   .map((metric) => [metric.label, metric.version].filter((part) => part).join(" "))
@@ -287,12 +285,12 @@ export function UsageBestModels({
 
   return (
     <section aria-label="Best models for you" className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+      <div className="flex flex-col gap-0.5">
         <h2 className="flex items-center gap-1.5 text-sm font-medium text-foreground">
           Best models for you
           <HowPicked table={table} />
         </h2>
-        <span className="text-xs text-muted-foreground">{picksBasis(picks, table)}</span>
+        <p className="text-xs text-muted-foreground">{picksBasis(picks, table)}</p>
       </div>
       <div className={cn("grid gap-3 sm:grid-cols-2 xl:grid-cols-4")}>
         {MODEL_PICK_KINDS.map((kind, index) => (

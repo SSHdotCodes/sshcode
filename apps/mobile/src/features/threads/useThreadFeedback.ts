@@ -5,14 +5,16 @@ import { AppState } from "react-native";
 import type { OrchestrationV2Run } from "@t3tools/contracts";
 import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
 
-export function playThreadFeedback(kind: "sent" | "completed" | "failed"): void {
+export function playThreadFeedback(kind: "sent" | "completed" | "failed" | "asked"): void {
   const feedback =
     kind === "sent"
       ? Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
       : Haptics.notificationAsync(
           kind === "completed"
             ? Haptics.NotificationFeedbackType.Success
-            : Haptics.NotificationFeedbackType.Error,
+            : kind === "asked"
+              ? Haptics.NotificationFeedbackType.Warning
+              : Haptics.NotificationFeedbackType.Error,
         );
   // Feedback must never turn an accepted send into a failed operation.
   void feedback.catch(() => undefined);
@@ -21,6 +23,8 @@ export function playThreadFeedback(kind: "sent" | "completed" | "failed"): void 
 interface FeedbackSnapshot {
   readonly threadKey: string;
   readonly runs: ReadonlyMap<string, OrchestrationV2Run["status"]> | null;
+  /** The question or approval open at this sample, for telling a new one from one already seen. */
+  readonly requestId: string | null;
   readonly armedRuns: Set<string>;
   readonly seenErrors: Set<string>;
 }
@@ -50,11 +54,14 @@ export function useThreadFeedback(
     connected,
     visible,
     supportsSyncMarker,
+    pendingRequestId = null,
   }: {
     readonly syncStatus: EnvironmentThreadStatus;
     readonly connected: boolean;
     readonly visible: boolean;
     readonly supportsSyncMarker: boolean;
+    /** The question the agent is waiting on, if any: one arriving on screen gets a tap. */
+    readonly pendingRequestId?: string | null;
   },
 ): void {
   const focused = useIsFocused();
@@ -125,7 +132,13 @@ export function useThreadFeedback(
         if (ACTIVE_RUN_STATUSES.has(status) && !previous.runs?.has(id)) armedRuns.add(id);
       }
     }
-    previousRef.current = { threadKey, runs: liveRuns, armedRuns, seenErrors };
+    previousRef.current = {
+      threadKey,
+      runs: liveRuns,
+      requestId: pendingRequestId,
+      armedRuns,
+      seenErrors,
+    };
     if (previous === null || previous.threadKey !== threadKey) return;
 
     let completed = false;
@@ -141,8 +154,18 @@ export function useThreadFeedback(
       completed ||= status === "completed";
       failed ||= status === "failed";
     }
+    // A question is news only when it arrives from work watched live; one that was already
+    // waiting when the chat opened, or replayed on a resume, is on screen, not arriving.
+    const asked =
+      previous.runs !== null &&
+      previous.armedRuns.size > 0 &&
+      liveRuns !== null &&
+      pendingRequestId !== null &&
+      pendingRequestId !== previous.requestId;
     if (failed) {
       playThreadFeedback("failed");
+    } else if (asked) {
+      playThreadFeedback("asked");
     } else if (completed) {
       playThreadFeedback("completed");
     }
@@ -151,6 +174,7 @@ export function useThreadFeedback(
     connected,
     focused,
     foreground,
+    pendingRequestId,
     runs,
     supportsSyncMarker,
     syncStatus,

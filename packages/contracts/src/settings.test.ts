@@ -708,6 +708,15 @@ describe("ClientSettings sidebar", () => {
   });
 });
 
+it("defaults server chat list tabs on, accepts an opt-out and drops the retired device key", () => {
+  const patch = { chatListTabsEnabled: false };
+  expect(decodeServerSettings({}).chatListTabsEnabled).toBe(true);
+  expect(decodeServerSettings(patch).chatListTabsEnabled).toBe(false);
+  expect(decodeServerSettingsPatch(patch)).toEqual(patch);
+  expect(decodeClientSettings(patch)).not.toHaveProperty("chatListTabsEnabled");
+  expect(decodeClientSettingsPatch(patch)).toEqual({});
+});
+
 describe("ClientSettings context window meter", () => {
   it("defaults off and preserves an explicit legacy opt-in", () => {
     expect(decodeClientSettings({}).contextWindowMeterEnabled).toBe(false);

@@ -2,7 +2,7 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import {
   MonitorError,
   OrchestratorMcpFailure,
-  type MonitorInfo,
+  type MonitorListResult,
   type MonitorStartInput,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -39,10 +39,8 @@ export class MonitorMcpService extends Context.Service<
     ) => Effect.Effect<{ readonly stopped: boolean }, OrchestratorMcpFailure>;
     readonly list: (
       scope: McpInvocationContext.McpInvocationScope,
-    ) => Effect.Effect<
-      { readonly monitors: ReadonlyArray<MonitorInfo>; readonly notice?: string },
-      OrchestratorMcpFailure
-    >;
+      includeOutput: boolean,
+    ) => Effect.Effect<typeof MonitorListResult.Type, OrchestratorMcpFailure>;
   }
 >()("t3/mcp/MonitorMcpService") {}
 
@@ -105,10 +103,10 @@ const make = Effect.gen(function* () {
           const warning = monitorBufferingProblem(input.command);
           const wakePolicy =
             typeof input.wakeOn === "string"
-              ? `Matches + exit; ${input.durable === true ? "use wakeOn:false for exit only" : "omit wakeOn for throttled output"}.`
+              ? "Matches + exit"
               : input.wakeOn === false || input.durable === true
-                ? "Exit only; set wakeOn to a regex for milestones."
-                : "Throttled output + exit; use wakeOn:regex or false.";
+                ? "Exit only"
+                : "Throttled output + exit";
           return { ...started, wakePolicy, ...(warning === undefined ? {} : { warning }) };
         }),
       ),
@@ -119,11 +117,16 @@ const make = Effect.gen(function* () {
           Effect.mapError(monitorFailure),
         ),
       ),
-    list: (scope) =>
+    list: (scope, includeOutput) =>
       withCaller(scope, "monitor_list", (thread) =>
         Effect.gen(function* () {
-          const listed = yield* monitors.list(thread.id);
-          if (listed.length === 0) return { monitors: listed };
+          const listed = (yield* monitors.list(thread.id)).map(
+            ({ threadId: _threadId, output, ...monitor }) => ({
+              ...monitor,
+              ...(includeOutput && output !== undefined ? { output } : {}),
+            }),
+          );
+          if (includeOutput || listed.length === 0) return { monitors: listed };
           const since = repeatListChecks(
             thread.id,
             listed.map((monitor) => `${monitor.monitorId}:${monitor.state ?? "running"}`).join(","),

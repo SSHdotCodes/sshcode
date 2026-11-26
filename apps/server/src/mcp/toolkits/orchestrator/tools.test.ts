@@ -1,6 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
+import { NodeId, ProviderInstanceId } from "@t3tools/contracts";
 import { Tool } from "effect/ai";
 import * as Context from "effect/Context";
+import { compactDelegateTaskResult } from "../../delegateTaskDetails.ts";
 import { ProjectToolkit } from "../project/tools.ts";
 
 import {
@@ -12,6 +14,36 @@ import {
 } from "./tools.ts";
 
 describe("orchestrator MCP tool guidance", () => {
+  const completedTask = {
+    taskId: NodeId.make("task"),
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    status: "completed",
+    workState: "result_available",
+  } as const;
+
+  it("returns a 16 KiB report in full", () => {
+    const report = "🧪".repeat(4096);
+    const result = compactDelegateTaskResult({ ...completedTask, summary: report });
+    assert.equal(result.summary, report);
+    assert.isUndefined(result.nextSummaryOffset);
+  });
+
+  it("resumes a long original result across UTF-16 offsets without splitting code points", () => {
+    const report = `a${"🧪界".repeat(5000)}`;
+    const task = { ...completedTask, summary: report };
+    const chunks: string[] = [];
+    let offset: number | undefined = 0;
+    do {
+      const chunk = compactDelegateTaskResult(task, offset);
+      assert.isAtMost(Buffer.byteLength(chunk.summary!), 16384);
+      assert.notInclude(Buffer.from(chunk.summary!).toString(), "�");
+      chunks.push(chunk.summary!);
+      offset = chunk.nextSummaryOffset;
+    } while (offset !== undefined);
+    assert.isAbove(chunks.length, 1);
+    assert.equal(chunks.join(""), report);
+  });
+
   // These left the always-on orchestration rules on 2026-11-13: the tool an agent loads before
   // calling it carries them, so they must stay in these descriptions.
   it("carries the card, monitor and secret rules the orchestration rules leave to tools", () => {
@@ -28,7 +60,7 @@ describe("orchestrator MCP tool guidance", () => {
       [tools.monitor_start, "persistent:true"],
       [tools.request_secret, "delivery:'file'"],
       [tools.request_secret, "sudo password"],
-      [tools.delegate_task, "Git repository at its current local commit"],
+      [tools.delegate_task, "last local commit, without uncommitted edits"],
     ] as const)
       assert.include(text(tool), guidance, `${tool.name}: ${guidance}`);
   });
@@ -142,11 +174,10 @@ describe("orchestrator MCP tool guidance", () => {
   it("publishes delegation hints on the encoded strings agents actually receive", () => {
     const schema = JSON.stringify(Tool.getJsonSchema(DelegateTaskTool));
     for (const guidance of [
-      "Self-contained task",
-      "Absolute path the child works in",
-      "Exact orchestrator_capabilities model id, not its label",
-      "unique delegation keys also reference tasks",
-      "Configured provider instance id",
+      "Self-contained subagent brief",
+      "Absolute checkout path to use or copy",
+      "Exact model id from orchestrator_capabilities",
+      "Instance id from orchestrator_capabilities",
     ])
       assert.include(schema, guidance);
   });
@@ -160,8 +191,8 @@ describe("orchestrator MCP tool guidance", () => {
     };
 
     assert.equal(schema.type, "object");
-    assert.include(JSON.stringify(schema.properties?.schedule), "Trigger object");
-    assert.include(JSON.stringify(schema.properties?.schedule), "{type:'once', runAt}");
+    assert.include(JSON.stringify(schema.properties?.schedule), "Use the schedule object");
+    assert.include(ScheduleTaskTool.description ?? "", "{type:'once',runAt:");
     assert.isAtLeast(schema.properties?.schedule?.anyOf?.length ?? 0, 2);
     assert.include(ScheduleTaskTool.description ?? "", "schedule is an object");
     assert.include(ScheduleTaskTool.description ?? "", "nextRunAt");

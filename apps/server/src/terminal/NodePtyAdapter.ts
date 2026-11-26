@@ -72,15 +72,11 @@ const ensureNodePtySpawnHelperExecutable = Effect.fn(function* () {
   if (didEnsureSpawnHelperExecutable) return;
 
   const helperPath = yield* resolveNodePtySpawnHelperPath;
-  if (!helperPath) return;
-  didEnsureSpawnHelperExecutable = true;
-
-  if (!(yield* fs.exists(helperPath))) {
-    return;
+  if (helperPath && (yield* fs.exists(helperPath))) {
+    yield* fs.chmod(helperPath, 0o755).pipe(Effect.orElseSucceed(() => undefined));
   }
-
-  // Best-effort: avoid FileSystem.stat in packaged mode where some fs metadata can be missing.
-  yield* fs.chmod(helperPath, 0o755).pipe(Effect.orElseSucceed(() => undefined));
+  // Set only after the repair finishes, so a check cut off by the spawn deadline runs again.
+  didEnsureSpawnHelperExecutable = true;
 });
 
 /**
@@ -249,19 +245,20 @@ export const make = Effect.fn("NodePtyAdapter.make")(function* () {
       }),
   }).pipe(Effect.orDie);
 
-  const ensureNodePtySpawnHelperExecutableCached = yield* Effect.cached(
-    ensureNodePtySpawnHelperExecutable().pipe(
-      Effect.provideService(FileSystem.FileSystem, fs),
-      Effect.provideService(Path.Path, path),
-      Effect.provideService(HostProcess.Platform, platform),
-      Effect.provideService(HostProcess.Architecture, architecture),
-      Effect.orElseSucceed(() => undefined),
-    ),
+  const ensureSpawnHelperExecutable = ensureNodePtySpawnHelperExecutable().pipe(
+    Effect.provideService(FileSystem.FileSystem, fs),
+    Effect.provideService(Path.Path, path),
+    Effect.provideService(HostProcess.Platform, platform),
+    Effect.provideService(HostProcess.Architecture, architecture),
+    Effect.orElseSucceed(() => undefined),
+    // Terminal startup runs uninterruptibly; a stalled helper check must not hold its locks.
+    Effect.interruptible,
+    Effect.timeoutOrElse({ duration: "5 seconds", orElse: () => Effect.void }),
   );
 
   return PtyAdapter.PtyAdapter.of({
     spawn: Effect.fn("NodePtyAdapter.spawn")(function* (input) {
-      yield* ensureNodePtySpawnHelperExecutableCached;
+      yield* ensureSpawnHelperExecutable;
       // node-pty only writes `name` into the child's TERM on the Unix path;
       // the ConPTY path leaves the environment untouched, so Windows children
       // inherit a missing or 16-color TERM unless it is set here.
@@ -289,6 +286,18 @@ export const make = Effect.fn("NodePtyAdapter.make")(function* () {
       });
       if (platform === "win32") {
         yield* waitForWindowsPid(ptyProcess.nativeProcess, ptyProcess.process, input.shell).pipe(
+          Effect.interruptible,
+          Effect.timeoutOrElse({
+            duration: "15 seconds",
+            orElse: () =>
+              Effect.fail(
+                new PtyAdapter.PtySpawnError({
+                  adapter: "node-pty",
+                  shell: input.shell,
+                  cause: "Windows PTY readiness timed out.",
+                }),
+              ),
+          }),
           Effect.onError(() =>
             Effect.sync(() => ptyProcess.process.disposeExitSubscription()).pipe(
               Effect.andThen(killStartingWindowsPty(ptyProcess.nativeProcess)),

@@ -30,7 +30,9 @@ import {
   buildThreadFeed,
   deriveThreadFeedPresentation,
   filterDiscordThreadFeed,
+  type ThreadFeedEntry,
   type ThreadFeedLatestRun,
+  type ThreadFeedMessage,
 } from "../../lib/threadActivity";
 import {
   createDiscordThreadFeedProjector,
@@ -40,6 +42,7 @@ import {
   threadFeedRevision,
   threadFeedSummary,
   threadFeedFailedRunIds,
+  threadFeedFinalAssistantMessageIds,
 } from "../../lib/threadFeedProjection";
 
 vi.mock("../../lib/composerImageGallery", () => ({ composerImageGallery: () => [] }));
@@ -1049,5 +1052,78 @@ describe("Discord and pending feed revisions", () => {
         expect(afterStream[i]).toBe(afterToolUpdate[i]);
       }
     }
+  });
+});
+
+describe("agent reply footers", () => {
+  const message = (
+    id: string,
+    role: "user" | "assistant",
+    runId: string,
+    extra: Partial<ThreadFeedMessage> = {},
+  ): ThreadFeedEntry => ({
+    type: "message",
+    id,
+    createdAt: DateTime.formatIso(v2Now),
+    message: {
+      id: MessageId.make(id),
+      role,
+      text: "text",
+      attachments: [],
+      runId: RunId.make(runId),
+      streaming: false,
+      visibility: "local",
+      sourceThreadId: v2ThreadId,
+      createdAt: DateTime.formatIso(v2Now),
+      updatedAt: DateTime.formatIso(v2Now),
+      ...extra,
+    },
+  });
+  // run-2 stays open on an agent timer: the user wrote to the waiting agent twice.
+  const feed = [
+    message("u-1", "user", "run-1"),
+    message("a-1", "assistant", "run-1"),
+    message("u-2", "user", "run-2"),
+    message("a-2", "assistant", "run-2"),
+    message("u-3", "user", "run-2", { inputIntent: "steer", agentWasWaiting: true }),
+    message("a-3", "assistant", "run-2"),
+    message("u-4", "user", "run-2", { inputIntent: "steer", agentWasWaiting: true }),
+    message("a-4", "assistant", "run-2"),
+  ];
+
+  it("finishes a reply that a message to the waiting agent follows", () => {
+    const summary = threadFeedSummary(feed);
+    expect([...threadFeedFinalAssistantMessageIds(summary, RunId.make("run-2"))]).toEqual([
+      "a-1",
+      "a-2",
+      "a-3",
+    ]);
+    // The same run waiting only on its timer has finished its latest reply too.
+    expect([...threadFeedFinalAssistantMessageIds(summary, null)]).toEqual([
+      "a-1",
+      "a-2",
+      "a-3",
+      "a-4",
+    ]);
+  });
+
+  it("keeps a reply open across a steer to a working agent", () => {
+    const summary = threadFeedSummary([
+      message("u-1", "user", "run-1"),
+      message("a-1", "assistant", "run-1"),
+      message("u-2", "user", "run-1", { inputIntent: "steer" }),
+      message("a-2", "assistant", "run-1"),
+    ]);
+    expect([...threadFeedFinalAssistantMessageIds(summary, RunId.make("run-1"))]).toEqual([]);
+    expect([...threadFeedFinalAssistantMessageIds(summary, null)]).toEqual(["a-2"]);
+    expect([...summary.assistantIdsBeforeUserBubble]).toEqual(["a-1"]);
+  });
+
+  it("spaces only agent messages directly above a user bubble", () => {
+    const summary = threadFeedSummary([
+      ...feed,
+      message("u-5", "user", "run-3", { createdBy: "agent", creationSource: "mcp" }),
+    ]);
+    expect([...summary.assistantIdsBeforeUserBubble]).toEqual(["a-1", "a-2", "a-3"]);
   });
 });

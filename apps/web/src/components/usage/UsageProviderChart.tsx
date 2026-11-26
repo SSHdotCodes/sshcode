@@ -195,6 +195,22 @@ export function niceScale(peak: number, count: number): { max: number; ticks: re
   return { max, ticks };
 }
 
+/**
+ * Axis labels for a scale's ticks. Zero reads "0"; when every other label ends
+ * in ".00" (whole-dollar steps) the cents are dropped, so the axis reads "$1,
+ * $2, $3" instead of repeating zeros the steps never use.
+ */
+export function axisTickLabels(
+  ticks: readonly number[],
+  format: (value: number) => string,
+): readonly string[] {
+  const labels = ticks.map((tick) => (tick === 0 ? "0" : format(tick)));
+  const wholeSteps = labels.every((label, index) => ticks[index] === 0 || label.endsWith(".00"));
+  return wholeSteps
+    ? labels.map((label, index) => (ticks[index] === 0 ? label : label.slice(0, -3)))
+    : labels;
+}
+
 const PLACEHOLDER_TICKS = Array.from({ length: TICK_COUNT + 1 }, (_, index) => index);
 
 /**
@@ -442,13 +458,13 @@ export function UsageProviderChart({
         {/* Axis labels sit outside the plot so they stay aligned to gridlines. */}
         <div className="relative h-56 w-14 shrink-0">
           {scale.labeled
-            ? scale.ticks.map((tick) => (
+            ? axisTickLabels(scale.ticks, format).map((label, index) => (
                 <span
-                  key={tick}
+                  key={scale.ticks[index]}
                   className="absolute right-0 -translate-y-1/2 text-3xs text-muted-foreground tabular-nums"
-                  style={{ top: `${(toY(tick) / VIEW_HEIGHT) * 100}%` }}
+                  style={{ top: `${(toY(scale.ticks[index]!) / VIEW_HEIGHT) * 100}%` }}
                 >
-                  {tick === 0 ? "0" : format(tick)}
+                  {label}
                 </span>
               ))
             : null}
@@ -463,6 +479,15 @@ export function UsageProviderChart({
             setHoverIndex(null);
           }}
         >
+          {scale.labeled && scale.max === 0 ? (
+            <p className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">
+              {/* Tokens without rates still count as usage; only their cost is missing. */}
+              {metric === "cost" &&
+              (resolution === "hour" ? hourly : daily).some((entry) => entry.totalTokens > 0)
+                ? "No priced usage in this range"
+                : "No usage in this range"}
+            </p>
+          ) : null}
           <UsageDitherAreas
             areas={ditherAreas}
             viewWidth={VIEW_WIDTH}

@@ -97,6 +97,7 @@ export function annotateEnvironmentRequest(endpoint: string) {
 export function failEnvironmentAuthInvalid(
   reason: EnvironmentAuthInvalidReason,
   dpopFailureReason?: DpopFailureReason,
+  pairingExpired = false,
 ) {
   return currentEnvironmentTraceId.pipe(
     Effect.flatMap((traceId) =>
@@ -105,6 +106,7 @@ export function failEnvironmentAuthInvalid(
           code: "auth_invalid",
           reason,
           ...(dpopFailureReason === undefined ? {} : { dpopFailureReason }),
+          ...(pairingExpired ? { pairingExpired: true } : {}),
           traceId,
         }),
       ),
@@ -251,6 +253,7 @@ export const layerAuthenticatedAuth = Layer.effect(
             failEnvironmentAuthInvalid(
               EnvironmentAuth.serverAuthCredentialReason(error),
               EnvironmentAuth.serverAuthDpopFailureReason(error),
+              EnvironmentAuth.isExpiredClientPairing(error),
             ),
           ),
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>

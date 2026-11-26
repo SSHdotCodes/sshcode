@@ -1,3 +1,5 @@
+import { Atom } from "effect/reactivity";
+import { syncedChatListTabsEnabled } from "@t3tools/client-runtime/state/chat-tabs";
 import { createSubagentRankingsAtoms } from "@t3tools/client-runtime/state/subagent-rankings";
 import { createModelRankingsEditorState } from "@t3tools/client-runtime/model-rankings";
 import { createServerEnvironmentAtoms } from "@t3tools/client-runtime/state/server";
@@ -22,6 +24,10 @@ export const environmentServerConfigsAtom = createEnvironmentServerConfigsAtom({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   serverConfigValueAtom: serverEnvironment.configValueAtom,
 });
+export const chatListTabsEnabledAtom = Atom.map(
+  environmentServerConfigsAtom,
+  syncedChatListTabsEnabled,
+);
 
 export const modelRankingsEnvironment = createModelRankingsEditorState(serverEnvironment);
 

@@ -54,7 +54,7 @@ describe("what the lead reads about a subagent the user started", () => {
       delegatedCompletionWakeDetail([silent.id], [silent]),
       'No result text. Read t3_thread_read({threadId:"thread:child"}).',
     );
-    const long = task({ createdBy: "user", result: "y".repeat(6000) });
+    const long = task({ createdBy: "user", result: "y".repeat(7000) });
     assert.isTrue(
       delegatedCompletionWakeDetail([long.id], [long]).endsWith(
         '\n… rest: t3_thread_read({threadId:"thread:child"})',
@@ -85,6 +85,27 @@ describe("what the lead reads about a subagent the user started", () => {
       delegatedCompletionWakeDetail([own.id], [own]),
       `Subagent ${taskReference(own.id)}: completed (codex/gpt-5.4)\nThe cache key changes on every run.`,
     );
+  });
+
+  it("includes a 5 KiB report in the wake", () => {
+    const report = "r".repeat(5 * 1024);
+    const own = task({ result: report });
+    const [, ...result] = delegatedCompletionWakeDetail([own.id], [own]).split("\n");
+    assert.equal(result.join("\n"), report);
+  });
+
+  it("gives the lead a UTF-16 offset after the preview of a long result", () => {
+    const report = "a" + "🧪界".repeat(1_500);
+    const own = task({ result: report });
+    const wake = delegatedCompletionWakeDetail([own.id], [own]);
+    const [header, preview, continuation] = wake.split("\n");
+    const offset = Number(/summaryOffset:(\d+)/u.exec(continuation ?? "")?.[1]);
+    assert.isAtMost(Buffer.byteLength(wake), 6144);
+    assert.include(header!, taskReference(own.id));
+    assert.isAbove(offset, 0);
+    assert.equal(preview!.length, offset);
+    assert.equal(preview! + report.slice(offset), report);
+    assert.isTrue(preview!.isWellFormed());
   });
 });
 

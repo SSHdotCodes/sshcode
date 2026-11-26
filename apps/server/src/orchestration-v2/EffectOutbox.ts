@@ -15,6 +15,7 @@ import {
   ProviderTurnId,
   RunId,
   RuntimeRequestId,
+  RuntimeMode,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
@@ -49,6 +50,13 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     summary: Schema.optional(Schema.String),
   }),
   Schema.Struct({
+    type: Schema.Literal("thread-send.complete"),
+    runId: RunId,
+    assignedRunId: RunId,
+    messageId: MessageId,
+    senderThreadId: ThreadId,
+  }),
+  Schema.Struct({
     type: Schema.Literal("created-chat.failure"),
     creatorThreadId: ThreadId,
     title: Schema.String,
@@ -78,6 +86,12 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
      * a brief first, and detach it once that is written.
      */
     handoffBrief: Schema.optional(Schema.Struct({ targetInstanceId: ProviderInstanceId })),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("provider-session.runtime-mode.apply"),
+    providerSessionId: ProviderSessionId,
+    providerThreadId: ProviderThreadId,
+    runtimeMode: RuntimeMode,
   }),
   Schema.Struct({
     type: Schema.Literal("provider-turn.start"),
@@ -164,6 +178,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   // existing queue-follow-up path instead of targeting a dead process.
   "provider-turn.steer",
   "created-chat.failure",
+  "thread-send.complete",
   "secret-request.answered",
   "provider-runtime.continue",
   "provider-continuation.await",
@@ -178,6 +193,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
 
 export const PROCESS_BOUND_EFFECT_TYPES = [
+  "provider-session.runtime-mode.apply",
   "provider-turn.start",
   "provider-turn.interrupt",
   "provider-turn.steer",
@@ -414,8 +430,8 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
       ).pipe(Effect.asVoid);
     // Each thread runs its effects one at a time, in enqueue (rowid) order. An earlier
     // effect waiting out a retry backoff still blocks later ones, so a turn
-    // cannot start while a failed rollback is about to restore files. A claim
-    // that skips restart continuations is not blocked by them either.
+    // cannot start while a failed rollback is about to restore files. Recovery skips
+    // restart continuations and the sender notifications that depend on their decisions.
     // Title generation is correlated metadata work, so it has its own
     // per-thread lane and cannot delay provider lifecycle effects. A
     // continuation grace waits on purpose, so it has one too: it must not
@@ -442,7 +458,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
                 AND active.rowid < candidate.rowid
                 AND ${
                   excludeRestartContinuations
-                    ? sql`active.effect_type != 'provider-runtime.continue'`
+                    ? sql`active.effect_type NOT IN ('provider-runtime.continue', 'thread-send.complete')`
                     : sql`1 = 1`
                 }
               )
@@ -698,7 +714,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
               SELECT candidate.effect_id
               FROM orchestration_v2_effect_outbox AS candidate
               WHERE ${claimableCandidatePredicate(nowIso, excludeRestartContinuations)}
-                AND ${excludeRestartContinuations ? sql`candidate.effect_type != 'provider-runtime.continue'` : sql`1 = 1`}
+                AND ${excludeRestartContinuations ? sql`candidate.effect_type NOT IN ('provider-runtime.continue', 'thread-send.complete')` : sql`1 = 1`}
               ORDER BY candidate.available_at ASC, candidate.created_at ASC, candidate.effect_id ASC
               LIMIT 1
             )

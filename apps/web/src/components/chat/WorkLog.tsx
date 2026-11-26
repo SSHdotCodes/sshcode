@@ -93,7 +93,12 @@ function WorkLogLine({
           {label}
         </div>
       </div>
-      {trailing}
+      {wrapLabel && trailing ? (
+        // A wrapping label tops the row, so center the trailing meta on its first line.
+        <span className="flex h-lh shrink-0 items-center">{trailing}</span>
+      ) : (
+        trailing
+      )}
     </div>
   );
 }

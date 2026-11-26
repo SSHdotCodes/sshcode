@@ -134,8 +134,7 @@ function EffortSlider(props: {
   const selectedIndex = levels.findIndex((level) => level.id === value);
   const activeIndex = dragIndex ?? selectedIndex;
   const active = levels[activeIndex];
-  const currentChoice = active ?? props.effort.options.find((option) => option.id === value);
-  const currentLabel = currentChoice ? effortChoiceLabel(currentChoice) : null;
+  const currentLabel = active ? effortChoiceLabel(active) : null;
   const last = levels.length - 1;
   const onlyLevel = levels[0];
   const percent = last > 0 && activeIndex >= 0 ? (100 * activeIndex) / last : 0;
@@ -293,10 +292,7 @@ function EffortSlider(props: {
             <Slider.Thumb
               className="pointer-events-none absolute top-3 size-3 opacity-0"
               getAriaLabel={() => props.effort.label}
-              getAriaValueText={(_, index) => {
-                const choice = levels[index];
-                return currentLabel ?? (choice ? effortChoiceLabel(choice) : "");
-              }}
+              getAriaValueText={() => currentLabel ?? ""}
             />
           </Slider.Control>
         </Slider.Root>
@@ -330,9 +326,13 @@ export function ModelPickerReasoningColumn(
       : false;
   const value = effort ? traits.selectValue(effort) : "";
   const { levels, otherChoices } = effortChoices(effort?.options ?? []);
-  const activeOtherIndex = Math.max(
+  // A range always has a numeric value. Show choices until a ranked effort is selected,
+  // so both keyboard and pointer users can pick the first level from an unset state.
+  const showSlider = levels.some((level) => level.id === value);
+  const rows = showSlider ? otherChoices : [...levels, ...otherChoices];
+  const activeRowIndex = Math.max(
     0,
-    otherChoices.findIndex((choice) => choice.id === value),
+    rows.findIndex((choice) => choice.id === value),
   );
   const stacked = use(ModelPickerStackedColumnContext);
   return (
@@ -354,7 +354,7 @@ export function ModelPickerReasoningColumn(
                 option.
               </div>
             ) : null}
-            {levels.length > 0 ? (
+            {showSlider ? (
               <EffortSlider
                 key={`${traitsInput.model}:${effort.id}`}
                 effort={effort}
@@ -367,14 +367,14 @@ export function ModelPickerReasoningColumn(
                 }}
               />
             ) : null}
-            {otherChoices.length > 0 ? (
+            {rows.length > 0 ? (
               <div
                 role="radiogroup"
                 aria-label={effort.label}
                 onKeyDown={moveBetweenLevels}
                 className="flex flex-col gap-0.5"
               >
-                {otherChoices.map((option, index) => (
+                {rows.map((option, index) => (
                   <LevelRow
                     key={option.id}
                     label={option.label}
@@ -382,7 +382,7 @@ export function ModelPickerReasoningColumn(
                     selected={option.id === value}
                     isDefault={option.isDefault}
                     disabled={locked}
-                    tabIndex={index === activeOtherIndex ? 0 : -1}
+                    tabIndex={index === activeRowIndex ? 0 : -1}
                     onPick={() => {
                       traits.handleSelectChange(effort, option.id);
                       onPicked?.();

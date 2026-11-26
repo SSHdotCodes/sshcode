@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Standalone Node benchmark.
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Build artifact check reads output files and reports their sizes.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 

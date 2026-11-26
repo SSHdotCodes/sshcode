@@ -16,6 +16,8 @@ run these commands on the machine that will host SSHCode:
 | Restart                         | `sshcode service restart`   |
 | Stop and remove from startup    | `sshcode service uninstall` |
 
+To connect a device to the background service, run `t3 pair` on the host.
+
 Uninstalling the service leaves your projects, threads, and settings intact.
 Running `sshcode service install` again repairs a service that `sshcode service status`
 reports as broken.

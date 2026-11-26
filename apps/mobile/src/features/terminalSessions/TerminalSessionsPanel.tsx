@@ -2,12 +2,13 @@ import { useEnvironmentDisplayLabel } from "../../state/environment-labels";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import type { ClaudeRcSession, EnvironmentId } from "@t3tools/contracts";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useNavigation } from "@react-navigation/native";
 import { Pressable, ScrollView, View } from "react-native";
 
+import { AppActivityIndicator } from "../../components/AppActivityIndicator";
 import { AppText as Text } from "../../components/AppText";
-import { MaterialButton } from "../../components/MaterialButton";
+import { EmptyState } from "../../components/EmptyState";
 import { environmentCatalog } from "../../connection/catalog";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
@@ -70,9 +71,13 @@ export function TerminalSessionsPanel(props: {
           }
         />
       ) : (
-        <Text className="px-4 py-3 text-sm text-foreground-muted">
-          {host.message ?? "Looking for sessions…"}
-        </Text>
+        <TerminalSessionsNotice>
+          {host.message ? (
+            <EmptyState title="Terminal sessions" detail={host.message} variant="plain" />
+          ) : (
+            <LookingForSessions />
+          )}
+        </TerminalSessionsNotice>
       )}
     </View>
   );
@@ -89,6 +94,33 @@ function ReadyTerminalSessions(props: {
   );
   const sessions = filterTerminalSessions(sessionsQuery.data ?? [], props.query);
   const loading = sessionsQuery.data === null && sessionsQuery.error === null;
+  // With nothing to list, say so the way Home's other empty lists do: one calm block in the
+  // middle of the screen, not a line of text under the tabs.
+  if (sessions.length === 0) {
+    return (
+      <TerminalSessionsNotice>
+        {loading ? (
+          <LookingForSessions />
+        ) : sessionsQuery.error ? (
+          <EmptyState
+            title="Can't reach terminal sessions"
+            detail={`${props.label}: ${sessionsQuery.error}`}
+            actionLabel="Try again"
+            onAction={() => sessionsQuery.refresh()}
+            variant="plain"
+          />
+        ) : props.query.trim().length > 0 ? (
+          <EmptyState title="No results" detail="No sessions match that search." variant="plain" />
+        ) : (
+          <EmptyState
+            title="No terminal sessions"
+            detail={`Claude Code sessions running with Remote Control on ${props.label} show up here.`}
+            variant="plain"
+          />
+        )}
+      </TerminalSessionsNotice>
+    );
+  }
   return (
     <ScrollView className="flex-1" contentContainerClassName="gap-1 px-4 py-2">
       {sessions.map((session) => (
@@ -113,24 +145,29 @@ function ReadyTerminalSessions(props: {
           {session.working ? <Text className="text-xs text-primary-text">Working</Text> : null}
         </Pressable>
       ))}
-      {loading ? (
-        <Text className="py-2 text-sm text-foreground-muted">Looking for sessions…</Text>
-      ) : null}
       {sessionsQuery.error ? (
-        <View className="gap-2 py-2">
-          <Text className="text-sm text-danger-foreground">
-            {props.label}: {sessionsQuery.error}
-          </Text>
-          <MaterialButton tone="text" label="Try again" onPress={() => sessionsQuery.refresh()} />
-        </View>
-      ) : null}
-      {!loading && sessionsQuery.error === null && sessions.length === 0 ? (
         <Text className="py-2 text-sm text-foreground-muted">
-          {props.query.trim().length > 0
-            ? "No sessions match that search."
-            : "No Claude Code sessions with Remote Control are running."}
+          {props.label}: {sessionsQuery.error}
         </Text>
       ) : null}
     </ScrollView>
+  );
+}
+
+/** Centers a notice in the space under the tabs, above the bottom bar. */
+function TerminalSessionsNotice(props: { readonly children: ReactNode }) {
+  return (
+    <View className="w-full max-w-[430px] flex-1 items-center justify-center self-center px-8 pb-36">
+      {props.children}
+    </View>
+  );
+}
+
+function LookingForSessions() {
+  return (
+    <View className="items-center gap-3">
+      <AppActivityIndicator colorClassName="accent-icon-muted" />
+      <Text className="text-sm text-foreground-muted">Looking for sessions…</Text>
+    </View>
   );
 }

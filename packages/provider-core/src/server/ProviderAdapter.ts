@@ -100,6 +100,12 @@ export const ProviderAdapterV2Event = Schema.Union([
     providerThread: OrchestrationV2ProviderThread,
     /** Persist updates reported outside an active provider turn. */
     sessionScoped: Schema.optional(Schema.Literal(true)),
+    reportedRuntimeMode: Schema.optional(
+      Schema.Struct({
+        previous: RuntimeMode,
+        current: RuntimeMode,
+      }),
+    ),
     /**
      * Set when the provider rewound its own conversation outside T3, for
      * example a Pi extension moving the session-tree leaf back. Lists every
@@ -464,6 +470,7 @@ export interface ProviderSessionKeepWarm {
 }
 
 export interface ProviderAdapterV2OpenSessionInput {
+  readonly isSubagent?: boolean;
   readonly keepWarm?: ProviderSessionKeepWarm;
   readonly threadId: ThreadId;
   readonly providerSessionId: ProviderSessionId;
@@ -747,6 +754,10 @@ export interface ProviderAdapterV2SessionRuntime {
    * Compaction thresholds are still discarded. Unknown transitions invalidate usage.
    */
   readonly canReuseContextUsage?: (previous: ModelSelection, next: ModelSelection) => boolean;
+  readonly setRuntimeMode?: (input: {
+    readonly providerThreadId: ProviderThreadId;
+    readonly runtimeMode: RuntimeMode;
+  }) => Effect.Effect<void, ProviderAdapterV2Error>;
   readonly ensureThread: (
     input: ProviderAdapterV2EnsureThreadInput,
   ) => Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>;

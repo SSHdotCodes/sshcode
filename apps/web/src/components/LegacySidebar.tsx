@@ -143,12 +143,16 @@ import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateInstallConfirmationMessage,
+  installDesktopUpdate,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
   shouldToastDesktopUpdateActionResult,
 } from "./desktopUpdate.logic";
-import { showDesktopUpdateDownloadedToast } from "./desktopUpdate.toast";
+import {
+  showDesktopUpdateDownloadedToast,
+  showDesktopUpdateWaitingToast,
+} from "./desktopUpdate.toast";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
 import {
@@ -3841,7 +3845,9 @@ export default function LegacySidebar() {
       let confirmed = false;
       try {
         confirmed = await ensureLocalApi().dialogs.confirm(
-          getDesktopUpdateInstallConfirmationMessage(desktopUpdateState),
+          getDesktopUpdateInstallConfirmationMessage(desktopUpdateState, {
+            waitsForIdle: bridge.installUpdateWhenIdle !== undefined,
+          }),
         );
       } catch (error) {
         setDesktopUpdateActionPending(false);
@@ -3858,10 +3864,12 @@ export default function LegacySidebar() {
         setDesktopUpdateActionPending(false);
         return;
       }
-      void bridge
-        .installUpdate()
+      void installDesktopUpdate(bridge, desktopUpdateState)
         .then((result) => {
-          if (!shouldToastDesktopUpdateActionResult(result)) return;
+          if (!shouldToastDesktopUpdateActionResult(result)) {
+            if (result.accepted) showDesktopUpdateWaitingToast(bridge, result.state);
+            return;
+          }
           const actionError = getDesktopUpdateActionError(result);
           if (!actionError) return;
           toastManager.add(

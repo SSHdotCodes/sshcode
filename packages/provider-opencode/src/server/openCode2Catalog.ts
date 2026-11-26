@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 
+import { configuredOpenCodeEffort } from "./openCodeVariant.ts";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import type { OpenCode2Model } from "./status.ts";
 import { httpFailureOf } from "./v2/OpenCode2Server.ts";
@@ -72,11 +73,16 @@ export const loadOpenCode2Catalog = (
       );
       return models.data.map((model) => {
         const providerName = providerNames.get(model.providerID);
+        const effort =
+          configuredOpenCodeEffort(model.body) ?? configuredOpenCodeEffort(model.settings);
+        const defaultVariant =
+          effort === undefined ? undefined : model.variants.find(({ id }) => id === effort)?.id;
         return {
           providerID: model.providerID,
           id: model.id,
           name: model.name,
           ...(providerName ? { providerName } : {}),
+          ...(defaultVariant ? { defaultVariant } : {}),
           variants: model.variants.map((variant) => ({ id: variant.id })),
           // The server's own catalogue: every listed model says what it reads.
           imageInput: model.capabilities.input.includes("image"),

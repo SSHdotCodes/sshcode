@@ -451,7 +451,14 @@ describe("CloudManagedEndpointRuntime", () => {
               ),
             });
             yield* Effect.addFinalizer(() => handle.kill().pipe(Effect.ignore));
-            return handle;
+            // The watchdog has to escalate when the subprocess ignores SIGTERM.
+            return ChildProcessSpawner.makeHandle({
+              ...handle,
+              kill: (options) =>
+                options?.forceKillAfter === undefined
+                  ? Deferred.await(exit).pipe(Effect.asVoid)
+                  : Effect.sleep(options.forceKillAfter).pipe(Effect.andThen(handle.kill())),
+            });
           }),
         );
         // Each readiness check takes the next scripted answer, then 503. It
@@ -495,7 +502,8 @@ describe("CloudManagedEndpointRuntime", () => {
         for (let check = 0; check < 13; check += 1) {
           expect(yield* nextCheck).toEqual({ url: "http://127.0.0.1:40000/ready", killed: "" });
         }
-        yield* Deferred.await(secondSpawned);
+        yield* TestClock.adjust(Duration.seconds(5));
+        expect(yield* Deferred.isDone(secondSpawned)).toBe(true);
         expect(killed).toEqual([1000]);
         expect(spawned).toEqual([1000, 1001]);
 
@@ -504,7 +512,8 @@ describe("CloudManagedEndpointRuntime", () => {
         for (let check = 0; check < 12; check += 1) {
           expect(yield* nextCheck).toEqual({ url: "http://127.0.0.1:40001/ready", killed: "1000" });
         }
-        yield* Deferred.await(exits[1]!);
+        yield* TestClock.adjust(Duration.seconds(5));
+        expect(yield* Deferred.isDone(exits[1]!)).toBe(true);
         expect(killed).toEqual([1000, 1001]);
       }).pipe(Effect.provide(TestClock.layer())),
   );

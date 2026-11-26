@@ -4,7 +4,6 @@ import {
   type ChatAttachment,
   CommandId,
   latestProviderTurnForAttempt,
-  MessageId,
   type OrchestrationMessageContext,
   type OrchestrationV2Run,
   type RunId,
@@ -30,6 +29,7 @@ import {
   RESTART_CONTINUE_PROMPT,
   restartCancelledBackgroundWorkNote,
   restartContinuationNote,
+  restartContinuationMessageId,
   restartStartsOver,
 } from "./RestartBackgroundNote.ts";
 import { unreadMidTurnMessages, withUnreadMessages } from "./MidTurnMessageReplay.ts";
@@ -229,7 +229,7 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
     const settings = yield* ServerSettings.ServerSettingsService;
     const currentSettings = yield* settings.getSettings;
     const threads = yield* ThreadManagementService.ThreadManagementService;
-    const messageId = MessageId.make(`message:restart-continuation:${input.sourceRunId}`);
+    const messageId = restartContinuationMessageId(input.sourceRunId);
     const projection = yield* threads.getThreadRecords(
       input.threadId,
       ["messages", "runs", "providerTurns", "attempts", "runtimeRequests", "turnItems"],

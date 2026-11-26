@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import { EnvironmentId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { McpSchema, McpServer } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
@@ -104,17 +105,21 @@ it.effect("reads without a thread or approval, returning text first and opt-in M
   }),
 );
 
-it.effect("searches X for read-only callers and returns the posts once, as text", () =>
+it.effect("deep searches go straight to Grok for read-only callers and return posts as text", () =>
   Effect.gen(function* () {
     const queries: string[] = [];
+    const fetch = vi.fn<typeof globalThis.fetch>(
+      async () => new Response(encodeJson({ meta: { result_count: 0 } })),
+    );
     yield* Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
       const tool = server.tools.find((entry) => entry.tool.name === "search_x")?.tool;
       expect(tool?.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true });
       const found = yield* server.callTool({
         name: "search_x",
-        arguments: { query: "  from:xai grok  " },
+        arguments: { query: "  from:xai grok  ", deep: true },
       });
+      expect(fetch.mock.calls.length).toBe(0);
       expect(found.isError).toBe(false);
       expect(found.content).toEqual([{ type: "text", text: "@xai · a post" }]);
       expect(found.structuredContent).toEqual({ posts: "@xai · a post" });
@@ -126,7 +131,11 @@ it.effect("searches X for read-only callers and returns the posts once, as text"
       Effect.provide(
         McpHttpServer.layerXPostToolkit.pipe(
           Layer.provideMerge(McpServer.McpServer.layer),
-          Layer.provide(noSavedKey),
+          Layer.provide(
+            Layer.mock(ApiKeyStore.ApiKeyStore)({
+              shared: () => Effect.succeed(Redacted.make("fixture")),
+            }),
+          ),
           Layer.provide(
             Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
               listInstances: Effect.succeed([
@@ -143,6 +152,7 @@ it.effect("searches X for read-only callers and returns the posts once, as text"
           ),
         ),
       ),
+      Effect.provideService(FetchHttpClient.Fetch, fetch),
       Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
       Effect.provideService(McpSchema.McpServerClient, client),
     );

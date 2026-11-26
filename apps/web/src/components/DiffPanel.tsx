@@ -857,20 +857,18 @@ export default function DiffPanel({
         </DropdownMenu>
         {selectedRunId === null && selectedGitScope === "branch" && selectedGitSource?.baseRef && (
           <div
-            className="flex min-w-0 max-w-full items-center gap-2 overflow-hidden text-xs text-muted-foreground"
+            className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-xs text-muted-foreground"
             aria-label={`Comparing ${selectedGitSource.headRef ?? "HEAD"} against ${selectedGitSource.baseRef}`}
           >
             <Tooltip>
-              <TooltipTrigger render={<span className="flex min-w-0 items-center gap-2" />}>
-                <span className="min-w-0 max-w-48 truncate">
-                  {selectedGitSource.headRef ?? "HEAD"}
-                </span>
-                <ArrowRightIcon className="size-3.5 shrink-0 opacity-70" />
+              <TooltipTrigger render={<span className="min-w-0 max-w-40 shrink truncate" />}>
+                {selectedGitSource.headRef ?? "HEAD"}
               </TooltipTrigger>
               <TooltipPopup side="top">
                 {`${selectedGitSource.headRef ?? "HEAD"} → ${selectedGitSource.baseRef}`}
               </TooltipPopup>
             </Tooltip>
+            <ArrowRightIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
             <Combobox
               items={baseRefItems}
               filteredItems={filteredBaseRefItems}
@@ -885,7 +883,8 @@ export default function DiffPanel({
             >
               <ComboboxTrigger
                 render={<Button variant="ghost-muted" size="compact" />}
-                className="min-w-0 max-w-48"
+                className="min-w-0 max-w-44 shrink overflow-hidden"
+                title={selectedGitSource.baseRef}
                 aria-label={`Change comparison target. Currently ${selectedGitSource.baseRef}`}
               >
                 <span className="min-w-0 truncate">{selectedGitSource.baseRef}</span>

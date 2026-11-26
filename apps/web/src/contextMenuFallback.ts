@@ -20,6 +20,29 @@ const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<stri
     { tag: "circle", attrs: { cx: "12", cy: "12", r: "10" } },
     { tag: "path", attrs: { d: "m9 12 2 2 4-4" } },
   ],
+  "columns-2": [
+    { tag: "rect", attrs: { width: "18", height: "18", x: "3", y: "3", rx: "2" } },
+    { tag: "path", attrs: { d: "M12 3v18" } },
+  ],
+  share: [
+    { tag: "path", attrs: { d: "M12 2v13" } },
+    { tag: "path", attrs: { d: "m16 6-4-4-4 4" } },
+    { tag: "path", attrs: { d: "M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" } },
+  ],
+  cloud: [{ tag: "path", attrs: { d: "M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" } }],
+  "cloud-download": [
+    { tag: "path", attrs: { d: "M12 13v8l-4-4" } },
+    { tag: "path", attrs: { d: "m12 21 4-4" } },
+    {
+      tag: "path",
+      attrs: { d: "M4.393 15.269A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.436 8.284" },
+    },
+  ],
+  "cloud-upload": [
+    { tag: "path", attrs: { d: "M12 13v8" } },
+    { tag: "path", attrs: { d: "M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" } },
+    { tag: "path", attrs: { d: "m8 17 4-4 4 4" } },
+  ],
   clock: [
     { tag: "path", attrs: { d: "M12 6v6l4 2" } },
     { tag: "circle", attrs: { cx: "12", cy: "12", r: "10" } },

@@ -127,9 +127,9 @@ it.effect(
         const list = yield* invoke("list_api_keys", {});
         expect(list.isError).toBe(false);
         expect(listed).toEqual([threadId]);
-        expect(list.structuredContent).toEqual([
-          { name: "FAKE_API_KEY", scope: "chat", expiresAt: 123_000 },
-        ]);
+        expect(list.structuredContent).toEqual({
+          keys: [{ name: "FAKE_API_KEY", scope: "chat", expiresAt: 123_000 }],
+        });
         const prepare = yield* invoke("prepare_api_key", { name: "FAKE_API_KEY" });
         expect(prepare.isError).toBe(false);
         expect(prepared).toEqual([{ name: "FAKE_API_KEY", threadId }]);

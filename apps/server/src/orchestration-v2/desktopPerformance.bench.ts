@@ -1,3 +1,4 @@
+import * as LocalFiles from "../assets/LocalFileAttachments.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { it } from "@effect/vitest";
@@ -195,6 +196,7 @@ it.live.each([1_000, 5_000])("server history with %i items", (count) =>
       getTimelinePage: (id, options) => store.getTimelinePage(id, options).pipe(Effect.orDie),
     });
     const mcp = OrchestratorMcpService.layer.pipe(
+      Layer.provide(Layer.mock(LocalFiles.LocalFileAttachments)({})),
       Layer.provide(
         Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
           namedProjectsRoot: "/unused",

@@ -10,10 +10,12 @@ import {
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import type { ResolvedSharePayload, SharePayload } from "expo-sharing";
+import { videoMimeType } from "@t3tools/shared/video";
 
 import { DraftComposerAttachmentSchema } from "../../lib/composer-image-schema";
 import { fitComposerImage } from "../../lib/composerImageFit";
 import type {
+  createComposerVideoAttachment,
   DraftComposerAttachment,
   persistComposerImageOriginal,
 } from "../../lib/composerImages";
@@ -108,6 +110,7 @@ export interface IncomingShareFileReader {
   readonly readBase64: (uri: string) => Promise<string>;
   readonly removeOwnedFile: (uri: string) => Promise<void> | void;
   readonly persistFile?: (uri: string, name: string) => Promise<string>;
+  readonly persistVideo?: typeof createComposerVideoAttachment;
   readonly readSize?: (uri: string) => Promise<number | null>;
 }
 
@@ -133,7 +136,13 @@ export function selectIncomingShareAttachments(input: {
     }
     const maxFileAttachmentBytes = clampFileAttachmentUploadBytes(input.maxFileAttachmentBytes);
     if (attachment.sizeBytes > maxFileAttachmentBytes) {
-      warnings.push(fileAttachmentTooLargeMessage(attachment.name, maxFileAttachmentBytes));
+      warnings.push(
+        fileAttachmentTooLargeMessage(
+          attachment.name,
+          maxFileAttachmentBytes,
+          videoMimeType(attachment) ? attachment.sizeBytes : undefined,
+        ),
+      );
       continue;
     }
     attachments.push(attachment);
@@ -311,6 +320,19 @@ export async function buildIncomingShareDraft(input: {
       let persistedFileUri: string | undefined;
       let retainedFileUri: string | undefined;
       try {
+        const video = videoMimeType({ name, mimeType });
+        if ((payload.shareType === "video" || video !== null) && input.fileReader.persistVideo) {
+          const attachment = await input.fileReader.persistVideo({
+            uri,
+            name,
+            mimeType: video ?? mimeType,
+            sizeBytes: resolved?.contentSize ?? null,
+            maxBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+          });
+          attachments.push({ ...attachment, id: `${input.id}-file-${index}` });
+          retainedFileUri = attachment.fileUri;
+          continue;
+        }
         let sizeBytes = resolved?.contentSize ?? (await input.fileReader.readSize?.(uri)) ?? null;
         if (
           (sizeBytes === null || (sizeBytes === 0 && uri.startsWith("content:"))) &&

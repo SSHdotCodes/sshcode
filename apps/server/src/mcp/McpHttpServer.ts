@@ -45,6 +45,7 @@ import {
 } from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { compactDynamicToolOutput } from "@t3tools/shared/toolOutput";
+import { T3_MCP_DISPATCH_TOOL } from "@t3tools/shared/t3McpToolPresentation";
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as BrowserObservations from "../preview/BrowserObservations.ts";
@@ -60,6 +61,12 @@ import {
   withoutGrades,
   toolsListRequestIds,
 } from "./AgentToolCatalog.ts";
+import { callerUsesCompactCatalog, withCompactAgentCatalog } from "./EagerAgentToolCatalog.ts";
+import {
+  deferMcpCatalog,
+  deferredMcpHarness,
+  layerDeferredMcpDispatcher,
+} from "./DeferredMcpCatalog.ts";
 
 import * as DeviceService from "../device/DeviceService.ts";
 import * as HtmlRender from "../htmlRender/HtmlRender.ts";
@@ -68,8 +75,8 @@ import * as ThreadManagementService from "../orchestration-v2/ThreadManagementSe
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpLiveNotifications from "./McpLiveNotifications.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
+import * as LocalFiles from "../assets/LocalFileAttachments.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
-import { UsageLimitsResult } from "./OrchestratorUsageLimits.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import * as PreviewControlsHandlers from "./toolkits/previewControls/handlers.ts";
 import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
@@ -218,10 +225,19 @@ const filterToolsListResponse = (
       yield* Effect.serviceOption(ChatControls.ChatControls),
       () => ChatControls.make().store,
     );
-    const visible = (name: string) => agentToolListVisible(policy, name, scope, chatControls);
+    const visible = (name: string) =>
+      name !== T3_MCP_DISPATCH_TOOL && agentToolListVisible(policy, name, scope, chatControls);
+    const deferred = deferredMcpHarness(
+      current.providerInstances,
+      scope.thread?.providerInstanceId,
+    );
     // Settings' grading switch: off removes the `grades` input, so it costs nothing.
     const transforms = [
       ...(current.grading ? [] : [withoutGrades]),
+      ...(deferred ||
+      callerUsesCompactCatalog(current.providerInstances, scope.thread?.providerInstanceId)
+        ? [withCompactAgentCatalog]
+        : []),
       ...(callerReadsGeminiSchemas(current.providerInstances, scope.thread?.providerInstanceId)
         ? [withGeminiSafeEnums]
         : []),
@@ -230,7 +246,8 @@ const filterToolsListResponse = (
       transforms.length === 0
         ? undefined
         : (tool) => transforms.reduce((next, apply) => apply(next), tool);
-    const rewrite = (text: string) => rewriteToolsListBody(text, ids, visible, transform);
+    const rewrite = (text: string) =>
+      rewriteToolsListBody(text, ids, visible, transform, deferred ? deferMcpCatalog : undefined);
     const body = response.body;
     if (body._tag === "Uint8Array") {
       const text = body.text ?? new TextDecoder().decode(body.body);
@@ -1070,29 +1087,6 @@ export const layerPreviewToolkit = Layer.mergeAll(
   layerPreviewSnapshotRegistration,
 ).pipe(Layer.provide(BrowserObservations.layer));
 
-const isUsageLimitsResult = Schema.is(UsageLimitsResult);
-
-function usageLimitsSummary(
-  toolName: string,
-  result: McpSchema.CallToolResult,
-): string | undefined {
-  if (toolName !== "usage_limits" || !isUsageLimitsResult(result.structuredContent)) return;
-  const report = result.structuredContent;
-  const lines = [
-    ...report.providers.map((provider) => provider.summary),
-    ...report.sources.flatMap((source) => [
-      ...source.accounts.map((account) => account.summary),
-      ...(source.credits
-        ? [
-            `${source.displayName}: $${source.credits.dollars.toFixed(2)} left, ${source.credits.defaultHours.toFixed(1)} default-hours / ${source.credits.largeHours.toFixed(1)} large-hours${source.credits.low ? "; low credits" : ""}`,
-          ]
-        : []),
-      ...(source.unavailable ? [`${source.displayName}: unavailable (${source.unavailable})`] : []),
-    ]),
-  ];
-  return lines.join("\n") || "No cached usage limits reported.";
-}
-
 const layerModelPreferencesToolkit = toolkitRegistration(
   ModelPreferencesToolkit,
   ModelPreferencesHandlers.layer,
@@ -1101,9 +1095,8 @@ const layerModelPreferencesToolkit = toolkitRegistration(
 export const layerOrchestratorToolkit = toolkitRegistration(
   OrchestratorToolkit,
   OrchestratorHandlers.layer,
-  usageLimitsSummary,
 ).pipe(
-  Layer.provide(OrchestratorMcpService.layer),
+  Layer.provide(OrchestratorMcpService.layer.pipe(Layer.provide(LocalFiles.layer))),
   Layer.provide(ThreadMetadataMcpService.layer),
   Layer.provide(MonitorMcpService.layer.pipe(Layer.provide(ThreadCommandExecutor.layer))),
 );
@@ -1274,5 +1267,9 @@ const layerAgentToolListNotifications = Layer.effectDiscard(
 );
 
 export const layer = layerAgentToolListNotifications.pipe(
-  Layer.provideMerge(layerAgentTools.pipe(Layer.provideMerge(layerMcpTransport))),
+  Layer.provideMerge(
+    Layer.merge(layerAgentTools, layerDeferredMcpDispatcher).pipe(
+      Layer.provideMerge(layerMcpTransport),
+    ),
+  ),
 );

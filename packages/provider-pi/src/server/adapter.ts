@@ -445,6 +445,16 @@ interface ActivePiTurn {
   latestCompactionAfterTokens: number | null;
   /** Last streamed usage total already emitted on the running turn. */
   lastLiveUsedTokens: number | null;
+  readonly usage: {
+    samples: number;
+    incomplete: boolean;
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens: number;
+    cacheCreationTokens: number;
+    reasoningTokens?: number;
+    hasSubagents: boolean;
+  };
   /** Invalidates idle snapshots when new work starts after a settle probe. */
   settleProbeGeneration: number;
   /** An extension may start compaction immediately after Pi emits agent_settled. */
@@ -590,6 +600,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         extensionPath,
         runtimeMode: input.runtimePolicy.runtimeMode,
         subagentsOff: !subagentsEnabledFor(input.threadId),
+        ...(input.isSubagent ? { isSubagent: true } : {}),
       });
       const scopedLaunch = yield* agentScope.wrap({
         command: options.settings.binaryPath || "pi",
@@ -1251,6 +1262,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           },
         });
         if (toolName === "subagent") {
+          turn.usage.hasSubagents = true;
           yield* emitSubagentTasks(turn, toolCallId, resultRecord, completed);
         }
       });
@@ -1737,6 +1749,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           ? yield* readTokenUsage(turn.latestCompactionAfterTokens, completedAt)
           : undefined;
         const failure = interrupted ? null : (turn.rejectedPromptFailure ?? turn.failure);
+        const { samples, incomplete, hasSubagents, ...totals } = turn.usage;
         yield* emit({
           type: "provider_turn.updated",
           driver: PI_PROVIDER,
@@ -1753,6 +1766,16 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             completedAt,
             ...piGenerationField(turn),
             ...(tokenUsage === undefined ? {} : { tokenUsage }),
+            turnTokenUsage:
+              samples === 0
+                ? { usageScope: "main_agent", hasSubagents, usageStatus: "unavailable" }
+                : {
+                    usageScope: "main_agent",
+                    hasSubagents,
+                    usageStatus:
+                      interrupted || failure !== null || incomplete ? "partial" : "complete",
+                    ...totals,
+                  },
           },
         });
         yield* updateProviderThread(
@@ -2028,6 +2051,25 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (turn === null) return;
             const message = event["message"];
             if (recordString(message, "role") !== "assistant") return;
+            const sample = recordField(message, "usage");
+            const input = nonNegativeInteger(sample, "input");
+            const output = nonNegativeInteger(sample, "output");
+            if (input === undefined || output === undefined) {
+              turn.usage.incomplete = true;
+            } else {
+              // Pi excludes both cache counters from input, and includes reasoning in output.
+              const read = nonNegativeInteger(sample, "cacheRead") ?? 0;
+              const write = nonNegativeInteger(sample, "cacheWrite") ?? 0;
+              turn.usage.samples++;
+              turn.usage.inputTokens += input + read + write;
+              turn.usage.outputTokens += output;
+              turn.usage.cachedInputTokens += read;
+              turn.usage.cacheCreationTokens += write;
+              const reasoning = nonNegativeInteger(sample, "reasoning");
+              if (reasoning !== undefined)
+                turn.usage.reasoningTokens =
+                  (turn.usage.reasoningTokens ?? 0) + Math.min(output, reasoning);
+            }
             yield* completeOpenStreamItems(turn);
             if (recordString(message, "stopReason") === "error" && turn.failure === null) {
               turn.failure = makeProviderFailure({
@@ -2979,6 +3021,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 compactCommand !== null || (payload?.message.trimStart().startsWith("/") ?? false),
               latestCompactionAfterTokens: null,
               lastLiveUsedTokens: null,
+              usage: {
+                samples: 0,
+                incomplete: false,
+                inputTokens: 0,
+                outputTokens: 0,
+                cachedInputTokens: 0,
+                cacheCreationTokens: 0,
+                hasSubagents: false,
+              },
               settleProbeGeneration: 0,
               settleWhenIdle: false,
               compactionCancelled: false,

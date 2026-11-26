@@ -336,7 +336,6 @@ it("rebuilds the template from this checkout and sends a child T3's brief as wri
   assert.notInclude(reminders?.join(), "Codebase and user instructions");
 
   const prompt = buildMessages(makeSample(childCase, base)).at(-1)?.content.at(-1);
-  // A subagent receives its brief as written; the role is data on the task.
   assert.equal(prompt?.text, childCase.prompt);
 });
 

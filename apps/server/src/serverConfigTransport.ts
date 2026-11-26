@@ -1,4 +1,4 @@
-import type { ServerConfigStreamEvent, ServerProvider } from "@t3tools/contracts";
+import type { ServerConfigStreamEvent, ServerProvider, ServerSettings } from "@t3tools/contracts";
 import type {
   ReusableProviderCatalog,
   ServerConfigStreamWireEvent,
@@ -8,6 +8,17 @@ import * as Stream from "effect/Stream";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- A synchronous digest inside a pure stream mapping.
 import * as NodeCrypto from "node:crypto";
 import * as NodeUtil from "node:util";
+
+import { redactServerSettingsForClient } from "./serverSettings.ts";
+
+export const serverSettingsConfigUpdates = (changes: Stream.Stream<ServerSettings>) =>
+  changes.pipe(
+    Stream.map((settings) => ({
+      version: 1 as const,
+      type: "settingsUpdated" as const,
+      payload: { settings: redactServerSettingsForClient(settings) },
+    })),
+  );
 
 function compactProvider(provider: ServerProvider, previous?: ServerProvider): ServerProviderWire {
   if (provider.workspaceSnapshots === undefined) return provider;

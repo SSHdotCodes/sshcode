@@ -985,6 +985,13 @@ const threadWorktreePathsReadActiveThreads = Effect.gen(function* () {
   assert.deepEqual(yield* store.getThreadWorktreePaths(), [
     { threadId: ThreadId.make("thread:active"), worktreePath: "/worktrees/active" },
   ]);
+  assert.sameDeepMembers(
+    [...(yield* store.getThreadWorktreePaths({ includeArchived: true }))],
+    [
+      { threadId: ThreadId.make("thread:active"), worktreePath: "/worktrees/active" },
+      { threadId: ThreadId.make("thread:archived"), worktreePath: "/worktrees/archived" },
+    ],
+  );
 });
 
 const liveThreadModelsReadOnlyChatsInFlight = Effect.gen(function* () {
@@ -1997,6 +2004,11 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           (row) => row.sourceItemId === "wire-sql-item:0",
         )?.item;
         assert.equal(original?.type === "command_execution" ? original.output : undefined, large);
+        const edit = trimmed.projection.visibleTurnItems.find(
+          (row) => row.item.type === "file_change" && row.item.status === "completed",
+        )?.item;
+        assert.equal(edit?.type === "file_change" ? edit.diffOmitted : undefined, true);
+        assert.equal(edit?.type === "file_change" ? edit.diffStr : undefined, undefined);
       }
       const detail = yield* store.getTurnItem({
         threadId: id,
@@ -4321,6 +4333,13 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         { suffix: "claude", instanceId: claudeInstanceId, ownerNodeId: null, seconds: 2 },
         // A second Codex conversation after handing back: no duplicate entry.
         { suffix: "codex-again", instanceId: providerInstanceId, ownerNodeId: null, seconds: 3 },
+        // A model picked and abandoned in the menu: an empty session, never shown.
+        {
+          suffix: "picked-only",
+          instanceId: ProviderInstanceId.make("picked-only"),
+          ownerNodeId: null,
+          seconds: 4,
+        },
       ] as const;
       for (const providerThread of providerThreads) {
         const createdAt = DateTime.add(now, { seconds: providerThread.seconds });
@@ -4340,7 +4359,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             nativeThreadRef: null,
             nativeConversationHeadRef: null,
             status: "idle",
-            firstRunOrdinal: null,
+            firstRunOrdinal:
+              providerThread.suffix === "picked-only" ? null : providerThread.seconds + 1,
             lastRunOrdinal: null,
             handoffIds: [],
             forkedFrom: null,

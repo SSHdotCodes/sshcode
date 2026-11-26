@@ -33077,12 +33077,13 @@ export type ServerNotification__ThreadItem =
   | {
       readonly failure?: ServerNotification__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: ServerNotification__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -33377,7 +33378,7 @@ export const ServerNotification__ThreadItem = Schema.Union(
         Schema.Union([ServerNotification__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([ServerNotification__AbsolutePathBuf, Schema.Null]),
@@ -33385,6 +33386,7 @@ export const ServerNotification__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -33655,12 +33657,13 @@ export type V2ItemCompletedNotification__ThreadItem =
   | {
       readonly failure?: V2ItemCompletedNotification__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2ItemCompletedNotification__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -33965,7 +33968,7 @@ export const V2ItemCompletedNotification__ThreadItem = Schema.Union(
         Schema.Union([V2ItemCompletedNotification__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2ItemCompletedNotification__AbsolutePathBuf, Schema.Null]),
@@ -33973,6 +33976,7 @@ export const V2ItemCompletedNotification__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -34140,12 +34144,13 @@ export type V2ItemStartedNotification__ThreadItem =
   | {
       readonly failure?: V2ItemStartedNotification__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2ItemStartedNotification__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -34450,7 +34455,7 @@ export const V2ItemStartedNotification__ThreadItem = Schema.Union(
         Schema.Union([V2ItemStartedNotification__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2ItemStartedNotification__AbsolutePathBuf, Schema.Null]),
@@ -34458,6 +34463,7 @@ export const V2ItemStartedNotification__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -35359,12 +35365,13 @@ export type V2ReviewStartResponse__ThreadItem =
   | {
       readonly failure?: V2ReviewStartResponse__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2ReviewStartResponse__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -35663,7 +35670,7 @@ export const V2ReviewStartResponse__ThreadItem = Schema.Union(
         Schema.Union([V2ReviewStartResponse__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2ReviewStartResponse__AbsolutePathBuf, Schema.Null]),
@@ -35671,6 +35678,7 @@ export const V2ReviewStartResponse__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -35825,12 +35833,13 @@ export type V2ThreadForkResponse__ThreadItem =
   | {
       readonly failure?: V2ThreadForkResponse__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2ThreadForkResponse__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -36129,7 +36138,7 @@ export const V2ThreadForkResponse__ThreadItem = Schema.Union(
         Schema.Union([V2ThreadForkResponse__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2ThreadForkResponse__AbsolutePathBuf, Schema.Null]),
@@ -36137,6 +36146,7 @@ export const V2ThreadForkResponse__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -36280,12 +36290,13 @@ export type V2ThreadItemsListResponse__ThreadItem =
   | {
       readonly failure?: V2ThreadItemsListResponse__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2ThreadItemsListResponse__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -36590,7 +36601,7 @@ export const V2ThreadItemsListResponse__ThreadItem = Schema.Union(
         Schema.Union([V2ThreadItemsListResponse__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2ThreadItemsListResponse__AbsolutePathBuf, Schema.Null]),
@@ -36598,6 +36609,7 @@ export const V2ThreadItemsListResponse__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -36741,12 +36753,13 @@ export type V2ThreadListResponse__ThreadItem =
   | {
       readonly failure?: V2ThreadListResponse__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2ThreadListResponse__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -37045,7 +37058,7 @@ export const V2ThreadListResponse__ThreadItem = Schema.Union(
         Schema.Union([V2ThreadListResponse__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2ThreadListResponse__AbsolutePathBuf, Schema.Null]),
@@ -37053,6 +37066,7 @@ export const V2ThreadListResponse__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -37198,12 +37212,13 @@ export type V2ThreadMetadataUpdateResponse__ThreadItem =
   | {
       readonly failure?: V2ThreadMetadataUpdateResponse__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2ThreadMetadataUpdateResponse__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -37508,7 +37523,7 @@ export const V2ThreadMetadataUpdateResponse__ThreadItem = Schema.Union(
         Schema.Union([V2ThreadMetadataUpdateResponse__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2ThreadMetadataUpdateResponse__AbsolutePathBuf, Schema.Null]),
@@ -37516,6 +37531,7 @@ export const V2ThreadMetadataUpdateResponse__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -37659,12 +37675,13 @@ export type V2ThreadReadResponse__ThreadItem =
   | {
       readonly failure?: V2ThreadReadResponse__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2ThreadReadResponse__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -37963,7 +37980,7 @@ export const V2ThreadReadResponse__ThreadItem = Schema.Union(
         Schema.Union([V2ThreadReadResponse__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2ThreadReadResponse__AbsolutePathBuf, Schema.Null]),
@@ -37971,6 +37988,7 @@ export const V2ThreadReadResponse__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -38114,12 +38132,13 @@ export type V2ThreadResumeResponse__ThreadItem =
   | {
       readonly failure?: V2ThreadResumeResponse__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2ThreadResumeResponse__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -38418,7 +38437,7 @@ export const V2ThreadResumeResponse__ThreadItem = Schema.Union(
         Schema.Union([V2ThreadResumeResponse__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2ThreadResumeResponse__AbsolutePathBuf, Schema.Null]),
@@ -38426,6 +38445,7 @@ export const V2ThreadResumeResponse__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -38569,12 +38589,13 @@ export type V2ThreadRevertResponse__ThreadItem =
   | {
       readonly failure?: V2ThreadRevertResponse__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2ThreadRevertResponse__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -38873,7 +38894,7 @@ export const V2ThreadRevertResponse__ThreadItem = Schema.Union(
         Schema.Union([V2ThreadRevertResponse__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2ThreadRevertResponse__AbsolutePathBuf, Schema.Null]),
@@ -38881,6 +38902,7 @@ export const V2ThreadRevertResponse__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -39073,12 +39095,13 @@ export type V2ThreadStartedNotification__ThreadItem =
   | {
       readonly failure?: V2ThreadStartedNotification__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2ThreadStartedNotification__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -39383,7 +39406,7 @@ export const V2ThreadStartedNotification__ThreadItem = Schema.Union(
         Schema.Union([V2ThreadStartedNotification__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2ThreadStartedNotification__AbsolutePathBuf, Schema.Null]),
@@ -39391,6 +39414,7 @@ export const V2ThreadStartedNotification__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -39534,12 +39558,13 @@ export type V2ThreadStartResponse__ThreadItem =
   | {
       readonly failure?: V2ThreadStartResponse__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2ThreadStartResponse__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -39838,7 +39863,7 @@ export const V2ThreadStartResponse__ThreadItem = Schema.Union(
         Schema.Union([V2ThreadStartResponse__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2ThreadStartResponse__AbsolutePathBuf, Schema.Null]),
@@ -39846,6 +39871,7 @@ export const V2ThreadStartResponse__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -39989,12 +40015,13 @@ export type V2ThreadTurnsListResponse__ThreadItem =
   | {
       readonly failure?: V2ThreadTurnsListResponse__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2ThreadTurnsListResponse__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -40299,7 +40326,7 @@ export const V2ThreadTurnsListResponse__ThreadItem = Schema.Union(
         Schema.Union([V2ThreadTurnsListResponse__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2ThreadTurnsListResponse__AbsolutePathBuf, Schema.Null]),
@@ -40307,6 +40334,7 @@ export const V2ThreadTurnsListResponse__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -40450,12 +40478,13 @@ export type V2ThreadUnarchiveResponse__ThreadItem =
   | {
       readonly failure?: V2ThreadUnarchiveResponse__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2ThreadUnarchiveResponse__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -40760,7 +40789,7 @@ export const V2ThreadUnarchiveResponse__ThreadItem = Schema.Union(
         Schema.Union([V2ThreadUnarchiveResponse__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2ThreadUnarchiveResponse__AbsolutePathBuf, Schema.Null]),
@@ -40768,6 +40797,7 @@ export const V2ThreadUnarchiveResponse__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -40913,12 +40943,13 @@ export type V2TurnCompletedNotification__ThreadItem =
   | {
       readonly failure?: V2TurnCompletedNotification__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2TurnCompletedNotification__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -41223,7 +41254,7 @@ export const V2TurnCompletedNotification__ThreadItem = Schema.Union(
         Schema.Union([V2TurnCompletedNotification__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2TurnCompletedNotification__AbsolutePathBuf, Schema.Null]),
@@ -41231,6 +41262,7 @@ export const V2TurnCompletedNotification__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -41374,12 +41406,13 @@ export type V2TurnStartedNotification__ThreadItem =
   | {
       readonly failure?: V2TurnStartedNotification__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2TurnStartedNotification__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -41684,7 +41717,7 @@ export const V2TurnStartedNotification__ThreadItem = Schema.Union(
         Schema.Union([V2TurnStartedNotification__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2TurnStartedNotification__AbsolutePathBuf, Schema.Null]),
@@ -41692,6 +41725,7 @@ export const V2TurnStartedNotification__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,
@@ -41846,12 +41880,13 @@ export type V2TurnStartResponse__ThreadItem =
   | {
       readonly failure?: V2TurnStartResponse__ImageGenerationFailure | null;
       readonly id: string;
-      readonly result: string;
+      readonly result?: string;
       readonly revisedPrompt?: string | null;
       readonly savedPath?: V2TurnStartResponse__AbsolutePathBuf | null;
       readonly status: string;
       readonly transparentBackground?: boolean | null;
       readonly type: "imageGeneration";
+      readonly fileId?: string;
     }
   | { readonly id: string; readonly review: string; readonly type: "enteredReviewMode" }
   | { readonly id: string; readonly review: string; readonly type: "exitedReviewMode" }
@@ -42146,7 +42181,7 @@ export const V2TurnStartResponse__ThreadItem = Schema.Union(
         Schema.Union([V2TurnStartResponse__ImageGenerationFailure, Schema.Null]),
       ),
       id: Schema.String,
-      result: Schema.String,
+      result: Schema.optionalKey(Schema.String),
       revisedPrompt: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
       savedPath: Schema.optionalKey(
         Schema.Union([V2TurnStartResponse__AbsolutePathBuf, Schema.Null]),
@@ -42154,6 +42189,7 @@ export const V2TurnStartResponse__ThreadItem = Schema.Union(
       status: Schema.String,
       transparentBackground: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null])),
       type: Schema.Literal("imageGeneration").annotate({ title: "ImageGenerationThreadItemType" }),
+      fileId: Schema.optionalKey(Schema.String),
     }).annotate({ title: "ImageGenerationThreadItem" }),
     Schema.Struct({
       id: Schema.String,

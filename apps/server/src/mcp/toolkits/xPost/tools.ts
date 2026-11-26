@@ -34,12 +34,14 @@ const ReadXPostTool = Tool.make("read_x_post", {
   .annotate(Tool.OpenWorld, true);
 
 const SearchXTool = Tool.make("search_x", {
-  description:
-    "Search posts on X (Twitter), like web search: news, launches, reactions, what people are saying. Returns up to 10 with author, date, text and link.",
+  description: "Search X (Twitter) posts. Defaults to the last 7 days.",
   parameters: Schema.Struct({
     query: Schema.String.annotate({
       description: 'Keywords or X operators, e.g. from:user "exact phrase" since:2026-11-01.',
     }),
+    deep: Schema.optional(
+      Schema.Boolean.annotate({ description: "Older posts via Grok (1-4 min)." }),
+    ),
   }),
   success: XSearchToolResult,
   failure: OrchestratorMcpFailure,

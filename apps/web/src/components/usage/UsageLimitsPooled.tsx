@@ -36,9 +36,10 @@ import {
   TicketIcon,
   TimerResetIcon,
 } from "lucide-react";
-import { Fragment, type ReactNode, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useState } from "react";
 
 import { ensureLocalApi } from "../../localApi";
+import { clearUsageLimitsFocus, usageLimitsPlanId, useUsageLimitsFocus } from "./usageLimitsFocus";
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { formatClockTime, formatUpcomingTimestamp } from "../../timestampFormat";
@@ -810,6 +811,15 @@ export function UsageLimitsPooled({
   const notices = collectLimitNotices(presentations, clock);
   const startsNewChats = newSessionAccountKeys(presentations, clock);
   const externalLinks = collectExternalUsageLinks(presentations);
+  // A ring in the sidebar's status dock opens this tab on its plan.
+  const focusedPlan = useUsageLimitsFocus();
+  useEffect(() => {
+    if (focusedPlan === null) return;
+    document
+      .getElementById(usageLimitsPlanId(focusedPlan))
+      ?.scrollIntoView({ block: "start", behavior: "smooth" });
+    clearUsageLimitsFocus();
+  }, [focusedPlan]);
   const cursorPromptAt =
     Math.max(
       pools.findLastIndex((pool) => pool.driver === "codex"),
@@ -833,13 +843,15 @@ export function UsageLimitsPooled({
       {pools.map((pool, index) => (
         <Fragment key={pool.key}>
           {index === cursorPromptAt ? cursorPrompt : null}
-          <PoolSection
-            pool={pool}
-            now={clock}
-            startsNewChats={pool.accounts.some((account) =>
-              account.sourceKeys.some((key) => startsNewChats.has(key)),
-            )}
-          />
+          <div id={usageLimitsPlanId(pool.key)} className="scroll-mt-6">
+            <PoolSection
+              pool={pool}
+              now={clock}
+              startsNewChats={pool.accounts.some((account) =>
+                account.sourceKeys.some((key) => startsNewChats.has(key)),
+              )}
+            />
+          </div>
         </Fragment>
       ))}
       {cursorPromptAt === pools.length ? cursorPrompt : null}

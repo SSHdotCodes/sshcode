@@ -13,7 +13,10 @@ export function HighlightedSearchText(props: {
 }) {
   return splitThreadSearchExcerpt(props.text, props.query, props.correction).map((part) =>
     part.highlighted ? (
-      <mark className="bg-transparent font-semibold text-foreground" key={part.start}>
+      <mark
+        className="rounded-sm bg-primary/14 px-0.5 font-medium text-foreground dark:bg-primary/22"
+        key={part.start}
+      >
         {part.text}
       </mark>
     ) : (

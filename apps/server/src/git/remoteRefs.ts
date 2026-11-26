@@ -1,3 +1,13 @@
+/** Parse the first fetch URL per remote from git config --null --get-regexp. */
+export function parseConfiguredRemoteUrls(stdout: string): Map<string, string> {
+  const remotes = new Map<string, string>();
+  for (const entry of stdout.split("\0")) {
+    const match = /^remote\.(.+)\.url\n([\s\S]+)$/.exec(entry);
+    if (match && !remotes.has(match[1]!)) remotes.set(match[1]!, match[2]!);
+  }
+  return remotes;
+}
+
 export function parseRemoteNamesInGitOrder(stdout: string): ReadonlyArray<string> {
   const remoteNames: Array<string> = [];
   for (const line of stdout.split("\n")) {

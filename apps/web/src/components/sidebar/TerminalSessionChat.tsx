@@ -320,6 +320,7 @@ function TerminalSessionMessage(props: {
       text={item.text}
       cwd={undefined}
       lineBreaks={item.role === "user"}
+      plainValues={item.role === "assistant"}
       isStreaming={props.streaming}
     />
   );

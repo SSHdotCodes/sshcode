@@ -1121,3 +1121,123 @@ describe("describeUpdateErrorCause", () => {
     assert.equal(DesktopUpdates.describeUpdateErrorCause(unreadable), "UnknownError");
   });
 });
+
+describe("install when idle", () => {
+  const downloaded = (working: () => Option.Option<number>) => {
+    // Scheduled checks find the downloaded update again, as electron-updater does.
+    const harness: ReturnType<typeof makeHarness> = makeHarness({
+      workingChats: working,
+      checkForUpdates: Effect.sync(() => harness.emit("update-not-available", {})),
+    });
+    const settle = Effect.repeat(flushCallbacks, { times: 20 });
+    const setup = Effect.gen(function* () {
+      const updates = yield* DesktopUpdates.DesktopUpdates;
+      yield* updates.configure;
+      harness.emit("update-downloaded", { version: "1.2.4" });
+      yield* flushCallbacks;
+      return updates;
+    });
+    const run = <A, E>(
+      body: (updates: DesktopUpdates.DesktopUpdates["Service"]) => Effect.Effect<A, E>,
+    ) =>
+      Effect.scoped(setup.pipe(Effect.flatMap(body))).pipe(
+        Effect.provide(Layer.merge(TestClock.layer(), harness.layer)),
+      );
+    return { harness, settle, run };
+  };
+
+  it.effect("installs at once when no chat is working or no backend can say", () =>
+    Effect.forEach([Option.some(0), Option.none<number>()], (working) => {
+      const { harness, run } = downloaded(() => working);
+      return run((updates) =>
+        Effect.gen(function* () {
+          const result = yield* updates.installWhenIdle;
+          assert.isTrue(result.accepted);
+          assert.equal(harness.quitAndInstalls(), 1);
+          assert.equal(harness.activityQueries(), 1);
+          assert.isUndefined(result.state.installWhenIdle);
+        }),
+      );
+    }),
+  );
+
+  it.effect("waits for working chats, confirms a zero, then installs", () => {
+    let working = Option.some(2);
+    const { harness, settle, run } = downloaded(() => working);
+    return run((updates) =>
+      Effect.gen(function* () {
+        const result = yield* updates.installWhenIdle;
+        assert.isTrue(result.accepted);
+        assert.isFalse(result.completed);
+        assert.deepEqual(result.state.installWhenIdle, { working: 2 });
+        assert.equal(harness.quitAndInstalls(), 0);
+
+        working = Option.some(1);
+        yield* TestClock.adjust(Duration.seconds(5));
+        yield* settle;
+        assert.deepEqual((yield* updates.getState).installWhenIdle, { working: 1 });
+
+        // A zero that a queued turn replaces within the re-check does not install.
+        working = Option.some(0);
+        yield* TestClock.adjust(Duration.seconds(5));
+        yield* settle;
+        working = Option.some(1);
+        yield* TestClock.adjust(Duration.seconds(2));
+        yield* settle;
+        assert.equal(harness.quitAndInstalls(), 0);
+        assert.deepEqual((yield* updates.getState).installWhenIdle, { working: 1 });
+
+        working = Option.some(0);
+        yield* TestClock.adjust(Duration.seconds(5));
+        yield* settle;
+        assert.equal(harness.quitAndInstalls(), 0);
+        yield* TestClock.adjust(Duration.seconds(2));
+        yield* settle;
+        assert.equal(harness.quitAndInstalls(), 1);
+        assert.isUndefined((yield* updates.getState).installWhenIdle);
+      }),
+    );
+  });
+
+  it.effect("installs anyway after 30 minutes", () => {
+    const { harness, settle, run } = downloaded(() => Option.some(3));
+    return run((updates) =>
+      Effect.gen(function* () {
+        yield* updates.installWhenIdle;
+        for (let step = 0; step < 359; step++) {
+          yield* TestClock.adjust(Duration.seconds(5));
+          yield* flushCallbacks;
+        }
+        yield* settle;
+        assert.equal(harness.quitAndInstalls(), 0);
+        yield* TestClock.adjust(Duration.seconds(5));
+        yield* settle;
+        assert.equal(harness.quitAndInstalls(), 1);
+      }),
+    );
+  });
+
+  it.effect("cancelling stops the wait; installing now ends it", () => {
+    let working = Option.some(2);
+    const { harness, settle, run } = downloaded(() => working);
+    return run((updates) =>
+      Effect.gen(function* () {
+        yield* updates.installWhenIdle;
+        const cancelled = yield* updates.cancelInstallWhenIdle;
+        assert.isUndefined(cancelled.installWhenIdle);
+        working = Option.some(0);
+        yield* TestClock.adjust(Duration.minutes(1));
+        yield* settle;
+        assert.equal(harness.quitAndInstalls(), 0);
+        assert.equal(cancelled.status, "downloaded");
+
+        working = Option.some(2);
+        assert.deepEqual((yield* updates.installWhenIdle).state.installWhenIdle, { working: 2 });
+        const now = yield* updates.install;
+        assert.isTrue(now.accepted);
+        assert.equal(harness.quitAndInstalls(), 1);
+        assert.isUndefined(now.state.installWhenIdle);
+      }),
+    );
+  });
+});

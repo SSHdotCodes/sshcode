@@ -481,7 +481,9 @@ function describePick(
     }
     return "it has room";
   }
-  if (picked.spare <= other.spare * (1 + TIE)) return "the accounts have about the same left";
+  // Spare is per hour until each reset, so 16% left today can tie 100% left for the week.
+  if (picked.spare <= other.spare * (1 + TIE))
+    return "both have about the same to use per hour until their resets";
   // With no more left than the other, it is ahead only because its unused share expires first.
   return picked.pace !== null &&
     other.pace !== null &&

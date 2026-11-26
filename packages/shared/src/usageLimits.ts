@@ -30,6 +30,16 @@ const DAY = 24 * HOUR;
 
 export const CHATGPT_USAGE_URL = "https://chatgpt.com/#settings/Usage";
 
+export const unavailableGoogleLimits = (checkedAt: string): ServerProviderUsageLimits => ({
+  checkedAt,
+  windows: [],
+  unavailable: { reason: "unsupported", message: "Google doesn't share limits with apps yet" },
+});
+
+export const isGoogleSubscription = (provider: Pick<ServerProvider, "driver" | "auth">) =>
+  provider.driver === "antigravity" &&
+  (provider.auth.type === "oauth-personal" || provider.auth.type === "oauth-business");
+
 export function usesChatGptSharing(provider: ServerProvider | null | undefined): boolean {
   return provider?.auth.status === "authenticated" && provider.auth.subscriptionSharing === true;
 }
@@ -387,11 +397,12 @@ export function collectLimitAccounts(
       const signInNotice = signedOut?.kind === "authentication_error" ? signedOut.message : null;
       const asOf = signInNotice === null ? olderReadingAt(provider.usageLimits) : null;
       const notice = signInNotice ?? (asOf === null ? limitsNotice(provider.usageLimits) : null);
-      // An account that can never report (an API key) has nothing to list.
+      // Google subscriptions keep a plan row explaining why they have no windows.
       if (
         notice !== null &&
         (options?.withNotices !== true ||
-          provider.usageLimits.unavailable?.reason === "unsupported")
+          (provider.driver !== "antigravity" &&
+            provider.usageLimits.unavailable?.reason === "unsupported"))
       ) {
         continue;
       }
@@ -424,7 +435,16 @@ export function collectLimitAccounts(
         ? `${presentation.entry.target.label} · ${source.label}`
         : source.label;
       for (const account of source.accounts) {
-        if (limitsNotice(account.usageLimits) !== null) continue;
+        const notice = limitsNotice(account.usageLimits);
+        if (
+          notice !== null &&
+          !(
+            options?.withNotices &&
+            account.driver === "antigravity" &&
+            account.usageLimits.unavailable?.reason === "unsupported"
+          )
+        )
+          continue;
         const key = `${source.id}:${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`;
         merge(resolveKey(account) ?? key, {
           key,
@@ -448,6 +468,7 @@ export function collectLimitAccounts(
               }
             : null,
           limits: account.usageLimits,
+          ...(notice === null ? {} : { notice }),
         });
       }
     }
@@ -670,17 +691,18 @@ export function collectLimitPools(
     .sort((left, right) => right.use - left.use);
   return drivers.flatMap(({ driver, groups }) =>
     [...groups]
-      // A provider's only section needs no second name, whatever its instance is called,
-      // except an ACP registry agent: the registry runs many agents (Devin, Kimi), so its
-      // section goes by the agent. Beside an added account its own section goes by its own
-      // name when it has one ("Work" beside "Personal"), so neither reads as the spare.
+      // Most single sections use the driver's name. A registry agent or a Google plan
+      // with only a notice needs its own name in the heading. Sibling plans always use theirs.
       .map(([key, members]) =>
         groups.size === 1
           ? {
               key: String(driver),
               members,
               label:
-                driver === "acpRegistry"
+                driver === "acpRegistry" ||
+                (driver === "antigravity" &&
+                  members.length === 1 &&
+                  members[0]?.notice !== undefined)
                   ? ((members.find((member) => member.primary) ?? members[0])?.displayName ?? null)
                   : null,
             }

@@ -1383,6 +1383,7 @@ export function pullRequestHostOf(
     }
   }
   const host = identity?.canonicalKey?.split("/")[0]?.trim();
+  if (kind === "gitlab" && host?.toLowerCase() === "altssh.gitlab.com") return "gitlab.com";
   return host === undefined || host.length === 0 ? kind : host.toLowerCase();
 }
 

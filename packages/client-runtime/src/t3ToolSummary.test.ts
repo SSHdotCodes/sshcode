@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { summarizeT3ToolCalls, type T3ToolSummaryCall } from "./t3ToolSummary.ts";
+import { delegatedTaskHandle } from "@t3tools/shared/delegatedTaskHandle";
+
+import {
+  delegationCallsShownAsCards,
+  summarizeT3ToolCalls,
+  type T3ToolSummaryCall,
+} from "./t3ToolSummary.ts";
 
 function completed(input: unknown, output?: unknown): T3ToolSummaryCall {
   return { input, output, outcome: "completed" };
@@ -331,5 +337,65 @@ it("summarizes computer and workflow tools", () => {
   expect(summarizeT3ToolCalls("workflow", [completed({ action: "list" })])).toEqual({
     label: "Managed agent teams 1 time",
     failedCount: 0,
+  });
+});
+
+describe("delegationCallsShownAsCards", () => {
+  const longId = "subagent-0123456789-abcdef";
+  const card = (runId: string, subagentId: string, childThreadId: string | null = null) =>
+    ({ kind: "card", runId, subagentId, childThreadId }) as const;
+  const call = (
+    runId: string,
+    extra: { failed?: boolean; taskId?: string; childThreadId?: string } = {},
+  ) => ({ kind: "call", runId, failed: extra.failed ?? false, ...extra }) as const;
+
+  it("matches a call to the card its returned handle names, in any run", () => {
+    const shown = delegationCallsShownAsCards([
+      call("run-1", { taskId: delegatedTaskHandle(longId) }),
+      card("run-2", longId),
+    ]);
+    expect([...shown]).toEqual([0]);
+  });
+
+  it("matches calls without output to unclaimed cards of their own run", () => {
+    const shown = delegationCallsShownAsCards([
+      call("run-1"),
+      call("run-1"),
+      card("run-1", "a"),
+      call("run-2"),
+      card("run-3", "b"),
+    ]);
+    // Two calls, one card in run-1: only one row can be represented by a card.
+    expect([...shown]).toEqual([0]);
+  });
+
+  it("lets id matches claim their cards before calls without output", () => {
+    const shown = delegationCallsShownAsCards([
+      call("run-1"),
+      call("run-1", { childThreadId: "thread-b" }),
+      card("run-1", "a"),
+      card("run-1", "b", "thread-b"),
+    ]);
+    expect([...shown].sort()).toEqual([0, 1]);
+  });
+
+  it("keeps failed calls as rows even when a card exists", () => {
+    const shown = delegationCallsShownAsCards([
+      call("run-1", { failed: true }),
+      card("run-1", "a"),
+    ]);
+    expect(shown.size).toBe(0);
+  });
+
+  it("keeps a call whose output names a child the feed doesn't have", () => {
+    const shown = delegationCallsShownAsCards([
+      call("run-1", { taskId: "gone" }),
+      card("run-1", "a"),
+    ]);
+    expect(shown.size).toBe(0);
+  });
+
+  it("keeps every call when the feed has no cards", () => {
+    expect(delegationCallsShownAsCards([call("run-1"), null, undefined]).size).toBe(0);
   });
 });

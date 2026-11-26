@@ -702,6 +702,9 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
         createdAt,
         updatedAt: DateTime.formatIso(item.updatedAt),
         ...(item.type === "user_message" ? { inputIntent: item.inputIntent } : {}),
+        ...(item.type === "user_message" && item.agentWasWaiting === true
+          ? { agentWasWaiting: true as const }
+          : {}),
         ...(item.type === "user_message" && answerByMessageId.has(item.messageId)
           ? { questionAnswer: answerByMessageId.get(item.messageId) }
           : {}),

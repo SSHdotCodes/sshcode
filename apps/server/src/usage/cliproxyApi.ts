@@ -5,18 +5,11 @@ import {
   type UsageLimitSourceAccount,
   type UsageLimitSourceConfig,
 } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
-import * as Option from "effect/Option";
 import {
   GROK_USAGE_URL,
   GrokUsageResponse,
   grokUsageResponseToLimits,
 } from "@t3tools/provider-grok/server";
-import {
-  antigravityAccountFingerprint,
-  antigravitySummaryWindows,
-  antigravityUserAgent,
-} from "../provider/antigravityUsageLimits.ts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -27,10 +20,8 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { codexPlanLabel } from "../provider/CodexProvider.ts";
 import { codexRateLimitsToLimits } from "../provider/codexUsageLimits.ts";
 import { claudeUsageResponseToLimits } from "../provider/claudeUsageLimits.ts";
-import {
-  makeUsageLimits,
-  makeUnavailableUsageLimits,
-} from "@t3tools/provider-core/server/usageLimits";
+import { unavailableGoogleLimits } from "@t3tools/shared/usageLimits";
+import { makeUnavailableUsageLimits } from "@t3tools/provider-core/server/usageLimits";
 
 const AuthFile = Schema.Struct({
   id: Schema.String,
@@ -38,7 +29,6 @@ const AuthFile = Schema.Struct({
   provider: Schema.String,
   email: Schema.optional(Schema.String),
   disabled: Schema.optional(Schema.Boolean),
-  project_id: Schema.optional(Schema.String),
   id_token: Schema.optional(
     Schema.Struct({
       chatgpt_account_id: Schema.optional(Schema.String),
@@ -139,14 +129,11 @@ const creditRedeemRequestId = Effect.fn("CliproxyApi.creditRedeemRequestId")(fun
 });
 
 const decodeGrokUsage = Schema.decodeUnknownEffect(Schema.fromJsonString(GrokUsageResponse));
-const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const GROK_CLI_VERSION = "1.0.77";
 
 export const makeCliproxyApi = Effect.gen(function* () {
   const client = yield* HttpClient.HttpClient;
   const crypto = yield* Crypto.Crypto;
-  const platform = yield* HostProcess.Platform;
-  const architecture = yield* HostProcess.Architecture;
 
   const management = Effect.fn("CliproxyApi.management")(function* (
     config: UsageLimitSourceConfig,
@@ -202,13 +189,7 @@ export const makeCliproxyApi = Effect.gen(function* () {
               "x-grok-client-version": GROK_CLI_VERSION,
               "User-Agent": `grok-cli/${GROK_CLI_VERSION}`,
             }
-          : account.provider === "antigravity"
-            ? {
-                Authorization: "Bearer $TOKEN$",
-                "Content-Type": "application/json",
-                "User-Agent": antigravityUserAgent(platform, architecture),
-              }
-            : { Authorization: "Bearer $TOKEN$", "anthropic-beta": "oauth-2025-04-20" };
+          : { Authorization: "Bearer $TOKEN$", "anthropic-beta": "oauth-2025-04-20" };
     const raw = yield* management(config, "api-call", {
       auth_index: account.auth_index,
       method: data === undefined ? "GET" : "POST",
@@ -267,39 +248,8 @@ export const makeCliproxyApi = Effect.gen(function* () {
         return { ...base, usageLimits: grokUsageResponseToLimits(usage, checkedAt) };
       }
       if (account.provider === "antigravity") {
-        const project = account.project_id?.trim();
-        if (!project)
-          return yield* new UsageLimitSourceError({ detail: "No Antigravity project reported." });
-        const requestedAt = DateTime.toEpochMillis(yield* DateTime.now);
-        const summary = yield* apiCall(
-          config,
-          account,
-          "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
-          { project },
-        );
-        const windows = yield* antigravitySummaryWindows(yield* decodeJson(summary), requestedAt);
-        if (windows.length === 0)
-          return yield* new UsageLimitSourceError({ detail: "No Antigravity quota reported." });
-        const fingerprint = yield* apiCall(
-          config,
-          account,
-          "https://www.googleapis.com/oauth2/v2/userinfo",
-        ).pipe(
-          Effect.flatMap(decodeJson),
-          Effect.flatMap(antigravityAccountFingerprint),
-          Effect.provideService(Crypto.Crypto, crypto),
-          Effect.option,
-        );
-        const usageLimits = makeUsageLimits({ checkedAt, windows });
-        return Option.isSome(fingerprint)
-          ? {
-              id: base.id,
-              driver: base.driver,
-              usageLimits: { ...usageLimits, credentialFingerprint: fingerprint.value },
-            }
-          : { ...base, usageLimits };
+        return { ...base, usageLimits: unavailableGoogleLimits(checkedAt) };
       }
-
       if (account.provider === "claude") {
         const body = yield* apiCall(config, account, "https://api.anthropic.com/api/oauth/usage");
         const usage = yield* decodeClaudeUsage(body);

@@ -111,6 +111,45 @@ describe("loadOpenCode2Catalog", () => {
     }),
   );
 
+  it.effect("keeps only an advertised default effort from an OpenRouter model", () =>
+    Effect.gen(function* () {
+      const base = {
+        id: "inkling-2-mini",
+        modelID: "inkling-2-mini",
+        name: "Inkling 2 Mini",
+        providerID: "openrouter",
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        variants: [{ id: "none" }, { id: "low" }, { id: "high" }],
+        time: { released: 0 },
+        cost: [],
+        status: "active",
+        enabled: true,
+        limit: { context: 1000, output: 100 },
+      };
+      const models = yield* readCatalog({
+        "/api/model": JSON.stringify({
+          location: { directory: "/project" },
+          data: [
+            { ...base, body: { reasoning: { effort: "high" } } },
+            { ...base, id: "settings", settings: { reasoningEffort: "low" } },
+            { ...base, id: "unsupported", settings: { reasoningEffort: "max" } },
+            { ...base, id: "unspecified" },
+            {
+              ...base,
+              id: "switch",
+              variants: [{ id: "thinking" }, { id: "none" }],
+              body: { chat_template_kwargs: { enable_thinking: false } },
+            },
+          ],
+        }),
+      });
+      assert.deepStrictEqual(
+        models.map((model) => model.defaultVariant),
+        ["high", "low", undefined, undefined, "none"],
+      );
+    }),
+  );
+
   // A server that cannot name its providers still lists its models, and the
   // status check labels those with the provider id instead.
   it.effect("leaves a model unnamed when the provider list fails", () =>

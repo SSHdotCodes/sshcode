@@ -160,8 +160,8 @@ function Root({
   return (
     <Surface
       className={cn(
-        "min-w-0 px-1 py-(--composer-banner-padding-block) after:block after:h-(--chat-composer-attachment-overlap) text-xs/4 [--composer-banner-icon-column:--spacing(7)] [--composer-banner-padding-block:--spacing(1)] sm:[--composer-banner-icon-column:--spacing(6)]",
-        density === "comfortable" && "[--composer-banner-padding-block:--spacing(1.25)]",
+        "min-w-0 px-1.5 py-(--composer-banner-padding-block) after:block after:h-(--chat-composer-attachment-overlap) text-xs/4 [--composer-banner-icon-column:--spacing(7)] [--composer-banner-padding-block:--spacing(1.5)] sm:[--composer-banner-icon-column:--spacing(6)]",
+        density === "comfortable" && "[--composer-banner-padding-block:--spacing(2)]",
         density === "spacious" && "px-3 [--composer-banner-padding-block:--spacing(3)]",
         width === "content" ? "w-fit max-w-full flex-none" : "@container",
         // The first row's last action sits in the banner's corner: its outer corner follows the

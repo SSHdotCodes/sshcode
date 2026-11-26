@@ -78,6 +78,12 @@ function unsupportedProvider(
 ): SourceControlProvider.SourceControlProvider["Service"] {
   return SourceControlProvider.SourceControlProvider.of({
     kind,
+    // Background status asks for any state. A host with no registered driver
+    // has no PR badge to discover. Explicit PR operations keep their errors.
+    headBranchProbe: ({ headSelectors, state }) => ({
+      headSelectors: state === "all" ? [] : headSelectors,
+      limit: 1,
+    }),
     listChangeRequests: (input) =>
       new SourceControlProviderError({
         provider: kind,

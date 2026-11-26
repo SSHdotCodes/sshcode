@@ -37,13 +37,16 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsL
 import { searchableSetting } from "./settingsSearch";
 import { SharedSkillsSettings } from "./SharedSkillsSettings";
 
+/** `state` greys out the button that would change nothing, so a long list reads at a glance. */
 function BulkToolActions({
   label,
   disabled,
+  state,
   onChange,
 }: {
   readonly label: string;
   readonly disabled: boolean;
+  readonly state?: "all" | "none" | "some";
   readonly onChange: (enabled: boolean) => void;
 }) {
   return (
@@ -51,7 +54,7 @@ function BulkToolActions({
       <Button
         size="sm"
         variant="outline"
-        disabled={disabled}
+        disabled={disabled || state === "all"}
         onClick={() => onChange(true)}
         aria-label={`Enable all ${label}`}
       >
@@ -60,7 +63,7 @@ function BulkToolActions({
       <Button
         size="sm"
         variant="outline"
-        disabled={disabled}
+        disabled={disabled || state === "none"}
         onClick={() => onChange(false)}
         aria-label={`Disable all ${label}`}
       >
@@ -305,29 +308,46 @@ function ToolsEnvironmentSettings({
           <SettingsSection {...searchableSetting("tools")} title="Tool groups">
             {Array.from(groups)
               .filter(([, tools]) => tools.some((tool) => visibleTools.includes(tool)))
-              .map(([group, tools]) => (
-                <SettingsRow
-                  key={group}
-                  title={group.slice(0, 1).toUpperCase() + group.slice(1)}
-                  description={`${tools.filter((tool) => resolveAgentToolSetting(policy, tool.name, selectedProvider?.instanceId).enabled).length} of ${tools.length} enabled. ${selectedProvider ? "Applies to this provider." : "Global defaults; provider overrides still apply."}`}
-                  control={
-                    <BulkToolActions
-                      label={`${group} tools`}
-                      disabled={disabled}
-                      onChange={(enabled) =>
-                        void save(
-                          setAgentToolGroupEnabled(
-                            policy,
-                            tools,
-                            enabled,
-                            selectedProvider?.instanceId,
-                          ),
-                        )
-                      }
-                    />
-                  }
-                />
-              ))}
+              .map(([group, tools]) => {
+                const enabledCount = tools.filter(
+                  (tool) =>
+                    resolveAgentToolSetting(policy, tool.name, selectedProvider?.instanceId)
+                      .enabled,
+                ).length;
+                return (
+                  <SettingsRow
+                    key={group}
+                    title={group.slice(0, 1).toUpperCase() + group.slice(1)}
+                    description={`${enabledCount} of ${tools.length} enabled. ${selectedProvider ? "Applies to this provider." : "Global defaults; provider overrides still apply."}`}
+                    control={
+                      <BulkToolActions
+                        label={`${group} tools`}
+                        disabled={disabled}
+                        // A provider row can still pin an inherited value, so only global rows go inert.
+                        state={
+                          selectedProvider !== undefined
+                            ? "some"
+                            : enabledCount === tools.length
+                              ? "all"
+                              : enabledCount === 0
+                                ? "none"
+                                : "some"
+                        }
+                        onChange={(enabled) =>
+                          void save(
+                            setAgentToolGroupEnabled(
+                              policy,
+                              tools,
+                              enabled,
+                              selectedProvider?.instanceId,
+                            ),
+                          )
+                        }
+                      />
+                    }
+                  />
+                );
+              })}
           </SettingsSection>
           {selectedProvider === undefined ? (
             <SettingsSection title="Global defaults">

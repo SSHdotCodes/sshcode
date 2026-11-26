@@ -22,6 +22,7 @@ import {
   type ServerProviderDraft,
 } from "@t3tools/provider-core/server/snapshotProbe";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
+import { configuredOpenCodeEffort } from "./openCodeVariant.ts";
 import type { ProbedOpenCode } from "./versionProbe.ts";
 import type { Agent, ProviderListResponse } from "@opencode-ai/sdk/v2";
 import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
@@ -148,20 +149,26 @@ function titleCaseSlug(value: string): string {
   return segments.join(" ");
 }
 
-function inferDefaultVariant(
-  providerID: string,
+function variantDescriptors(
   variants: ReadonlyArray<string>,
-): string | undefined {
-  if (variants.length === 1) {
-    return variants[0];
-  }
-  if (providerID === "anthropic" || providerID.startsWith("google")) {
-    return variants.includes("high") ? "high" : undefined;
-  }
-  if (providerID === "openai" || providerID === "opencode") {
-    return variants.includes("medium") ? "medium" : variants.includes("high") ? "high" : undefined;
-  }
-  return undefined;
+  configuredEffort: string | undefined,
+  label = titleCaseSlug,
+) {
+  if (variants.length === 0) return [];
+  const defaultVariant = variants.find((id) => id === configuredEffort);
+  return [
+    {
+      id: "variant",
+      label: "Reasoning",
+      type: "select" as const,
+      options: variants.map((id) => ({
+        id,
+        label: label(id),
+        ...(id === defaultVariant ? { isDefault: true } : {}),
+      })),
+      ...(defaultVariant === undefined ? {} : { currentValue: defaultVariant }),
+    },
+  ];
 }
 
 function inferDefaultAgent(agents: ReadonlyArray<Agent>): string | undefined {
@@ -170,18 +177,6 @@ function inferDefaultAgent(agents: ReadonlyArray<Agent>): string | undefined {
 
 const DEFAULT_OPENCODE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [
-    {
-      id: "variant",
-      label: "Reasoning",
-      type: "select",
-      options: [
-        { id: "low", label: "Low" },
-        { id: "medium", label: "Medium", isDefault: true },
-        { id: "high", label: "High" },
-        { id: "xhigh", label: "Extra High" },
-      ],
-      currentValue: "medium",
-    },
     {
       id: "agent",
       label: "Agent",
@@ -204,24 +199,12 @@ function readsImages(model: {
 }
 
 function openCodeCapabilitiesForModel(input: {
-  readonly providerID: string;
   readonly model: ProviderListResponse["all"][number]["models"][string];
   readonly agents: ReadonlyArray<Agent>;
 }): ModelCapabilities {
-  const rawVariantValues = Object.keys(input.model.variants ?? {});
-  // When a model advertises no variants, synthesize the standard reasoning
-  // levels so the composer still offers a Reasoning selector (mirrors the
-  // Codex/Grok experience where reasoning is always configurable). The set
-  // covers the common OpenCode variant spectrum; `inferDefaultVariant`
-  // picks the provider-appropriate default (e.g. medium for openai/opencode).
-  const variantValues =
-    rawVariantValues.length > 0 ? rawVariantValues : ["low", "medium", "high", "xhigh"];
-  const defaultVariant = inferDefaultVariant(input.providerID, variantValues);
-  const variantOptions = variantValues.map((value) =>
-    defaultVariant === value
-      ? { id: value, label: titleCaseSlug(value), isDefault: true as const }
-      : { id: value, label: titleCaseSlug(value) },
-  );
+  const variantValues = Object.entries(input.model.variants ?? {})
+    .filter(([, variant]) => variant.disabled !== true)
+    .map(([id]) => id);
   const primaryAgents = input.agents.filter(
     (agent) => !agent.hidden && (agent.mode === "primary" || agent.mode === "all"),
   );
@@ -233,17 +216,7 @@ function openCodeCapabilitiesForModel(input: {
   );
   return createModelCapabilities({
     optionDescriptors: [
-      ...(variantOptions.length > 0
-        ? [
-            {
-              id: "variant",
-              label: "Reasoning",
-              type: "select" as const,
-              options: variantOptions,
-              ...(defaultVariant ? { currentValue: defaultVariant } : {}),
-            },
-          ]
-        : []),
+      ...variantDescriptors(variantValues, configuredOpenCodeEffort(input.model.options)),
       ...(agentOptions.length > 0
         ? [
             {
@@ -297,7 +270,6 @@ function flattenOpenCodeModels(
         ...(subProvider ? { subProvider } : {}),
         isCustom: false,
         capabilities: openCodeCapabilitiesForModel({
-          providerID: provider.id,
           model,
           agents: input.agents,
         }),
@@ -413,6 +385,7 @@ export interface OpenCode2Model {
    */
   readonly providerName?: string;
   readonly variants: ReadonlyArray<{ readonly id: string }>;
+  readonly defaultVariant?: string;
   /** Whether the server's catalogue lists images among what the model reads. */
   readonly imageInput?: boolean;
 }
@@ -625,47 +598,19 @@ const THINKING_SWITCH_VARIANTS = { none: "Off", thinking: "On" } as const;
  * OpenCode only makes a "thinking" variant for a reasoning switch, so a model
  * that has one thinks or doesn't. Effort variants beside it (a config adding the
  * switch to a model OpenCode guessed efforts for) would change nothing; the
- * menu offers Off and On, on by default.
+ * menu offers Off and On.
  */
-function reasoningVariants(model: OpenCode2Model): {
-  readonly variants: ReadonlyArray<string>;
-  readonly defaultVariant: string | undefined;
-  readonly label: (id: string) => string;
-} {
-  const variants = model.variants.map((variant) => variant.id);
-  if (variants.includes("thinking")) {
-    return {
-      variants: variants.filter((id) => Object.hasOwn(THINKING_SWITCH_VARIANTS, id)),
-      defaultVariant: "thinking",
-      label: (id) => THINKING_SWITCH_VARIANTS[id as keyof typeof THINKING_SWITCH_VARIANTS],
-    };
-  }
-  return {
-    variants,
-    defaultVariant: inferDefaultVariant(model.providerID, variants),
-    label: titleCaseSlug,
-  };
-}
-
 function openCode2ModelCapabilities(model: OpenCode2Model): ModelCapabilities {
-  const { variants, defaultVariant, label } = reasoningVariants(model);
+  const variants = model.variants.map(({ id }) => id);
+  const isSwitch = variants.includes("thinking");
   return createModelCapabilities({
-    optionDescriptors:
-      variants.length === 0
-        ? []
-        : [
-            {
-              id: "variant",
-              label: "Reasoning",
-              type: "select",
-              options: variants.map((id) => ({
-                id,
-                label: label(id),
-                ...(id === defaultVariant ? { isDefault: true } : {}),
-              })),
-              ...(defaultVariant === undefined ? {} : { currentValue: defaultVariant }),
-            },
-          ],
+    optionDescriptors: isSwitch
+      ? variantDescriptors(
+          variants.filter((id) => Object.hasOwn(THINKING_SWITCH_VARIANTS, id)),
+          model.defaultVariant,
+          (id) => THINKING_SWITCH_VARIANTS[id as keyof typeof THINKING_SWITCH_VARIANTS],
+        )
+      : variantDescriptors(variants, model.defaultVariant),
     imageInput: model.imageInput,
   });
 }

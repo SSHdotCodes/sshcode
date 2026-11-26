@@ -100,6 +100,7 @@ export interface SettingsSecret {
   readonly value: string;
   readonly redacted: boolean;
   readonly sensitive: boolean;
+  readonly destination?: string;
   readonly providerInstanceId?: string;
   readonly environmentVariable?: string;
   /** A variable whose value comes from a shared key; it never stores its own. */
@@ -107,6 +108,14 @@ export interface SettingsSecret {
 }
 
 type SecretValue = Pick<SettingsSecret, "value" | "redacted">;
+
+function normalizedDestination(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const url = URL.parse(value);
+  if (!url) return value;
+  url.pathname = url.pathname.replace(/\/+$/, "");
+  return url.href;
+}
 
 /**
  * Visits credential fields declared by schemas and dynamically sensitive environment variables.
@@ -120,8 +129,10 @@ export function mapSettingsSecrets(
     fields: Readonly<Record<string, unknown>>,
     secretFields: ReadonlyArray<string>,
     name: (field: string, serverHost: string | null) => string,
+    destinationField?: string,
   ) => {
     const next = { ...fields };
+    const destination = destinationField && normalizedDestination(fields[destinationField]);
     for (const field of secretFields) {
       if (!(field in next)) continue;
       next[field] = writeSecretFieldValues(
@@ -129,6 +140,7 @@ export function mapSettingsSecrets(
         readSecretFieldValues(next[field]).map(([serverHost, value]) => {
           const result = map({
             secretName: name(field, serverHost),
+            ...(destination === undefined ? {} : { destination }),
             kind: "field",
             value,
             redacted: value === SECRET_REDACTED,
@@ -156,6 +168,7 @@ export function mapSettingsSecrets(
                   (field, serverHost) =>
                     `provider-config-${encode(instanceId)}-${encode(instance.driver)}-${encode(field)}` +
                     (serverHost === null ? "" : `-${encode(serverHost)}`),
+                  instance.driver === openCodeClient.driverKind ? "serverUrl" : undefined,
                 ),
               }
             : {}),
@@ -206,6 +219,7 @@ export function mapSettingsSecrets(
           (field === "managementKey" && serverHost === null
             ? ""
             : `-${encode(field)}${serverHost === null ? "" : `-${encode(serverHost)}`}`),
+        "url",
       ),
     ]),
   ) as ServerSettings["usageLimitSources"];

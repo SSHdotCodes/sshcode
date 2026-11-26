@@ -109,6 +109,22 @@ describe("mapManagedRelayError", () => {
   });
 });
 
+it("preserves confirmed pairing expiry on direct ticket authentication", () => {
+  const error = new EnvironmentAuthInvalidError({
+    code: "auth_invalid",
+    reason: "invalid_credential",
+    traceId: "test",
+    pairingExpired: true,
+  });
+  expect(mapRemoteEnvironmentError(error)).toMatchObject({
+    _tag: "ConnectionBlockedError",
+    reason: "authentication",
+    pairingExpired: true,
+  });
+  expect(mapRemoteEnvironmentError(error, "relay")).not.toHaveProperty("pairingExpired");
+  expect(mapRemoteDpopEnvironmentError(error)).not.toHaveProperty("pairingExpired");
+});
+
 describe("mapRemoteDpopEnvironmentError", () => {
   it("keeps relay descriptor auth failures distinct from DPoP proof failures", () => {
     const error = new EnvironmentAuthInvalidError({

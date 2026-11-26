@@ -2149,6 +2149,72 @@ describe("EnvironmentRegistry routes", () => {
     }),
   );
 
+  it.effect("renews the existing route in place and reconnects with its cache intact", () =>
+    Effect.gen(function* () {
+      const id = LAN_TARGET.environmentId;
+      const fresh = new BearerConnectionCredential({ token: "test-renewed" });
+      let credentials: Ref.Ref<Map<string, ConnectionCredential>> | undefined;
+      const harness = yield* makeHarness(
+        [LAN_TARGET, RELAY_TARGET],
+        [LAN_PROFILE],
+        [[LAN_TARGET.connectionId, BEARER_CREDENTIAL]],
+        {
+          beforePrepareRoute: (target) =>
+            credentials && target._tag === "BearerConnectionTarget"
+              ? Ref.get(credentials).pipe(
+                  Effect.map((stored) =>
+                    stored.get(target.connectionId)?.token === fresh.token
+                      ? undefined
+                      : new ConnectionBlockedError({
+                          reason: "authentication",
+                          detail: "Expired",
+                          pairingExpired: true,
+                        }),
+                  ),
+                )
+              : Effect.succeed(
+                  new ConnectionBlockedError({ reason: "configuration", detail: "Unavailable" }),
+                ),
+        },
+      );
+      credentials = harness.storedCredentials;
+      yield* Ref.update(harness.shellCache, (cached) => new Map(cached).set(id, CACHED_SNAPSHOT));
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        yield* awaitConnectionState(registry, id, (state) => state.phase === "blocked");
+        const entry = (yield* SubscriptionRef.get(registry.entries)).get(id)!;
+        // Older entries can have a different connection id from a fresh pairing to the same URL.
+        const connectionId = "replacement-id";
+        const registration = new BearerConnectionRegistration({
+          target: new BearerConnectionTarget({ ...LAN_TARGET, connectionId }),
+          profile: new BearerConnectionProfile({ ...LAN_PROFILE, connectionId }),
+          credential: fresh,
+        });
+        expect(yield* registry.register(registration, entry)).toBe(true);
+        yield* awaitConnectionState(registry, id, (state) => state.phase === "connected");
+        expect((yield* Ref.get(harness.storedCredentials)).get(LAN_TARGET.connectionId)).toEqual(
+          fresh,
+        );
+        expect(routesOf(yield* Ref.get(harness.storedTargets), id)).toEqual([
+          LAN_TARGET,
+          RELAY_TARGET,
+        ]);
+        expect((yield* Ref.get(harness.shellCache)).get(id)).toEqual(CACHED_SNAPSHOT);
+        expect(yield* Ref.get(harness.cacheClears)).toEqual([]);
+        expect(yield* Ref.get(harness.ownedDataClears)).toEqual([]);
+        const renewedEntry = (yield* SubscriptionRef.get(registry.entries)).get(id)!;
+        yield* registry.setEnabled(id, false);
+        expect(yield* registry.register(lanRegistration(), renewedEntry)).toBe(false);
+        expect((yield* Ref.get(harness.storedCredentials)).get(LAN_TARGET.connectionId)).toEqual(
+          fresh,
+        );
+        yield* registry.remove(id);
+        expect(yield* registry.register(registration, renewedEntry)).toBe(false);
+        expect((yield* SubscriptionRef.get(registry.entries)).has(id)).toBe(false);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+
   it.effect("re-pairing the same address replaces that route rather than adding another", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness(

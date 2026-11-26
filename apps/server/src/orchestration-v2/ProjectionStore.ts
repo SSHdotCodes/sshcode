@@ -812,7 +812,9 @@ export interface ProjectionStoreV2Shape {
    * same threads as the shell snapshot's `threads`. Reads only the thread rows,
    * so callers can check who uses a path without a shell snapshot.
    */
-  readonly getThreadWorktreePaths: () => Effect.Effect<
+  readonly getThreadWorktreePaths: (options?: {
+    readonly includeArchived?: boolean;
+  }) => Effect.Effect<
     ReadonlyArray<{ readonly threadId: ThreadId; readonly worktreePath: string }>,
     ProjectionStoreV2Error
   >;
@@ -848,6 +850,13 @@ export interface ProjectionStoreV2Shape {
   readonly getRuntimeRecoveryProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<ProjectionRuntimeRecoveryState, ProjectionStoreV2Error>;
+  readonly getRunAttemptState: (
+    threadId: ThreadId,
+    runId: RunId,
+  ) => Effect.Effect<
+    Pick<OrchestrationV2Run, "status" | "activeAttemptId"> | undefined,
+    ProjectionStoreV2Error
+  >;
   readonly getPendingNativeUserInputs: (
     threadId: ThreadId,
     providerTurnId: ProviderTurnId,
@@ -2441,7 +2450,7 @@ export function threadShellFromProjection(
       threadId: projection.thread.id,
       providerThreads: projection.providerThreads,
     }),
-    goal: activeProviderGoalForShell(
+    ...activeProviderFieldsForShell(
       projection.providerThreads,
       projection.thread.activeProviderThreadId,
     ),
@@ -2479,7 +2488,13 @@ function providerInstanceHistoryForShell(input: {
 }): ReadonlyArray<ProviderInstanceId> {
   const history: Array<ProviderInstanceId> = [];
   for (const providerThread of input.providerThreads
-    .filter((thread) => thread.appThreadId === input.threadId && thread.ownerNodeId === null)
+    .filter(
+      (thread) =>
+        thread.appThreadId === input.threadId &&
+        thread.ownerNodeId === null &&
+        // A model picked and abandoned in the menu leaves an empty session; it never ran.
+        (thread.firstRunOrdinal !== null || thread.nativeThreadRef !== null),
+    )
     .toSorted(
       (left, right) =>
         DateTime.toEpochMillis(left.createdAt) - DateTime.toEpochMillis(right.createdAt) ||
@@ -2492,12 +2507,17 @@ function providerInstanceHistoryForShell(input: {
   return history;
 }
 
-/** The native goal lives on the provider thread that currently owns the conversation. */
-function activeProviderGoalForShell(
+function activeProviderFieldsForShell(
   providerThreads: ReadonlyArray<OrchestrationV2ThreadProjection["providerThreads"][number]>,
   activeProviderThreadId: OrchestrationV2ThreadProjection["thread"]["activeProviderThreadId"],
-): OrchestrationV2ThreadShell["goal"] {
-  return providerThreads.find((thread) => thread.id === activeProviderThreadId)?.goal ?? null;
+) {
+  const active = providerThreads.find((thread) => thread.id === activeProviderThreadId);
+  return {
+    goal: active?.goal ?? null,
+    ...(active?.waitingOnBackgroundWork && active.backgroundWaitStartedAt
+      ? { backgroundWaitStartedAt: active.backgroundWaitStartedAt }
+      : {}),
+  };
 }
 
 function isInterruptibleRunForShell(run: OrchestrationV2ThreadProjection["runs"][number]): boolean {
@@ -2544,6 +2564,7 @@ type ShellThreadState = {
   readonly hasActionableProposedPlan: boolean;
   readonly blockedOnThreadWait?: boolean;
   readonly pendingBackgroundTasks: OrchestrationV2ThreadShell["pendingBackgroundTasks"];
+  readonly backgroundWaitStartedAt?: string;
   readonly longRunningWork: OrchestrationV2ThreadShell["longRunningWork"];
   readonly providerInstanceHistory: OrchestrationV2ThreadShell["providerInstanceHistory"];
   readonly goal: OrchestrationV2ThreadShell["goal"];
@@ -2745,6 +2766,9 @@ function shellFromState(input: {
     hasActionableProposedPlan: input.state.hasActionableProposedPlan,
     ...(input.state.blockedOnThreadWait === true ? { blockedOnThreadWait: true as const } : {}),
     pendingBackgroundTasks: input.state.pendingBackgroundTasks,
+    ...(input.state.backgroundWaitStartedAt
+      ? { backgroundWaitStartedAt: input.state.backgroundWaitStartedAt }
+      : {}),
     longRunningWork: withAppMonitors(input.state.longRunningWork, input.state.thread.id),
     nextScheduledRunAt: input.stores.shellSchedules?.nextRunAt(input.state.thread.id) ?? null,
     providerInstanceHistory: input.state.providerInstanceHistory,
@@ -3853,9 +3877,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const wireTurnItemPayload = sql`
       CASE item.type
         WHEN 'handoff' THEN json_remove(item.payload_json, '$.summary')
-        WHEN 'file_change' THEN CASE WHEN item.status = 'failed'
-          THEN json_remove(item.payload_json, '$.oldStr', '$.newStr')
-          ELSE json_remove(item.payload_json, '$.oldStr', '$.newStr', '$.diffStr') END
+        WHEN 'file_change' THEN CASE
+          WHEN item.status = 'failed'
+            THEN json_remove(item.payload_json, '$.oldStr', '$.newStr')
+          WHEN length(trim(json_extract(item.payload_json, '$.diffStr'), ${wireWhitespace})) > 0
+            THEN json_set(
+              json_remove(item.payload_json, '$.oldStr', '$.newStr', '$.diffStr'),
+              '$.diffOmitted', json('true')
+            )
+          ELSE json_remove(item.payload_json, '$.oldStr', '$.newStr', '$.diffStr')
+          END
         WHEN 'command_execution' THEN (
           SELECT CASE
           -- substr counts Unicode code points, so this preserves at least the
@@ -4206,13 +4237,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         // Reuse the decoded items for cohort IDs and the resulting projection.
         // Parsing these rows separately duplicates every retained tool output.
         const turnItems = yield* decodeRows(decodeTurnItemPayload, threadId)(boundedTurnItemRows);
-        const cohortJson = (field: string) =>
-          JSON.stringify(
-            turnItems.flatMap((payload) => {
-              const value = nullableStringField(payload, field);
-              return value === null ? [] : [value];
-            }),
-          );
+        // The same run, provider turn or node can own hundreds of retained
+        // items. Send each ID to SQLite once so keyed joins don't repeat work.
+        const cohortJson = (field: string) => {
+          if (window === undefined) return "[]";
+          const ids = new Set<string>();
+          for (const item of turnItems) {
+            const id = nullableStringField(item, field);
+            if (id !== null) ids.add(id);
+          }
+          return JSON.stringify([...ids]);
+        };
         const cohortRunIds = cohortJson("runId");
         // A run can contain thousands of completed nodes. Load the visible
         // nodes and live control dependencies, then walk only their ancestors.
@@ -6228,6 +6263,23 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       isProjectionStoreThreadNotFoundError(cause)
         ? cause
         : new ProjectionStoreReadError({ threadId, cause });
+
+    const getRunAttemptState: ProjectionStoreV2Shape["getRunAttemptState"] = (threadId, runId) =>
+      Effect.gen(function* () {
+        const [row] = yield* sql<{
+          readonly status: OrchestrationV2Run["status"] | null;
+          readonly active_attempt_id: RunAttemptId | null;
+        }>`
+          SELECT run.status, json_extract(run.payload_json, '$.activeAttemptId') AS active_attempt_id
+          FROM orchestration_v2_projection_threads AS thread
+          LEFT JOIN orchestration_v2_projection_runs AS run
+            ON run.run_id = ${runId} AND run.thread_id = thread.thread_id
+          WHERE thread.thread_id = ${threadId}
+        `;
+        if (row === undefined) return yield* new ProjectionStoreThreadNotFoundError({ threadId });
+        if (row.status === null) return undefined;
+        return { status: row.status, activeAttemptId: row.active_attempt_id };
+      }).pipe(Effect.mapError(controlReadError(threadId)));
 
     const getPendingNativeUserInputs: ProjectionStoreV2Shape["getPendingNativeUserInputs"] = (
       threadId,
@@ -9672,12 +9724,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
             );
 
-    const getThreadWorktreePaths: ProjectionStoreV2Shape["getThreadWorktreePaths"] = () =>
+    const getThreadWorktreePaths: ProjectionStoreV2Shape["getThreadWorktreePaths"] = (options) =>
       sql<{ readonly thread_id: string; readonly worktree_path: string }>`
         SELECT thread_id, json_extract(payload_json, '$.worktreePath') AS worktree_path
         FROM orchestration_v2_projection_threads
         WHERE deleted_at IS NULL
-          AND archived_at IS NULL
+          ${options?.includeArchived ? sql`` : sql`AND archived_at IS NULL`}
           AND json_extract(payload_json, '$.worktreePath') IS NOT NULL
       `.pipe(
         Effect.map((rows) =>
@@ -9859,7 +9911,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             threadId: thread.id,
             providerThreads: providerThreadsByThreadId.get(thread.id) ?? [],
           }),
-          goal: activeProviderGoalForShell(
+          ...activeProviderFieldsForShell(
             providerThreadsByThreadId.get(thread.id) ?? [],
             thread.activeProviderThreadId,
           ),
@@ -10716,6 +10768,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getTurnStartContext,
       getTurnStartHistory,
       getRuntimeRecoveryProjection,
+      getRunAttemptState,
       getRunningTurnContext,
       getThreadProviderContext,
       getRuntimeResponseContext,
@@ -11219,12 +11272,12 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             ),
           ),
         ),
-      getThreadWorktreePaths: () =>
+      getThreadWorktreePaths: (options) =>
         Ref.get(replayState).pipe(
           Effect.map((state) =>
             [...state.projections.values()].flatMap(({ thread }) =>
               thread.deletedAt === null &&
-              thread.archivedAt === null &&
+              (thread.archivedAt === null || options?.includeArchived === true) &&
               thread.worktreePath !== null
                 ? [{ threadId: thread.id, worktreePath: thread.worktreePath }]
                 : [],
@@ -12006,6 +12059,14 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             ),
           ),
       getRuntimeRecoveryProjection: (threadId) => service.getThreadProjection(threadId),
+      getRunAttemptState: (threadId, runId) =>
+        Effect.gen(function* () {
+          const projection = (yield* Ref.get(replayState)).projections.get(threadId);
+          if (projection === undefined)
+            return yield* new ProjectionStoreThreadNotFoundError({ threadId });
+          const run = projection.runs.find((candidate) => candidate.id === runId);
+          return run && { status: run.status, activeAttemptId: run.activeAttemptId };
+        }),
       getThreadSnapshot: (threadId) =>
         service.getThreadProjection(threadId).pipe(
           Effect.flatMap((projection) =>

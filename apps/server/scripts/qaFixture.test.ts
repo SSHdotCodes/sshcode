@@ -7,7 +7,27 @@ it("advertises selectable models and default reasoning, speed and context", () =
     model: "qa-balanced",
     reasoning: "medium",
     fast: false,
+    speed: "standard",
+    mode: "code",
     context: "272k",
+  });
+  expect(options.find((option) => option.configId === "mode")).toMatchObject({
+    category: "mode",
+    currentValue: "code",
+    options: [
+      { value: "code" },
+      { value: "smart" },
+      { value: "ask" },
+      { value: "plan" },
+      { value: "bypassPermissions" },
+    ],
+  });
+  expect(options.find((option) => option.configId === "speed")).toMatchObject({
+    currentValue: "standard",
+    options: [
+      { value: "standard", name: "Standard" },
+      { value: "fast", name: "Ultrafast" },
+    ],
   });
   const reasoning = options.find((option) => option.category === "thought_level");
   expect(reasoning).toMatchObject({

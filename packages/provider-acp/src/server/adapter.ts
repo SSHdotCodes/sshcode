@@ -33,6 +33,7 @@ import {
   type ProviderThreadId,
   type ProviderTurnId,
   type ProviderUserInputAnswers,
+  type RuntimeMode,
   type RuntimeRequestId,
   type ThreadTokenUsageSnapshot,
   type ThreadId,
@@ -97,11 +98,13 @@ import {
   MAX_AGENT_TERMINAL_OUTPUT_CHARS,
   boundToolCallOutputText,
   embeddedTerminalIdsFromSessionUpdate,
+  acpMcpDispatch,
   extractMcpToolCallIdentity,
   findModelConfigOption,
   mergeToolCallState,
   parsePermissionRequest,
   parseSessionUpdateEvent,
+  sessionUpdateIsReplay,
   withTrackedPermissionToolCall,
   toolCallVisibleOutputChanged,
   type AcpPlanUpdate,
@@ -124,9 +127,11 @@ import {
   type AcpClientTerminals,
 } from "./clientTerminals.ts";
 import { makeRunningToolCalls } from "./runningToolCalls.ts";
+import { findAcpApprovalModes } from "@t3tools/shared/acpComposer";
 import {
   ACP_EMPTY_OPTION_VALUE,
   ACP_SESSION_MODE_OPTION_ID,
+  acpProviderOptionDescriptors,
   flattenSelectChoices,
 } from "./sessionConfig.ts";
 import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
@@ -343,13 +348,15 @@ function acpProviderTurnTokenUsage(
   live: OrchestrationV2ProviderTurnTokenUsage | undefined,
   contextUsage: ThreadTokenUsageSnapshot | null,
   promptUsage: EffectAcpSchema.Usage | undefined,
+  fallbackContextTokens: number | undefined,
   at: DateTime.Utc,
 ): OrchestrationV2ProviderTurnTokenUsage | undefined {
   if (promptUsage === undefined) return live;
   const usedTokens =
     live?.usedTokens ??
     (contextUsage !== null && contextUsage.usedTokens > 0 ? contextUsage.usedTokens : undefined) ??
-    promptUsage.totalTokens;
+    fallbackContextTokens;
+  if (usedTokens === undefined) return live;
   const maxTokens = live?.maxTokens ?? contextUsage?.maxTokens;
   const cachedInputTokens =
     promptUsage.cachedReadTokens == null
@@ -376,11 +383,20 @@ function acpProviderTurnTokenUsage(
 
 export interface AcpAdapterV2Flavor {
   readonly requiresSignIn?: (cause: unknown) => boolean;
+  readonly mcpDiscoveryInstructions?: (catalog: string) => string;
+  readonly supportsMcpDiscovery?: (
+    agent: EffectAcpSchema.InitializeResponse,
+    model: string,
+  ) => boolean;
   readonly buildPrompt?: (input: {
     readonly text: string;
     readonly attachments: ReadonlyArray<ChatAttachment>;
     readonly promptCapabilities: EffectAcpSchema.AgentCapabilities["promptCapabilities"];
-  }) => Effect.Effect<ReadonlyArray<EffectAcpSchema.ContentBlock>, EffectAcpErrors.AcpError>;
+  }) => Effect.Effect<
+    ReadonlyArray<EffectAcpSchema.ContentBlock>,
+    EffectAcpErrors.AcpError,
+    Scope.Scope
+  >;
 
   /** Interprets provider-specific prompt errors before they cross into orchestration. */
   readonly promptFailure?: (cause: unknown) => OrchestrationV2ProviderFailure;
@@ -392,6 +408,11 @@ export interface AcpAdapterV2Flavor {
   readonly normalizeSessionUpdate?: (
     notification: EffectAcpSchema.SessionNotification,
   ) => EffectAcpSchema.SessionNotification;
+  /** Grok attaches its native context occupancy to ordinary notifications. */
+  readonly extractContextUsage?: (
+    source: Pick<EffectAcpSchema.SessionNotification, "_meta">,
+    session: AcpSessionRuntime.AcpSessionRuntimeStartResult | null,
+  ) => ThreadTokenUsageSnapshot | undefined;
   readonly onAvailableCommandsUpdate?: (
     commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
     meta?: unknown,
@@ -630,6 +651,10 @@ export interface AcpAdapterV2Flavor {
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
   /** Interrupt the local prompt fiber before `session/cancel` (Grok wedged prompts). */
   readonly interruptPromptOnCancel?: boolean;
+  /** One completed inference reported by a native usage update. */
+  readonly extractStepUsage?: (
+    update: Extract<EffectAcpSchema.SessionUpdate, { sessionUpdate: "usage_update" }>,
+  ) => EffectAcpSchema.Usage | undefined;
   /** Enable only when this agent has verified per-turn PromptResponse.usage counters. */
   readonly reportsPerTurnPromptUsage?: boolean;
   /** Normalizes provider-specific PromptResponse.usage before summing into TurnTokenUsage. */
@@ -725,6 +750,8 @@ export interface AcpAdapterV2SubagentUpdate {
   readonly prompt: string;
   readonly title: string | null;
   readonly model: string | null;
+  /** The provider guarantees an unspecified worker model inherits the current session model. */
+  readonly inheritParentModel?: boolean;
   readonly status:
     | "pending"
     | "running"
@@ -974,6 +1001,7 @@ interface AcpMcpContext {
   readonly processEnvironment?: NodeJS.ProcessEnv;
   readonly endpoint?: string;
   readonly authorization?: string;
+  readonly toolDiscoveryCatalog?: Effect.Effect<string> | undefined;
 }
 
 /**
@@ -1020,6 +1048,7 @@ function acpMcpContext(
     acpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }],
     endpoint: session.endpoint,
     authorization: session.authorizationHeader,
+    toolDiscoveryCatalog: session.toolDiscoveryCatalog,
     processEnvironment: {
       // The thread id every process the agent starts inherits, so a tool run
       // from its shell can find its SSHCode thread. Claude and Codex sessions set
@@ -1135,6 +1164,12 @@ function acpMcpToolCallOutput(rawOutput: unknown): unknown {
     : { error: errorMessage, result: resultOutput };
 }
 
+function acpDynamicToolName(tool: AcpToolCallState) {
+  return typeof tool.data.name === "string" && tool.data.name.trim()
+    ? tool.data.name.trim()
+    : (tool.title ?? tool.kind);
+}
+
 function nonEmptyText(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
 }
@@ -1224,11 +1259,12 @@ function commandExitCode(value: unknown): number | undefined {
 export function acpProjectedCommandExitCode(
   status: "pending" | "running" | "waiting" | "completed" | "failed" | "interrupted",
   rawOutput: unknown,
+  metadata?: unknown,
 ): number | undefined {
   if (status !== "completed" && status !== "failed") {
     return undefined;
   }
-  return commandExitCode(rawOutput);
+  return commandExitCode(rawOutput) ?? commandExitCode(metadata);
 }
 
 function structuredFileChanges(toolCall: AcpToolCallState) {
@@ -1683,6 +1719,7 @@ interface ActiveAcpTurn {
     }
   >;
   interrupted: boolean;
+  nativeSteerSent: boolean;
   finalized: boolean;
   finalizedStatus: "completed" | "interrupted" | "failed" | "cancelled" | null;
   /** session/prompt already returned; finalize deferred for background work. */
@@ -2269,6 +2306,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const clientPolicyGrants = makeAcpClientPolicyGrants();
         let latestRuntimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy =
           input.runtimePolicy;
+        let configuredAcpMode: { value: string; runtimeMode: RuntimeMode } | null = null;
         const events = yield* Queue.unbounded<
           ProviderAdapter.ProviderAdapterV2Event,
           ProviderAdapter.ProviderAdapterEventStreamError
@@ -3451,6 +3489,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 : embeddedTerminalCommands(rootSessionId, update.toolCallId)),
             ],
           });
+          const dispatched = mcpIdentity && acpMcpDispatch(mcpIdentity, merged.data.rawInput);
           const now = yield* DateTime.now;
           const status = toolStatus(merged.status);
           const startedAt = context.toolStartedAt.get(key) ?? now;
@@ -3470,7 +3509,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               parentItemId: null,
               ordinal,
               status,
-              title: merged.title ?? merged.kind ?? "Tool",
+              title: dispatched ? null : (merged.title ?? merged.kind ?? "Tool"),
               startedAt,
               completedAt: completedAtForStatus(status, now),
               updatedAt: now,
@@ -3479,7 +3518,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 ? {}
                 : mcpToolPresentation({
                     serverName: mcpIdentity.server,
-                    toolName: mcpIdentity.tool,
+                    toolName: dispatched?.tool ?? mcpIdentity.tool,
                     source: unknownRecord(
                       (
                         unknownRecord(unknownRecord(merged.data.rawOutput)?.result) ??
@@ -3489,9 +3528,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   })),
               toolName:
                 mcpIdentity === undefined
-                  ? (merged.title ?? merged.kind ?? "Tool")
-                  : `${mcpIdentity.server}.${mcpIdentity.tool}`,
-              input: merged.data.rawInput ?? null,
+                  ? (acpDynamicToolName(merged) ?? "Tool")
+                  : `${mcpIdentity.server}.${dispatched?.tool ?? mcpIdentity.tool}`,
+              input: dispatched?.input ?? merged.data.rawInput ?? null,
               output: merged.data.rawOutput ?? merged.data.content ?? null,
             },
           });
@@ -3577,6 +3616,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const turnItemOrdinal =
             existing?.turnItemOrdinal ?? (yield* resolveItemOrdinal(context, nativeTaskId));
           const taskStatus = update.status;
+          let model = update.model?.trim() || existing?.task.model || null;
+          if (model === null && update.inheritParentModel === true) {
+            const config = findModelConfigOption(yield* runtime.getConfigOptions);
+            model =
+              config?.currentValue ||
+              (yield* activeModelState)?.currentModelId ||
+              context.input.modelSelection.model;
+          }
           const task: OrchestrationV2Subagent = {
             ...(existing?.task ?? {
               id: nodeId,
@@ -3595,7 +3642,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               result: null,
               startedAt: now,
             }),
-            model: update.model?.trim() || existing?.task.model || null,
+            model,
             status: taskStatus,
             result: update.result ?? existing?.task.result ?? null,
             completedAt: acpSubagentStatusIsTerminal(taskStatus) ? now : null,
@@ -4006,12 +4053,19 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const knownProviderThread =
             (yield* Ref.get(providerThreadByNativeSessionId)).get(context.nativeThreadId) ??
             context.input.providerThread;
-          const { waitingOnBackgroundWork: _previousWaiting, ...baseThread } = knownProviderThread;
+          const { waitingOnBackgroundWork, backgroundWaitStartedAt, ...baseThread } =
+            knownProviderThread;
           const now = yield* DateTime.now;
           const updatedThread: OrchestrationV2ProviderThread = {
             ...baseThread,
             pendingBackgroundTasks: [...nextTasks],
-            ...(nextTasks.length > 0 ? { waitingOnBackgroundWork: true as const } : {}),
+            ...(nextTasks.length > 0
+              ? {
+                  waitingOnBackgroundWork: true as const,
+                  backgroundWaitStartedAt:
+                    (waitingOnBackgroundWork && backgroundWaitStartedAt) ?? DateTime.formatIso(now),
+                }
+              : {}),
             updatedAt: now,
           };
           yield* Ref.update(providerThreadByNativeSessionId, (current) =>
@@ -4124,6 +4178,23 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             background?.turn.tools.get(incoming.toolCallId);
           const merged = mergeToolCallState(previous, incoming);
           const normalized = flavor.normalizeToolCall?.(merged) ?? merged;
+          // agy flushes the command as failed and the timer as completed during session/cancel.
+          // Keep their last output, then let the interrupted prompt settle the open cards.
+          if (
+            context.interrupted &&
+            context.promptHoldsBackgroundWork &&
+            projectedStatus === undefined &&
+            previous !== undefined &&
+            previous.status !== "failed" &&
+            previous.status !== "completed" &&
+            (previous.kind === "execute" || flavor.isPersistentBackgroundTool?.(previous))
+          ) {
+            context.tools.set(normalized.toolCallId, {
+              ...normalized,
+              status: previous.status ?? "inProgress",
+            });
+            return;
+          }
           const endedStatus = context.endedBackgroundToolStatus.get(normalized.toolCallId);
           const reopens = (status: ProjectedToolStatus | undefined) =>
             endedStatus !== undefined && (status === "pending" || status === "running");
@@ -4458,18 +4529,33 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               });
             }
           } else if (mcpIdentity !== undefined) {
-            const toolName = `${mcpIdentity.server}.${mcpIdentity.tool}`;
-            const input =
+            const reportedName = `${mcpIdentity.server}.${mcpIdentity.tool}`;
+            const reportedInput =
               mcpIdentity.input ?? unknownRecord(rawInputRecord?.arguments) ?? rawInputRecord ?? {};
+            const dispatched = acpMcpDispatch(mcpIdentity, rawInput);
+            const toolName = dispatched ? `t3-code.${dispatched.tool}` : reportedName;
+            const input = dispatched?.input ?? reportedInput;
             let output = rawOutput === undefined ? undefined : acpMcpToolCallOutput(rawOutput);
             const t3ToolId = resolveT3McpToolId(toolName);
             const isHtmlRender = t3ToolId === HTML_RENDER_TOOL_NAME;
             if (
               t3ToolId !== null &&
               !isHtmlRender &&
+              dispatched?.lookup !== true &&
               (status === "completed" || status === "failed")
             ) {
-              if (output === undefined) {
+              if (dispatched) {
+                const recorded =
+                  previous?.data.dispatchedOutput ??
+                  (yield* mcpSessions.takeToolResult(context.input.threadId, t3ToolId, input));
+                if (recorded !== undefined) {
+                  output = recorded;
+                  context.tools.set(toolCall.toolCallId, {
+                    ...toolCall,
+                    data: { ...toolCall.data, dispatchedOutput: recorded },
+                  });
+                }
+              } else if (output === undefined) {
                 const previousOutput = acpMcpToolCallOutput(
                   previous?.data.rawOutput ?? previous?.data.content,
                 );
@@ -4524,10 +4610,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             }
             turnItem = {
               ...base,
-              title: null,
+              title: dispatched?.lookup ? `Look up ${dispatched.tool} schema` : null,
               ...mcpToolPresentation({
                 serverName: mcpIdentity.server,
-                toolName: mcpIdentity.tool,
+                toolName: dispatched?.tool ?? mcpIdentity.tool,
                 source: unknownRecord(
                   (unknownRecord(rawOutputRecord?.result) ?? rawOutputRecord)?._meta,
                 )?.source,
@@ -4629,7 +4715,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 break;
               }
               case "execute": {
-                const exitCode = acpProjectedCommandExitCode(status, rawOutput);
+                const exitCode = acpProjectedCommandExitCode(status, rawOutput, toolCall.data);
                 const commandTitle =
                   typeof rawInputRecord?.toolSummary === "string" &&
                   rawInputRecord.toolSummary.trim().length > 0
@@ -4688,7 +4774,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               }
               default:
                 if (projectAsCommandExecution) {
-                  const exitCode = acpProjectedCommandExitCode(status, rawOutput);
+                  const exitCode = acpProjectedCommandExitCode(status, rawOutput, toolCall.data);
                   turnItem = {
                     ...base,
                     type: "command_execution",
@@ -4712,7 +4798,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   turnItem = {
                     ...base,
                     type: "dynamic_tool",
-                    toolName: toolCall.title ?? toolCall.kind ?? null,
+                    toolName: acpDynamicToolName(toolCall) ?? null,
                     input: rawInput ?? {},
                     ...(viewedImage === undefined
                       ? {
@@ -5572,11 +5658,76 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     ).pipe(Effect.asVoid),
                 );
 
+        const publishSessionState = Effect.fnUntraced(function* (
+          sessionId: string,
+          context: ActiveAcpTurn | null,
+          isUsage: boolean,
+        ) {
+          const knownProviderThread = (yield* Ref.get(providerThreadByNativeSessionId)).get(
+            sessionId,
+          );
+          if (knownProviderThread !== undefined) {
+            const now = yield* DateTime.now;
+            const providerThread: OrchestrationV2ProviderThread = {
+              ...knownProviderThread,
+              contextUsage:
+                (yield* Ref.get(contextUsageBySessionId)).get(sessionId) ??
+                knownProviderThread.contextUsage ??
+                null,
+              nativeMetadata:
+                (yield* Ref.get(nativeMetadataBySessionId)).get(sessionId) ??
+                knownProviderThread.nativeMetadata ??
+                null,
+              updatedAt: now,
+            };
+            yield* Ref.update(providerThreadByNativeSessionId, (current) =>
+              new Map(current).set(sessionId, providerThread),
+            );
+            yield* emitProviderEvent({
+              type: "provider_thread.updated",
+              driver,
+              providerThread,
+              ...(isUsage && (context?.nativeThreadId !== sessionId || context.finalized)
+                ? { sessionScoped: true as const }
+                : {}),
+            });
+          }
+        });
+
+        const observeContextUsage = Effect.fnUntraced(function* (
+          sessionId: string,
+          source: Pick<EffectAcpSchema.SessionNotification, "_meta">,
+          context: ActiveAcpTurn | null,
+        ) {
+          if (!flavor.extractContextUsage) return;
+          const setup =
+            sessionId === (yield* Ref.get(activeSessionId))
+              ? yield* Ref.get(activeSessionSetup)
+              : null;
+          const reported = flavor.extractContextUsage(source, setup);
+          if (reported !== undefined) {
+            const previous = (yield* Ref.get(contextUsageBySessionId)).get(sessionId);
+            const usage = { ...previous, ...reported };
+            if (!Equal.equals(previous, usage)) {
+              yield* Ref.update(contextUsageBySessionId, (current) =>
+                new Map(current).set(sessionId, usage),
+              );
+              if (context?.nativeThreadId === sessionId) context.contextUsage = usage;
+              if ((yield* Ref.get(loadingSessionId)) !== sessionId) {
+                yield* publishSessionState(sessionId, context, true);
+              }
+            }
+          }
+        });
+
         const handleSessionUpdate = Effect.fnUntraced(function* (
           notification: EffectAcpSchema.SessionNotification,
         ) {
           const context = yield* Ref.get(activeTurn);
           const update = notification.update;
+          if (flavor.extractContextUsage && update.sessionUpdate !== "usage_update") {
+            yield* observeContextUsage(notification.sessionId, notification, context);
+          }
           if (yield* projectAgentTerminalUpdate(notification, context)) return;
           let settledTimerEnded = false;
           if (
@@ -5681,6 +5832,17 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               if (context?.nativeThreadId === notification.sessionId) {
                 context.contextUsage = stateEvent.usage;
                 if (!context.finalized && stateEvent.usage.usedTokens > 0) {
+                  if (
+                    update.sessionUpdate === "usage_update" &&
+                    flavor.extractStepUsage &&
+                    !sessionUpdateIsReplay(notification) &&
+                    (yield* Ref.get(loadingSessionId)) !== notification.sessionId
+                  ) {
+                    context.promptUsage = addAcpUsage(
+                      context.promptUsage,
+                      flavor.extractStepUsage(update),
+                    );
+                  }
                   const usageAt = yield* DateTime.now;
                   context.turnTokenUsage = {
                     usedTokens: Math.max(0, Math.round(stateEvent.usage.usedTokens)),
@@ -5710,36 +5872,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 context.nativeMetadata = metadata;
               }
             }
-            const knownProviderThread = (yield* Ref.get(providerThreadByNativeSessionId)).get(
+            yield* publishSessionState(
               notification.sessionId,
+              context,
+              stateEvent._tag === "UsageUpdated",
             );
-            if (knownProviderThread !== undefined) {
-              const now = yield* DateTime.now;
-              const providerThread: OrchestrationV2ProviderThread = {
-                ...knownProviderThread,
-                contextUsage:
-                  (yield* Ref.get(contextUsageBySessionId)).get(notification.sessionId) ??
-                  knownProviderThread.contextUsage ??
-                  null,
-                nativeMetadata:
-                  (yield* Ref.get(nativeMetadataBySessionId)).get(notification.sessionId) ??
-                  knownProviderThread.nativeMetadata ??
-                  null,
-                updatedAt: now,
-              };
-              yield* Ref.update(providerThreadByNativeSessionId, (current) =>
-                new Map(current).set(notification.sessionId, providerThread),
-              );
-              yield* emitProviderEvent({
-                type: "provider_thread.updated",
-                driver,
-                providerThread,
-                ...(stateEvent._tag === "UsageUpdated" &&
-                (context?.nativeThreadId !== notification.sessionId || context.finalized)
-                  ? { sessionScoped: true as const }
-                  : {}),
-              });
-            }
             if (
               update.sessionUpdate === "usage_update" &&
               context?.nativeThreadId === notification.sessionId
@@ -6015,6 +6152,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       : embeddedTerminalCommands(rootSessionId, toolCall.toolCallId)),
                   ],
                 });
+                const dispatched = mcpIdentity && acpMcpDispatch(mcpIdentity, merged.data.rawInput);
                 const now = yield* DateTime.now;
                 const status = toolStatus(merged.status);
                 const startedAt = context.toolStartedAt.get(key) ?? now;
@@ -6034,7 +6172,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     parentItemId: null,
                     ordinal,
                     status,
-                    title: merged.title ?? merged.kind ?? "Tool",
+                    title: dispatched ? null : (merged.title ?? merged.kind ?? "Tool"),
                     startedAt,
                     completedAt: completedAtForStatus(status, now),
                     updatedAt: now,
@@ -6043,7 +6181,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       ? {}
                       : mcpToolPresentation({
                           serverName: mcpIdentity.server,
-                          toolName: mcpIdentity.tool,
+                          toolName: dispatched?.tool ?? mcpIdentity.tool,
                           source: unknownRecord(
                             (
                               unknownRecord(unknownRecord(merged.data.rawOutput)?.result) ??
@@ -6053,9 +6191,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                         })),
                     toolName:
                       mcpIdentity === undefined
-                        ? (merged.title ?? merged.kind ?? "Tool")
-                        : `${mcpIdentity.server}.${mcpIdentity.tool}`,
-                    input: merged.data.rawInput ?? null,
+                        ? (acpDynamicToolName(merged) ?? "Tool")
+                        : `${mcpIdentity.server}.${dispatched?.tool ?? mcpIdentity.tool}`,
+                    input: dispatched?.input ?? merged.data.rawInput ?? null,
                     output: merged.data.rawOutput ?? merged.data.content ?? null,
                   },
                 });
@@ -7178,10 +7316,43 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               notification.update.sessionUpdate === "config_option_update" ||
               notification.update.sessionUpdate === "current_mode_update"
             ) {
+              const configOptions = yield* runtime.getConfigOptions;
+              const modeState = yield* runtime.getModeState;
+              if (
+                configuredAcpMode &&
+                notification.sessionId === (yield* Ref.get(activeSessionId))
+              ) {
+                const modes = findAcpApprovalModes(
+                  acpProviderOptionDescriptors({ configOptions, modeState }),
+                );
+                const modeId =
+                  notification.update.sessionUpdate === "current_mode_update"
+                    ? notification.update.currentModeId
+                    : modes?.descriptor.currentValue;
+                if (modeId !== undefined && modeId !== configuredAcpMode.value) {
+                  const previous = configuredAcpMode.runtimeMode;
+                  const current = (Object.keys(modes?.approvals ?? {}) as RuntimeMode[]).find(
+                    (mode) => modes?.approvals[mode]?.id === modeId,
+                  );
+                  configuredAcpMode = { value: modeId, runtimeMode: current ?? previous };
+                  const providerThread = (yield* Ref.get(providerThreadByNativeSessionId)).get(
+                    notification.sessionId,
+                  );
+                  if (providerThread && current !== undefined && current !== previous) {
+                    yield* Queue.offer(events, {
+                      type: "provider_thread.updated",
+                      driver,
+                      providerThread,
+                      sessionScoped: true,
+                      reportedRuntimeMode: { previous, current },
+                    });
+                  }
+                }
+              }
               yield* (
                 flavor.onSessionConfigurationUpdate?.(
-                  yield* runtime.getConfigOptions,
-                  yield* runtime.getModeState,
+                  configOptions,
+                  modeState,
                   yield* activeModelState,
                 ) ?? Effect.void
               );
@@ -8002,7 +8173,35 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         yield* Ref.set(loadingSessionId, null);
         yield* Ref.set(activeSessionSetup, started);
         rememberTerminalEnvironment(started.sessionId, yield* readMcpContext(input.threadId));
-        const capabilities = negotiatedCapabilities(flavor.capabilities, started, flavor);
+        const readApprovalModes = Effect.gen(function* () {
+          if (flavor.sessionModeForPolicy !== undefined) return null;
+          return findAcpApprovalModes(
+            acpProviderOptionDescriptors({
+              configOptions: yield* runtime.getConfigOptions,
+              modeState: yield* runtime.getModeState,
+            }),
+          );
+        });
+        const setAcpMode = Effect.fnUntraced(function* (id: string, value: string) {
+          const config = (yield* runtime.getConfigOptions).find((option) => option.id === id);
+          if (config && config.category !== "mode") {
+            yield* runtime.setConfigOption(id, value);
+          } else {
+            yield* runtime.setMode(value);
+          }
+        });
+        const baseCapabilities = negotiatedCapabilities(flavor.capabilities, started, flavor);
+        const supportsAcpApprovalModes = (yield* readApprovalModes) !== null;
+        const capabilities = supportsAcpApprovalModes
+          ? {
+              ...baseCapabilities,
+              sessions: {
+                ...baseCapabilities.sessions,
+                supportsRuntimeModeSwitchInSession: true,
+                appliesRuntimeModeChangesImmediately: true,
+              },
+            }
+          : baseCapabilities;
         const steersWithPrompt = flavor.steersWithPrompt?.(started.initializeResult) === true;
         const canLoadSession = started.initializeResult.agentCapabilities?.loadSession === true;
         const canResumeSession =
@@ -8080,6 +8279,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           // the previously applied selection no longer describes the session.
           // Callers record the new selection only once this completes.
           yield* Ref.set(activeSelection, null);
+          configuredAcpMode = null;
           yield* validateModelSelection(modelSelection);
           const requestedModel = flavor.resolveModelId?.(modelSelection) ?? modelSelection.model;
           const rejectedModel = (error: EffectAcpErrors.AcpError) =>
@@ -8155,6 +8355,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               selection.value === ACP_EMPTY_OPTION_VALUE ? { ...selection, value: "" } : selection,
             );
           const configOptions = yield* runtime.getConfigOptions;
+          const modeState = yield* runtime.getModeState;
+          const approvalModes = yield* readApprovalModes;
           const availableConfigIds = new Set(configOptions.map((option) => option.id));
           const hasNativeConfigWithSyntheticModeId = availableConfigIds.has(
             ACP_SESSION_MODE_OPTION_ID,
@@ -8185,7 +8387,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             );
           }
           for (const selection of configSelections) {
-            if (!availableConfigIds.has(selection.id)) continue;
+            if (
+              !availableConfigIds.has(selection.id) ||
+              selection.id === approvalModes?.descriptor.id
+            )
+              continue;
             // Tuning knobs degrade instead of failing the session open: agents
             // advertise the union of values across models but can reject a
             // per-model invalid one at set time (codex-acp advertises "ultra"
@@ -8221,17 +8427,38 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           if (policyMode !== undefined) {
             yield* runtime.setMode(policyMode);
           }
-          const modeState = yield* runtime.getModeState;
           // The synthetic mode selection is skipped rather than failed when the
           // agent no longer advertises it: mode sets are volatile across agent
           // versions and a stale persisted mode should not block the turn.
           if (
+            approvalModes === null &&
             modeSelection !== undefined &&
             typeof modeSelection.value === "string" &&
             modeState?.availableModes.some((mode) => mode.id === modeSelection.value) === true &&
             modeState.currentModeId !== modeSelection.value
           ) {
             yield* runtime.setMode(modeSelection.value);
+          }
+          if (approvalModes !== null) {
+            const { descriptor, approvals, workModes, plan } = approvalModes;
+            const saved = optionSelections.find(
+              (selection) => selection.id === descriptor.id,
+            )?.value;
+            const work = workModes.find((choice) => choice.id === saved && choice !== workModes[0]);
+            const choice =
+              (runtimePolicy.interactionMode === "plan" ? plan : undefined) ??
+              work ??
+              approvals[runtimePolicy.runtimeMode] ??
+              Object.values(approvals).find((candidate) => candidate.id === saved) ??
+              approvals["approval-required"]!;
+            if (descriptor.currentValue !== choice.id) {
+              yield* setAcpMode(descriptor.id, choice.id);
+            }
+            const reported = yield* readApprovalModes;
+            configuredAcpMode = {
+              value: reported?.descriptor.currentValue ?? choice.id,
+              runtimeMode: runtimePolicy.runtimeMode,
+            };
           }
           const effectiveModeState = yield* runtime.getModeState;
           const effectiveConfigOptions = yield* runtime.getConfigOptions;
@@ -8243,12 +8470,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               { readonly type: "select" }
             > =>
               option.type === "select" &&
+              option.id !== approvalModes?.descriptor.id &&
               (option.category === "mode" || option.category === "collaboration_mode"),
           );
           if (runtimePolicy.interactionMode === "plan") {
             if (!nativeBuildConfigurationBySessionId.has(startResult.sessionId)) {
               nativeBuildConfigurationBySessionId.set(startResult.sessionId, {
-                ...(effectiveModeState === undefined
+                ...(effectiveModeState === undefined || approvalModes !== null
                   ? {}
                   : { modeId: effectiveModeState.currentModeId }),
                 configOptions: planSensitiveOptions.map((option) => ({
@@ -8260,7 +8488,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const planMode = effectiveModeState?.availableModes.find(
               (mode) => mode.id === "plan" || mode.id === "architect",
             );
-            if (planMode !== undefined && effectiveModeState?.currentModeId !== planMode.id) {
+            if (
+              approvalModes === null &&
+              planMode !== undefined &&
+              effectiveModeState?.currentModeId !== planMode.id
+            ) {
               yield* runtime.setMode(planMode.id);
             }
             for (const option of planSensitiveOptions) {
@@ -8338,6 +8570,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             context.turnTokenUsage,
             context.contextUsage,
             isRunning ? undefined : context.promptUsage,
+            flavor.extractContextUsage ? undefined : context.promptUsage?.totalTokens,
             completedAt ?? context.startedAt,
           );
           const generation = generationSnapshot(context.generation);
@@ -8620,8 +8853,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             threadId: context.input.threadId,
             providerTurn: turn,
           });
-          const { waitingOnBackgroundWork: _clearedWaiting, ...baseProviderThread } =
-            context.input.providerThread;
+          const {
+            waitingOnBackgroundWork: _clearedWaiting,
+            backgroundWaitStartedAt: _clearedWaitStart,
+            ...baseProviderThread
+          } = context.input.providerThread;
           const updatedProviderThread: OrchestrationV2ProviderThread = {
             ...baseProviderThread,
             providerSessionId: input.providerSessionId,
@@ -8916,6 +9152,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 promptCapabilities: setup?.initializeResult.agentCapabilities?.promptCapabilities,
               })
               .pipe(
+                Effect.provideService(Scope.Scope, sessionScope),
                 Effect.mapError(
                   (cause) =>
                     new ProviderAdapter.ProviderAdapterProtocolError({
@@ -8958,11 +9195,28 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
           sessionId: string,
         ) {
+          const mcp = yield* readMcpContext(turnInput.threadId);
+          const formatDiscovery = flavor.mcpDiscoveryInstructions;
+          const setup = yield* Ref.get(activeSessionSetup);
+          const supportsDiscovery =
+            flavor.supportsMcpDiscovery === undefined ||
+            (setup !== null &&
+              flavor.supportsMcpDiscovery(setup.initializeResult, turnInput.modelSelection.model));
+          const toolDiscoveryInstructions =
+            !supportsDiscovery ||
+            formatDiscovery === undefined ||
+            mcp.toolDiscoveryCatalog === undefined
+              ? undefined
+              : yield* mcp.toolDiscoveryCatalog.pipe(
+                  Effect.map((catalog) => (catalog ? formatDiscovery(catalog) : undefined)),
+                );
           const instructionState = t3AcpInstructionState({
+            runtimeHarness: flavor.runtimeHarness,
             isSubagent: turnInput.appThread.lineage.relationshipToParent === "subagent",
             interactionMode: turnInput.runtimePolicy.interactionMode,
-            hasT3Mcp: (yield* readMcpContext(turnInput.threadId)).servers.length > 0,
+            hasT3Mcp: mcp.servers.length > 0,
             subagentsEnabled: subagentsEnabledFor(turnInput.threadId),
+            toolDiscoveryInstructions,
           });
           const previousInstructionState = (yield* Ref.get(promptInstructionStates)).get(sessionId);
           const compactionMarker = (yield* Ref.get(compactionMarkers)).get(sessionId);
@@ -9084,6 +9338,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             // response must not flip a settled turn.
             Effect.tap((result) =>
               Effect.gen(function* () {
+                if (flavor.extractContextUsage && !context.finalized) {
+                  yield* observeContextUsage(settle.sessionId, result, context);
+                }
                 if (
                   flavor.reportsPerTurnPromptUsage === true &&
                   !context.finalized &&
@@ -9247,6 +9504,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             // Session activation can itself invoke client fs/terminal methods.
             // Install the incoming thread policy before load/resume so those
             // requests can never inherit the previously active thread's policy.
+            const runtimeModeChanged =
+              latestRuntimePolicy.runtimeMode !== turnInput.runtimePolicy.runtimeMode;
             latestRuntimePolicy = turnInput.runtimePolicy;
             const requestedSessionId = yield* nativeThreadId(driver, turnInput.providerThread);
             const restartOutcome = yield* restartRuntimeAfterTeardownIfRequired(
@@ -9271,7 +9530,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               if (
                 configuredSelection === null ||
                 !modelSelectionsEqual(configuredSelection, turnInput.modelSelection) ||
-                configuredInteractionMode !== turnInput.runtimePolicy.interactionMode
+                configuredInteractionMode !== turnInput.runtimePolicy.interactionMode ||
+                runtimeModeChanged
               ) {
                 const currentSessionSetup = yield* Ref.get(activeSessionSetup);
                 if (currentSessionSetup === null) {
@@ -9417,6 +9677,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               earlyInjectedReportObserved: false,
               plans: new Map(),
               interrupted: false,
+              nativeSteerSent: false,
               finalized: false,
               finalizedStatus: null,
               promptSettled: false,
@@ -9853,6 +10114,65 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 }),
               }
             : {}),
+          ...(supportsAcpApprovalModes
+            ? {
+                setRuntimeMode: (change) =>
+                  runtimeTransitionPermit
+                    .withPermit(
+                      Effect.gen(function* () {
+                        const sessionId = yield* Ref.get(activeSessionId);
+                        if (
+                          sessionId === null ||
+                          (yield* Ref.get(providerThreadByNativeSessionId)).get(sessionId)?.id !==
+                            change.providerThreadId
+                        )
+                          return;
+                        const modes = yield* readApprovalModes;
+                        if (!modes) return;
+                        const value = modes.descriptor.currentValue;
+                        // A native work mode occupies the same ACP slot. Keep it until
+                        // the user returns to Code, when the saved approval level applies.
+                        if (!Object.values(modes.approvals).some((choice) => choice.id === value))
+                          return;
+                        const next =
+                          modes.approvals[change.runtimeMode] ??
+                          modes.approvals["approval-required"];
+                        if (!next) return;
+                        const previous = configuredAcpMode;
+                        configuredAcpMode = null;
+                        yield* setAcpMode(modes.descriptor.id, next.id).pipe(
+                          Effect.onError(() =>
+                            Effect.sync(() => {
+                              configuredAcpMode = previous;
+                            }),
+                          ),
+                        );
+                        const reported = yield* readApprovalModes;
+                        configuredAcpMode = {
+                          value: reported?.descriptor.currentValue ?? next.id,
+                          runtimeMode: change.runtimeMode,
+                        };
+                        yield* (
+                          flavor.onSessionConfigurationUpdate?.(
+                            yield* runtime.getConfigOptions,
+                            yield* runtime.getModeState,
+                            yield* activeModelState,
+                          ) ?? Effect.void
+                        );
+                      }),
+                    )
+                    .pipe(
+                      Effect.mapError(
+                        (cause) =>
+                          new ProviderAdapter.ProviderAdapterProtocolError({
+                            driver,
+                            detail: "ACP agent could not change approval mode",
+                            cause,
+                          }),
+                      ),
+                    ),
+              }
+            : {}),
           ensureThread: Effect.fn("AcpAdapterV2.ensureThread")(
             function* (threadInput: ProviderAdapter.ProviderAdapterV2EnsureThreadInput) {
               const now = yield* DateTime.now;
@@ -9863,7 +10183,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   detail: "ACP runtime did not produce a session id",
                 });
               }
-              const providerThread = makeProviderThread({
+              const initial = makeProviderThread({
                 driver,
                 providerInstanceId: options.instanceId,
                 idAllocator,
@@ -9873,6 +10193,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 ...(itemIdentityVersion === undefined ? {} : { itemIdentityVersion }),
                 now,
               });
+              const rememberedUsage = (yield* Ref.get(contextUsageBySessionId)).get(sessionId);
+              const providerThread =
+                rememberedUsage === undefined
+                  ? initial
+                  : { ...initial, contextUsage: rememberedUsage };
               yield* Ref.update(providerThreadByNativeSessionId, (current) =>
                 new Map(current).set(sessionId, providerThread),
               );
@@ -9935,6 +10260,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   const now = yield* DateTime.now;
                   return {
                     ...threadInput.providerThread,
+                    contextUsage:
+                      (yield* Ref.get(contextUsageBySessionId)).get(sessionId) ??
+                      threadInput.providerThread.contextUsage,
                     providerSessionId: input.providerSessionId,
                     status: "idle" as const,
                     updatedAt: now,
@@ -9984,6 +10312,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               });
             }
             const steer = flavor.steer ?? steerAcpTurn;
+            if (flavor.steer === undefined) turn.nativeSteerSent = true;
             yield* steer({
               driver,
               runtime,
@@ -10286,7 +10615,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                         if (!settledSoftInterrupt) {
                           yield* runtime.cancel;
                         }
-                        if (restartRuntime && flavor.restartRuntimeAfterInterrupt === true) {
+                        // Some agents settle cancellation before clearing the injected input.
+                        // Reopen the durable session before dispatching the next prompt.
+                        const reopenSteeredSession =
+                          turnInput.requestRuntimeRestart === true &&
+                          context.nativeSteerSent &&
+                          (canLoadSession || canResumeSession);
+                        if (
+                          reopenSteeredSession ||
+                          (restartRuntime && flavor.restartRuntimeAfterInterrupt === true)
+                        ) {
                           yield* Ref.set(runtimeRestartRequired, true);
                         }
                       }

@@ -1,3 +1,6 @@
+import { useLegacyPlanModeState } from "./use-legacy-plan-mode-enabled";
+import { acpWorkModeDescriptor, findAcpApprovalModes } from "@t3tools/shared/acpComposer";
+import type { ProviderInteractionMode } from "@t3tools/contracts";
 import { useThreadSettingsDraft } from "./use-thread-settings-draft";
 import { createV5StackNavigator as createNativeStackNavigator } from "../../native/createV5StackNavigator";
 import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@t3tools/contracts";
@@ -380,6 +383,8 @@ type ThreadSettingsSessionProps = {
   readonly optionDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly onUpdateOptionSelections: (selections: ReadonlyArray<ProviderOptionSelection>) => void;
   readonly runtimeMode: RuntimeMode;
+  readonly interactionMode?: ProviderInteractionMode;
+  readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
   /** A subagent works with its lead chat's access: the picker offers no runtime of its own. */
   readonly runtimeHidden?: boolean | undefined;
@@ -490,6 +495,7 @@ function ThreadSettingsSessionProvider(
 ) {
   const registry = use(RegistryContext);
   const preferences = useAtomValue(mobilePreferencesAtom);
+  const { enabled: planModeEnabled } = useLegacyPlanModeState();
   const configs = useAtomValue(environmentServerConfigsAtom);
   const config = props.environmentId ? configs.get(props.environmentId) : undefined;
   const settings = config?.settings;
@@ -498,7 +504,12 @@ function ThreadSettingsSessionProvider(
   const [manageHidden, setManageHidden] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const draft = useThreadSettingsDraft(props);
-  const { pendingModel, setPendingModel, applyOptionChange, save: saveDraft } = draft;
+  const {
+    pendingModel,
+    setPendingModel,
+    applyOptionChange: applyDraftOptionChange,
+    save: saveDraft,
+  } = draft;
   const pendingHidden = useRef(new Set<string>());
   const pendingFavorites = useRef(
     new Map<string, { favorite: boolean; settings: ServerSettings; pending: boolean }>(),
@@ -771,7 +782,37 @@ function ThreadSettingsSessionProvider(
     [isApplied, pendingModelKey],
   );
 
-  const displayedDescriptors = draft.descriptors;
+  const approvalModes = useMemo(() => findAcpApprovalModes(draft.descriptors), [draft.descriptors]);
+  const displayedDescriptors = useMemo(() => {
+    if (!approvalModes) return draft.descriptors;
+    return draft.descriptors.flatMap((descriptor) =>
+      descriptor !== approvalModes.descriptor
+        ? [descriptor]
+        : approvalModes.workModes.length > 1
+          ? [acpWorkModeDescriptor(approvalModes, props.interactionMode ?? "default")]
+          : [],
+    );
+  }, [approvalModes, draft.descriptors, props.interactionMode]);
+  const applyOptionChange = useCallback(
+    (id: string, value: string | boolean) => {
+      if (id === approvalModes?.descriptor.id && !pendingModel) {
+        if (planModeEnabled && value === approvalModes.plan?.id && props.onUpdateInteractionMode) {
+          props.onUpdateInteractionMode("plan");
+          return;
+        }
+        if (props.interactionMode === "plan") props.onUpdateInteractionMode?.("default");
+      }
+      applyDraftOptionChange(id, value);
+    },
+    [
+      approvalModes,
+      applyDraftOptionChange,
+      pendingModel,
+      props.interactionMode,
+      props.onUpdateInteractionMode,
+      planModeEnabled,
+    ],
+  );
   const displayedModel = useMemo(
     () =>
       pendingModel ??
@@ -792,9 +833,14 @@ function ThreadSettingsSessionProvider(
       ? findMakerModel(makerGroups, { instanceId: selection.instanceId, slug: selection.model })
       : null;
   }, [makerGroups, pendingModel, props.selectedModel]);
-  const runtimeModeChoices = runtimeModeChoicesForSupportedModes(
-    displayedModel?.supportedRuntimeModes,
-  );
+  const runtimeModeChoices = useMemo(() => {
+    const supported = runtimeModeChoicesForSupportedModes(displayedModel?.supportedRuntimeModes);
+    if (!approvalModes) return supported;
+    return supported.flatMap((choice) => {
+      const native = approvalModes.approvals[choice.mode];
+      return native ? [{ ...choice, description: native.description ?? choice.description }] : [];
+    });
+  }, [approvalModes, displayedModel?.supportedRuntimeModes]);
   const compatibleRuntimeMode = compatibleRuntimeModeForChoices(
     draft.runtimeMode,
     runtimeModeChoices,
@@ -1615,7 +1661,7 @@ function ThreadSettingsChoiceContent(props: {
             ).map((choice) => ({
               id: choice.id,
               label: choice.label,
-              description: undefined,
+              description: choice.description,
               trailingText: null,
               selected:
                 choice.id ===
@@ -2066,6 +2112,8 @@ export function NewTaskThreadSettingsRouteScreen() {
       prompt={flow.prompt}
       onPromptChange={flow.setPrompt}
       runtimeMode={flow.runtimeMode}
+      interactionMode={flow.interactionMode}
+      onUpdateInteractionMode={flow.setInteractionMode}
       onUpdateRuntimeMode={flow.setRuntimeMode}
       onClose={() => navigation.goBack()}
     />

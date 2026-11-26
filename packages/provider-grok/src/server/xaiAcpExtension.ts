@@ -20,6 +20,7 @@ const XAiPromptCompleteNotification = Schema.Struct({
   promptId: Schema.optional(Schema.String),
   stopReason: Schema.optional(Schema.String),
   agentResult: Schema.optional(Schema.NullOr(Schema.Unknown)),
+  usage: Schema.optional(Schema.Unknown),
 });
 
 type XAiPromptCompleteNotification = typeof XAiPromptCompleteNotification.Type;
@@ -43,6 +44,7 @@ const XAiSessionUpdateNotification = Schema.Struct({
     stop_reason: Schema.optional(Schema.String),
     stopReason: Schema.optional(Schema.String),
     agent_result: Schema.optional(Schema.NullOr(Schema.Unknown)),
+    usage: Schema.optional(Schema.Unknown),
     // subagent_finished
     child_session_id: Schema.optional(Schema.String),
     status: Schema.optional(Schema.String),
@@ -87,6 +89,7 @@ export function xAiPromptCompleteFromSessionUpdate(
     sessionId: notification.sessionId,
     promptId,
     ...(stopReason === undefined ? {} : { stopReason }),
+    ...(update.usage === undefined ? {} : { usage: update.usage }),
     ...(update.agent_result === undefined ? {} : { agentResult: update.agent_result }),
   };
 }
@@ -103,6 +106,7 @@ export function isXAiTaskCompletedWakeNotification(
 }
 
 interface PendingXAiPromptCompletion {
+  readonly lastResponseTokens?: number;
   readonly sessionId: string;
   readonly promptId: string;
   readonly deferred: Deferred.Deferred<
@@ -716,10 +720,18 @@ function normalizeXAiMcpToolCall(toolCall: AcpToolCallState): AcpToolCallState {
  */
 export function normalizeXAiAcpToolCallState(incoming: AcpToolCallState): AcpToolCallState {
   const toolCall = normalizeXAiMcpToolCall(incoming);
+  const name = nonEmptyString(
+    unknownRecord(unknownRecord(toolCall.data.meta)?.["x.ai/tool"])?.name,
+  );
   const resolvedTitle = resolveXAiAcpToolTitle(toolCall);
   const withTitle =
-    resolvedTitle !== undefined && resolvedTitle !== toolCall.title
-      ? { ...toolCall, title: resolvedTitle }
+    (resolvedTitle !== undefined && resolvedTitle !== toolCall.title) ||
+    (name !== undefined && name !== toolCall.data.name)
+      ? {
+          ...toolCall,
+          ...(resolvedTitle === undefined ? {} : { title: resolvedTitle }),
+          ...(name === undefined ? {} : { data: { ...toolCall.data, name } }),
+        }
       : toolCall;
 
   const rawOutput = unknownRecord(withTitle.data.rawOutput);
@@ -1460,8 +1472,35 @@ function normalizeXAiStopReason(value: string | undefined): EffectAcpSchema.Stop
   }
 }
 
+const tokenCount = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+const isGrokTurnUsage = Schema.is(
+  Schema.Struct({
+    inputTokens: tokenCount,
+    outputTokens: tokenCount,
+    totalTokens: tokenCount,
+    cachedReadTokens: Schema.optional(tokenCount),
+    cacheCreationTokens: Schema.optional(tokenCount),
+    reasoningTokens: Schema.optional(tokenCount),
+  }),
+);
+
+function grokPromptUsage(value: unknown): EffectAcpSchema.Usage | undefined {
+  if (!isGrokTurnUsage(value)) return undefined;
+  return {
+    inputTokens: value.inputTokens,
+    outputTokens: value.outputTokens,
+    totalTokens: value.totalTokens,
+    ...(value.cachedReadTokens === undefined ? {} : { cachedReadTokens: value.cachedReadTokens }),
+    ...(value.cacheCreationTokens === undefined
+      ? {}
+      : { cachedWriteTokens: value.cacheCreationTokens }),
+    ...(value.reasoningTokens === undefined ? {} : { thoughtTokens: value.reasoningTokens }),
+  };
+}
+
 function promptResponseFromXAi(
   notification: XAiPromptCompleteNotification,
+  contextTokens?: number,
 ): EffectAcpSchema.PromptResponse {
   const stopReason = normalizeXAiStopReason(notification.stopReason);
   // Values originate from a decoded JSON-RPC payload, so they are JSON even
@@ -1469,6 +1508,7 @@ function promptResponseFromXAi(
   const meta: Record<string, Schema.Json> = {
     sessionId: notification.sessionId,
   };
+  if (contextTokens !== undefined) meta.totalTokens = contextTokens;
   if (notification.stopReason === undefined) {
     meta[xAiStopReasonMissingMetaKey] = true;
   }
@@ -1479,8 +1519,10 @@ function promptResponseFromXAi(
   if (notification.agentResult !== undefined) {
     meta.agentResult = notification.agentResult as Schema.Json;
   }
+  const usage = grokPromptUsage(notification.usage);
   return {
     stopReason,
+    ...(usage === undefined ? {} : { usage }),
     _meta: meta,
   };
 }
@@ -1617,9 +1659,10 @@ const resolveXAiPromptCompletionFallback = ({
         const settle =
           failure !== null
             ? Deferred.fail(entry.deferred, failure).pipe(Effect.asVoid)
-            : Deferred.succeed(entry.deferred, promptResponseFromXAi(notification)).pipe(
-                Effect.asVoid,
-              );
+            : Deferred.succeed(
+                entry.deferred,
+                promptResponseFromXAi(notification, entry.lastResponseTokens),
+              ).pipe(Effect.asVoid);
         return [settle, [...pending.slice(0, index), ...pending.slice(index + 1)]] as const;
       }).pipe(Effect.flatten);
     }),
@@ -1696,6 +1739,29 @@ export const makeXAiPromptCompletionRuntime = Effect.fn("makeXAiPromptCompletion
         runtime.handleExtNotification(method, Schema.Unknown, (params) =>
           decodeXAiSessionUpdateNotification(params).pipe(
             Effect.flatMap((notification) => {
+              if (notification.update.sessionUpdate === "response_completed") {
+                const usage = unknownRecord(notification.update.usage);
+                const counts = [
+                  usage?.input_tokens,
+                  usage?.output_tokens,
+                  usage?.cache_read_input_tokens ?? 0,
+                  usage?.cache_creation_input_tokens ?? 0,
+                ];
+                if (
+                  counts.every(
+                    (n): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0,
+                  )
+                ) {
+                  const lastResponseTokens = counts.reduce((sum, n) => sum + n, 0);
+                  return Ref.update(pendingXAiPromptCompletionsRef, (pending) =>
+                    pending.map((entry) =>
+                      entry.sessionId === notification.sessionId
+                        ? { ...entry, lastResponseTokens }
+                        : entry,
+                    ),
+                  );
+                }
+              }
               const complete = xAiPromptCompleteFromSessionUpdate(notification);
               return complete === null ? Effect.void : settleFromPromptComplete(complete);
             }),
@@ -1767,6 +1833,11 @@ export const makeXAiPromptCompletionRuntime = Effect.fn("makeXAiPromptCompletion
             ),
             Deferred.await(fallback.deferred),
           ).pipe(
+            Effect.map((response) => {
+              if (response.usage != null) return response;
+              const usage = grokPromptUsage(response._meta?.usage);
+              return usage === undefined ? response : { ...response, usage };
+            }),
             Effect.tap((response) =>
               rememberCompletedXAiPromptId(completedXAiPromptIdsRef, response, fallback.promptId),
             ),

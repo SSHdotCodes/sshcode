@@ -764,7 +764,10 @@ function makeManager(input?: {
   sourceControlProvider?: SourceControlProvider["Service"];
   textGeneration?: Partial<FakeGitTextGeneration>;
   serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
-  setupScriptRunner?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"];
+  setupScriptRunner?: Pick<
+    ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"],
+    "runForThread"
+  >;
   gitConfigReads?: string[];
   /** Records the arguments of every git process the manager starts. */
   gitCommands?: string[];
@@ -878,12 +881,12 @@ function makeManager(input?: {
     Layer.mock(ProviderRegistry.ProviderRegistry)({
       getProviders: Effect.succeed([]),
     }),
-    Layer.succeed(
-      ProjectSetupScriptRunner.ProjectSetupScriptRunner,
-      input?.setupScriptRunner ?? {
-        runForThread: () => Effect.succeed({ status: "no-script" as const }),
-      },
-    ),
+    Layer.succeed(ProjectSetupScriptRunner.ProjectSetupScriptRunner, {
+      runForThread:
+        input?.setupScriptRunner?.runForThread ??
+        (() => Effect.succeed({ status: "no-script" as const })),
+      whenIdle: Effect.asVoid,
+    }),
     layerServerSettings,
   ).pipe(
     Layer.provideMerge(layerSourceControlRegistry),

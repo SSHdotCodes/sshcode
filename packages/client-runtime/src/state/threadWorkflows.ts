@@ -154,6 +154,16 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
             turn.status === "running",
         )
       : undefined;
+  // Stop reaches the server before the run leaves "running". Account moves also
+  // interrupt the provider but keep the user's work active.
+  const stopping =
+    activeRun != null &&
+    projection.turnItems?.some(
+      (item) =>
+        item.runId === activeRun.id &&
+        item.type === "run_interrupt_request" &&
+        !item.forAccountMove,
+    );
   const steering = providerSteeringExecution(session);
   const steeringUnavailableReason =
     runningTurn?.steeringUnavailable === true ||
@@ -186,16 +196,19 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
     isHeld,
     canReorder: capabilities?.supportsQueuedMessages === true,
     canPromoteToSteer:
+      !stopping &&
       !isHeld &&
       runningTurn !== undefined &&
       steeringUnavailableReason === null &&
       steering !== null,
     canSendSteer:
+      !stopping &&
       activeRun !== null &&
       activeRun.status !== "waiting" &&
       steeringUnavailableReason === null &&
       (session === null || steering !== null),
     canSendNow:
+      !stopping &&
       !isHeld &&
       steeringUnavailableReason !== null &&
       capabilities?.supportsInterrupt === true &&

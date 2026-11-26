@@ -83,7 +83,6 @@ import {
   resolveProviderStatusCachePath,
   writeProviderStatusCache,
 } from "./providerStatusCache.ts";
-import { scopeAntigravityUsageWindows } from "./antigravityUsageLimits.ts";
 import type {
   ProviderInstance,
   ProviderWorkspaceSnapshot,
@@ -262,13 +261,20 @@ export function upsertProviderWorkspaceSnapshot(
   cwd: string,
   scopedSnapshot: ProviderWorkspaceSnapshot,
 ): ServerProvider {
+  // Antigravity's workspace scan reads skills from disk. Before the first
+  // authenticated session, its commands still come from the cached advertisement.
+  const useAntigravityCache =
+    provider.driver === "antigravity" &&
+    scopedSnapshot.auth.status === "unknown" &&
+    scopedSnapshot.slashCommands.length === 0;
   const workspaceSnapshot = {
     cwd,
     checkedAt: scopedSnapshot.checkedAt,
-    slashCommands: scopedSnapshot.slashCommandsPending
-      ? (provider.workspaceSnapshots?.find((snapshot) => snapshot.cwd === cwd)?.slashCommands ??
-        scopedSnapshot.slashCommands)
-      : scopedSnapshot.slashCommands,
+    slashCommands:
+      scopedSnapshot.slashCommandsPending || useAntigravityCache
+        ? (provider.workspaceSnapshots?.find((snapshot) => snapshot.cwd === cwd)?.slashCommands ??
+          (useAntigravityCache ? provider.slashCommands : scopedSnapshot.slashCommands))
+        : scopedSnapshot.slashCommands,
     ...(scopedSnapshot.slashCommandsPending ? { slashCommandsPending: true } : {}),
     skills: scopedSnapshot.skills,
   } satisfies NonNullable<ServerProvider["workspaceSnapshots"]>[number];
@@ -373,14 +379,30 @@ const mergeProviderModels = (
   }
 
   const previousBySlug = new Map(previousModels.map((model) => [model.slug, model] as const));
+  const preserveDefault =
+    nextModels.length > 0 && !nextModels.some((model) => model.isDefault === true);
   const mergedModels = nextModels.map((model) => {
     const previousModel = previousBySlug.get(model.slug);
-    if (!previousModel || hasModelCapabilities(model) || !hasModelCapabilities(previousModel)) {
+    if (!previousModel) {
       return model;
     }
+    const retainCapabilities = !hasModelCapabilities(model) && hasModelCapabilities(previousModel);
+    const retainDefault = preserveDefault && previousModel.isDefault === true;
+    if (!retainCapabilities && !retainDefault) {
+      return model;
+    }
+    const aliases = retainDefault
+      ? [...new Set([...(model.aliases ?? []), ...(previousModel.aliases ?? [])])]
+      : undefined;
     return {
       ...model,
-      capabilities: previousModel.capabilities,
+      ...(retainCapabilities ? { capabilities: previousModel.capabilities } : {}),
+      ...(retainDefault
+        ? {
+            isDefault: true,
+            ...(aliases && aliases.length > 0 ? { aliases } : {}),
+          }
+        : {}),
     };
   });
   const nextSlugs = new Set(nextModels.map((model) => model.slug));
@@ -479,10 +501,17 @@ export const mergeProviderSnapshot = (
           ),
           ...nextWorkspaceSnapshots,
         ].slice(-MAX_WORKSPACE_SNAPSHOTS_PER_PROVIDER);
-  const merged: ServerProvider = {
+  return {
     ...(savedAccount?.status === "ready" ? nextWithoutMessage : nextProvider),
     ...savedAccount,
     models: mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
+    // The launch-free Antigravity health check does not discover commands. Keep a
+    // correlated account's last advertisement through startup on the same runtime.
+    ...(savedAccount &&
+    nextProvider.slashCommands.length === 0 &&
+    (nextProvider.version === null || nextProvider.version === previousProvider.version)
+      ? { slashCommands: previousProvider.slashCommands }
+      : {}),
     ...(workspaceSnapshots === undefined ? {} : { workspaceSnapshots }),
     ...(shouldRetainMissingOpenCodeMetadata(nextProvider)
       ? {
@@ -494,11 +523,6 @@ export const mergeProviderSnapshot = (
         }
       : {}),
   };
-  // Antigravity publishes limits before its first session lists the models, so its limits
-  // learn their models here, from the models this merge keeps.
-  return merged.driver === ProviderDriverKind.make("antigravity")
-    ? scopeAntigravityUsageWindows(merged)
-    : merged;
 };
 
 export const mergeProviderSnapshots = (
@@ -702,8 +726,10 @@ export const layer = Layer.effect(
               ) {
                 return Effect.succeed(undefined);
               }
+              // Pre-upgrade Google quota is obsolete even when the cached sign-in is still valid.
               const limits = cachedProvider.usageLimits;
               if (
+                cachedProvider.driver !== "antigravity" &&
                 limits?.windows.length &&
                 cachedProvider.enabled &&
                 fallbackProvider.enabled &&
@@ -1821,7 +1847,7 @@ export const layer = Layer.effect(
                   : instances.includes(provider.instanceId))) &&
               provider.usageLimits !== undefined &&
               !provider.refreshing &&
-              isUsageLimitReadingStale(provider.usageLimits, now) &&
+              isUsageLimitReadingStale(provider.driver, provider.usageLimits, now) &&
               // A probe that keeps failing leaves the reading stale: do not start one per call.
               now - (usageLimitProbedAt.get(provider.instanceId) ?? Number.NEGATIVE_INFINITY) >=
                 60_000,

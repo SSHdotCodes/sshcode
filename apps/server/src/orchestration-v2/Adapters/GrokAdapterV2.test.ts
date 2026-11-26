@@ -107,6 +107,32 @@ describe("acpSubagentStatusBlocksTurnSettlement", () => {
 });
 
 describe("GrokAdapterV2 capabilities", () => {
+  it("rejects invalid Grok context metadata and ignores aggregate turn usage", () => {
+    const flavor = makeGrokAcpAdapterFlavor(
+      {
+        makeRuntime: () => Effect.never,
+      } as unknown as Parameters<typeof makeGrokAcpAdapterFlavor>[0],
+      "/home/ada",
+    );
+    assert.isDefined(flavor.extractContextUsage);
+    for (const totalTokens of [-1, 1.5, "42000", Number.MAX_SAFE_INTEGER + 1]) {
+      const notification = {
+        sessionId: "grok-context-session",
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "" } },
+        _meta: { totalTokens },
+      } as unknown as EffectAcpSchema.SessionNotification;
+      assert.isUndefined(flavor.extractContextUsage(notification, null));
+    }
+    const aggregateUsage = {
+      sessionId: "grok-context-session",
+      update: {
+        sessionUpdate: "turn_completed",
+        usage: { inputTokens: 90_000, outputTokens: 2_000, modelCalls: 12 },
+      },
+    } as unknown as EffectAcpSchema.SessionNotification;
+    assert.isUndefined(flavor.extractContextUsage(aggregateUsage, null));
+  });
+
   it.effect.each(["queued", "refused", "unsupported"] as const)(
     "uses native interjection without cancel for %s",
     (status) =>
@@ -575,10 +601,23 @@ describe("Grok launch permission mode", () => {
               authMethods: [{ id: "test", name: "Test" }],
             }),
             outbound("session/new"),
-            answer("session/new", { sessionId: "agent-session" }),
+            answer("session/new", {
+              sessionId: "agent-session",
+              models: {
+                currentModelId: "grok-build",
+                availableModels: [
+                  {
+                    modelId: "grok-build",
+                    name: "Grok Build",
+                    _meta: { totalContextTokens: 272_000 },
+                  },
+                ],
+              },
+            }),
             outbound("session/prompt"),
             notification("session/update", {
               sessionId: "agent-session",
+              _meta: { totalTokens: 42_731 },
               update: {
                 sessionUpdate: "plan",
                 entries: [
@@ -642,6 +681,14 @@ describe("Grok launch permission mode", () => {
           ),
         );
       }).pipe(Effect.scoped);
+      assert.isTrue(
+        events.some(
+          (event) =>
+            event.type === "provider_thread.updated" &&
+            event.providerThread.contextUsage?.usedTokens === 42_731 &&
+            event.providerThread.contextUsage.maxTokens === 272_000,
+        ),
+      );
       const todoItem = events.find(
         (event) => event.type === "turn_item.updated" && event.turnItem.type === "todo_list",
       );

@@ -120,11 +120,46 @@ export function normalizeDevinSessionUpdate(
   return routed;
 }
 
+/** Devin sends a usage sample twice. The tagged copy identifies the agent that incurred it. */
+export const devinStepUsage: NonNullable<AcpAdapterV2Flavor["extractStepUsage"]> = (update) => {
+  const meta = update._meta;
+  if (record(meta?.["cognition.ai/subagent_context"])?.parentAgentId !== "root") return undefined;
+  const count = (key: string) => {
+    const n = meta?.[key];
+    return typeof n === "number" && Number.isSafeInteger(n) && n >= 0 ? n : undefined;
+  };
+  const inputTokens = count("cognition.ai/inputTokens");
+  const outputTokens = count("cognition.ai/outputTokens");
+  if (inputTokens === undefined || outputTokens === undefined) return undefined;
+  const cachedReadTokens = count("cognition.ai/cachedReadTokens");
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    ...(cachedReadTokens === undefined ? {} : { cachedReadTokens }),
+  };
+};
+
 export function normalizeDevinToolCall(tool: AcpToolCallState): AcpToolCallState {
-  const name = record(tool.data.meta)?.["cognition.ai/inferenceToolName"];
-  return typeof name === "string" && (!tool.title || tool.title === "Tool")
-    ? { ...tool, title: name }
-    : tool;
+  const meta = record(tool.data.meta);
+  const name = meta?.["cognition.ai/inferenceToolName"];
+  // The terminal exit precedes Devin's final content update, which replaces the metadata.
+  const code = record(meta?.terminal_exit)?.exit_code ?? tool.data.exitCode;
+  const exitCode = typeof code === "number" && Number.isInteger(code) ? code : undefined;
+  const named = typeof name === "string" && name.trim().length > 0;
+  if (!named && exitCode === undefined) return tool;
+  return {
+    ...tool,
+    ...(named && (!tool.title || tool.title === "Tool") ? { title: name } : {}),
+    ...(exitCode !== undefined && exitCode !== 0 && tool.status === "completed"
+      ? { status: "failed" }
+      : {}),
+    data: {
+      ...tool.data,
+      ...(named ? { name } : {}),
+      ...(exitCode === undefined ? {} : { exitCode }),
+    },
+  };
 }
 
 export function extractDevinSubagentUpdate(

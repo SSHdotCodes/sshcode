@@ -763,8 +763,10 @@ function TooltipTrigger(props: TooltipPrimitive.Trigger.Props) {
  * under the window controls flips to its other side. Rendered inside the
  * portal so only open tooltips track the titlebar.
  */
+// No position transition: a tooltip opening for the first time slid in from the left
+// edge (its unpositioned spot) across whatever sat in between. It appears in place and fades.
 const POSITIONER_CLASS =
-  "pointer-events-none z-[140] h-(--positioner-height) w-(--positioner-width) max-w-(--available-width) transition-[top,left,right,bottom,transform] data-instant:transition-none";
+  "pointer-events-none z-[140] h-(--positioner-height) w-(--positioner-width) max-w-(--available-width)";
 const STILL_POSITIONER_CLASS =
   "pointer-events-none z-[140] h-(--positioner-height) w-(--positioner-width) max-w-(--available-width)";
 

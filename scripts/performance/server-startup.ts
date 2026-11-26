@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Standalone Node benchmark.
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Fresh Node processes measure module evaluation outside the server runtime.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";

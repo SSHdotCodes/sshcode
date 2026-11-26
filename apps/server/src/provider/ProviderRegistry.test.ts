@@ -860,55 +860,6 @@ it.layer(
       );
     });
 
-    it("names the models of Antigravity limits read before its first session lists them", () => {
-      const previousProvider = {
-        instanceId: ProviderInstanceId.make("antigravity"),
-        driver: ProviderDriverKind.make("antigravity"),
-        status: "ready",
-        enabled: true,
-        installed: true,
-        auth: { status: "authenticated", type: "oauth-personal" },
-        checkedAt: "2026-11-19T08:00:00.000Z",
-        version: "1.5.12",
-        models: [
-          { slug: "claude-opus-5-5", name: "Claude Opus 5.5", isCustom: false, capabilities: null },
-          { slug: "gemini-4-neon", name: "Gemini 4 Neon", isCustom: false, capabilities: null },
-        ],
-        slashCommands: [],
-        skills: [],
-      } as const satisfies ServerProvider;
-      // The health check at startup has not signed in yet: the account is carried over and
-      // the models it does not list are kept from before.
-      const startupProbe = {
-        ...previousProvider,
-        status: "warning",
-        auth: { status: "unknown" },
-        checkedAt: "2026-11-19T08:47:07.000Z",
-        models: [],
-        usageLimits: {
-          checkedAt: "2026-11-19T08:47:07.000Z",
-          windows: [
-            {
-              id: "3p-weekly",
-              label: "Claude & GPT (shared) · Weekly",
-              kind: "weekly",
-              usedPercent: 0,
-            },
-            { id: "gemini-weekly", label: "Gemini · Weekly", kind: "weekly", usedPercent: 3 },
-          ],
-        },
-      } satisfies ServerProvider;
-
-      const merged = ProviderRegistry.mergeProviderSnapshot(previousProvider, startupProbe);
-      assert.deepStrictEqual(
-        merged.usageLimits?.windows.map((window) => [window.id, window.modelIds]),
-        [
-          ["3p-weekly", ["claude-opus-5-5"]],
-          ["gemini-weekly", ["gemini-4-neon"]],
-        ],
-      );
-    });
-
     it("drops stale ACP Registry models missing from a completed discovery probe", () => {
       const previousProvider = {
         instanceId: ProviderInstanceId.make("acpRegistry_codex"),
@@ -1881,6 +1832,33 @@ it.layer(
         assert.deepStrictEqual(
           ProviderRegistry.mergeProviderSnapshot(merged, restartProbe),
           merged,
+        );
+      });
+
+      it("keeps advertised Antigravity commands available to a new workspace after restart", () => {
+        const slashCommands = [{ name: "swarm" }];
+        const unchecked = { ...restartProbe, slashCommands: [] };
+        const merged = ProviderRegistry.mergeProviderSnapshot(
+          { ...signedIn, slashCommands },
+          unchecked,
+        );
+        assert.deepStrictEqual(merged.slashCommands, slashCommands);
+        const scanned = ProviderRegistry.upsertProviderWorkspaceSnapshot(
+          merged,
+          "/fresh",
+          unchecked,
+        );
+        assert.deepStrictEqual(scanned.workspaceSnapshots?.[0]?.slashCommands, slashCommands);
+
+        const emptyAdvertisement = { ...signedIn, slashCommands: [] };
+        assert.deepStrictEqual(
+          ProviderRegistry.mergeProviderSnapshot(scanned, emptyAdvertisement).slashCommands,
+          [],
+        );
+        assert.deepStrictEqual(
+          ProviderRegistry.mergeProviderSnapshot(merged, { ...unchecked, version: "1.6.0" })
+            .slashCommands,
+          [],
         );
       });
 

@@ -19,7 +19,7 @@ import {
 
 import { pickAccountForNewSession } from "./accountBalance.ts";
 import { isReasoningOptionId, supersededModelVersions } from "./model.ts";
-import { providerAccountKeyResolver } from "./usageLimits.ts";
+import { isGoogleSubscription, providerAccountKeyResolver } from "./usageLimits.ts";
 import type { ModelBenchmarkTable } from "./modelBenchmarks.ts";
 import {
   benchmarkFor,
@@ -30,6 +30,7 @@ import {
   PICK_QUALITY_FLOOR,
   realCostForSameWork,
   realCostPerMOutput,
+  valueScore,
   type ModelPick,
   type ModelPickKind,
   type ModelPicks,
@@ -42,7 +43,7 @@ import {
   type PickRoute,
   type PlanSummary,
 } from "./modelPicks.ts";
-import { knownPlan, planAllowance, planName } from "./subscriptionPlans.ts";
+import { knownPlan, planName } from "./subscriptionPlans.ts";
 import { formatCount, formatTokens, formatUsd } from "./usageFormat.ts";
 import {
   isModelCostUnknown,
@@ -178,11 +179,12 @@ export function routesFromUsage(
   providers: ReadonlyArray<ModelPickProvider>,
   providerLabel: (provider: UsageProviderKind) => string,
   scale = 1,
+  includeUnavailable = false,
 ): PickRoute[] {
   return models.flatMap((model): PickRoute[] => {
     const provider = providerOf(providers, model.instanceId, model.environmentId);
     // Used last week, but it could not take work today.
-    if (provider !== undefined && !canRunWork(provider)) return [];
+    if (!includeUnavailable && provider !== undefined && !canRunWork(provider)) return [];
     const label = catalogLabel(provider, model.model);
     return [
       {
@@ -195,6 +197,7 @@ export function routesFromUsage(
         provider: `usage:${model.provider}`,
         local: false,
         costUsd: model.costUsd * scale,
+        unpricedTokens: model.unpricedTokens * scale,
         // A few unpriced records barely move the figure; many make it a floor, not a price.
         costKnown: !isModelCostUnknown(model) && model.unpricedRecords <= model.records * 0.05,
         tokens:
@@ -316,7 +319,10 @@ export function newerVersions(
       // A user's custom id or an already-retired release never retires a current one.
       new Set(
         models
-          .filter((model) => model.isCustom !== true && model.isLegacy !== true)
+          .filter(
+            (model) =>
+              model.isCustom !== true && !model.isLegacy && model.unavailableReason === undefined,
+          )
           .map((model) => model.slug),
       ),
     );
@@ -427,7 +433,8 @@ export function routesFromCatalog(
   const routes: Array<PickRoute & { readonly order: number }> = [];
   for (const provider of providers) {
     if (!canRunWork(provider) || provider.models.length > MAX_CATALOG_MODELS) continue;
-    const limited = (provider.usageLimits?.windows.length ?? 0) > 0;
+    const subscription =
+      isGoogleSubscription(provider) || (provider.usageLimits?.windows.length ?? 0) > 0;
     for (const model of provider.models) {
       const key = routeKey({
         instanceId: provider.instanceId,
@@ -457,7 +464,7 @@ export function routesFromCatalog(
         tokens: NO_TOKENS,
         responses: 0,
         // A model offered several ways is shown the way it is most likely run.
-        order: limited ? 0 : 1,
+        order: subscription ? 0 : 1,
       });
     }
   }
@@ -518,8 +525,7 @@ export interface PlanPriceRow {
   /** What the user said they pay a month. */
   readonly yourUsd?: number;
   readonly includedMonthlyUsd?: number;
-  /** How much the plan allows next to its provider's smallest, where its name says. */
-  readonly allowance?: number;
+  readonly providerIds?: readonly string[];
   readonly hasLimits: boolean;
 }
 
@@ -567,10 +573,6 @@ export function planPriceRows(
       windowIds: windows.map((window) => window.id),
     });
     const yours = prices[provider.instanceId];
-    const allowance = planAllowance({
-      driver: provider.driver,
-      ...(provider.auth?.label === undefined ? {} : { planLabel: provider.auth.label }),
-    });
     rows.push({
       instanceId: provider.instanceId,
       ...(provider.accountKey === undefined ? {} : { accountKey: provider.accountKey }),
@@ -583,7 +585,7 @@ export function planPriceRows(
       ...(known?.includedMonthlyUsd === undefined
         ? {}
         : { includedMonthlyUsd: known.includedMonthlyUsd }),
-      ...(allowance === undefined ? {} : { allowance }),
+      ...(known?.providerIds ? { providerIds: known.providerIds } : {}),
       hasLimits: windows.length > 0,
     });
   }
@@ -607,10 +609,10 @@ export function plansFromProviders(
             ...(row.accountKey === undefined ? {} : { accountKey: row.accountKey }),
             label: row.planLabel,
             monthlyUsd,
+            ...(row.providerIds ? { providerIds: row.providerIds } : {}),
             ...(row.includedMonthlyUsd === undefined
               ? {}
               : { includedMonthlyUsd: row.includedMonthlyUsd }),
-            ...(row.allowance === undefined ? {} : { allowance: row.allowance }),
           },
         ];
   });
@@ -701,12 +703,18 @@ export function buildModelPicks(input: BuildModelPicksInput): ModelPicks {
     routes
       .map((route) => onNewerVersion(newer, route))
       .filter((route) => route.local || !retired.has(normalizeModelId(route.model)));
+  const usage = routesFromUsage(
+    modelsWhere(() => true),
+    providers,
+    input.providerLabel,
+    1,
+    true,
+  );
   const usageRoutes = current(
-    routesFromUsage(
-      modelsWhere(() => true),
-      providers,
-      input.providerLabel,
-    ),
+    usage.filter((route) => {
+      const provider = providerOf(providers, route.instanceId, route.environmentId);
+      return !provider || canRunWork(provider);
+    }),
   );
   const grades = gradesFromSnapshots(input.snapshots).map((grade) => onNewerVersion(newer, grade));
   const ranRoutes = [...usageRoutes, ...current(routesFromGrades(grades, providers, usageRoutes))];
@@ -714,10 +722,30 @@ export function buildModelPicks(input: BuildModelPicksInput): ModelPicks {
   const sinceDayCache = new Map<string, ReadonlyArray<PickRoute>>();
   // A rise from before the usage on hand would be percent with no work to set against it.
   const oldestDay = dayAt(input.now - RISE_EVIDENCE_DAYS * 24 * 60 * 60 * 1000, input.timeZone).day;
-  const hiddenOn = (instanceId: string | undefined, model: string, environmentId?: string) =>
-    providerOf(providers, instanceId, environmentId)?.hiddenModels?.includes(model) === true;
+  const canStart = (instanceId: string | undefined, model: string, environmentId?: string) => {
+    const provider = providerOf(providers, instanceId, environmentId);
+    if (!provider) return true;
+    if (!canRunWork(provider)) return false;
+    const catalog = provider.models;
+    // Antigravity still accepts effort-suffixed IDs for families in its current catalog.
+    const family =
+      provider.driver === "antigravity"
+        ? model.replace(/-(?:low|medium|high|xhigh|max)$/, "")
+        : model;
+    const offered =
+      catalog.find((entry) => entry.slug === model || entry.aliases?.includes(model)) ??
+      catalog.find((entry) => entry.slug === family);
+    return (
+      !provider.hiddenModels?.includes(model) &&
+      !provider.hiddenModels?.includes(family) &&
+      !offered?.isLegacy &&
+      offered?.unavailableReason === undefined &&
+      (provider.driver !== "antigravity" || offered !== undefined)
+    );
+  };
   return pickBestModels({
-    canStart: (route) => !hiddenOn(route.instanceId, route.model, route.environmentId),
+    usage,
+    canStart: (route) => canStart(route.instanceId, route.model, route.environmentId),
     routes: [...ranRoutes, ...current(routesFromCatalog(providers, ranRoutes, benchmarks, newer))],
     grades,
     limits: limitsFromProviders(providers).map((window) =>
@@ -726,6 +754,7 @@ export function buildModelPicks(input: BuildModelPicksInput): ModelPicks {
         : { ...window, dailyRise: window.dailyRise.filter((entry) => entry.day >= oldestDay) },
     ),
     plans: plansFromProviders(providers, input.planPrices),
+    subscriptionAccounts: new Set(providers.filter(isGoogleSubscription).map(accountOf)),
     benchmarks,
     usageSince: (sinceMs) => {
       const cached = sinceCache.get(sinceMs);
@@ -772,7 +801,7 @@ export function buildModelPicks(input: BuildModelPicksInput): ModelPicks {
         { instanceId: route.instanceId, model: route.model },
         {
           now: input.now,
-          accepts: (provider) => !hiddenOn(provider.instanceId, route.model, machine),
+          accepts: (provider) => canStart(provider.instanceId, route.model, machine),
         },
       );
       return pick === null || pick.instanceId === route.instanceId
@@ -790,15 +819,15 @@ const TITLES: Record<ModelPickKind, string> = {
   quality: "Quality",
   value: "Value",
   speed: "Speed",
-  frugal: "Low cost",
+  frugal: "Budget pick",
 };
 
 const RULES: Record<ModelPickKind, string> = {
   quality:
-    "Public benchmark scores at the effort you run, each scaled against the best model and weighted by how much it tells models apart, blended with the grades your lead agents gave its subagent work. Grades count for more as they add up, to at most half.",
-  value: `The most quality per dollar you really pay, among models within ${Math.round((1 - PICK_QUALITY_FLOOR.value) * 100)}% of the best. On a plan, a model costs the plan's price spread over the work its limits allow in a month, judged from how much of each limit your usage has taken. Pay-per-token models cost their API price, and your own GPU is free. Cost is for the same work: a model that spends more tokens on the same public benchmark tasks costs that much more.`,
-  speed: `The model that finishes the same work soonest, among models at least ${Math.round(PICK_QUALITY_FLOOR.speed * 100)}% as good as the best: the output tokens it spends on a fixed set of public benchmark tasks at the effort you run, divided by its output tokens per second. Speed is timed in your own responses where there are enough, otherwise a public figure. A model that writes fast but spends many more tokens is not faster.`,
-  frugal: `The best model among those close to free: your own GPU, and anything that really costs you $${NEAR_FREE_PER_M_OUTPUT_USD.toFixed(2)} or less per million output tokens, which on a plan barely touches its limit. Better quality first, then faster. If nothing is that cheap, the cheapest for the same work. A plan about to run out is skipped.`,
+    "Public benchmark scores at the effort you run, each scaled against the best model and weighted by how much it tells models apart, blended with your subagent ratings. The headline shows one benchmark. Percentages compare the overall quality score. Completed unflagged work can contribute an automatic rating. Exact ties share a rank and are listed by model ID.",
+  value: `Quality per estimated dollar of benchmark work, among models scoring at least ${PICK_QUALITY_FLOOR.value * 100}% of the leader. We allocate a monthly fee by each model’s share of that account’s priced usage over 30 days, including input and cache costs. For models with no priced output on the account we use another route’s token mix or list rates. Without a plan rate, the API rate is a proxy. Missing benchmark task sizes use the median.`,
+  speed: `Estimated generation time on benchmark tasks among models scoring at least ${PICK_QUALITY_FLOOR.speed * 100}% of the leader. Task output tokens divided by tokens per second. Uses your response timings when available, otherwise public throughput. Models without a comparable task size follow by throughput.`,
+  frugal: `Among models costing at most $${NEAR_FREE_PER_M_OUTPUT_USD.toFixed(2)} per million output tokens including context, highest quality wins, then throughput. Outside that budget we rank by estimated cost for comparable work. Local inference has no API fee. Plans below 10% remaining are skipped.`,
 };
 
 export const pickTitle = (kind: ModelPickKind) => TITLES[kind];
@@ -816,10 +845,23 @@ function times(ratio: number): string {
   return ratio >= 10 ? `${Math.round(ratio)}×` : `${ratio.toFixed(1)}×`;
 }
 
+function percentOfLeader(value: number): string {
+  if (value < 100 && value > 99.9) return ">99.9%";
+  return `${Number(value.toFixed(value >= 99.5 ? 1 : 0))}%`;
+}
+
+/** Exact quality ties share competition rank even when the first is featured. */
+export function pickRank(pick: ModelPick, index: number): number {
+  const candidate = pick.ranked[index];
+  return pick.kind === "quality" && candidate?.quality !== undefined
+    ? pick.ranked.findIndex((other) => other.quality === candidate.quality) + 1
+    : index + 1;
+}
+
 function qualityShare(candidate: PickCandidate): string {
   return candidate.quality === undefined
     ? "No benchmark or grades for it yet"
-    : `${Math.round(candidate.quality)}% of the best quality`;
+    : `${percentOfLeader(candidate.quality)} of the top quality score`;
 }
 
 function smallPercent(value: number): string {
@@ -830,13 +872,10 @@ function smallPercent(value: number): string {
 function gradeLine(candidate: PickCandidate): string | null {
   const grade = candidate.grade;
   if (!grade) return null;
-  return `${grade.average.toFixed(1)}/10 across ${formatCount(grade.rated)} graded ${grade.rated === 1 ? "task" : "tasks"}`;
+  return `${grade.average.toFixed(1)}/10 across ${formatCount(grade.rated)} rated ${grade.rated === 1 ? "task" : "tasks"}`;
 }
 
 export interface PickHeadline {
-  /** Counts up on screen; null when the headline is a word. */
-  readonly value: number | null;
-  readonly format: (value: number) => string;
   readonly text: string;
   readonly unit: string;
 }
@@ -850,16 +889,16 @@ export interface PickDescription {
 }
 
 function fixed(text: string, unit: string): PickHeadline {
-  return { value: null, format: () => text, text, unit };
-}
-
-function counted(value: number, format: (value: number) => string, unit: string): PickHeadline {
-  return { value, format, text: format(value), unit };
+  return { text, unit };
 }
 
 function costText(candidate: PickCandidate): string {
+  if (candidate.billing === "local") return "No API fee";
   const cost = realCostPerMOutput(candidate);
-  return cost === undefined ? "" : cost === 0 ? "free" : `${money(cost)}/M`;
+  if (cost === undefined) return "";
+  if (candidate.billing === "subscription" && candidate.paidPerMOutput === undefined)
+    return `API ${money(cost)}/M`;
+  return cost === 0 ? "free" : `${money(cost)}/M`;
 }
 
 /** A ranked model's short value, for the runner-up list. */
@@ -873,19 +912,29 @@ export function pickValueText(
       // Against the best, since the winner's own figure is one benchmark's score.
       const best = pick?.winner?.quality;
       return best !== undefined && best > 0 && candidate.quality !== undefined
-        ? `${Math.round((candidate.quality / best) * 100)}%`
+        ? candidate.quality === best && candidate.key !== pick?.winner?.key
+          ? "Tied"
+          : percentOfLeader((candidate.quality / best) * 100)
         : `${Math.round(candidate.quality ?? 0)}`;
     }
     case "value":
+      if (pick?.winner && Number.isFinite(valueScore(pick.winner))) {
+        const proxy =
+          candidate.billing === "subscription" && candidate.paidPerMOutput === undefined;
+        return `${percentOfLeader(pickBarShare(kind, candidate, pick) * 100)} of top value${proxy ? " (API)" : ""}`;
+      }
+      return costText(candidate);
     case "frugal":
       return costText(candidate);
     case "speed": {
       const speed = candidate.speed;
       if (!speed) return "";
       const fastest = pick?.winner?.speed?.secondsPerTask;
-      return speed.secondsPerTask !== undefined && fastest !== undefined && fastest > 0
-        ? `${times(speed.secondsPerTask / fastest)} as long`
-        : `${Math.round(speed.tokensPerSecond)} tok/s`;
+      const figure =
+        speed.secondsPerTask !== undefined && fastest !== undefined && fastest > 0
+          ? `${times(speed.secondsPerTask / fastest)} as long`
+          : `${Math.round(speed.tokensPerSecond)} tok/s`;
+      return speed.fast ? `${figure} · Fast` : figure;
     }
   }
 }
@@ -909,16 +958,19 @@ export function pickBarShare(
         ? ratio(winner.speed.secondsPerTask, candidate.speed.secondsPerTask)
         : ratio(candidate.speed?.tokensPerSecond, winner.speed?.tokensPerSecond);
     case "value": {
-      const score = (c: PickCandidate) => {
-        const cost = realCostForSameWork(c);
-        return c.quality === undefined || cost === undefined
-          ? undefined
-          : c.quality / Math.max(cost, 0.01);
-      };
-      return ratio(score(candidate), score(winner));
+      const top = valueScore(winner);
+      return Number.isFinite(top)
+        ? ratio(valueScore(candidate), top)
+        : valueScore(candidate) === Infinity
+          ? ratio(candidate.quality, winner.quality)
+          : 0;
     }
     case "frugal": {
-      // The cheapest fills the bar; a model that costs more gets a shorter one.
+      if (realCostPerMOutput(winner)! <= NEAR_FREE_PER_M_OUTPUT_USD) {
+        return realCostPerMOutput(candidate)! <= NEAR_FREE_PER_M_OUTPUT_USD
+          ? ratio(candidate.quality, winner.quality)
+          : 0;
+      }
       const cost = realCostForSameWork(candidate) ?? 0;
       const least = realCostForSameWork(winner) ?? 0;
       if (cost === 0) return 1;
@@ -930,7 +982,7 @@ export function pickBarShare(
 /** What a million output tokens cost is counted in, for under the figure. */
 function costUnit(candidate: PickCandidate): string {
   if (candidate.paidPerMOutput !== undefined && candidate.plan) {
-    return `per 1M output tokens with their context, on your ${candidate.plan.label} plan`;
+    return `per 1M output tokens including input · estimated from ${candidate.plan.label}’s 30-day usage`;
   }
   return candidate.billing === "subscription"
     ? "per 1M output tokens with their context, at API prices"
@@ -938,12 +990,15 @@ function costUnit(candidate: PickCandidate): string {
 }
 
 function costHeadline(candidate: PickCandidate): PickHeadline {
-  if (candidate.billing === "local") return fixed("Free", "runs on your own GPU, no limit");
+  if (candidate.billing === "local") return fixed("No API fee", "runs on your own GPU");
   const cost = realCostPerMOutput(candidate) ?? 0;
-  if (cost === 0) {
-    return fixed("Free", candidate.plan ? `on your ${candidate.plan.label} plan` : "no price");
+  if (cost === 0 && (candidate.billing !== "subscription" || candidate.paidPerMOutput === 0)) {
+    return fixed(
+      "Free",
+      candidate.plan ? `on your ${candidate.plan.label} plan` : "no token charge",
+    );
   }
-  return counted(cost, money, costUnit(candidate));
+  return fixed(money(cost), costUnit(candidate));
 }
 
 /** How the figure relates to the API price, or why it is the API price. */
@@ -953,28 +1008,26 @@ function costBasisLine(candidate: PickCandidate): string | null {
   const plan = candidate.plan;
   if (plan && candidate.paidPerMOutput !== undefined) {
     if (plan.monthlyUsd === 0 || api === undefined) return null;
-    const leverage = plan.leverage ?? 1;
-    // Before the wording for work done: that work was done on the other account, not this one.
-    if (plan.judgedFrom !== undefined && leverage >= 1.05) {
-      return `API price ${money(api)}; going by ${plan.judgedFrom}, this plan makes it about ${times(leverage)} cheaper`;
-    }
-    if (plan.capacityBasis === "used") {
-      return `API price ${money(api)}; you have run ${times(leverage)} the plan's price through it`;
-    }
-    return leverage >= 1.05
-      ? `API price ${money(api)}, so the plan makes it ${times(leverage)} cheaper`
-      : `API price ${money(api)}: no cheaper on this plan at what its limits allow`;
+    const mix =
+      candidate.costBasis === "list"
+        ? "list rates at your token mix"
+        : candidate.costBasis === "other"
+          ? "usage on another route"
+          : "recorded usage";
+    return `${money(plan.monthlyUsd)}/month allocated over ${money(plan.usedUsd)} of priced work. Model rate from ${mix}.`;
   }
   if (candidate.billing === "subscription") {
     return plan
-      ? "Too little of this plan used yet to work out its real price"
-      : "Enter what this plan costs you to see its real price";
+      ? "No priced usage on this plan to allocate its fee"
+      : "Plan price or coverage unknown. Showing the API estimate.";
   }
   return candidate.costBasis === "yours"
     ? "Priced from your own usage at API rates"
-    : candidate.costBasis === "list"
-      ? "List price at your usual mix of tokens"
-      : null;
+    : candidate.costBasis === "other"
+      ? "Estimated from usage on another route"
+      : candidate.costBasis === "list"
+        ? "List price at your usual mix of tokens"
+        : null;
 }
 
 /** "about 1.0%", or "under 0.1%" where "about" would not read. */
@@ -994,20 +1047,13 @@ function limitLine(candidate: PickCandidate): string | null {
 
 /** How much less the same work costs than on the best model: tokens spent count, not only their price. */
 function cheaperThan(winner: PickCandidate, best: PickCandidate | null): string {
-  const cost = realCostForSameWork(winner);
-  const bestCost = best ? realCostForSameWork(best) : undefined;
-  if (
-    !best ||
-    best.key === winner.key ||
-    cost === undefined ||
-    cost <= 0 ||
-    bestCost === undefined ||
-    bestCost <= cost
-  ) {
-    return "";
-  }
+  if (!best || best.key === winner.key) return "";
   const sameWork = winner.tokensPerTask !== undefined && best.tokensPerTask !== undefined;
-  return ` for ${times(bestCost / cost)} less than ${best.label}${sameWork ? " on the same work" : ""}`;
+  const price = sameWork ? realCostForSameWork : realCostPerMOutput;
+  const cost = price(winner);
+  const bestCost = price(best);
+  if (cost === undefined || cost <= 0 || bestCost === undefined || bestCost <= cost) return "";
+  return ` · ${best.label} costs ~${times(bestCost / cost)} as much ${sameWork ? "on benchmark tasks" : "per output token including input"}`;
 }
 
 export function describePick(pick: ModelPick, picks: ModelPicks): PickDescription | null {
@@ -1023,34 +1069,40 @@ export function describePick(pick: ModelPick, picks: ModelPicks): PickDescriptio
       const benchmark = winner.headlineBenchmark;
       const grade = winner.grade;
       if (benchmark) {
-        // A whole-number score counts up in whole numbers; a fractional one keeps its decimal.
-        const digits = Number.isInteger(benchmark.value) ? 0 : 1;
-        headline = counted(
-          benchmark.value,
-          (value) => value.toFixed(digits),
+        headline = fixed(
+          String(benchmark.value),
           benchmark.effort === undefined || benchmark.effort === "default"
             ? benchmark.label
             : `${benchmark.label}, ${benchmark.effort} effort`,
         );
         const gradeText = gradeLine(winner);
-        if (gradeText) lines.push(`Your grades: ${gradeText}`);
+        if (gradeText) lines.push(gradeText);
       } else if (grade) {
-        headline = counted(grade.average, (value) => value.toFixed(1), "/ 10 from your grades");
+        headline = fixed(grade.average.toFixed(1), "/ 10 across rated tasks");
         lines.push(
-          `${formatCount(grade.rated)} graded ${grade.rated === 1 ? "task" : "tasks"}, no public benchmark yet`,
+          `${formatCount(grade.rated)} rated ${grade.rated === 1 ? "task" : "tasks"}, no public benchmark yet`,
         );
       } else {
         headline = fixed("Top", "of your models");
       }
       const second = pick.ranked[1];
       if (second?.quality !== undefined) {
-        lines.push(`${second.label} follows at ${Math.round(second.quality)}% of it`);
+        lines.push(
+          second.quality === winner.quality
+            ? `${second.label} ties for the top quality score`
+            : `${second.label} has ${percentOfLeader(second.quality)} of the top quality score`,
+        );
       }
       break;
     }
     case "value": {
       headline = costHeadline(winner);
-      lines.push(`${qualityShare(winner)}${cheaperThan(winner, best)}`);
+      lines.push(
+        winner.tokensPerTask === undefined
+          ? "Highest quality per estimated dollar, assuming typical task length"
+          : "Highest quality per estimated dollar of benchmark work",
+        `${qualityShare(winner)}${cheaperThan(winner, best)}`,
+      );
       const basis = costBasisLine(winner);
       if (basis) lines.push(basis);
       const limit = limitLine(winner);
@@ -1066,15 +1118,14 @@ export function describePick(pick: ModelPick, picks: ModelPicks): PickDescriptio
           : undefined;
       const rate = `${formatCount(speed.tokensPerSecond)} tokens a second`;
       if (sooner !== undefined) {
-        headline = counted(
-          sooner,
-          (value) => `${value >= 10 ? Math.round(value) : value.toFixed(1)}×`,
-          `sooner than ${best!.label} on the same work`,
+        headline = fixed(
+          times(sooner),
+          `as fast as ${best!.label} at generating benchmark output (estimated)`,
         );
         lines.push(
           speed.basis === "yours"
             ? `${rate}, timed over ${formatCount(speed.responses ?? 0)} of your responses`
-            : `${rate}, a public figure: too few of your responses timed`,
+            : `${rate} in public benchmarks`,
         );
         if (speed.tokensPerTask !== undefined && reference?.tokensPerTask !== undefined) {
           const share = speed.tokensPerTask / reference.tokensPerTask;
@@ -1088,15 +1139,11 @@ export function describePick(pick: ModelPick, picks: ModelPicks): PickDescriptio
         }
         lines.push(qualityShare(winner));
       } else {
-        headline = counted(
-          speed.tokensPerSecond,
-          (value) => formatCount(value),
-          "output tokens per second",
-        );
+        headline = fixed(formatCount(speed.tokensPerSecond), "output tokens per second");
         lines.push(
           speed.basis === "yours"
             ? `Timed over ${formatCount(speed.responses ?? 0)} of your responses`
-            : "Public figure: not enough of your responses timed yet",
+            : "Public benchmark throughput",
         );
         lines.push(
           reference
@@ -1110,24 +1157,25 @@ export function describePick(pick: ModelPick, picks: ModelPicks): PickDescriptio
     case "frugal": {
       headline = costHeadline(winner);
       lines.push(
+        realCostPerMOutput(winner)! <= NEAR_FREE_PER_M_OUTPUT_USD
+          ? `Highest quality at $${NEAR_FREE_PER_M_OUTPUT_USD.toFixed(2)}/M or less`
+          : "Lowest estimated cost for comparable work",
         `${qualityShare(winner)}${winner.quality === undefined ? "" : cheaperThan(winner, best)}`,
       );
       const limit = limitLine(winner);
       const basis = costBasisLine(winner);
       if (limit) lines.push(limit);
-      else if (basis) lines.push(basis);
+      if (basis) lines.push(basis);
       else if (winner.billing === "metered") lines.push("Pay per token, no limit to run out of");
       break;
     }
   }
 
   if (!winner.used) lines.push("You have not run it lately");
-  const shown = lines.slice(0, 3);
-  // Said whatever else is cut: the figures on the card are another version's.
   if (winner.figuresFrom !== undefined) {
-    shown.push(`Scored as ${winner.figuresFrom} until its own figures are published`);
+    lines.push(`Scored as ${winner.figuresFrom} until its own figures are published`);
   }
-  return { title: TITLES[pick.kind], headline, lines: shown, badge };
+  return { title: TITLES[pick.kind], headline, lines, badge };
 }
 
 export interface PlanDescription {
@@ -1152,7 +1200,10 @@ function usedText(plan: PlanSummary): string {
   if (unpriced > 0 && plan.usedUsd <= 0) {
     return `${formatTokens(unpriced)} tokens ${window} (its models have no API price)`;
   }
-  const priced = `${money(plan.usedUsd)} of work at API prices ${window}`;
+  if (plan.scopedUsage && plan.usedUsd === 0)
+    return `No priced usage identified this plan ${window}`;
+  const work = plan.scopedUsage ? "identified plan work" : "work";
+  const priced = `${money(plan.usedUsd)} of ${work} at API prices ${window}`;
   return unpriced > 0
     ? `${priced}, plus ${formatTokens(unpriced)} tokens with no API price`
     : priced;
@@ -1198,12 +1249,12 @@ export function describePlan(plan: PlanSummary): PlanDescription {
 export function picksBasis(picks: ModelPicks, benchmarks: ModelBenchmarkTable): string {
   const models = picks.candidates.filter((candidate) => candidate.quality !== undefined).length;
   const parts = [
-    `${formatCount(models)} ${models === 1 ? "model" : "models"} you can run`,
+    `${formatCount(models)} ${models === 1 ? "model" : "models"} scored`,
     `your last ${PICKS_WINDOW_DAYS} days of usage`,
   ];
   if (picks.gradedRuns > 0) {
     parts.push(
-      `${formatCount(picks.gradedRuns)} graded subagent ${picks.gradedRuns === 1 ? "task" : "tasks"}`,
+      `${formatCount(picks.gradedRuns)} rated subagent ${picks.gradedRuns === 1 ? "task" : "tasks"}`,
     );
   }
   if (benchmarks.models.length > 0) {

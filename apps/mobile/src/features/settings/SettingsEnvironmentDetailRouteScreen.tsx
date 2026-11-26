@@ -72,6 +72,15 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
     targetVersion: string | null;
   } | null>(null);
   const checkController = useRef<AbortController | null>(null);
+  // Removing this environment (its row's Remove) returns to the list, not to a blank page.
+  const wasSaved = useRef(environment !== undefined);
+  useEffect(() => {
+    if (environment !== undefined) {
+      wasSaved.current = true;
+      return;
+    }
+    if (wasSaved.current && navigation.canGoBack()) navigation.goBack();
+  }, [environment, navigation]);
   useEffect(() => () => checkController.current?.abort(), []);
 
   const connected = environment?.isEnabled === true && environment.connectionState === "connected";

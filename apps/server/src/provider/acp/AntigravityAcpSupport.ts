@@ -6,15 +6,20 @@ import {
   type ProviderSendTurnInput,
   type RuntimeMode,
 } from "@t3tools/contracts";
+import { audioMimeTypeFromExtension } from "@t3tools/shared/filePreview";
+import { GENERIC_MIME_TYPES } from "@t3tools/shared/image";
+import { videoMimeType } from "@t3tools/shared/video";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as ChildProcess from "effect/process/ChildProcess";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
@@ -85,6 +90,31 @@ export const antigravityKeepsPromptOpenForBackgroundWork = (
   initializeResult: EffectAcpSchema.InitializeResponse,
 ): boolean => isAntigravityReleaseAtLeast(initializeResult.agentInfo?.version, [1, 5, 15]);
 
+/** Older ACP builds keep the compact eager declarations. */
+export const antigravitySupportsMcpDiscovery = (
+  initializeResult: EffectAcpSchema.InitializeResponse,
+): boolean => isAntigravityReleaseAtLeast(initializeResult.agentInfo?.version, [1, 5, 17]);
+
+export const antigravityMcpDiscoveryInstructions = (catalog: string) =>
+  `T3 Code tools. For lazy tools, read the cached schema at Antigravity's MCP path and use call_mcp_tool with server t3-code.\n${catalog}`;
+
+export const antigravityMcpServers: NonNullable<
+  AcpSessionRuntime.AcpSessionRuntimeOptions["mapMcpServers"]
+> = (servers, agent) =>
+  antigravitySupportsMcpDiscovery(agent)
+    ? servers.map((server) =>
+        server.name === "t3-code"
+          ? {
+              ...server,
+              _meta: {
+                ...(Predicate.isObject(server._meta) ? server._meta : {}),
+                antigravity: { forceAllToolsEager: false },
+              },
+            }
+          : server,
+      )
+    : servers;
+
 /** Normal launches reject browser login; only the auth flow supplies `onAuthorizationUrl`. */
 export const makeAntigravityAcpRuntime = Effect.fn("makeAntigravityAcpRuntime")(function* (
   input: AntigravityAcpRuntimeInput,
@@ -100,6 +130,7 @@ export const makeAntigravityAcpRuntime = Effect.fn("makeAntigravityAcpRuntime")(
       authenticateEagerly: true,
       resumeMethod: "resume",
       cancelBehavior: "wait-for-prompt",
+      mapMcpServers: antigravityMcpServers,
       clientInfo: antigravityClientInfo(input.runtimeVersion),
       clientCapabilities: {
         ...input.clientCapabilities,
@@ -261,7 +292,7 @@ const AUDIO_MIME_TYPES = new Set([
   "audio/x-wav",
   "audio/webm",
 ]);
-const ANTIGRAVITY_MAX_AUDIO_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const ANTIGRAVITY_MAX_MEDIA_BYTES = 20 * 1024 * 1024;
 const TEXT_MIME_TYPES = new Set([
   "application/json",
   "application/ld+json",
@@ -324,6 +355,74 @@ const TEXT_FILE_EXTENSIONS = new Set([
 const ANTIGRAVITY_MAX_TEXT_ATTACHMENT_BYTES = 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = PROVIDER_SEND_TURN_MAX_FILE_BYTES;
 
+export type AntigravityMediaSpawner = Pick<
+  ChildProcessSpawner.ChildProcessSpawner["Service"],
+  "exitCode"
+>;
+
+/** agy infers unsupported audio/mp4a-latm, audio/x-aac and audio/x-flac from these suffixes.
+ * Its viewer plays all three codecs in MPEG-4. Preserve the original audio packets. */
+const prepareViewerAudio = Effect.fn("Antigravity.prepareViewerAudio")(function* (input: {
+  readonly path: string;
+  readonly extension: string;
+  readonly size: number;
+  readonly attachmentsDir: string;
+  readonly mediaSpawner?: AntigravityMediaSpawner | undefined;
+}) {
+  const remux = input.extension === ".aac" || input.extension === ".flac";
+  if (
+    input.size > ANTIGRAVITY_MAX_MEDIA_BYTES ||
+    (input.extension !== ".m4a" && !(remux && input.mediaSpawner))
+  )
+    return input.path;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  return yield* Effect.gen(function* () {
+    const dir = yield* fs.makeTempDirectoryScoped({
+      directory: input.attachmentsDir,
+      prefix: "agy-media-",
+    });
+    const alias = path.join(dir, "audio.mp4");
+    if (remux && input.mediaSpawner) {
+      const code = yield* input.mediaSpawner
+        .exitCode(
+          ChildProcess.make(
+            "ffmpeg",
+            [
+              "-nostdin",
+              "-n",
+              "-protocol_whitelist",
+              "file",
+              "-f",
+              input.extension.slice(1),
+              "-i",
+              input.path,
+              "-map",
+              "0:a:0",
+              "-c:a",
+              "copy",
+              "-strict",
+              "experimental",
+              "-fs",
+              String(MAX_TOTAL_ATTACHMENT_BYTES),
+              alias,
+            ],
+            { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
+          ),
+        )
+        .pipe(Effect.timeout("15 seconds"));
+      if (code !== 0) return input.path;
+      const stat = yield* fs.stat(alias);
+      if (stat.size === 0n || stat.size >= BigInt(MAX_TOTAL_ATTACHMENT_BYTES)) return input.path;
+    } else {
+      yield* fs
+        .stream(input.path, { bytesToRead: input.size })
+        .pipe(Stream.run(fs.sink(alias, { flag: "wx", mode: 0o600 })));
+    }
+    return alias;
+  }).pipe(Effect.orElseSucceed(() => input.path));
+});
+
 /**
  * Sends supported uploads as native ACP content. Other files, and native
  * candidates over their limits, reach the agent through the saved path
@@ -334,10 +433,11 @@ export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(functi
   readonly attachments: ProviderSendTurnInput["attachments"];
   readonly attachmentsDir: string;
   readonly promptCapabilities: EffectAcpSchema.AgentCapabilities["promptCapabilities"];
+  readonly mediaSpawner?: AntigravityMediaSpawner | undefined;
 }): Effect.fn.Return<
   ReadonlyArray<EffectAcpSchema.ContentBlock>,
   EffectAcpErrors.AcpError,
-  FileSystem.FileSystem | Path.Path
+  FileSystem.FileSystem | Path.Path | Scope.Scope
 > {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -354,7 +454,14 @@ export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(functi
     // ProviderService has already put the file path in the text block. Keep a
     // folded clipboard paste lazy so the agent can search or sample it rather
     // than paying to embed the entire resource in context immediately.
-    const mimeType = attachment.mimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+    const declared = attachment.mimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+    const extension = path.extname(attachment.name).toLowerCase();
+    const video = attachment.type === "file" ? videoMimeType(attachment) : null;
+    const mimeType =
+      video ??
+      (!declared || GENERIC_MIME_TYPES.has(declared)
+        ? (audioMimeTypeFromExtension(extension) ?? declared)
+        : declared);
     const image = attachment.type === "image" && IMAGE_MIME_TYPES.has(mimeType);
     const audio = attachment.type === "file" && AUDIO_MIME_TYPES.has(mimeType);
     const pdf = attachment.type === "file" && mimeType === "application/pdf";
@@ -395,12 +502,64 @@ export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(functi
         `Could not read attachment '${attachment.name}'.`,
       );
     }
-    if (isPathOnly) continue;
+    const fileUri = (file: string) =>
+      path.toFileUrl(file).pipe(
+        Effect.map((url) => url.href),
+        Effect.mapError(() =>
+          EffectAcpErrors.AcpRequestError.invalidParams(`Invalid attachment '${attachment.name}'.`),
+        ),
+      );
     const size = Number(info.size);
+    const media = attachment.type === "file" && (video !== null || mimeType.startsWith("audio/"));
+    if (
+      media &&
+      (isPathOnly ||
+        size > ANTIGRAVITY_MAX_MEDIA_BYTES ||
+        totalBytes + size > MAX_TOTAL_ATTACHMENT_BYTES)
+    ) {
+      // agy 1.5.16 accepts binary resource blocks but drops their media. Its
+      // read_file tool gives Gemini the original video and sound together.
+      const mediaPath = mimeType.startsWith("audio/")
+        ? yield* prepareViewerAudio({
+            path: attachmentPath,
+            extension,
+            size,
+            attachmentsDir: input.attachmentsDir,
+            mediaSpawner: input.mediaSpawner,
+          })
+        : attachmentPath;
+      const uri = yield* fileUri(mediaPath);
+      blocks.push({
+        type: "resource_link",
+        uri,
+        name: attachment.name,
+        mimeType: mediaPath === attachmentPath ? mimeType : "audio/mp4",
+      });
+      const overLimit =
+        size > ANTIGRAVITY_MAX_MEDIA_BYTES
+          ? "Over the 20 MiB inline limit. "
+          : totalBytes + size > MAX_TOTAL_ATTACHMENT_BYTES
+            ? "Over the 50 MiB message limit. "
+            : "";
+      const viewerPath =
+        mediaPath === attachmentPath &&
+        mimeType.startsWith("audio/") &&
+        (extension === ".aac" || extension === ".flac")
+          ? `a lossless MP4 remux of ${mediaPath}`
+          : mediaPath === attachmentPath && extension === ".m4a"
+            ? `a temporary .mp4 copy of ${mediaPath}`
+            : mediaPath;
+      blocks.push({
+        type: "text",
+        text: `${overLimit}Use read_file on ${viewerPath} for native media.`,
+      });
+      continue;
+    }
+    if (isPathOnly) continue;
     const limit = image
       ? PROVIDER_SEND_TURN_MAX_IMAGE_BYTES
       : audio
-        ? ANTIGRAVITY_MAX_AUDIO_ATTACHMENT_BYTES
+        ? ANTIGRAVITY_MAX_MEDIA_BYTES
         : pdf
           ? MAX_TOTAL_ATTACHMENT_BYTES
           : ANTIGRAVITY_MAX_TEXT_ATTACHMENT_BYTES;
@@ -416,12 +575,7 @@ export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(functi
         `Image '${attachment.name}' is too large. Antigravity accepts images up to 10 MiB and 50 MiB of native attachments per message.`,
       );
     }
-    const uri = yield* path.toFileUrl(attachmentPath).pipe(
-      Effect.map((url) => url.href),
-      Effect.mapError(() =>
-        EffectAcpErrors.AcpRequestError.invalidParams(`Invalid attachment '${attachment.name}'.`),
-      ),
-    );
+    const uri = yield* fileUri(attachmentPath);
     if (pdf) {
       blocks.push({ type: "resource_link", uri, name: attachment.name, mimeType });
       continue;

@@ -49,6 +49,8 @@ const ITEMS: ReadonlyArray<SettingsSearchItem> = [
 
 describe("searchSettings", () => {
   it.each([
+    ["folder tabs", "chat-list-tabs", "Chat list tabs"],
+    ["session tabs", "chat-list-tabs", "Chat list tabs"],
     ["follow-up behavior", "follow-up-behavior", "Follow-up messages"],
     ["follow-up messages", "follow-up-behavior", "Follow-up messages"],
     ["default diff file state", "default-diff-file-state", "Diff files"],

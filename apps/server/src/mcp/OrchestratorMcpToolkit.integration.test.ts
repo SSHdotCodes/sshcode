@@ -18,6 +18,7 @@ import {
   isProviderNativeSubagentThread,
   MessageId,
   type ModelSelection,
+  type ChatAttachment,
   type OrchestrationV2DelegatedCompletionDelivery,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderSession,
@@ -91,6 +92,7 @@ import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
+import { layerDeferredMcpDispatcher } from "./DeferredMcpCatalog.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import { delegatedTaskRun, hasPendingChildRuns } from "./OrchestratorMcpService.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -213,6 +215,7 @@ interface CapturedTurn {
   readonly instanceId: ProviderInstanceId;
   readonly threadId: ThreadId;
   readonly text: string;
+  readonly attachments?: ReadonlyArray<ChatAttachment>;
 }
 
 function unsupported(driver: ProviderDriverKind, detail: string) {
@@ -331,6 +334,9 @@ function makeDeterministicAdapter(input: {
                   instanceId: input.instanceId,
                   threadId: turnInput.threadId,
                   text: turnInput.message.text,
+                  ...(turnInput.message.attachments.length
+                    ? { attachments: turnInput.message.attachments }
+                    : {}),
                 },
               ]);
               const eventTime = yield* DateTime.now;
@@ -786,9 +792,10 @@ describe("orchestrator MCP toolkit", () => {
             Layer.provide(ServerConfig.layerTest(cwd, { prefix: "sshcode-api-key-mcp-" })),
             Layer.provide(NodeCrypto.layer),
           );
-          const layerTest = Layer.merge(
+          const layerTest = Layer.mergeAll(
             layerOrchestratorToolkit,
             McpHttpServer.layerThreadToolkit,
+            layerDeferredMcpDispatcher,
           ).pipe(
             Layer.provideMerge(McpServer.McpServer.layer),
             Layer.provideMerge(layerOrchestration),
@@ -802,7 +809,11 @@ describe("orchestrator MCP toolkit", () => {
                 getById: (id) =>
                   Effect.succeed(
                     id === projectId
-                      ? Option.some({ id, defaultModelSelection: null } as never)
+                      ? Option.some({
+                          id,
+                          workspaceRoot: cwd,
+                          defaultModelSelection: null,
+                        } as never)
                       : Option.none(),
                   ),
               }),
@@ -815,6 +826,7 @@ describe("orchestrator MCP toolkit", () => {
               ),
             ),
             Layer.provideMerge(layerApiKeys),
+            Layer.provide(ServerConfig.layerTest(cwd, { prefix: "t3-mcp-local-files-" })),
             Layer.provide(NodeServices.layer),
           );
 
@@ -1778,14 +1790,6 @@ describe("orchestrator MCP toolkit", () => {
             expect(capabilities.structuredContent).toMatchObject({
               inheritedProviderInstanceId: codexInstanceId,
               inheritedModel: codexModel,
-              features: {
-                appOwnedSubagents: true,
-                asyncPolling: true,
-                cancellation: true,
-                batchThreadCreation: true,
-                threadManagement: true,
-                incrementalThreadRead: true,
-              },
               providers: expect.arrayContaining([
                 expect.objectContaining({ providerInstanceId: claudeInstanceId }),
                 // No opencode adapter is registered in this harness, so the
@@ -1807,6 +1811,7 @@ describe("orchestrator MCP toolkit", () => {
                 }),
               ]),
             });
+            expect(capabilities.structuredContent).not.toHaveProperty("features");
 
             const scheduleTool = server.tools.find(({ tool }) => tool.name === "schedule_task");
             expect(scheduleTool?.tool.annotations?.destructiveHint).toBe(true);
@@ -1843,6 +1848,50 @@ describe("orchestrator MCP toolkit", () => {
             expect(scheduledListCall.isError).toBe(false);
             expect(scheduledListCall.structuredContent).toMatchObject({
               tasks: [{ scheduledTaskId, boundThreadId: parentThreadId }],
+            });
+            expect(
+              (scheduledListCall.structuredContent as { tasks: object[] }).tasks[0],
+            ).not.toHaveProperty("prompt");
+            const museScope = {
+              ...invocation,
+              thread: {
+                ...invocation.thread!,
+                providerInstanceId: ProviderInstanceId.make("muse"),
+              },
+            };
+            const lookup = yield* invokeAs(museScope, "t3_tool", { name: "list_scheduled_tasks" });
+            const schema = lookup.content[0];
+            expect(schema?.type === "text" ? JSON.parse(schema.text) : null).toMatchObject({
+              name: "list_scheduled_tasks",
+              inputSchema: { type: "object" },
+            });
+            const dispatched = yield* invokeAs(museScope, "t3_tool", {
+              name: "list_scheduled_tasks",
+              input: {},
+            });
+            expect(dispatched.structuredContent).toEqual(scheduledListCall.structuredContent);
+            const invalid = yield* invokeAs(museScope, "t3_tool", {
+              name: "list_scheduled_tasks",
+              input: { scheduledTaskId: 123 },
+            }).pipe(
+              Effect.match({
+                onFailure: () => true,
+                onSuccess: (result) => result.isError === true,
+              }),
+            );
+            expect(invalid).toBe(true);
+            expect(
+              (yield* invokeAs(museScope, "t3_tool", { name: "t3_tool", input: {} })).isError,
+            ).toBe(true);
+            expect(
+              (yield* invokeAs(museScope, "t3_tool", { name: "preview_open", input: {} })).isError,
+            ).toBe(true);
+            expect(
+              (yield* invoke("t3_tool", { name: "list_scheduled_tasks", input: {} })).isError,
+            ).toBe(true);
+            const scheduledDetail = yield* invoke("list_scheduled_tasks", { scheduledTaskId });
+            expect(scheduledDetail.structuredContent).toMatchObject({
+              tasks: [{ scheduledTaskId, prompt: "wake up in this thread and say hello" }],
             });
 
             // schedule_task pauses without deleting.
@@ -2065,9 +2114,9 @@ describe("orchestrator MCP toolkit", () => {
             expect(apiCall.structuredContent).not.toHaveProperty("secretRef");
             const listedKeys = yield* invoke("list_api_keys", {});
             expect(listedKeys.isError).toBe(false);
-            expect(listedKeys.structuredContent).toMatchObject([
-              { name: "FAKE_PLATFORM_API_KEY", scope: "all", expiresAt: null },
-            ]);
+            expect(listedKeys.structuredContent).toMatchObject({
+              keys: [{ name: "FAKE_PLATFORM_API_KEY", scope: "all", expiresAt: null }],
+            });
             expect(
               JSON.stringify([
                 apiCall,
@@ -2077,7 +2126,10 @@ describe("orchestrator MCP toolkit", () => {
               ]),
             ).not.toContain("obviously-fake-platform-value");
 
+            const fs = yield* FileSystem.FileSystem.pipe(Effect.provide(NodeServices.layer));
+            yield* fs.writeFileString(`${cwd}/clip.mov`, "movie");
             const delegatedCall = yield* invoke("delegate_task", {
+              attachmentPaths: ["clip.mov"],
               task: delegatedPrompt,
               target: {
                 providerInstanceId: claudeInstanceId,
@@ -2193,6 +2245,7 @@ describe("orchestrator MCP toolkit", () => {
                   transfer.type === "subagent_spawn" && transfer.sourceThreadId === parentThreadId,
               ),
             ).toBe(true);
+            yield* fs.remove(`${cwd}/clip.mov`);
             const capturedAfterDelegate = yield* Ref.get(capturedTurns);
             expect(
               capturedAfterDelegate.filter((turn) => turn.threadId === delegatedChildThreadId),
@@ -2201,6 +2254,14 @@ describe("orchestrator MCP toolkit", () => {
                 instanceId: claudeInstanceId,
                 threadId: delegatedChildThreadId,
                 text: delegatedPrompt,
+                attachments: [
+                  expect.objectContaining({
+                    type: "file",
+                    name: "clip.mov",
+                    mimeType: "video/quicktime",
+                    sizeBytes: 5,
+                  }),
+                ],
               },
             ]);
             expect(
@@ -2226,6 +2287,12 @@ describe("orchestrator MCP toolkit", () => {
             expect(delegatedStatus.latestTerminalRunId).toBeUndefined();
             expect(delegatedStatus.latestTerminalResultContextTransferId).toBeUndefined();
 
+            const suffix = yield* invoke("task_status", {
+              taskId: delegatedStatus.taskId,
+              summaryOffset: 5,
+            });
+            expect(suffix.structuredContent).toMatchObject({ summary: delegatedResult.slice(5) });
+
             // Grading the task it reads means the result was already read: no repeat.
             const gradedStatusCall = yield* invoke("task_status", {
               taskId: delegated.taskId,
@@ -2240,7 +2307,9 @@ describe("orchestrator MCP toolkit", () => {
             // Wait-mode completion already returned its result while the parent was live.
             yield* expectOffersToStay(0);
 
+            yield* fs.writeFileString(`${cwd}/voice.m4a`, "audio");
             const childFollowupCall = yield* invoke("t3_thread_send", {
+              attachmentPaths: ["voice.m4a"],
               threadId: delegated.taskId,
               message: "Confirm the delegated API boundary remains inspected.",
               clientRequestId: "delegated-child-followup-1",
@@ -2248,6 +2317,7 @@ describe("orchestrator MCP toolkit", () => {
             const childFollowup = yield* decodeThreadSendResult(
               childFollowupCall.structuredContent,
             ).pipe(Effect.orDie);
+            expect(childFollowup.notice).toBeUndefined();
             expect(childFollowup.runId).toBeUndefined();
             expect(childFollowup.taskId).toBeDefined();
             const childFollowupTask = taskForReference(
@@ -2273,6 +2343,26 @@ describe("orchestrator MCP toolkit", () => {
               status: "completed",
               timedOut: false,
             });
+            expect(
+              (yield* Ref.get(capturedTurns)).find(
+                (turn) => turn.text === "Confirm the delegated API boundary remains inspected.",
+              )?.attachments,
+            ).toEqual([
+              expect.objectContaining({
+                type: "file",
+                mimeType: "audio/mp4",
+                name: "voice.m4a",
+                sizeBytes: 5,
+              }),
+            ]);
+            yield* fs.remove(`${cwd}/voice.m4a`);
+            const repeatFollowup = yield* invoke("t3_thread_send", {
+              threadId: delegated.taskId,
+              message: "Confirm the delegated API boundary remains inspected.",
+              attachmentPaths: ["voice.m4a"],
+              clientRequestId: "delegated-child-followup-1",
+            });
+            expect(repeatFollowup.isError).toBe(false);
             const delegatedStatusAfterFollowupCall = yield* invoke("task_status", {
               taskId: delegated.taskId,
             });
@@ -2427,6 +2517,7 @@ describe("orchestrator MCP toolkit", () => {
             yield* Ref.set(continuationOffers, []);
 
             const repeatedDelegatedCall = yield* invoke("delegate_task", {
+              attachmentPaths: ["clip.mov"],
               task: delegatedPrompt,
               target: {
                 providerInstanceId: claudeInstanceId,
@@ -2724,6 +2815,19 @@ describe("orchestrator MCP toolkit", () => {
               metadataList.threads.find((thread) => thread.threadId === emptyThread.threadId)
                 ?.settledAt,
             ).toBeUndefined();
+            expect(
+              metadataList.threads.find((thread) => thread.threadId === emptyThread.threadId)
+                ?.runtimeMode,
+            ).toBeUndefined();
+            const metadataDetailList = yield* invoke("t3_thread_list", {
+              titleContains: "Metadata-managed thread",
+              includeDetails: true,
+            });
+            expect(metadataDetailList.structuredContent).toMatchObject({
+              threads: [
+                { threadId: emptyThread.threadId, runtimeMode: metadataRead.thread.runtimeMode },
+              ],
+            });
             expect(metadataRead.thread).toMatchObject({ settled: false });
             expect(metadataRead.thread.settledAt).toBeUndefined();
 
@@ -3009,7 +3113,7 @@ describe("orchestrator MCP toolkit", () => {
             expect(inheritedSearch.items[0]).toMatchObject({
               sourceThreadId: promptedThread.threadId,
               visibility: "inherited",
-              text: `Claude completed: ${createdThreadPrompt}`,
+              snippet: expect.stringContaining(`Claude completed: ${createdThreadPrompt}`),
             });
 
             const ordinaryLoopPrompt = "Run an ordinary thread loop iteration.";
@@ -3034,7 +3138,10 @@ describe("orchestrator MCP toolkit", () => {
             ).toMatchObject({
               senderThreadId: parentThreadId,
             });
-            expect(sent.delivery).toBe("started");
+            expect(sent).toMatchObject({
+              delivery: "started",
+              notice: expect.stringContaining("wake"),
+            });
             const waitCall = yield* invoke("t3_thread_wait", {
               threadId: emptyThread.threadId,
               runId: sent.runId,
@@ -3057,6 +3164,13 @@ describe("orchestrator MCP toolkit", () => {
               repeatedSendCall.structuredContent,
             ).pipe(Effect.orDie);
             expect(repeatedSend.runId).toBe(sent.runId);
+            const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+            yield* worker.drain();
+            const peerNotices = (yield* orchestrator.getThreadProjection(
+              parentThreadId,
+            )).messages.filter((m) => m.notification?.summary.includes(emptyThread.threadId));
+            expect(peerNotices).toHaveLength(1);
+            expect(peerNotices[0]?.text).toContain(`Codex completed: ${ordinaryLoopPrompt}`);
             expect(
               (yield* orchestrator.getThreadProjection(emptyThread.threadId)).runs,
             ).toHaveLength(1);
@@ -3113,6 +3227,120 @@ describe("orchestrator MCP toolkit", () => {
               status: "running",
               timedOut: true,
             });
+            // This independent agent steers the same Claude turn twice and queues a third send.
+            const peerScope = {
+              ...invocation,
+              thread: { ...invocation.thread!, threadId: activeThread.threadId },
+              requestNamespace: "independent-sender",
+            };
+            const peerSend = (key: string, message: string, mode: "auto" | "queue") =>
+              invokeAs(peerScope, "t3_thread_send", {
+                threadId: promptedThread.threadId,
+                message,
+                mode,
+                clientRequestId: key,
+              }).pipe(Effect.flatMap((call) => decodeThreadSendResult(call.structuredContent)));
+            const peerStart = yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              createdBy: "user",
+              creationSource: "web",
+              threadId: promptedThread.threadId,
+              commandId: CommandId.make("command:independent-claude-start"),
+              messageId: MessageId.make("message:independent-claude-start"),
+              text: cancellationPrompt,
+              attachments: [],
+              dispatchMode: { type: "start_immediately" },
+            });
+            yield* orchestrator
+              .streamStoredEventsFrom({
+                threadId: promptedThread.threadId,
+                afterSequence: peerStart.sequence,
+                eventType: "provider-turn.updated",
+              })
+              .pipe(
+                Stream.filter(
+                  ({ event }) =>
+                    event.type === "provider-turn.updated" && event.payload.status === "running",
+                ),
+                Stream.take(1),
+                Stream.runDrain,
+              );
+            const firstPeerSteer = yield* peerSend("steer-one", "First steer", "auto");
+            const secondPeerSteer = yield* peerSend("steer-two", "Second steer", "auto");
+            expect(firstPeerSteer.delivery).toBe("steered");
+            expect(secondPeerSteer).toMatchObject({
+              delivery: "steered",
+              runId: firstPeerSteer.runId,
+            });
+            const queuedPeerSend = yield* peerSend(
+              "queued",
+              "Queued result " + "🐈".repeat(2000),
+              "queue",
+            );
+            expect(queuedPeerSend.delivery).toBe("queued");
+            expect(queuedPeerSend.runId).not.toBe(firstPeerSteer.runId);
+            yield* worker.drain();
+            const peerResults = () =>
+              orchestrator
+                .getThreadProjection(activeThread.threadId)
+                .pipe(
+                  Effect.map((p) =>
+                    p.messages.filter((m) =>
+                      m.notification?.summary.includes(promptedThread.threadId),
+                    ),
+                  ),
+                );
+            expect(yield* peerResults()).toHaveLength(0);
+            const interruptedPeer = yield* invoke("t3_thread_interrupt", {
+              threadId: promptedThread.threadId,
+              runId: firstPeerSteer.runId,
+            });
+            expect(interruptedPeer.isError).toBe(false);
+            const queueWait = yield* invoke("t3_thread_wait", {
+              threadId: promptedThread.threadId,
+              runId: queuedPeerSend.runId,
+              timeoutMs: 10_000,
+            });
+            expect(queueWait.structuredContent).toMatchObject({ status: "completed" });
+            yield* worker.drain();
+            const reports = yield* peerResults();
+            expect(reports).toHaveLength(3);
+            expect(
+              reports.filter((m) => m.notification?.summary.endsWith("interrupted")),
+            ).toHaveLength(2);
+            const queuedReply = reports.find((m) => m.notification?.outcome === "completed")!.text;
+            expect(queuedReply).toContain("Claude completed: Queued result 🐈");
+            expect(queuedReply).not.toContain("\uFFFD");
+            expect(Buffer.byteLength(queuedReply)).toBeLessThanOrEqual(6144);
+            // A later unrelated run on the same target has no sender to wake.
+            const unrelated = yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              createdBy: "user",
+              creationSource: "web",
+              threadId: promptedThread.threadId,
+              commandId: CommandId.make("command:later-peer-turn"),
+              messageId: MessageId.make("message:later-peer-turn"),
+              text: "Later turn",
+              attachments: [],
+              dispatchMode: { type: "start_immediately" },
+            });
+            yield* orchestrator
+              .streamStoredEventsFrom({
+                threadId: promptedThread.threadId,
+                afterSequence: unrelated.sequence,
+                eventType: "run.updated",
+              })
+              .pipe(
+                Stream.filter(
+                  ({ event }) =>
+                    event.type === "run.updated" && event.payload.status === "completed",
+                ),
+                Stream.take(1),
+                Stream.runDrain,
+              );
+            yield* worker.drain();
+            expect(yield* peerResults()).toHaveLength(3);
+
             const steerCall = yield* invoke("t3_thread_send", {
               threadId: activeThread.threadId,
               message: "Include the latest parent guidance before finishing.",
@@ -3258,6 +3486,7 @@ describe("orchestrator MCP toolkit", () => {
             ]);
             const listCall = yield* invoke("t3_thread_list", {
               includeSubagents: false,
+              includeDetails: true,
               limit: 100,
             });
             const listed = yield* decodeThreadListResult(listCall.structuredContent).pipe(
@@ -3428,7 +3657,6 @@ describe("orchestrator MCP toolkit", () => {
             const pendingRead = yield* invoke("t3_pending_request_read", pendingRequestTarget);
             expect(pendingRead.isError).toBe(false);
             expect(pendingRead.structuredContent).toMatchObject({
-              requestId: pendingRequestTarget.requestId,
               questions: waitQuestions,
             });
             const pendingRespond = yield* invoke("t3_pending_request_respond", {
@@ -4648,6 +4876,7 @@ describe("orchestrator MCP toolkit", () => {
                     : Effect.succeedNone,
             }),
           ),
+          Layer.provide(ServerConfig.layerTest(cwd, { prefix: "t3-mcp-local-files-" })),
           Layer.provide(NodeServices.layer),
         );
 
@@ -4747,6 +4976,18 @@ describe("orchestrator MCP toolkit", () => {
             model: claudeModel,
           });
           const scratchThreadId = scratchCreated.threads[0]!.threadId;
+          expect(
+            declaredFailure(
+              yield* invoke("t3_thread_send", {
+                threadId: scratchThreadId,
+                message: "Inspect this recording",
+                attachmentPaths: ["recording.m4a"],
+              }),
+            ),
+          ).toMatchObject({
+            code: "invalid_request",
+            message: "Local attachment paths require a sender thread.",
+          });
           const scratchProjection = yield* orchestrator.getThreadProjection(scratchThreadId);
           expect(scratchProjection.thread).toMatchObject({
             projectId: scratchProjectId,
@@ -4870,6 +5111,7 @@ describe("orchestrator MCP toolkit", () => {
               Layer.provide(layerOrchestration),
             ),
           ),
+          Layer.provide(ServerConfig.layerTest(cwd, { prefix: "t3-mcp-local-files-" })),
           Layer.provide(NodeServices.layer),
         );
 

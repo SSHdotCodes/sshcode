@@ -11,6 +11,8 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useResolveClassNames } from "uniwind";
+import { Path, Svg } from "react-native-svg";
+import { ULTRAFAST_BOLTS } from "@t3tools/client-runtime/state/subagent-display";
 
 import { SymbolView } from "./AppSymbol";
 
@@ -21,7 +23,7 @@ const SIZE = 14;
  * double flicker and a flash of glow, like the Mac's. Unlit (a Fast switch that is off) it rests
  * grey. Reduce Motion keeps it lit and still.
  */
-export function FastModeBolt(props: { readonly lit?: boolean }) {
+export function FastModeBolt(props: { readonly lit?: boolean; readonly ultrafast?: boolean }) {
   const lit = props.lit ?? true;
   const reduced = useReducedMotion();
   const strike = useSharedValue(0);
@@ -79,12 +81,19 @@ export function FastModeBolt(props: { readonly lit?: boolean }) {
         />
       ) : null}
       <Animated.View style={boltStyle}>
-        <SymbolView
-          name="bolt.fill"
-          size={SIZE}
-          tintColorClassName={lit ? "accent-warning-foreground" : "accent-icon-subtle"}
-          type="monochrome"
-        />
+        {props.ultrafast && typeof glowColor === "string" ? (
+          <Svg width={SIZE} height={SIZE} viewBox="0 0 24 24">
+            <Path d={ULTRAFAST_BOLTS.back} fill={glowColor} opacity={0.4} />
+            <Path d={ULTRAFAST_BOLTS.front} fill={glowColor} />
+          </Svg>
+        ) : (
+          <SymbolView
+            name="bolt.fill"
+            size={SIZE}
+            tintColorClassName={lit ? "accent-warning-foreground" : "accent-icon-subtle"}
+            type="monochrome"
+          />
+        )}
       </Animated.View>
     </View>
   );

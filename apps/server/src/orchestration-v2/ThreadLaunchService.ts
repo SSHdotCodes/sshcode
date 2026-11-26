@@ -49,6 +49,7 @@ import {
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as WarmWorktreePool from "../project/WarmWorktreePool.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { accountUnavailable } from "../provider/accountAvailability.ts";
@@ -274,6 +275,7 @@ const make = Effect.gen(function* () {
   const terminals = yield* TerminalManager.TerminalManager;
   const git = yield* GitWorkflow.GitWorkflowService;
   const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+  const warmWorktrees = yield* WarmWorktreePool.WarmWorktreePool;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const textGeneration = yield* TextGeneration.TextGeneration;
@@ -337,7 +339,8 @@ const make = Effect.gen(function* () {
       const checkedAt = yield* Clock.currentTimeMillis;
       const stale = pool.some(
         (provider) =>
-          provider.usageLimits && isUsageLimitReadingStale(provider.usageLimits, checkedAt),
+          provider.usageLimits &&
+          isUsageLimitReadingStale(provider.driver, provider.usageLimits, checkedAt),
       );
       // Unattended work can wake up to yesterday's readings. The registry coalesces
       // probes and bounds the wait for the whole pool, even if a provider hangs.
@@ -483,6 +486,7 @@ const make = Effect.gen(function* () {
         : (reused?.sourcePath ?? project.workspaceRoot);
     const tracked = input.workspaceStrategy.type === "worktree" || reused !== undefined;
     let createdWorktreePath: string | null = null;
+    let warmLease: NonNullable<Effect.Success<ReturnType<typeof warmWorktrees.claim>>> | undefined;
     let setupTerminalId: string | null = null;
     let workspaceRecorded = false;
     let runReleased = false;
@@ -618,27 +622,44 @@ const make = Effect.gen(function* () {
           branch = flattenTemporaryWorktreeBranchName(branch);
         }
         yield* setupTracker.stageStatus(threadId, "checkout", "running");
-        const worktree = yield* git
-          .createWorktree(
-            {
-              cwd: sourceCwd,
-              refName: startRef,
-              newRefName: branch!,
-              baseRefName: input.workspaceStrategy.baseRef,
-              path: null,
-            },
-            {
-              progress: {
-                onWorktreeClaimed: (path) =>
-                  Effect.sync(() => {
-                    createdWorktreePath = path;
-                  }),
-                onCheckoutProgress: (progress) =>
-                  setupTracker.stage(threadId, "checkout", { percent: progress.percent }),
-              },
-            },
-          )
-          .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
+        const warm =
+          input.holdForSetup === true && input.workspaceStrategy.parentSnapshot === undefined
+            ? yield* warmWorktrees.claim({
+                threadId,
+                projectId: input.projectId,
+                cwd: sourceCwd,
+                ref: startRef,
+                baseRef: input.workspaceStrategy.baseRef,
+                branch: branch!,
+                onClaimed: (lease) => {
+                  warmLease = lease;
+                },
+              })
+            : null;
+        const worktree =
+          warm !== null
+            ? { worktree: { path: warm.path, refName: branch! } }
+            : yield* git
+                .createWorktree(
+                  {
+                    cwd: sourceCwd,
+                    refName: startRef,
+                    newRefName: branch!,
+                    baseRefName: input.workspaceStrategy.baseRef,
+                    path: null,
+                  },
+                  {
+                    progress: {
+                      onWorktreeClaimed: (path) =>
+                        Effect.sync(() => {
+                          createdWorktreePath = path;
+                        }),
+                      onCheckoutProgress: (progress) =>
+                        setupTracker.stage(threadId, "checkout", { percent: progress.percent }),
+                    },
+                  },
+                )
+                .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
         worktreePath = worktree.worktree.path;
         branch = worktree.worktree.refName;
         createdWorktreePath = worktreePath;
@@ -665,6 +686,7 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
       }
       workspaceRecorded = true;
+      if (warmLease) yield* warmLease.publish;
 
       // Rename temporary branches (server-invented above, or sent by clients
       // that name worktrees themselves) in the background so generation latency
@@ -772,28 +794,32 @@ const make = Effect.gen(function* () {
       // waits for setup and is told plainly when setup did not complete.
       const holdForSetup = input.holdForSetup === true && tracked;
       let setupNotice: string | undefined;
-      const started = yield* setupScripts
-        .runForThread({
-          threadId,
-          projectId: input.projectId,
-          projectCwd: sourceCwd,
-          worktreePath: cwd,
-          useWorktreeProjectFile: tracked,
-          ...(tracked
-            ? {
-                observeCompletion: {
-                  onOutputLine: (line: string) =>
-                    setupTracker.appendTail(threadId, "setup-script", line),
+      const started =
+        warmLease !== undefined
+          ? Exit.succeed({ status: "no-script" } as const)
+          : yield* setupScripts
+              .runForThread({
+                threadId,
+                projectId: input.projectId,
+                projectCwd: sourceCwd,
+                worktreePath: cwd,
+                useWorktreeProjectFile: tracked,
+                ...(holdForSetup ? { subagentWorktree: true } : {}),
+                ...(tracked
+                  ? {
+                      observeCompletion: {
+                        onOutputLine: (line: string) =>
+                          setupTracker.appendTail(threadId, "setup-script", line),
+                      },
+                    }
+                  : {}),
+                project: {
+                  id: project.id,
+                  workspaceRoot: sourceCwd,
+                  scripts: project.scripts,
                 },
-              }
-            : {}),
-          project: {
-            id: project.id,
-            workspaceRoot: sourceCwd,
-            scripts: project.scripts,
-          },
-        })
-        .pipe(Effect.mapError(mapError(input, "run-setup-script", threadId)), Effect.exit);
+              })
+              .pipe(Effect.mapError(mapError(input, "run-setup-script", threadId)), Effect.exit);
       if (Exit.isFailure(started) && !holdForSetup) return yield* Effect.failCause(started.cause);
       const setup = Exit.isSuccess(started) ? started.value : null;
 
@@ -833,6 +859,16 @@ const make = Effect.gen(function* () {
               setupNotice = setupFailureNotice(
                 `failed (exit ${exitCode ?? "unknown"}${lastLine ? `: ${lastLine}` : ""})`,
               );
+            } else if (
+              input.workspaceStrategy.type === "worktree" &&
+              input.workspaceStrategy.parentSnapshot === undefined
+            ) {
+              yield* warmWorktrees.recordSetup({
+                projectId: input.projectId,
+                cwd: sourceCwd,
+                worktreePath: cwd,
+                command: setup.scriptCommand,
+              });
             }
           }
         } else if (setup.completion) {
@@ -865,7 +901,12 @@ const make = Effect.gen(function* () {
           yield* setupTracker.stageStatus(threadId, "setup-script", "done");
         }
       } else {
-        yield* setupTracker.stageStatus(threadId, "setup-script", "skipped");
+        yield* setupTracker.stageStatus(
+          threadId,
+          "setup-script",
+          "skipped",
+          warmLease ? "Dependencies ready" : undefined,
+        );
       }
       yield* setupTracker.markUncancellable(threadId);
       yield* setupTracker.stageStatus(threadId, "agent", "running");
@@ -894,6 +935,13 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.onError((cause) =>
         Effect.gen(function* () {
+          if (warmLease && !workspaceRecorded) {
+            yield* warmLease.abandon;
+            // The pool reconciles its durable lease against the thread before removal.
+            createdWorktreePath = null;
+          } else if (warmLease) {
+            yield* warmLease.publish;
+          }
           const cancelled = Cause.hasInterruptsOnly(cause);
           yield* setupTracker.finish(
             threadId,
@@ -913,27 +961,29 @@ const make = Effect.gen(function* () {
             // The thread forgets the worktree only once it is gone; a failed
             // removal leaves the directory for the user to clean up rather than
             // reusing a checkout that may be half written.
-            yield* git.removeWorktree({ cwd: sourceCwd, path: removedPath, force: true }).pipe(
-              Effect.andThen(
-                threads
-                  .dispatch({
-                    type: "thread.metadata.update",
-                    commandId: CommandId.make(`${input.commandId}:cancel-workspace`),
+            yield* git
+              .removeWorktree({ cwd: sourceCwd, path: removedPath, force: true }, { abandon: true })
+              .pipe(
+                Effect.andThen(
+                  threads
+                    .dispatch({
+                      type: "thread.metadata.update",
+                      commandId: CommandId.make(`${input.commandId}:cancel-workspace`),
+                      threadId,
+                      worktreePath: null,
+                      branch: null,
+                    })
+                    .pipe(Effect.ignore),
+                ),
+                Effect.catchCause((removeCause) =>
+                  Effect.logWarning("Failed to remove an abandoned thread worktree", {
+                    commandId: input.commandId,
                     threadId,
-                    worktreePath: null,
-                    branch: null,
-                  })
-                  .pipe(Effect.ignore),
-              ),
-              Effect.catchCause((removeCause) =>
-                Effect.logWarning("Failed to remove an abandoned thread worktree", {
-                  commandId: input.commandId,
-                  threadId,
-                  path: removedPath,
-                  cause: removeCause,
-                }),
-              ),
-            );
+                    path: removedPath,
+                    cause: removeCause,
+                  }),
+                ),
+              );
           }
         }),
       ),

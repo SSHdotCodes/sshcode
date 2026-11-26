@@ -1,3 +1,4 @@
+import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "./chatAttachment.ts";
 import { ApiKeyRequest } from "./apiKey.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -54,7 +55,7 @@ const OrchestratorMcpTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(512)
 // MCP publishes the encoded side of these transforming string schemas.
 const OrchestratorMcpClientRequestId = describeInput(
   TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
-  "Retry key; unique delegation keys also reference tasks.",
+  "Retry key.",
 );
 
 /**
@@ -74,7 +75,7 @@ const OrchestratorMcpSchedule = Schema.Union([
   OrchestratorMcpScheduleFromJsonString,
 ]).annotate({
   description:
-    "Trigger object: {type:'interval', everyMs}, {type:'fixed_time', timeOfDay, weekdays?}, {type:'once', runAt}, or {type:'webhook'} to run on each request to a generated URL. Never stringify it unless the provider requires the compatibility form.",
+    "Use the schedule object shown in the tool description. Stringify only if the provider requires it.",
 });
 
 /**
@@ -111,21 +112,15 @@ export type OrchestratorMcpTargetOptions = typeof OrchestratorMcpTargetOptions.T
 
 export const OrchestratorMcpTarget = Schema.Struct({
   providerInstanceId: Schema.optional(
-    describeInput(
-      ProviderInstanceId,
-      "Configured provider instance id from orchestrator_capabilities.",
-    ),
+    describeInput(ProviderInstanceId, "Instance id from orchestrator_capabilities."),
   ),
   driverKind: Schema.optional(
-    describeInput(
-      ProviderDriverKind,
-      "Provider driver kind; prefer providerInstanceId when available.",
-    ),
+    describeInput(ProviderDriverKind, "Prefer providerInstanceId when available."),
   ),
   model: Schema.optional(
     describeInput(
       TrimmedNonEmptyString,
-      "Exact orchestrator_capabilities model id, not its label; omit to inherit a current one. Custom ids require an empty catalog, that exact user request and userNamedModel:true.",
+      "Exact model id from orchestrator_capabilities. Omit to inherit.",
     ),
   ),
   /**
@@ -137,7 +132,7 @@ export const OrchestratorMcpTarget = Schema.Struct({
    */
   options: Schema.optional(
     OrchestratorMcpTargetOptions.annotate({
-      description: "Model option selections advertised by orchestrator_capabilities.",
+      description: "Options from orchestrator_capabilities.",
     }),
   ),
   userNamedAccount: Schema.optional(
@@ -146,7 +141,7 @@ export const OrchestratorMcpTarget = Schema.Struct({
   userNamedModel: Schema.optional(
     Schema.Boolean.annotate({
       description:
-        "True only if the user named this exact model. Required for legacy/superseded models and custom ids in empty catalogs; explain the request.",
+        "Use only for an exact user request for a legacy, superseded or custom id with an empty catalog.",
     }),
   ),
 });
@@ -197,9 +192,9 @@ export const OrchestratorMcpTerminalDelegatedTaskStatus = Schema.Literals([
 export type OrchestratorMcpTerminalDelegatedTaskStatus =
   typeof OrchestratorMcpTerminalDelegatedTaskStatus.Type;
 
-/** Grades ride on a subagent call the agent makes anyway, so rating costs no extra step. */
+/** Flags ride on a subagent call the agent makes anyway, so flagging costs no extra step. */
 export const OrchestratorMcpTaskGrades = Schema.Unknown.annotateKey({
-  description: "Rate work against the brief, not findings: [{taskId,score:1-10,note?}].",
+  description: "Flag work that fell short of the brief: [{taskId,score:1-6,note}].",
 });
 export type OrchestratorMcpTaskGrades = typeof OrchestratorMcpTaskGrades.Type;
 
@@ -211,11 +206,17 @@ export const OrchestratorMcpGradesResult = Schema.Struct({
 });
 export type OrchestratorMcpGradesResult = typeof OrchestratorMcpGradesResult.Type;
 
+const attachmentPaths = Schema.optional(
+  Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(4096)))
+    .check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS))
+    .annotate({
+      description: "Workspace or attachments-directory files. 50 MiB total.",
+    }),
+);
+
 export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
-  task: describeInput(
-    OrchestratorMcpPrompt,
-    "Self-contained task for one delegated child agent/subagent.",
-  ),
+  task: describeInput(OrchestratorMcpPrompt, "Self-contained subagent brief."),
+  attachmentPaths,
   // Some providers send the whole target object as JSON text.
   target: Schema.optional(
     Schema.Union([OrchestratorMcpTarget, Schema.fromJsonString(OrchestratorMcpTarget)]),
@@ -225,16 +226,16 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   isolation: Schema.optional(
     Schema.Literals(["shared", "worktree"]).annotate({
       description:
-        "Defaults to shared: the parent's checkout, or repositoryPath. worktree copies the Git repository at its current local commit (uncommitted edits stay behind unless withEdits) and runs project setup first. Without repositoryPath, a non-Git parent folder runs shared and the result's notice says so.",
+        "Default shared. Worktree runs project setup. A non-Git parent without repositoryPath falls back to shared.",
     }),
   ),
   withEdits: Schema.optional(
-    describeInput(Schema.Boolean, "Include parent edits in a worktree subagent. Defaults false."),
+    describeInput(Schema.Boolean, "Include edits in a worktree subagent. Default false."),
   ),
   repositoryPath: Schema.optional(
     describeInput(
       TrimmedNonEmptyString,
-      "Absolute path the child works in (for worktree, the Git checkout to copy). Defaults to the parent's checkout; set it when the target repository is elsewhere.",
+      "Absolute checkout path to use or copy. Defaults to parent's.",
     ),
   ),
   mode: Schema.optional(
@@ -244,13 +245,13 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   ),
   timeoutMs: Schema.optional(Schema.Number).annotate({
     description:
-      "mode=wait budget; default 4 minutes. Expiry returns waitTimedOut=true and does not cancel the child.",
+      "Wait budget, default 4 min. Expiry returns waitTimedOut and does not cancel the child.",
   }),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
   runtimeMode: Schema.optional(
     OrchestratorMcpRuntimeMode.annotate({
       description:
-        "Defaults to inherit; omit unless the user asks for a supervised child. Not a read-only switch: approval-required/auto-accept-edits pause the child at each action needing approval until a person approves in the child's thread, which this thread cannot do — to limit the child, say so in the task. Modes above this thread's are rejected; lower rank doesn't promise narrower provider permissions.",
+        "Default inherit. Override only for user-requested supervision. Approval modes pause for the user in the child chat. Modes above yours are rejected. State read-only limits in the brief.",
     }),
   ),
   interactionMode: Schema.optional(OrchestratorMcpInteractionMode),
@@ -312,6 +313,8 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   model: Schema.optionalKey(Schema.String),
   /** The original run's result text; omitted until it produces one. */
   summary: Schema.optionalKey(Schema.String),
+  /** More original result text at this UTF-16 offset; pass it to task_status. */
+  nextSummaryOffset: Schema.optionalKey(NonNegativeInt),
   seen: Schema.optional(OrchestrationV2SubagentSeen),
   failure: Schema.optional(
     OrchestrationV2ProviderFailure.annotate({
@@ -371,6 +374,8 @@ export const OrchestratorMcpTaskStatusInput = Schema.Struct({
     NodeId,
     "Task handle, full taskId, or unique clientRequestId from this parent thread.",
   ),
+  /** UTF-16 offset into the published summary, as supplied in a clipped wake. */
+  summaryOffset: Schema.optionalKey(NonNegativeInt),
   grades: Schema.optionalKey(OrchestratorMcpTaskGrades),
 });
 export type OrchestratorMcpTaskStatusInput = typeof OrchestratorMcpTaskStatusInput.Type;
@@ -446,8 +451,7 @@ export type OrchestratorMcpThreadStatus = typeof OrchestratorMcpThreadStatus.Typ
 
 const OrchestratorMcpProjectTarget = Schema.optional(
   ProjectId.annotate({
-    description:
-      "Project to act on. Omit for the calling thread's project; required when the caller is not a SSHCode thread.",
+    description: "Defaults to this thread's project. Required outside a thread.",
   }),
 );
 
@@ -474,6 +478,9 @@ export const OrchestratorMcpThreadListInput = Schema.Struct({
   settled: Schema.optional(Schema.Boolean),
   snoozed: Schema.optional(Schema.Boolean),
   includeSubagents: Schema.optional(Schema.Boolean),
+  includeDetails: Schema.optional(Schema.Boolean).annotate({
+    description: "Add permission modes, creation metadata and item counts.",
+  }),
   cursor: Schema.optional(NonNegativeInt),
   limit: Schema.optional(clampedPositiveInt(100)),
 });
@@ -501,12 +508,12 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   threadId: ThreadId,
   title: Schema.String,
   createdBy: OrchestrationV2Actor,
-  creationSource: McpCreationSource,
+  creationSource: Schema.optionalKey(McpCreationSource),
   status: OrchestratorMcpThreadStatus,
   providerInstanceId: ProviderInstanceId,
   model: Schema.String,
-  runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode,
+  runtimeMode: Schema.optionalKey(RuntimeMode),
+  interactionMode: Schema.optionalKey(ProviderInteractionMode),
   linkedPullRequest: Schema.optional(ThreadLinkedPullRequest),
   settled: Schema.Boolean,
   settledAt: Schema.optional(IsoDateTime),
@@ -517,8 +524,8 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   pinned: Schema.optional(Schema.Boolean),
   parentThreadId: Schema.optional(ThreadId),
   relationshipToParent: Schema.optional(Schema.Literals(["fork", "subagent"])),
-  itemCount: NonNegativeInt,
-  createdAt: IsoDateTime,
+  itemCount: Schema.optionalKey(NonNegativeInt),
+  createdAt: Schema.optionalKey(IsoDateTime),
   updatedAt: IsoDateTime,
 });
 export type OrchestratorMcpThreadListItem = typeof OrchestratorMcpThreadListItem.Type;
@@ -649,6 +656,7 @@ export type OrchestratorMcpThreadReadResult = typeof OrchestratorMcpThreadReadRe
 export const OrchestratorMcpThreadSendInput = Schema.Struct({
   threadId: OrchestratorMcpThreadReference,
   message: OrchestratorMcpPrompt,
+  attachmentPaths,
   mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
   grades: Schema.optionalKey(OrchestratorMcpTaskGrades),
@@ -665,6 +673,7 @@ export const OrchestratorMcpThreadSendResult = Schema.Struct({
   taskId: Schema.optional(NodeId),
   status: Schema.NullOr(OrchestrationV2RunStatus),
   delivery: Schema.Literals(["started", "queued", "steered", "restarted", "held"]),
+  notice: Schema.optionalKey(Schema.String),
 });
 export type OrchestratorMcpThreadSendResult = typeof OrchestratorMcpThreadSendResult.Type;
 
@@ -715,11 +724,11 @@ export type OrchestratorMcpCapabilitiesInput = typeof OrchestratorMcpCapabilitie
 export const OrchestratorMcpProviderCapability = Schema.Struct({
   providerInstanceId: ProviderInstanceId,
   driverKind: ProviderDriverKind,
-  displayName: Schema.NullOr(Schema.String),
+  displayName: Schema.optionalKey(Schema.NullOr(Schema.String)),
   models: Schema.Array(
     Schema.Struct({
       id: Schema.String,
-      label: Schema.NullOr(Schema.String),
+      label: Schema.optionalKey(Schema.NullOr(Schema.String)),
       /** Model options a target may select (for example reasoning effort). */
       options: Schema.optional(Schema.Array(ProviderOptionDescriptor)),
       family: Schema.optional(Schema.String),
@@ -772,16 +781,18 @@ export const OrchestratorMcpCapabilitiesResult = Schema.Struct({
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   providers: Schema.Array(OrchestratorMcpProviderCapability),
-  features: Schema.Struct({
-    appOwnedSubagents: Schema.Boolean,
-    asyncPolling: Schema.Boolean,
-    cancellation: Schema.Boolean,
-    batchThreadCreation: Schema.Boolean,
-    threadManagement: Schema.Boolean,
-    incrementalThreadRead: Schema.Boolean,
-    scheduledTasks: Schema.Boolean,
-    maxBatchThreads: Schema.Number,
-  }),
+  features: Schema.optionalKey(
+    Schema.Struct({
+      appOwnedSubagents: Schema.Boolean,
+      asyncPolling: Schema.Boolean,
+      cancellation: Schema.Boolean,
+      batchThreadCreation: Schema.Boolean,
+      threadManagement: Schema.Boolean,
+      incrementalThreadRead: Schema.Boolean,
+      scheduledTasks: Schema.Boolean,
+      maxBatchThreads: Schema.Number,
+    }),
+  ),
 });
 export type OrchestratorMcpCapabilitiesResult = typeof OrchestratorMcpCapabilitiesResult.Type;
 
@@ -824,7 +835,8 @@ export type OrchestratorMcpSaveScheduledTaskInput =
 export const OrchestratorMcpScheduledTask = Schema.Struct({
   scheduledTaskId: ScheduledTaskId,
   title: Schema.String,
-  prompt: Schema.String,
+  /** Full prompt, returned by list_scheduled_tasks filtered by scheduledTaskId. */
+  prompt: Schema.optionalKey(Schema.String),
   enabled: Schema.Boolean,
   projectId: ProjectId,
   boundThreadId: Schema.NullOr(ThreadId),
@@ -850,8 +862,7 @@ export type OrchestratorMcpScheduleTaskResult = typeof OrchestratorMcpScheduleTa
 export const OrchestratorMcpListScheduledTasksInput = Schema.Struct({
   projectId: Schema.optional(
     ProjectId.annotate({
-      description:
-        "Only list this project's tasks. Omit for the calling thread's project, or for every project when the caller is not a SSHCode thread.",
+      description: "Defaults to this thread's project, or all projects outside a thread.",
     }),
   ),
   scheduledTaskId: Schema.optional(ScheduledTaskId),

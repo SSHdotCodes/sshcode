@@ -191,6 +191,7 @@ describe("GhosttyTerminalSurface visibility", () => {
     const onData = vi.fn<(data: string) => void>();
 
     return {
+      canvas,
       mount,
       frames,
       paint,
@@ -804,6 +805,38 @@ describe("GhosttyTerminalSurface visibility", () => {
     expect(harness.renderedSnapshot.rowData[0]?.text).toBe(latest);
     expect(surface.getSelection()).not.toBe("");
     expect(surface.getSelectionPosition()?.end.y).toBe(39);
+  });
+
+  it("keeps a multiline selection when Control-click opens the context menu on macOS", async () => {
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    const harness = createHarness();
+    let selectionAtContextMenu: string | null = null;
+    const surface = await harness.create({
+      onContextMenu: () => {
+        selectionAtContextMenu = surface.getSelection();
+      },
+    });
+    surface.write("alpha\r\nbravo\r\ncharlie");
+    harness.flushFrame();
+    harness.pointer("pointerdown", 1, 1, {}, 0, 1);
+    harness.pointer("pointermove", 55, 1, {}, 0, 30);
+    harness.pointer("pointerup", 55, 0, {}, 0, 30);
+    const selected = surface.getSelection();
+    expect(selected.split("\n").length).toBeGreaterThan(1);
+
+    // macOS Chromium reports Control-click as a primary press, then fires contextmenu on press.
+    harness.pointer("pointerdown", 9, 1, { ctrlKey: true }, 0, 1);
+    harness.canvas.dispatchEvent(
+      Object.assign(new Event("contextmenu", { cancelable: true }), {
+        clientX: 9,
+        clientY: 1,
+        button: 0,
+        buttons: 1,
+        ctrlKey: true,
+      }),
+    );
+
+    expect(selectionAtContextMenu).toBe(selected);
   });
 
   it("pastes the terminal selection, and only that, on a Linux middle click", async () => {

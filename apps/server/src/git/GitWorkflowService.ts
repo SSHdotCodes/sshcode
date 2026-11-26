@@ -2,6 +2,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
 import {
   GitManagerError,
@@ -30,6 +32,7 @@ import {
 } from "@t3tools/contracts";
 
 import * as GitManager from "./GitManager.ts";
+import * as WarmWorktreePool from "../project/WarmWorktreePool.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
@@ -108,6 +111,7 @@ export class GitWorkflowService extends Context.Service<
     >;
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
+      options?: { readonly abandon?: boolean },
     ) => Effect.Effect<void, GitCommandError>;
     readonly pruneWorktrees: (input: {
       readonly cwd: string;
@@ -172,6 +176,8 @@ export const make = Effect.gen(function* () {
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
   const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const warm = yield* Effect.serviceOption(WarmWorktreePool.WarmWorktreePool);
 
   // Nested projects and path aliases must share the checkout's branch-mutation lease.
   const withCheckoutLease = <A, E, R>(rootPath: string, effect: Effect.Effect<A, E, R>) =>
@@ -425,9 +431,30 @@ export const make = Effect.gen(function* () {
       ensureGitCommand("GitWorkflowService.resolveRemoteTrackingCommit", input.cwd).pipe(
         Effect.andThen(git.resolveRemoteTrackingCommit(input)),
       ),
-    removeWorktree: (input) =>
+    removeWorktree: (input, options) =>
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
-        Effect.andThen(git.removeWorktree(input)),
+        Effect.andThen(
+          withCheckoutLease(
+            path.resolve(input.cwd, input.path),
+            Effect.gen(function* () {
+              if (input.force && !options?.abandon && Option.isSome(warm)) {
+                const outcome = yield* warm.value.recycle({
+                  ...input,
+                  path: path.resolve(input.cwd, input.path),
+                });
+                if (outcome === "recycled") return;
+                if (outcome === "in-use")
+                  return yield* new GitCommandError({
+                    operation: "GitWorkflowService.removeWorktree",
+                    command: "git worktree remove",
+                    cwd: input.cwd,
+                    detail: "A thread or running task still uses this worktree.",
+                  });
+              }
+              yield* git.removeWorktree(input);
+            }),
+          ),
+        ),
       ),
     pruneWorktrees: (input) =>
       ensureGitCommand("GitWorkflowService.pruneWorktrees", input.cwd).pipe(

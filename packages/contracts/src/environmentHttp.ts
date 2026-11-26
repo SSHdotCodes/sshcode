@@ -158,6 +158,8 @@ export class EnvironmentAuthInvalidError extends Schema.TaggedError<EnvironmentA
   {
     code: Schema.Literal("auth_invalid"),
     reason: EnvironmentAuthInvalidReason,
+    /** A signed, unrevoked bearer issued by client pairing reached its expiry. */
+    pairingExpired: Schema.optionalKey(Schema.Boolean),
     // Older servers do not send a DPoP failure category.
     dpopFailureReason: Schema.optionalKey(DpopFailureReason),
     traceId: TrimmedNonEmptyString,

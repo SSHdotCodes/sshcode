@@ -737,7 +737,7 @@ it.effect.each(["message.dispatch", "runtime-request.respond"] as const)(
         Effect.provide(
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             getThreadRecords: questionRecords(),
-            withIntakeReceipt: (_command, run) => run(false),
+            withIntakeReceipt: (_command, run) => run(false, Effect.succeed(false)),
             dispatch: (command) => {
               if (command.type === "runtime-request.respond") {
                 accepted = command.attachmentsByQuestionId?.q ?? [];

@@ -31,7 +31,7 @@ const base = (id: string, ordinal: number) => ({
 const steer = (
   ordinal: number,
   intent: "steer" | "promoted_queued_to_steer" | "turn_start" = "steer",
-): OrchestrationV2TurnItem => ({
+): Extract<OrchestrationV2TurnItem, { type: "user_message" }> => ({
   ...base(`steer-${ordinal}`, ordinal),
   type: "user_message",
   messageId: MessageId.make(`steer-${ordinal}`),
@@ -92,6 +92,20 @@ describe("steer reasoning windows", () => {
       { steer: "steer-2", items: ["thought-3"], closed: true },
     ]);
   });
+  it.each(["steer", "promoted_queued_to_steer"] as const)(
+    "ends the previous reply without narrating a %s sent while waiting",
+    (intent) => {
+      expect(
+        ids([
+          steer(1),
+          thought(2),
+          { ...steer(3, intent), agentWasWaiting: true },
+          thought(4),
+          answer(5),
+        ]),
+      ).toEqual([{ steer: "steer-1", items: ["thought-2"], closed: true }]);
+    },
+  );
   it("does not infer delivery from an older tool finishing or from child output", () => {
     const tool: OrchestrationV2TurnItem = {
       ...base("tool", 1),

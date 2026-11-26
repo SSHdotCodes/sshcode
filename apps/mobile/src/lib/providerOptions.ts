@@ -4,6 +4,7 @@ import type {
   ProviderOptionDescriptor,
   ProviderOptionSelection,
 } from "@t3tools/contracts";
+import { acpSpeedChoices, acpSpeedIcon } from "@t3tools/shared/acpComposer";
 import { effortDisplay } from "@t3tools/client-runtime/composer-model-display";
 import {
   buildProviderOptionSelectionsFromDescriptors,
@@ -42,19 +43,18 @@ export function fastModeControl(descriptor: ProviderOptionDescriptor) {
       switchLabel: "Fast",
     };
   }
-  if (descriptor.id === "speed" && descriptor.type === "select") {
-    // An ACP agent's Speed (Devin): "fast", which Devin's SWE models call Lightning.
-    const on = descriptor.options.find((choice) => choice.id === "fast");
-    const off = descriptor.options.find((choice) => choice.id === "standard");
-    if (!on || !off) return null;
-    const enabled = getProviderOptionCurrentValue(descriptor) === on.id;
+  const acp = acpSpeedChoices(descriptor);
+  if (acp && descriptor.type === "select") {
+    const value = getProviderOptionCurrentValue(descriptor);
+    const current = descriptor.options.find((choice) => choice.id === value) ?? acp.off;
+    const icon = acpSpeedIcon(current);
     return {
-      enabled,
-      onValue: on.id,
-      offValue: off.id,
-      choices: null,
-      label: enabled ? on.label : "Off",
-      switchLabel: on.label,
+      enabled: icon !== null,
+      onValue: acp.on.id,
+      offValue: acp.off.id,
+      choices: descriptor.options.length > 2 ? descriptor.options : null,
+      label: current.label,
+      switchLabel: acp.on.label,
     };
   }
   if (descriptor.id !== "serviceTier" || descriptor.type !== "select") return null;

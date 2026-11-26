@@ -98,6 +98,8 @@ export interface PackageManagedProviderMaintenanceDefinition {
     readonly args: ReadonlyArray<string>;
     /** Paths the provider's own installer owns; omit when it has none. */
     readonly isCommandPath?: (commandPath: string) => boolean;
+    /** Allow the native updater only for installs its path identifies. */
+    readonly requiresCommandPath?: boolean;
     /** Environment the native updater needs to target this instance's install. */
     readonly env?: NodeJS.ProcessEnv;
     /**
@@ -414,11 +416,11 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
   }
   // A `node_modules` path not proven below belongs to another package or a
   // project, so the provider's own updater could act on the wrong install.
-  const fallback = commandPaths.some((commandPath) =>
-    normalizeCommandPath(commandPath).includes("/node_modules/"),
-  )
-    ? manual
-    : native;
+  const fallback =
+    nativeUpdate?.requiresCommandPath ||
+    commandPaths.some((commandPath) => normalizeCommandPath(commandPath).includes("/node_modules/"))
+      ? manual
+      : native;
   if (packageName && commandPaths.some(isVitePlusGlobalCommandPath)) {
     return makeProviderMaintenanceCapabilities({
       provider: definition.provider,

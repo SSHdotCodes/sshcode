@@ -50,6 +50,8 @@ function renderPart(part: MathPart): string {
       return escapeHtml(part.value);
     case "inlineCode":
       return `<code>${escapeHtml(part.value)}</code>`;
+    case "plainValue":
+      return `<span class="plain-value" data-copy-source="${escapeHtml(part.source)}">${escapeHtml(part.value)}</span>`;
     case "break":
       return "<br>";
     case "math": {

@@ -1,6 +1,56 @@
 import type * as Path from "effect/Path";
+import * as Effect from "effect/Effect";
+import type * as FileSystem from "effect/FileSystem";
 
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+
+export const WARM_WORKTREES_DIRECTORY = ".warm-worktrees";
+export const LEGACY_PARKED_WORKTREES_DIRECTORY = ".parked";
+export const warmWorktreeRecordName = (worktreeName: string) => `${worktreeName}.pool.json`;
+
+/** A recycled checkout keeps its original path so its installed launchers still resolve. */
+export function recycledWorktreeRecordName(
+  candidate: string,
+  worktreesDir: string,
+  path: Path.Path,
+): string | null {
+  const relative = path.relative(worktreesDir, candidate);
+  if (
+    !relative ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  )
+    return null;
+  const name = `recycled-${encodeURIComponent(relative)}.pool.json`;
+  // Leave room for the sibling temporary name used by an atomic write.
+  return name.length <= 230 ? name : null;
+}
+
+/** pnpm writes absolute paths into its launchers. A claimed worktree stays at the same path. */
+export function isPrivateWorktree(
+  candidate: string,
+  path: Path.Path,
+  fs: FileSystem.FileSystem,
+  worktreesDir: string,
+): Effect.Effect<boolean> {
+  const directory = path.dirname(candidate);
+  if (
+    path.basename(candidate) === LEGACY_PARKED_WORKTREES_DIRECTORY ||
+    path.basename(directory) === LEGACY_PARKED_WORKTREES_DIRECTORY
+  )
+    return Effect.succeed(true);
+  const marker =
+    path.basename(directory) === WARM_WORKTREES_DIRECTORY
+      ? path.join(directory, warmWorktreeRecordName(path.basename(candidate)))
+      : (() => {
+          const name = recycledWorktreeRecordName(candidate, worktreesDir, path);
+          return name === null ? null : path.join(worktreesDir, WARM_WORKTREES_DIRECTORY, name);
+        })();
+  return marker === null
+    ? Effect.succeed(false)
+    : fs.exists(marker).pipe(Effect.orElseSucceed(() => true));
+}
 
 /**
  * Directory new worktrees are created under: the `worktreesDirectory`

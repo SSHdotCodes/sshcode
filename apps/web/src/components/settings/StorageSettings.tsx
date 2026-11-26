@@ -7,7 +7,7 @@ import type {
   WorktreeCleanupRules,
 } from "@t3tools/contracts";
 import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
-import { useMemo, useRef, useState } from "react";
+import { Fragment, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 import {
@@ -237,7 +237,8 @@ function CleanupResults({
       {report.omittedCount > 0 && (
         <p className="px-3 py-2.5 text-xs text-muted-foreground sm:px-4">
           {environmentLabel ? `${environmentLabel}: ` : ""}
-          {report.omittedCount.toLocaleString()} more results.
+          {report.omittedCount.toLocaleString()} more{" "}
+          {report.omittedCount === 1 ? "result" : "results"}.
         </p>
       )}
       {report.entries.length === 0 && report.omittedCount === 0 && (
@@ -378,153 +379,159 @@ function CleanupSection() {
   };
   return (
     <SettingsSection id="storage-cleanup" title="Cleanup" variant="plain">
-      <SettingsGroup>
-        <SettingsRow
-          {...searchableSetting("storage-delete-now")}
-          description={
-            <span>
-              {!hasRules
-                ? "Turn on a cleanup rule to use this."
-                : summaries.map(({ environment, description }) => (
-                    <span key={environment.environmentId} className="block">
-                      {supported.length > 1 ? `${environment.label}: ` : ""}
-                      {description}
-                    </span>
-                  ))}
-            </span>
-          }
-          control={
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={pending || !hasRules || !state.some((entry) => entry.allowed)}
-              onClick={() => void deleteNow()}
-            >
-              {pending ? "Deleting…" : "Delete now"}
-            </Button>
-          }
-        />
-      </SettingsGroup>
-      {supported
-        .filter(
-          (environment) =>
-            environment.serverConfig?.environment.capabilities.storageMaintenance === true,
-        )
-        .map((environment) => {
-          const query = state.find((entry) => entry.environmentId === environment.environmentId);
-          const review = query?.report?.maintenance;
-          const database = review?.database;
-          const disabled = pending || !query?.allowed;
-          return (
-            <SettingsGroup key={environment.environmentId}>
-              <SettingsRow
-                title={`${supported.length > 1 ? `${environment.label}: ` : ""}Review storage`}
-                description="Preview archived and orphan worktrees, queued messages older than 3 days with no live execution, and reclaimable database space. Previews expire after 10 minutes."
-                control={
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={disabled}
-                    onClick={() =>
-                      void maintenance(environment.environmentId, { action: "preview" })
-                    }
-                  >
-                    {pending ? "Working…" : "Review storage"}
-                  </Button>
-                }
-              />
-              {review && (
-                <>
-                  <SettingsRow
-                    title="Cancel stale queued runs"
-                    description={`${review.staleQueuedRunCount} stale queued runs. Cancelling keeps their messages visible in conversation history.`}
-                    control={
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={disabled || review.staleQueuedRunCount === 0}
-                        onClick={() =>
-                          void maintenance(environment.environmentId, {
-                            action: "cancel-stale-queued-runs",
-                            previewId: review.previewId,
-                          })
-                        }
-                      >
-                        Cancel {review.staleQueuedRunCount} queued runs
-                      </Button>
-                    }
-                  />
-                  <SettingsRow
-                    title="Reclaim space"
-                    description={
-                      database
-                        ? `Database: ${formatBytes(database.databaseBytes)}. Free pages: ${formatBytes(database.freelistBytes)}. WAL: ${formatBytes(database.walBytes)}. Estimated gain: up to ${formatBytes(database.estimatedGainBytes)}. Free disk: ${formatBytes(database.freeDiskBytes)}; required: ${formatBytes(database.requiredFreeBytes)} (includes temporary database copies and a safety margin). ${database.mode === "vacuum" ? "Rebuilds the database" : "Reclaims incremental free pages"} while writes wait. History is preserved.`
-                        : "Database space information is unavailable. Refresh the preview to retry."
-                    }
-                    control={
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={disabled || !database?.canReclaim}
-                        onClick={() =>
-                          void maintenance(environment.environmentId, {
-                            action: "reclaim-space",
-                            previewId: review.previewId,
-                          })
-                        }
-                      >
-                        {pending ? "Working…" : "Reclaim space"}
-                      </Button>
-                    }
-                  />
-                </>
-              )}
-            </SettingsGroup>
-          );
-        })}
-      {summaries.some(({ report }) => report !== null) && (
-        <FoldedSettingsSection
-          id="storage-cleanup-last-run"
-          title="Last run"
-          headerPlacement="inside"
-          summary={summaries
-            .flatMap(({ environment, report }) =>
-              report
-                ? [
-                    `${connectedEnvironments.length > 1 ? `${environment.label}: ` : ""}${report.counts.removed} removed, ${report.counts.kept} kept${report.counts.failed > 0 ? `, ${report.counts.failed} failed` : ""}`,
-                  ]
-                : [],
+      {/* One card for the actions, like every other section; the last run folds below it. */}
+      <div className="space-y-3">
+        <SettingsGroup>
+          <SettingsRow
+            {...searchableSetting("storage-delete-now")}
+            description={
+              <span>
+                {!hasRules
+                  ? "Turn on a cleanup rule to use this."
+                  : summaries.map(({ environment, description }) => (
+                      <span key={environment.environmentId} className="block">
+                        {supported.length > 1 ? `${environment.label}: ` : ""}
+                        {description}
+                      </span>
+                    ))}
+              </span>
+            }
+            control={
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pending || !hasRules || !state.some((entry) => entry.allowed)}
+                onClick={() => void deleteNow()}
+              >
+                {pending ? "Deleting…" : "Delete now"}
+              </Button>
+            }
+          />
+          {supported
+            .filter(
+              (environment) =>
+                environment.serverConfig?.environment.capabilities.storageMaintenance === true,
             )
-            .join(" · ")}
-        >
-          {summaries.map(
-            ({ environment, report }) =>
-              report && (
-                <CleanupResults
-                  key={environment.environmentId}
-                  report={report}
-                  environmentLabel={
-                    connectedEnvironments.length > 1 ? environment.label : undefined
-                  }
-                  removeWorktree={
-                    !pending &&
-                    state.some(
-                      (entry) => entry.environmentId === environment.environmentId && entry.allowed,
-                    ) &&
-                    report.maintenance
-                      ? (path) =>
-                          void maintenance(environment.environmentId, {
-                            action: "remove-worktree",
-                            path,
-                            previewId: report.maintenance!.previewId,
-                          })
-                      : undefined
-                  }
-                />
-              ),
-          )}
-        </FoldedSettingsSection>
-      )}
+            .map((environment) => {
+              const query = state.find(
+                (entry) => entry.environmentId === environment.environmentId,
+              );
+              const review = query?.report?.maintenance;
+              const database = review?.database;
+              const disabled = pending || !query?.allowed;
+              return (
+                <Fragment key={environment.environmentId}>
+                  <SettingsRow
+                    title={`${supported.length > 1 ? `${environment.label}: ` : ""}Review storage`}
+                    description="Preview archived and orphan worktrees, queued messages older than 3 days with no live execution, and reclaimable database space. Previews expire after 10 minutes."
+                    control={
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={disabled}
+                        onClick={() =>
+                          void maintenance(environment.environmentId, { action: "preview" })
+                        }
+                      >
+                        {pending ? "Working…" : "Review storage"}
+                      </Button>
+                    }
+                  />
+                  {review && (
+                    <>
+                      <SettingsRow
+                        title="Cancel stale queued runs"
+                        description={`${review.staleQueuedRunCount} stale queued runs. Cancelling keeps their messages visible in conversation history.`}
+                        control={
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={disabled || review.staleQueuedRunCount === 0}
+                            onClick={() =>
+                              void maintenance(environment.environmentId, {
+                                action: "cancel-stale-queued-runs",
+                                previewId: review.previewId,
+                              })
+                            }
+                          >
+                            Cancel {review.staleQueuedRunCount} queued runs
+                          </Button>
+                        }
+                      />
+                      <SettingsRow
+                        title="Reclaim space"
+                        description={
+                          database
+                            ? `Database: ${formatBytes(database.databaseBytes)}. Free pages: ${formatBytes(database.freelistBytes)}. WAL: ${formatBytes(database.walBytes)}. Estimated gain: up to ${formatBytes(database.estimatedGainBytes)}. Free disk: ${formatBytes(database.freeDiskBytes)}; required: ${formatBytes(database.requiredFreeBytes)} (includes temporary database copies and a safety margin). ${database.mode === "vacuum" ? "Rebuilds the database" : "Reclaims incremental free pages"} while writes wait. History is preserved.`
+                            : "Database space information is unavailable. Refresh the preview to retry."
+                        }
+                        control={
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={disabled || !database?.canReclaim}
+                            onClick={() =>
+                              void maintenance(environment.environmentId, {
+                                action: "reclaim-space",
+                                previewId: review.previewId,
+                              })
+                            }
+                          >
+                            {pending ? "Working…" : "Reclaim space"}
+                          </Button>
+                        }
+                      />
+                    </>
+                  )}
+                </Fragment>
+              );
+            })}
+        </SettingsGroup>
+        {summaries.some(({ report }) => report !== null) && (
+          <FoldedSettingsSection
+            id="storage-cleanup-last-run"
+            title="Last run"
+            headerPlacement="inside"
+            summary={summaries
+              .flatMap(({ environment, report }) =>
+                report
+                  ? [
+                      `${connectedEnvironments.length > 1 ? `${environment.label}: ` : ""}${report.counts.removed} removed, ${report.counts.kept} kept${report.counts.failed > 0 ? `, ${report.counts.failed} failed` : ""}`,
+                    ]
+                  : [],
+              )
+              .join(" · ")}
+          >
+            {summaries.map(
+              ({ environment, report }) =>
+                report && (
+                  <CleanupResults
+                    key={environment.environmentId}
+                    report={report}
+                    environmentLabel={
+                      connectedEnvironments.length > 1 ? environment.label : undefined
+                    }
+                    removeWorktree={
+                      !pending &&
+                      state.some(
+                        (entry) =>
+                          entry.environmentId === environment.environmentId && entry.allowed,
+                      ) &&
+                      report.maintenance
+                        ? (path) =>
+                            void maintenance(environment.environmentId, {
+                              action: "remove-worktree",
+                              path,
+                              previewId: report.maintenance!.previewId,
+                            })
+                        : undefined
+                    }
+                  />
+                ),
+            )}
+          </FoldedSettingsSection>
+        )}
+      </div>
     </SettingsSection>
   );
 }

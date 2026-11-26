@@ -14,6 +14,7 @@ import * as Stream from "effect/Stream";
 import * as ServerConfig from "../config.ts";
 import * as Rankings from "./SubagentRankings.ts";
 import {
+  FLAG_ONLY_GRADING_SINCE,
   MAX_RUNS,
   RankingsState,
   WINDOW_MS,
@@ -370,6 +371,21 @@ it.effect("persists a grade batch with one atomic save", () =>
     ]);
   }).pipe(Effect.scoped, Effect.provide(testLayer)),
 );
+
+it("counts finished runs nobody flagged after the flag-only switch as fine", () => {
+  const at = FLAG_ONLY_GRADING_SINCE + 1000;
+  const later = (n: number, extra: Partial<RunRecord> = {}) =>
+    run(n, { finishedAt: at + n, ...extra });
+  const model = rankingsSnapshot(
+    [later(0), later(1), later(2, { grade: { score: 4 } }), later(3, { outcome: "failed" })],
+    at + 3,
+  ).models[0]!;
+  // Two unflagged at 8.5 and one flag at 4; the failed run stays unrated.
+  expect(model.stats).toMatchObject({ rated: 3, average: 7 });
+  expect(model.yourRuns).toContain("low grades 1/3");
+  // Before the switch an ungraded run stays unrated.
+  expect(rankingsSnapshot([run(0)], now).models[0]!.yourRuns).toContain("1 run, 0 rated");
+});
 
 it("bases few runs on distinct rated runs and counts only parent grades at or below six", () => {
   const runs = [

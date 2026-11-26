@@ -91,6 +91,8 @@ const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
   ),
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-orchestrator-tools-" })),
+  Layer.provide(NodeServices.layer),
 );
 
 // Effect returns a declared tool failure as `isError` with its encoded payload

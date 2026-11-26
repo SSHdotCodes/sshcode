@@ -1,6 +1,7 @@
 // @ts-check
 const fs = require("node:fs");
 const path = require("node:path");
+const { reanimated } = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
 
 // Expo's fingerprint ignores the app version, so binaries of different majors
 // share a runtime version whenever native code is unchanged, and a production
@@ -16,5 +17,13 @@ if (!majorVersion) {
 module.exports = {
   // Hash the pinned Screens fork's native source, rather than only its version.
   nativeModuleSourceType: "files",
-  extraSources: [{ type: "contents", id: "appMajorVersion", contents: majorVersion }],
+  extraSources: [
+    { type: "contents", id: "appMajorVersion", contents: majorVersion },
+    // Expo's default fingerprint skips Reanimated's compile-time settings in package.json.
+    {
+      type: "contents",
+      id: "reanimatedStaticFeatureFlags",
+      contents: JSON.stringify(reanimated?.staticFeatureFlags ?? {}),
+    },
+  ],
 };

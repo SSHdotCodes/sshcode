@@ -63,10 +63,11 @@ function table(columns: Column[], rows: string[][]): string {
     Math.max(c.header.length, ...rows.map((r) => r[i]?.length ?? 0)),
   );
   const line = (cells: string[]) =>
-    `  ${cells
-      .map((cell, i) =>
-        columns[i]?.align === "left" ? cell.padEnd(widths[i]!) : cell.padStart(widths[i]!),
-      )
+    `  ${columns
+      .map((column, i) => {
+        const cell = cells[i] ?? "";
+        return column.align === "left" ? cell.padEnd(widths[i]!) : cell.padStart(widths[i]!);
+      })
       .join("  ")
       .trimEnd()}`;
   return [

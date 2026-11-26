@@ -252,10 +252,14 @@ export function detectSourceControlProviderFromRemoteUrl(
   }
 
   if (isGitLabHost(hostname)) {
+    const webHost = hostname === "altssh.gitlab.com" ? "gitlab.com" : host;
     return {
       kind: SourceControlProviderKind.make("gitlab"),
-      name: hostname === "gitlab.com" ? "GitLab" : "GitLab Self-Hosted",
-      baseUrl: toBaseUrl(host),
+      name:
+        hostname === "gitlab.com" || hostname === "altssh.gitlab.com"
+          ? "GitLab"
+          : "GitLab Self-Hosted",
+      baseUrl: toBaseUrl(webHost),
     };
   }
 
@@ -312,6 +316,7 @@ export function sourceControlRepositorySelector(
 
 export function canonicalRepositoryKey(key: string): string {
   return key
+    .replace(/^altssh\.gitlab\.com\//u, "gitlab.com/")
     .replace(
       /^(?:ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)\/v3\/([^/]+)\/([^/]+)\/([^/]+)$/u,
       "dev.azure.com/$1/$2/_git/$3",

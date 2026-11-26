@@ -1,9 +1,14 @@
-import type { ServerProviderUsageLimits } from "@t3tools/contracts";
+import type { ProviderDriverKind, ServerProviderUsageLimits } from "@t3tools/contracts";
 
 // Two default health checks leave room for an in-flight probe.
 export const USAGE_LIMIT_STALE_AFTER_MS = 10 * 60_000;
 
-export function isUsageLimitReadingStale(limits: ServerProviderUsageLimits, now: number): boolean {
+export function isUsageLimitReadingStale(
+  driver: ProviderDriverKind,
+  limits: ServerProviderUsageLimits,
+  now: number,
+): boolean {
+  if (driver === "antigravity" && limits.unavailable?.reason === "unsupported") return false;
   const checkedAt = Date.parse(limits.checkedAt);
   return (
     !Number.isFinite(checkedAt) ||

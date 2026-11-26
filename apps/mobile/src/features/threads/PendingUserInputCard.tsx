@@ -41,6 +41,9 @@ import {
   USER_INPUT_TOGGLE_DURATION_MS,
 } from "./pendingUserInputLayout";
 
+import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
+// oxlint-disable-next-line t3code/no-mobile-uniwind-theme-escape-hatches -- SVG extracts Stop children; wrapping them loses their theme color.
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
 import { ControlPill } from "../../components/ControlPill";
@@ -98,6 +101,11 @@ export interface PendingUserInputCardProps {
   readonly onSubmit: () => Promise<unknown>;
   /** Closes an async question without a reply. Hidden for native callback questions. */
   readonly onDismiss: () => Promise<unknown>;
+  /**
+   * The chat's composer sits under this card and its text is sent as the typed answer.
+   * A lone question then needs no answer field of its own: two boxes asked for one thing.
+   */
+  readonly composerAnswer?: { readonly hasText: boolean };
 }
 
 /**
@@ -116,6 +124,13 @@ export interface PendingUserInputCardProps {
 const EXPANDED_CARD_IS_OVERLAY = Platform.OS === "ios";
 
 const CARD_LAYOUT_TRANSITION = LinearTransition.duration(200);
+
+/** The host's padding around the card (`px-4 pb-3`), which the dock's backdrop fills too. */
+const DOCK_SIDE_GAP = 16;
+const DOCK_BOTTOM_GAP = 12;
+const DOCK_FADE_HEIGHT = 24;
+/** Extra feed inset so resting text clears most of the fade. */
+const DOCK_FADE_CLEARANCE = 8;
 
 /** Renders question text as markdown so agent-provided links open on tap. */
 function QuestionText(props: { readonly markdown: string }) {
@@ -138,6 +153,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
   const mascot = harnessMascotForDriver(mascotDriver, mascotAgentId);
   const mascotReady = useHarnessMascotReady(mascot?.id ?? null);
   const { height: keyboardHeight } = useReanimatedKeyboardAnimation();
+  const screenColor = String(useUniwindTheme()["--color-screen"]);
   const [footerHeight, setFooterHeight] = useState(0);
   const [headerHeight, setHeaderHeight] = useState(0);
   const { heightConstraints } = props;
@@ -167,7 +183,11 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
   const canRespond = props.pendingUserInput.responseCapability !== "not_resumable";
   const isResponding = props.respondingUserInputId === props.pendingUserInput.requestId;
   const responseDisabled = !canRespond || isResponding;
-  const sendDisabled = !props.canOperateThread || responseDisabled || props.answers === null;
+  const answersInComposer = props.composerAnswer !== undefined && questionCount === 1;
+  const sendDisabled =
+    !props.canOperateThread ||
+    responseDisabled ||
+    (props.answers === null && !(answersInComposer && props.composerAnswer?.hasText));
   // Async questions (`ask_user`, Codex's) are answered by message while the
   // agent keeps working, so they read as a question rather than a blocker.
   const asks = props.pendingUserInput.responseMode === "message";
@@ -187,7 +207,9 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
     if (!cardCoverage) {
       return;
     }
-    const coverage = Math.max(0, cardHeightRef.current - barHeightRef.current);
+    const covered = Math.max(0, cardHeightRef.current - barHeightRef.current);
+    // The feed also rests clear of the fade above the card, so its last line stays crisp.
+    const coverage = covered > 0 ? covered + DOCK_FADE_CLEARANCE : 0;
     if (coverage === cardCoverage.value) {
       return;
     }
@@ -233,6 +255,41 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
       transform: [{ translateY: (1 - progress) * cardHeight.value }],
     };
   });
+
+  // What the feed scrolls behind: opaque from the card's top to the composer, softened by a
+  // fade above. Without it, lines slid under the card cut in half at its edge and showed
+  // again in the gap under it. It rises and sinks with the card.
+  const dockBackdropStyle = useAnimatedStyle(() => {
+    const progress = cardProgress === undefined ? 1 : cardProgress.value;
+    return {
+      height: progress * (cardHeight.value + DOCK_BOTTOM_GAP + DOCK_FADE_HEIGHT),
+      opacity: Math.min(1, progress * 4),
+    };
+  });
+  const dockBackdrop =
+    EXPANDED_CARD_IS_OVERLAY && !discord ? (
+      <Animated.View
+        pointerEvents="none"
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        className="absolute overflow-hidden"
+        style={[
+          { left: -DOCK_SIDE_GAP, right: -DOCK_SIDE_GAP, bottom: -DOCK_BOTTOM_GAP },
+          dockBackdropStyle,
+        ]}
+      >
+        <Svg width="100%" height={DOCK_FADE_HEIGHT}>
+          <Defs>
+            <LinearGradient id="question-dock-fade" x1="0%" x2="0%" y1="0%" y2="100%">
+              <Stop offset="0%" stopColor={screenColor} stopOpacity={0} />
+              <Stop offset="100%" stopColor={screenColor} />
+            </LinearGradient>
+          </Defs>
+          <Rect width="100%" height="100%" fill="url(#question-dock-fade)" />
+        </Svg>
+        <View className="flex-1 bg-screen" />
+      </Animated.View>
+    ) : null;
 
   // On iOS the card stays MOUNTED while collapsed (hidden via the animated
   // style): expanding animates existing views on the UI thread the same
@@ -426,7 +483,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                   );
                 })}
               </View>
-              {question.allowCustomAnswer !== false ? (
+              {question.allowCustomAnswer !== false && !answersInComposer ? (
                 <QuestionAttachments
                   requestId={props.pendingUserInput.requestId}
                   question={question}
@@ -480,7 +537,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                       : "Submit answers"
               }
               size="large"
-              tone={props.answers && !isResponding ? "primary" : "secondary"}
+              tone={!sendDisabled && !isResponding ? "primary" : "secondary"}
               accessibilityState={{ busy: isResponding }}
               disabled={sendDisabled}
               onPress={() => void props.onSubmit()}
@@ -502,6 +559,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
   ) : null;
   return (
     <View className="relative">
+      {dockBackdrop}
       {bar}
       {EXPANDED_CARD_IS_OVERLAY ? (
         // Clipping window for the collapse slide: same footprint as the

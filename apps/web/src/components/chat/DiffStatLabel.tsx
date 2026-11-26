@@ -27,6 +27,7 @@ export const DiffStatLabel = memo(function DiffStatLabel(props: {
   layout?: "aligned" | "inline";
 }) {
   const { additions, deletions, className, showParentheses = false, layout = "aligned" } = props;
+  const isZero = additions === 0 && deletions === 0;
   return (
     <>
       {showParentheses && <span className="text-muted-foreground/70">(</span>}
@@ -40,12 +41,37 @@ export const DiffStatLabel = memo(function DiffStatLabel(props: {
           className,
         )}
       >
-        <span aria-hidden="true" className="font-mono text-diff-addition">
-          +{formatCompactDiffCount(additions)}
-        </span>
-        <span aria-hidden="true" className="font-mono text-diff-deletion">
-          -{formatCompactDiffCount(deletions)}
-        </span>
+        {isZero ? (
+          layout === "aligned" ? (
+            <>
+              <span aria-hidden="true" />
+              <span aria-hidden="true" className="font-mono text-muted-foreground/60">
+                0
+              </span>
+            </>
+          ) : (
+            <span aria-hidden="true" className="font-mono text-muted-foreground/60">
+              0
+            </span>
+          )
+        ) : (
+          <>
+            {additions > 0 ? (
+              <span aria-hidden="true" className="font-mono text-diff-addition">
+                +{formatCompactDiffCount(additions)}
+              </span>
+            ) : layout === "aligned" ? (
+              <span aria-hidden="true" />
+            ) : null}
+            {deletions > 0 ? (
+              <span aria-hidden="true" className="font-mono text-diff-deletion">
+                -{formatCompactDiffCount(deletions)}
+              </span>
+            ) : layout === "aligned" ? (
+              <span aria-hidden="true" />
+            ) : null}
+          </>
+        )}
       </span>
       {showParentheses && <span className="text-muted-foreground/70">)</span>}
     </>

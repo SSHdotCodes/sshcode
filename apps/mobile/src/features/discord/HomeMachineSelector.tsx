@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useEnvironmentDisplayLabels } from "../../state/environment-labels";
 import { usePrivacyLabel } from "../../state/use-privacy-mode";
 import { useWorkspaceEnvironments } from "../../state/workspace";
@@ -18,6 +19,7 @@ import { discordSurfaces } from "./discordTheme";
 export function HomeMachines(props: {
   readonly unknownCountEnvironments?: ReadonlySet<string>;
   readonly rail: boolean;
+  readonly trailing?: ReactNode;
   readonly machines: ReadonlyMap<string, { needsYou: number; unread: boolean }>;
   readonly configs: ReadonlyMap<EnvironmentId, ServerConfig>;
   readonly selected: string | null;
@@ -200,6 +202,7 @@ export function HomeMachines(props: {
           </View>
         );
       })}
+      {props.trailing}
     </ScrollView>
   );
 }

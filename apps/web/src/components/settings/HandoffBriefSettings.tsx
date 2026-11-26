@@ -97,7 +97,7 @@ export function HandoffBriefSettingsRows() {
           description="Off: the model being left writes it, since it knows the work best (your text generation model steps in when that account is out of usage). On: this model always writes it, from the chat's transcript."
           control={
             !hasServerTargets ? (
-              <span className="text-sm text-muted-foreground">
+              <span className="text-xs text-muted-foreground">
                 Connect an environment to choose who writes handoff briefs.
               </span>
             ) : (
@@ -169,7 +169,7 @@ export function HandoffBriefSettingsRows() {
                   />
                 ) : null}
                 {!usesChosenWriter && !mixedWriter ? (
-                  <span className="text-sm text-muted-foreground">Model being left</span>
+                  <span className="text-xs text-muted-foreground">Model being left</span>
                 ) : null}
                 <Switch
                   mixed={mixedWriter}

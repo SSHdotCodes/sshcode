@@ -1,3 +1,4 @@
+import { delegatedTaskHandle } from "@t3tools/shared/delegatedTaskHandle";
 import type { T3McpToolSummaryAction } from "@t3tools/shared/t3McpToolPresentation";
 
 export interface T3ToolSummaryCall {
@@ -511,4 +512,70 @@ export function summarizeT3ToolCalls(
       break;
   }
   return { label, failedCount };
+}
+
+/** What the delegation matcher needs from one timeline entry. */
+export type DelegationTimelineItem =
+  | {
+      readonly kind: "card";
+      readonly runId: string;
+      readonly subagentId: string;
+      readonly childThreadId: string | null;
+    }
+  | {
+      readonly kind: "call";
+      readonly runId: string;
+      readonly failed: boolean;
+      /** The task handle or child thread the call returned, when its output is known. */
+      readonly taskId?: string | undefined;
+      readonly childThreadId?: string | undefined;
+    };
+
+/**
+ * Indexes of delegate calls whose app-owned subagent card is already in the feed, so the
+ * card alone stands for the delegation. A call claims the card its output names; a call
+ * without output (still running, or omitted by the adapter) claims the next unclaimed
+ * card of its run. Failed calls never match, so a failed delegation keeps its error row.
+ */
+export function delegationCallsShownAsCards(
+  items: ReadonlyArray<DelegationTimelineItem | null | undefined>,
+): ReadonlySet<number> {
+  const cardByKey = new Map<string, number>();
+  const cardsByRun = new Map<string, number[]>();
+  items.forEach((item, index) => {
+    if (item?.kind !== "card") return;
+    cardByKey.set(item.subagentId, index);
+    // delegate_task answers with the short handle of the subagent's id.
+    cardByKey.set(delegatedTaskHandle(item.subagentId), index);
+    if (item.childThreadId !== null) cardByKey.set(item.childThreadId, index);
+    const run = cardsByRun.get(item.runId);
+    if (run) run.push(index);
+    else cardsByRun.set(item.runId, [index]);
+  });
+  const shown = new Set<number>();
+  if (cardByKey.size === 0) return shown;
+  const claimed = new Set<number>();
+  const unmatched: number[] = [];
+  items.forEach((item, index) => {
+    if (item?.kind !== "call" || item.failed) return;
+    const card = [item.taskId, item.childThreadId]
+      .map((key) => (key === undefined ? undefined : cardByKey.get(key)))
+      .find((candidate) => candidate !== undefined && !claimed.has(candidate));
+    if (card === undefined) {
+      // A call that names a child the feed doesn't have stays a row.
+      if (item.taskId === undefined && item.childThreadId === undefined) unmatched.push(index);
+      return;
+    }
+    claimed.add(card);
+    shown.add(index);
+  });
+  for (const index of unmatched) {
+    const item = items[index];
+    if (item?.kind !== "call") continue;
+    const card = cardsByRun.get(item.runId)?.find((candidate) => !claimed.has(candidate));
+    if (card === undefined) continue;
+    claimed.add(card);
+    shown.add(index);
+  }
+  return shown;
 }

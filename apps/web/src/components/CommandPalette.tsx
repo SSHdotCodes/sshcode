@@ -2272,7 +2272,7 @@ function OpenCommandPaletteDialog(props: {
         toastManager.add({
           type: "success",
           title: "The agent will restart",
-          description: "The agent starts fresh with your next message.",
+          description: "Your next message restarts the agent and keeps this conversation.",
         });
         const project = projectByKey.get(`${environmentId}:${thread.projectId}`);
         if (!project) return;

@@ -4,6 +4,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ServerConfigStreamEvent,
+  ServerSettingsPatch,
   type ServerConfig,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -14,7 +15,19 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import { providerCatalogDigest, serverConfigTransport } from "./serverConfigTransport.ts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
+import * as ServerSettingsService from "./serverSettings.ts";
+import * as ServerConfigService from "./config.ts";
+import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as SqlitePersistence from "./persistence/Sqlite.ts";
+import { syncedChatListTabsEnabled } from "../../../packages/client-runtime/src/state/chatTabs.ts";
+import {
+  providerCatalogDigest,
+  serverConfigTransport,
+  serverSettingsConfigUpdates,
+} from "./serverConfigTransport.ts";
 import {
   applyServerConfigProjection,
   type ServerConfigProjection,
@@ -88,6 +101,7 @@ const statuses = (providers: ReadonlyArray<ServerProvider>): ServerConfigStreamE
 const encodeLegacy = Schema.encodeSync(ServerConfigStreamEvent);
 const encodeWire = Schema.encodeSync(ServerConfigStreamWireEvent);
 const decodeWire = Schema.decodeSync(ServerConfigStreamWireEvent);
+const decodeSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const decodeWireJson = Schema.decodeEffect(Schema.fromJsonString(ServerConfigStreamWireEvent));
 const run = (
   events: ReadonlyArray<ServerConfigStreamEvent>,
@@ -100,6 +114,72 @@ const run = (
     reuseProviderCatalogs,
     reuseWorkspaceCatalogs,
   }).pipe(Stream.runCollect);
+
+it.effect(
+  "streams a phone's tab change to an open Mac and the Mac's change back to the phone",
+  () =>
+    Effect.gen(function* () {
+      const service = yield* ServerSettingsService.ServerSettingsService;
+      const connect = Effect.gen(function* () {
+        const changes = serverSettingsConfigUpdates(yield* service.subscribeChanges);
+        const initial = { ...config, settings: yield* service.getSettings };
+        let state = applyServerConfigProjection(
+          Option.none(),
+          decodeWire(
+            encodeWire({
+              version: 1,
+              type: "snapshot",
+              config: initial,
+            }),
+          ),
+        );
+        return {
+          enabled: () =>
+            syncedChatListTabsEnabled(new Map([["shared", Option.getOrThrow(state).config]])),
+          setEnabled: (enabled: boolean) =>
+            service.updateSettings(decodeSettingsPatch({ chatListTabsEnabled: enabled })),
+          receive: changes.pipe(
+            Stream.runHead,
+            Effect.map((update) => {
+              state = applyServerConfigProjection(
+                state,
+                decodeWire(encodeWire(Option.getOrThrow(update))),
+              );
+            }),
+          ),
+        };
+      });
+      const phone = yield* connect;
+      const mac = yield* connect;
+      expect(mac.enabled()).toBe(true);
+      yield* phone.setEnabled(false);
+      yield* mac.receive;
+      yield* phone.receive;
+      expect(mac.enabled()).toBe(false);
+      expect((yield* connect).enabled()).toBe(false);
+      const fs = yield* FileSystem.FileSystem;
+      const server = yield* ServerConfigService.ServerConfig;
+      expect(JSON.parse(yield* fs.readFileString(server.settingsPath))).toMatchObject({
+        chatListTabsEnabled: false,
+        chatListTabsChangedAt: expect.any(Number),
+      });
+      yield* mac.setEnabled(true);
+      yield* phone.receive;
+      expect(phone.enabled()).toBe(true);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        ServerSettingsService.layer.pipe(
+          Layer.provide(ServerSecretStore.layer),
+          Layer.provideMerge(Layer.fresh(SqlitePersistence.layerMemory)),
+          Layer.provideMerge(
+            ServerConfigService.layerTest(process.cwd(), { prefix: "chat-list-tabs-sync-" }),
+          ),
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
+);
 
 it("preserves receipt-first replay support across config transport and older snapshots", () => {
   for (const advertised of [true, undefined]) {

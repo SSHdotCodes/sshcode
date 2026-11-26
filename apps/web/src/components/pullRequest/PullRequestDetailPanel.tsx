@@ -2541,6 +2541,7 @@ export function PullRequestDetailPanel({
                     <PullRequestActorLabel
                       actor={detail.author}
                       profileUrl={authorProfileUrl}
+                      threadRef={threadRef}
                       variant="avatar"
                       className="shrink-0"
                     />
@@ -2722,7 +2723,11 @@ export function PullRequestDetailPanel({
                   )
                 }
                 author={
-                  <PullRequestActorLabel actor={detail.author} profileUrl={authorProfileUrl} />
+                  <PullRequestActorLabel
+                    actor={detail.author}
+                    profileUrl={authorProfileUrl}
+                    threadRef={threadRef}
+                  />
                 }
                 updated={
                   <span>
@@ -2997,6 +3002,7 @@ export function PullRequestDetailPanel({
       >
         {detailQuery.error && !detail ? (
           <PullRequestsUnavailableState
+            threadRef={threadRef}
             {...(isPullRequestNotFound(detailQuery.failure)
               ? {
                   title: `Pull request #${reference.number} not found`,

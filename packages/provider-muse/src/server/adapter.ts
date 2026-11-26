@@ -26,6 +26,7 @@ import {
 import type { MuseSettings } from "../settings.ts";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import { resolveT3McpDispatch } from "@t3tools/shared/t3McpToolPresentation";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -52,12 +53,14 @@ import {
   resolveMuseReasoningEffort,
 } from "./modelCatalog.ts";
 import {
+  MUSE_MAX_PATCH_BYTES,
   MuseApproval,
   MuseCompactResult,
   MuseContextUsage,
   MuseDelta,
   MuseItemEvent,
   MuseSessionResult,
+  MuseStoredOutputPage,
   MuseTokenUsageEvent,
   MuseTodoList,
   MuseTurnRetryScheduled,
@@ -95,7 +98,7 @@ import {
   makeSubagentConversationArtifacts,
   subagentThreadTitle,
 } from "@t3tools/provider-core/server/subagentProjection";
-import { museItemStatus, museToolPresentation } from "./itemPresentation.ts";
+import { museFilePatch, museItemStatus, museToolPresentation } from "./itemPresentation.ts";
 
 const MUSE_PROVIDER = ProviderDriverKind.make("muse");
 // Setting the standing effort is best effort; a host that never answers must not hold the turn.
@@ -220,6 +223,7 @@ interface ActiveTurn {
   /** Turns Muse started on its own while this run was active, which this run shows. */
   readonly joined: Set<string>;
   readonly items: Map<string, MuseItem>;
+  readonly dispatchedOutputs: Map<string, unknown>;
   readonly ordinals: Map<string, number>;
   readonly started: Map<string, DateTime.Utc>;
   readonly dirty: Set<string>;
@@ -730,6 +734,39 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
           }),
         });
       });
+      const readItemPatch = Effect.fnUntraced(function* (item: MuseItem) {
+        const ref = item.patchRef;
+        const sessionId = nativeSessionId;
+        if (
+          sessionId === undefined ||
+          ref?.availability !== "available" ||
+          ref.byteLen > MUSE_MAX_PATCH_BYTES
+        )
+          return undefined;
+        // Patch reads are optional and can run while the event permit is held.
+        const result = yield* Effect.tryPromise(() =>
+          host.connection.request("item/readOutput", {
+            sessionId,
+            itemId: item.itemId,
+            outputRef: ref.id,
+            lengthBytes: MUSE_MAX_PATCH_BYTES,
+          }),
+        ).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(MuseStoredOutputPage)),
+          Effect.timeoutOption("2 seconds"),
+          Effect.orElseSucceed(Option.none),
+        );
+        if (Option.isNone(result) || !result.value.eof || result.value.offsetBytes !== 0) {
+          return undefined;
+        }
+        const { encoding, content } = result.value;
+        if (content.length > MUSE_MAX_PATCH_BYTES * 2) return undefined;
+        const text =
+          encoding === "base64" ? Buffer.from(content, "base64").toString("utf8") : content;
+        return Buffer.byteLength(text, "utf8") <= MUSE_MAX_PATCH_BYTES
+          ? museFilePatch(text, workspaceRoot)
+          : undefined;
+      });
       const publishItem = Effect.fnUntraced(function* (
         turn: ActiveTurn,
         item: MuseItem,
@@ -807,7 +844,26 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
             summary: text || item.reason,
           };
         } else {
-          turnItem = { ...base, ...museToolPresentation(item, status) };
+          const patch =
+            item.kind === "toolCall" && status === "completed"
+              ? yield* readItemPatch(item)
+              : undefined;
+          const presentation = museToolPresentation(item, status, patch);
+          const call = resolveT3McpDispatch(item.tool, item.args);
+          if (
+            presentation.type === "dynamic_tool" &&
+            call &&
+            !call.lookup &&
+            (status === "completed" || status === "failed")
+          ) {
+            const output =
+              turn.dispatchedOutputs.get(item.itemId) ??
+              (yield* mcpSessions.takeToolResult(base.threadId, call.tool, call.input));
+            if (output !== undefined) turn.dispatchedOutputs.set(item.itemId, output);
+            turnItem = { ...base, ...presentation, output: output ?? presentation.output };
+          } else {
+            turnItem = { ...base, ...presentation };
+          }
         }
         yield* emit({
           type: "node.updated",
@@ -2023,6 +2079,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
           nativeId,
           joined: new Set(),
           items: new Map(),
+          dispatchedOutputs: new Map(),
           ordinals: new Map(),
           started: new Map(),
           dirty: new Set(),

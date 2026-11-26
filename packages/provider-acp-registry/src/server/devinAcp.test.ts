@@ -12,7 +12,49 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as EffectAcpErrors from "effect-acp/errors";
 
-import { steerDevinTurn, withDevinLightningSpeed, withoutDevinEffortSuffix } from "./devinAcp.ts";
+import {
+  devinStepUsage,
+  normalizeDevinToolCall,
+  steerDevinTurn,
+  withDevinLightningSpeed,
+  withoutDevinEffortSuffix,
+} from "./devinAcp.ts";
+
+it("retains a failed terminal exit through Devin's final text-only update", () => {
+  const terminal = normalizeDevinToolCall({
+    toolCallId: "exec",
+    status: "inProgress",
+    data: { meta: { terminal_exit: { exit_code: 7 } } },
+  });
+  const completed = normalizeDevinToolCall({
+    ...terminal,
+    status: "completed",
+    data: { ...terminal.data, meta: { "cognition.ai/inferenceToolName": "exec" }, content: [] },
+  });
+  assert.equal(completed.status, "failed");
+  assert.equal(completed.data.exitCode, 7);
+});
+
+it("counts only the root copy of each Devin inference", () => {
+  const update = { sessionUpdate: "usage_update" as const, used: 120, size: 2048 };
+  const sample = {
+    "cognition.ai/inputTokens": 99,
+    "cognition.ai/outputTokens": 21,
+    "cognition.ai/cachedReadTokens": 40,
+  };
+  const tagged = (parentAgentId: string) => ({
+    ...update,
+    _meta: { ...sample, "cognition.ai/subagent_context": { parentAgentId } },
+  });
+  assert.isUndefined(devinStepUsage({ ...update, _meta: sample }));
+  assert.isUndefined(devinStepUsage(tagged("child")));
+  assert.deepEqual(devinStepUsage(tagged("root")), {
+    inputTokens: 99,
+    outputTokens: 21,
+    totalTokens: 120,
+    cachedReadTokens: 40,
+  });
+});
 
 // Devin answers a mid-turn prompt only when the turn it joined ends (or fails it at once).
 const setup = (reply: "pending" | "refused" = "pending") =>

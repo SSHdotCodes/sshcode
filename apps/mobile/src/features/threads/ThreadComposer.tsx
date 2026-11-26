@@ -101,6 +101,10 @@ import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { AppText as Text } from "../../components/AppText";
 import { ComposerAttachmentButton } from "../../components/ComposerAttachmentButton";
 import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStrip";
+import {
+  isCompressingComposerVideo,
+  useCompressingComposerVideo,
+} from "../../state/composer-video-preparation";
 import { VideoPreviewModal, type VideoPreviewSource } from "../../components/VideoPreviewModal";
 import { GlassSurface } from "../../components/GlassSurface";
 import { ComposerEditor, type ComposerEditorHandle } from "../../components/ComposerEditor";
@@ -574,6 +578,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   // Content lives under the edit's own draft while a queued message is open;
   // the owner key still identifies this composer for settings and dictation.
   const composerDraftKey = props.draftKey ?? composerOwnerKey;
+  const compressingVideo = useCompressingComposerVideo(composerDraftKey);
   const workflowComposer = useWorkflowComposer({
     environmentId: props.environmentId,
     threadId: props.selectedThread.id,
@@ -680,6 +685,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const isExpanded =
     isFocused ||
     settingsSheetPresentation.keepsComposerExpanded ||
+    compressingVideo !== undefined ||
     stripAttachments.length > 0 ||
     (queuedEdit?.existingAttachments.length ?? 0) > 0;
   const showsCompactDictation = isVoiceInputPresented && !isExpanded;
@@ -697,6 +703,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     terminalHandoff.blockReason ??
     props.sendBlockedReason ??
     (pendingPastedTextAttachmentCount > 0 ? "Attaching pasted text" : null) ??
+    (compressingVideo ? "Compressing video" : null) ??
     (props.pendingAnswer ? null : attachmentBlockReason);
   const canSend =
     (props.canOperateThread || props.connectionState !== "connected") &&
@@ -753,6 +760,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     await inputRef.current?.flushPendingInput();
     const readPendingWork = () => ({
       pastedTextAttachments: pendingPastedTextAttachmentCountRef.current,
+      compressingVideo: isCompressingComposerVideo(composerDraftKey),
       importingContext: appAtomRegistry.get(composerContextImportsAtom)[composerDraftKey] === true,
     });
     const draft = getComposerDraftSnapshot(composerDraftKey);
@@ -825,7 +833,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       )
         return;
       if (!(await flushComposerEditorInput(inputRef.current, flushingInputRef))) return;
-      if (pendingPastedTextAttachmentCountRef.current > 0) return;
+      if (
+        pendingPastedTextAttachmentCountRef.current > 0 ||
+        isCompressingComposerVideo(composerDraftKey)
+      )
+        return;
       const answer = pendingAnswerRef.current;
       if (answer) {
         if (!answer.responding) await answer.onSubmit();
@@ -994,6 +1006,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       },
       runtimeMode: currentRuntimeMode,
       onUpdateRuntimeMode: props.onUpdateRuntimeMode,
+      interactionMode: props.selectedThread.interactionMode,
+      onUpdateInteractionMode: props.onUpdateInteractionMode,
     }),
     [
       currentModelSelection,
@@ -1003,6 +1017,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       currentRuntimeMode,
       props.onUpdateModelSelection,
       props.onUpdateRuntimeMode,
+      props.onUpdateInteractionMode,
+      props.selectedThread.interactionMode,
       providerOptionDescriptors,
       settingsOwnerId,
       lockedProviderInstanceId,
@@ -1256,7 +1272,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 />
               </Animated.View>
             ) : null}
-            {isExpanded && stripAttachments.length > 0 ? (
+            {isExpanded && (stripAttachments.length > 0 || compressingVideo) ? (
               <Animated.View
                 className="px-[14px] pb-2.5"
                 entering={COMPOSER_ATTACHMENT_ENTERING}
@@ -1265,6 +1281,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 <ComposerAttachmentStrip
                   environmentId={props.environmentId}
                   attachments={stripAttachments}
+                  compressingVideo={compressingVideo}
                   imageSize={56}
                   imageBorderRadius={12}
                   onRemove={isSubmissionLocked ? undefined : props.onRemoveDraftImage}
@@ -1525,6 +1542,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                         capabilities={currentModelOption?.capabilities}
                         selection={currentModelSelection}
                         reportedSelection={props.reportedModelSelection}
+                        onAcpSpeedChange={settingsRouteSession.onUpdateOptionSelections}
                         emphasized
                         renderIcon={(size) => (
                           <ProviderIcon
@@ -1604,6 +1622,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   ? "Finish editing the queued message first."
                   : scheduledComposerMessageReason(getComposerDraftSnapshot(composerDraftKey), {
                       pastedTextAttachments: pendingPastedTextAttachmentCount,
+                      compressingVideo: compressingVideo !== undefined,
                       importingContext: contextImports[composerDraftKey] === true,
                     }))
           }

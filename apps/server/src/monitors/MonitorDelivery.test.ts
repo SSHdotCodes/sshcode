@@ -91,8 +91,20 @@ it.effect.each([false, true])(
       ) => (command.type === "message.dispatch" ? command.notification?.detail : undefined);
 
       yield* Effect.gen(function* () {
-        // The first output wakes the thread at once.
+        // A short job gets one wake even when its answer and exit arrive separately.
+        yield* offer("ready");
+        yield* TestClock.adjust("1 second");
+        expect(yield* Queue.size(commands)).toBe(0);
+        yield* offer("", "completed");
+        expect(yield* Queue.take(commands)).toMatchObject({
+          notification: { outcome: "completed", detail: "ready" },
+        });
+        yield* TestClock.adjust("2 seconds");
+        expect(yield* Queue.size(commands)).toBe(0);
+
+        // A continuing job reports its first progress after the exit grace.
         yield* offer("one");
+        yield* TestClock.adjust("2 seconds");
         expect(detailOf(yield* Queue.take(commands))).toBe("one");
 
         // More output while the thread is idle waits out the interval, then goes as one wake.
@@ -107,7 +119,7 @@ it.effect.each([false, true])(
           expect(combined.text).toBe(
             `Monitor "Watch" (monitor:watch): output\n${durable ? "three" : "two\nthree"}`,
           );
-          expect(combined.messageId).toBe("message:monitor:0:monitor:watch:3");
+          expect(combined.messageId).toBe("message:monitor:0:monitor:watch:5");
         }
 
         // A busy thread takes output at once as a steer.
@@ -127,7 +139,7 @@ it.effect.each([false, true])(
           notification: {
             outcome: "completed",
             summary: "Watch: exited with code 0",
-            detail: durable ? exitDetail : "five",
+            detail: durable ? `${exitDetail}\nfive` : "five",
           },
         });
       }).pipe(
@@ -183,6 +195,7 @@ it.effect("a stuck-job notice skips the idle hold and carries the output held be
       });
     yield* Effect.gen(function* () {
       yield* offer("output", "epoch 1");
+      yield* TestClock.adjust("2 seconds");
       yield* Queue.take(commands);
       yield* offer("output", "retrying");
       yield* TestClock.adjust("10 seconds");

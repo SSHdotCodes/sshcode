@@ -1589,90 +1589,106 @@ const KIMI = {
   },
 };
 
-// Twins: Gemini is the twins and Antigravity floats, so two plush sparkles in Gemini's four
-// colours hover side by side with dark eyes and a blush. They bob out of step at rest, circle
-// each other like a binary star while they work, bump together in a burst of sparkles when
-// done, and grey and sink a little when something fails.
+// Twins: Gemini is the twins and Antigravity floats, so two plush Gemini sparks hover as a
+// pair: a big blue-to-violet one and a small violet-to-pink twin tucked by its shoulder,
+// inside one soft glow. They bob out of step at rest, circle each other like a binary star
+// while they work, bump together in a burst of Google's four colours when done, and grey
+// and sink a little when something fails.
 const GEMINI_BLUE = "#3186ff";
-const GEMINI_INK = "#14213f";
-/** Gemini's sparkle; a smaller `puff` fills its sides out, plush rather than sharp. */
-const geminiStar = (x, y, r, puff = 0.44) => {
-  const k = r * puff;
-  return `M${n(x)} ${n(y - r)}C${n(x)} ${n(y - r + k)} ${n(x + r - k)} ${n(y)} ${n(x + r)} ${n(y)}C${n(x + r - k)} ${n(y)} ${n(x)} ${n(y + r - k)} ${n(x)} ${n(y + r)}C${n(x)} ${n(y + r - k)} ${n(x - r + k)} ${n(y)} ${n(x - r)} ${n(y)}C${n(x - r + k)} ${n(y)} ${n(x)} ${n(y - r + k)} ${n(x)} ${n(y - r)}Z`;
+const GEMINI_INK = "#141a3d";
+/** Gemini's spark around the origin; `puff` is how deeply its four sides curve in. */
+const geminiStar = (r, puff) => {
+  const k = n(r * puff);
+  const s = n(r - k);
+  return `M0 ${-r}C0 ${-s} ${s} 0 ${r} 0C${s} 0 0 ${s} 0 ${r}C0 ${s} ${-s} 0 ${-r} 0C${-s} 0 0 ${-s} 0 ${-r}Z`;
 };
-const GEMINI_DEFS = `<defs><radialGradient id="gr" cx="0" cy="0" r="1" gradientUnits="objectBoundingBox" gradientTransform="translate(.5 0) scale(.46)"><stop offset="0" stop-color="#f94543"/><stop offset="1" stop-color="#f94543" stop-opacity="0"/></radialGradient><radialGradient id="gy" cx="0" cy="0" r="1" gradientUnits="objectBoundingBox" gradientTransform="translate(0 .5) scale(.46)"><stop offset="0" stop-color="#fabc12"/><stop offset="1" stop-color="#fabc12" stop-opacity="0"/></radialGradient><radialGradient id="gg" cx="0" cy="0" r="1" gradientUnits="objectBoundingBox" gradientTransform="translate(.5 1) scale(.46)"><stop offset="0" stop-color="#08b962"/><stop offset="1" stop-color="#08b962" stop-opacity="0"/></radialGradient></defs>`;
-/** The sparkle, its colours turned by `drift` degrees inside the shape. */
-function geminiFilled(x, y, r, id, gray = 0, drift = 0, puff = 0.44) {
-  const d = geminiStar(x, y, r, puff);
-  const box = `x="${n(x - r)}" y="${n(y - r)}" width="${n(r * 2)}" height="${n(r * 2)}"`;
-  return `<clipPath id="${id}"><path d="${d}"/></clipPath><g clip-path="url(#${id})"><g transform="rotate(${n(drift)} ${n(x)} ${n(y)})"><rect ${box} fill="${GEMINI_BLUE}"/><rect ${box} fill="url(#gr)"/><rect ${box} fill="url(#gy)"/><rect ${box} fill="url(#gg)"/></g>${gray > 0.01 ? `<rect ${box} fill="#9aa3b2" opacity="${n(gray * 0.85)}"/>` : ""}</g>`;
+// The shared glow is pale, so it lights a dark background and all but vanishes on a light one.
+// Light falls from the top left. Gradients are in each spark's own space, so they move with it.
+const geminiCoat = (id, r, [light, mid, deep]) =>
+  `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${n(-r * 0.62)}" y1="${n(-r * 0.7)}" x2="${n(r * 0.6)}" y2="${n(r * 0.74)}"><stop offset="0" stop-color="${light}"/><stop offset=".46" stop-color="${mid}"/><stop offset="1" stop-color="${deep}"/></linearGradient><radialGradient id="${id}s" gradientUnits="userSpaceOnUse" cx="${n(-r * 0.2)}" cy="${n(-r * 0.26)}" r="${n(r * 0.6)}"><stop offset="0" stop-color="#fff" stop-opacity=".5"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>`;
+const GEMINI_BIG = { r: 28.25, edge: 3.5, puff: 0.42, id: "twA" };
+const GEMINI_SMALL = { r: 15.8, edge: 2.4, puff: 0.42, id: "twB" };
+const GEMINI_DEFS = `<defs>${geminiCoat("twA", 30, ["#62b0ff", GEMINI_BLUE, "#7a56f2"])}${geminiCoat("twB", 17, ["#a98bff", "#c079f2", "#ff8fbe"])}<radialGradient id="twG"><stop offset="0" stop-color="#c4d0ff" stop-opacity=".21"/><stop offset=".6" stop-color="#cfc4ff" stop-opacity=".07"/><stop offset="1" stop-color="#cfc4ff" stop-opacity="0"/></radialGradient></defs>`;
+/** One spark at the origin: rounded tips come from a round-joined edge around the star. */
+function geminiSpark({ r, edge, puff, id }, gray) {
+  const box = `x="${-r - edge}" y="${-r - edge}" width="${(r + edge) * 2}" height="${(r + edge) * 2}"`;
+  const paint = (fill, extra = "") => `<rect ${box} fill="${fill}"${extra}/>`;
+  return `<mask id="${id}m" maskUnits="userSpaceOnUse" ${box}><path d="${geminiStar(r, puff)}" fill="#fff" stroke="#fff" stroke-width="${edge}" stroke-linejoin="round"/></mask><g mask="url(#${id}m)">${paint(`url(#${id})`)}${paint(`url(#${id}s)`)}${gray > 0.01 ? paint("#a3abba", ` opacity="${n(gray * 0.82)}"`) : ""}</g>`;
 }
 function twinsFrame(p) {
   const gray = Math.max(p.gray, p.sad * 0.85);
-  const drift = (p.phase / TAU) * 360 * (p.work > 0.5 ? -0.5 : 0.2);
-  const eyes = (x, y, scale, look) =>
-    rigEyes({ ...p, look: p.look * scale + look }, x - 5 * scale, x + 5 * scale, y, {
-      w: 3.8 * scale,
-      h: 7.4 * scale,
+  // Shut and smiling eyes are drawn as lines twice an eye wide, so those get a narrower eye.
+  const narrow = p.eye < 0.3 || p.happy > 0.5 ? 0.78 : 1;
+  const face = (scale, look) =>
+    rigEyes({ ...p, look: p.look * scale + look }, -4.7 * scale, 4.7 * scale, -1.9 * scale, {
+      w: 3.2 * scale * narrow,
+      h: 5 * scale,
       color: GEMINI_INK,
       shine: "#ffffff",
+      stroke: 1.5 * scale,
     });
-  const blush = (x, y, scale) =>
-    [-1, 1]
-      .map(
-        (side) =>
-          `<ellipse cx="${n(x + side * 8.6 * scale)}" cy="${n(y + 5.2 * scale)}" rx="${n(2.6 * scale)}" ry="${n(1.4 * scale)}" fill="#ff8fb1" opacity=".55"/>`,
-      )
-      .join("");
-  const twin = (x, y, r, id, scale, look, turn, depth = 1) => {
-    const pop = 1 + p.happy * 0.07 - p.sad * 0.06;
-    return `<g opacity="${n(0.78 + depth * 0.22)}" transform="translate(${n(x)} ${n(y)}) scale(${n(pop * (0.82 + depth * 0.18))}) rotate(${n(turn)}) translate(${n(-x)} ${n(-y)})">${geminiFilled(x, y, r, id, gray, drift, 0.34)}${eyes(x, y - r * 0.02, scale, look)}${gray > 0.3 ? "" : blush(x, y, scale)}</g>`;
+  const twin = (shape, x, y, scale, look, turn, size = 1) => {
+    const pop = size * (1 + p.happy * 0.05 - p.sad * 0.05);
+    return `<g transform="translate(${n(x)} ${n(y)}) rotate(${n(turn)}) scale(${n(pop)})">${geminiSpark(shape, gray)}${face(scale, look)}</g>`;
   };
+  const glow = (x, y, r) =>
+    `<circle cx="${n(x)}" cy="${n(y)}" r="${n(r)}" fill="url(#twG)" opacity="${n(1 - gray * 0.8)}"/>`;
   if (p.work > 0.5) {
-    // A binary star: the pair circles a shared centre, the far one smaller and dimmer.
-    const angle = p.phase;
-    const depth = (Math.sin(angle) + 1) / 2;
-    const look = Math.sin(angle) * 1.2;
+    // A binary star on a tilted orbit: the small one swings wide, low in front and high behind.
+    const angle = p.phase / 2;
+    const front = Math.sin(angle);
     const a = twin(
-      48 + Math.cos(angle) * 19,
-      52 + Math.sin(angle) * 4,
-      29,
-      "twA",
-      1.2,
-      -look,
-      0,
-      depth,
+      GEMINI_BIG,
+      44 - Math.cos(angle) * 7,
+      54 - front * 2.4,
+      1.3,
+      Math.cos(angle) * 0.9,
+      Math.cos(angle) * -3,
+      1 - front * 0.03,
     );
     const b = twin(
-      48 - Math.cos(angle) * 19,
-      52 - Math.sin(angle) * 4,
-      21,
-      "twB",
+      GEMINI_SMALL,
+      44 + Math.cos(angle) * 26,
+      53 + front * 15,
       0.86,
-      look,
-      0,
-      1 - depth,
+      -Math.cos(angle) * 0.7,
+      Math.cos(angle) * 8,
+      1 + front * 0.05,
     );
     return svg(
-      `${GEMINI_DEFS}<ellipse cx="48" cy="88" rx="17" ry="2.4" fill="#1a1a2a" opacity=".1"/>${rigBody({ ...p, tilt: 0 }, Math.sin(angle) > 0 ? b + a : a + b, 48, 52)}${rigMarks(p, GEMINI_INK, GEMINI_BLUE)}`,
+      `${GEMINI_DEFS}${glow(48, 53, 34)}<ellipse cx="46" cy="91" rx="15" ry="2.2" fill="#1a1a2a" opacity=".1"/>${rigBody({ ...p, tilt: 0 }, front > 0 ? a + b : b + a, 48, 54)}${rigMarks(p, GEMINI_INK, GEMINI_BLUE)}`,
     );
   }
-  // Hovering: no feet, so each bobs on its own and the shadow breathes with the bigger one.
-  const bobA = Math.sin(p.phase) * 2.2;
-  const bobB = Math.sin(p.phase + 2.1) * 2.6;
-  const meet = p.fx * 5; // done: they bump together
-  const a = twin(37 + meet, 58 + bobA, 30, "twA", 1.25, 0.5, -p.tilt * 0.4 - p.wave * 10, 1);
-  const b = twin(72 - meet, 34 + bobB, 19, "twB", 0.8, -0.5, p.tilt * 0.6 + p.wave * 14, 1);
+  // Hovering: no feet, so each bobs in its own gentle rhythm and the shadow breathes.
+  const bobA = Math.sin(p.phase) * 1.5;
+  const bobB = Math.sin(p.phase + 1.9) * 1.9;
+  const meet = p.fx * 2.6; // done: they bump together
+  const a = twin(
+    GEMINI_BIG,
+    40 + meet * 0.5,
+    58 + bobA - meet * 0.3,
+    1.3,
+    0.35,
+    -2.5 + Math.sin(p.phase + 0.6) * 1.4 - p.tilt * 0.3 - p.wave * 5 + p.fx * 5,
+  );
+  const b = twin(
+    GEMINI_SMALL,
+    64 - meet,
+    37.5 + bobB + meet * 0.8,
+    0.86,
+    -0.35,
+    9 + Math.sin(p.phase + 2.6) * 2.4 + p.tilt * 0.5 + p.wave * 11 - p.fx * 10,
+  );
   const burst =
     p.fx > 0.02
-      ? sparkle(50, 28 - p.fx * 6, 4.4 * p.fx, "#fabc12", p.fx) +
-        sparkle(22, 36 - p.fx * 4, 3.2 * p.fx, "#f94543", p.fx) +
-        sparkle(80, 60 - p.fx * 3, 3 * p.fx, "#08b962", p.fx) +
-        sparkle(50, 70 - p.fx * 3, 2.6 * p.fx, GEMINI_BLUE, p.fx)
+      ? sparkle(54 + p.fx * 2, 30 - p.fx * 8, 3.8 * p.fx, "#fbbc04", p.fx) +
+        sparkle(47 - p.fx * 6, 40 - p.fx * 5, 2.8 * p.fx, "#ea4335", p.fx) +
+        sparkle(60 + p.fx * 7, 54 + p.fx * 3, 3 * p.fx, "#34a853", p.fx) +
+        sparkle(72 + p.fx * 5, 58 - p.fx * 2, 2.2 * p.fx, "#4285f4", p.fx)
       : "";
-  const shadow = `<ellipse cx="44" cy="89" rx="${n(16 - bobA * 0.8)}" ry="2.4" fill="#1a1a2a" opacity=".1"/>`;
+  const shadow = `<ellipse cx="44" cy="91" rx="${n(15 - bobA * 0.8)}" ry="2.2" fill="#1a1a2a" opacity=".1"/>`;
   return svg(
-    `${GEMINI_DEFS}${shadow}${burst}${rigBody({ ...p, tilt: p.tilt * 0.3 }, a + b + rigSweat(p, 50, 30), 48, 52)}${rigMarks(p, GEMINI_INK, GEMINI_BLUE)}`,
+    `${GEMINI_DEFS}${glow(50, 50, 34)}${shadow}${rigBody({ ...p, tilt: p.tilt * 0.3 }, a + b + burst + rigSweat(p, 52, 30), 48, 54)}${rigMarks(p, GEMINI_INK, GEMINI_BLUE)}`,
   );
 }
 

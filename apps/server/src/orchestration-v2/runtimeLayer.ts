@@ -29,6 +29,7 @@ import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
 import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as WarmWorktreePool from "../project/WarmWorktreePool.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as CheckpointCaptureService from "./CheckpointCaptureService.ts";
 import * as CheckpointService from "./CheckpointService.ts";
@@ -299,6 +300,16 @@ const layerThreadManagementProvided = ThreadManagementService.layerWithLegacyImp
 export const layerProjectSetupScriptRunner = ProjectSetupScriptRunner.layer.pipe(
   Layer.provide(layerProjectService),
 );
+export const layerWarmWorktreePool = WarmWorktreePool.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      layerProjectService,
+      layerProjectSetupScriptRunner,
+      ProjectionStore.layer,
+      GitVcsDriver.layer,
+    ),
+  ),
+);
 const layerManagedProjectFoldersProvided = ManagedProjectFolders.layer.pipe(
   Layer.provide(layerProjectService),
 );
@@ -307,6 +318,7 @@ const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
     Layer.mergeAll(
       layerProjectService,
       layerProjectSetupScriptRunner,
+      layerWarmWorktreePool,
       layerManagedProjectFoldersProvided,
       layerThreadManagementProvided,
       layerCommandReceiptStoreProvided,

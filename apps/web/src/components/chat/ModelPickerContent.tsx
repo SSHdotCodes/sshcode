@@ -809,7 +809,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   const makerModels = useMemo(() => {
     const group = orderedMakerGroups.find((candidate) => candidate.maker.id === selectedMakerId);
     if (!group) return [];
-    return group.models.flatMap((model): ModelPickerItem[] => {
+    const rows = group.models.flatMap((model): ModelPickerItem[] => {
       const route = rowRouteFor(model);
       if (!route) return [];
       const reasons = model.routes.map(routeDisabledReason);
@@ -834,7 +834,20 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         },
       ];
     });
-  }, [itemForRoute, orderedMakerGroups, routeDisabledReason, rowRouteFor, selectedMakerId]);
+    // Starred models lead their maker's list; the rest keep their order by use.
+    const starred = (item: ModelPickerItem) =>
+      item.favoriteRefs.some((ref) =>
+        favoritesSet.has(providerModelKey(ref.instanceId as ProviderInstanceId, ref.slug)),
+      );
+    return [...rows.filter(starred), ...rows.filter((item) => !starred(item))];
+  }, [
+    favoritesSet,
+    itemForRoute,
+    orderedMakerGroups,
+    routeDisabledReason,
+    rowRouteFor,
+    selectedMakerId,
+  ]);
 
   const isSearching = searchQuery.trim().length > 0;
   // A pasted model page searches by its id; "Add <id> to …" appears when no harness lists it.

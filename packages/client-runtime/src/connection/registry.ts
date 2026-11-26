@@ -14,6 +14,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import * as ClientCapabilities from "../platform/capabilities.ts";
 import {
+  BearerConnectionRegistration,
   type ConnectionCatalogEntry,
   type ConnectionCredential,
   type ConnectionProfile,
@@ -103,10 +104,12 @@ export class EnvironmentRegistry extends Context.Service<
     readonly start: Effect.Effect<void>;
     /**
      * Saves a user registration. Succeeds with `false` and changes nothing when
-     * the environment is platform-managed, since the host owns that entry.
+     * the environment is platform-managed. A renewal changes only the matching
+     * route’s credential, provided its saved entry is still current and enabled.
      */
     readonly register: (
       registration: ConnectionRegistration,
+      onlyIfCurrent?: ConnectionCatalogEntry,
     ) => Effect.Effect<boolean, Persistence.ConnectionPersistenceError>;
     readonly registerPlatform: (registration: PrimaryConnectionRegistration) => Effect.Effect<void>;
     readonly reconcilePlatform: (
@@ -561,6 +564,7 @@ export const make = Effect.gen(function* () {
 
   const register = Effect.fn("EnvironmentRegistry.register")(function* (
     registration: ConnectionRegistration,
+    onlyIfCurrent?: ConnectionCatalogEntry,
   ) {
     const registered = connectionRegistrationCatalogEntry(registration);
     const environmentId = registered.target.environmentId;
@@ -574,6 +578,33 @@ export const make = Effect.gen(function* () {
         // already has (the same id, or a pairing to the same address) replaces
         // it in place. Editing keeps the disabled state.
         const previous = (yield* SubscriptionRef.get(entries)).get(environmentId);
+        if (onlyIfCurrent !== undefined) {
+          if (
+            previous !== onlyIfCurrent ||
+            !previous.enabled ||
+            registration._tag !== "BearerConnectionRegistration"
+          )
+            return false;
+          const route = findRouteToSameAddress(connectionRoutes(previous), registered);
+          const profile = route && Option.getOrNull(route.profile);
+          if (
+            route?.target._tag !== "BearerConnectionTarget" ||
+            profile?._tag !== "BearerConnectionProfile" ||
+            profile.learned ||
+            profile.authorization
+          )
+            return false;
+          yield* registrations.register(
+            new BearerConnectionRegistration({
+              target: route.target,
+              profile,
+              credential: registration.credential,
+            }),
+            persistedRoutes(previous),
+          );
+          yield* installEntryLocked({ ...previous });
+          return true;
+        }
         let entry = registered;
         if (previous !== undefined) {
           const route: ConnectionRoute = { target: registered.target, profile: registered.profile };

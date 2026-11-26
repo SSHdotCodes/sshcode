@@ -133,6 +133,11 @@ export interface AcpSessionRuntimeOptions {
    */
   readonly authenticateEagerly?: boolean;
   readonly mcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
+  /** Negotiate transport metadata once the agent's actual version is known. */
+  readonly mapMcpServers?: (
+    servers: ReadonlyArray<EffectAcpSchema.McpServer>,
+    agent: EffectAcpSchema.InitializeResponse,
+  ) => ReadonlyArray<EffectAcpSchema.McpServer>;
   /** Extra workspace roots the agent may read and write besides `cwd`. */
   readonly additionalDirectories?: ReadonlyArray<string>;
   /** Transforms provider stdout before protocol parsing and protocol logging. */
@@ -2309,13 +2314,11 @@ export const make = (
       activationOptions?: AcpSessionActivationOptions,
     ): ReadonlyArray<EffectAcpSchema.McpServer> => {
       const acpServers = activationOptions?.acpMcpServers ?? options.acpMcpServers ?? [];
-      if (
-        initializeResult.agentCapabilities?.mcpCapabilities?.acp === true &&
-        acpServers.length > 0
-      ) {
-        return acpServers;
-      }
-      return activationOptions?.mcpServers ?? options.mcpServers ?? [];
+      const servers =
+        initializeResult.agentCapabilities?.mcpCapabilities?.acp === true && acpServers.length > 0
+          ? acpServers
+          : (activationOptions?.mcpServers ?? options.mcpServers ?? []);
+      return options.mapMcpServers?.(servers, initializeResult) ?? servers;
     };
 
     const startOnce = Effect.gen(function* () {

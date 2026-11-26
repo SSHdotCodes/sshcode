@@ -105,6 +105,8 @@ export interface ChatMessage {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly inputIntent?: OrchestrationV2UserMessageInputIntent | undefined;
+  /** A steer that reached a waiting agent: shown as a new message. */
+  readonly agentWasWaiting?: true;
   /** Set on the message that answers an `ask_user` card, which shows as a folded answer row. */
   readonly questionAnswer?:
     | import("@t3tools/contracts").UserInputAttachmentAnswerPayload

@@ -1173,7 +1173,7 @@ export function EnvironmentProviderSettings({
                   >
                     <RefreshIcon refreshing={isRefreshingProviders} />
                     <span className="sr-only">Refresh provider status</span>
-                    <span className="hidden min-w-0 truncate sm:inline">
+                    <span className="hidden min-w-0 truncate ps-0.5 sm:inline">
                       {isRefreshingProviders ? (
                         "Refreshing providers"
                       ) : (
@@ -1231,7 +1231,9 @@ export function EnvironmentProviderSettings({
           <div className="min-w-0 @min-[48rem]/providers:min-h-0">
             {selectedRow ? (
               <ScrollArea scrollFade chainVerticalScroll className="@min-[48rem]/providers:h-full">
-                <div className="space-y-6 p-4">{renderProviderInstance(selectedRow, "editor")}</div>
+                <div className="divide-y divide-border/50 px-2 pb-6 sm:px-3 [&>*]:py-4 [&>*:first-child]:pt-3 [&>*:last-child]:pb-4">
+                  {renderProviderInstance(selectedRow, "editor")}
+                </div>
               </ScrollArea>
             ) : (
               <ListState

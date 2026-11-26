@@ -632,10 +632,12 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
         assert.include(result, "Result head:");
         assert.notInclude(result, " END");
         assert.notInclude(result, "�");
-        assert.include(
-          result,
-          `… rest: task_status({taskId:"${taskReference([firstId, secondId][index]!)}"})`,
-        );
+        const reference = taskReference([firstId, secondId][index]!);
+        const [preview, rest] = result.split("\n… rest: ");
+        const shown = preview!.slice(preview!.indexOf("Result head:"));
+        assert.equal(rest, `task_status({taskId:"${reference}",summaryOffset:${shown.length}})`);
+        const full = `Result head: ${character.repeat(5000)} END`;
+        assert.equal(shown + full.slice(shown.length), full);
       }
     }),
   );

@@ -23,6 +23,7 @@ import {
   ProviderInteractionMode,
   OrchestrationV2WorkspacePreparation,
   type OrchestrationV2ServerCommand,
+  ChatAttachment,
   OrchestratorMcpDelegateTaskInput,
   type WorkflowDefinition,
 } from "@t3tools/contracts";
@@ -59,6 +60,7 @@ import * as Projects from "../project/ProjectService.ts";
 import * as Git from "../vcs/GitVcsDriver.ts";
 import { randomUuidV4 } from "@t3tools/provider-core/server/randomUuid";
 import * as ServerConfig from "../config.ts";
+import * as LocalFiles from "../assets/LocalFileAttachments.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Launch from "../orchestration-v2/ThreadLaunchService.ts";
@@ -107,6 +109,7 @@ export class WorkflowsService extends Context.Service<
         input: OrchestratorMcpDelegateTaskInput,
         context?: WorkflowContextRecord,
         admit?: (command: DelegationCommand) => Effect.Effect<void, WorkflowsError>,
+        admittedAttachments?: ReadonlyArray<ChatAttachment>,
       ) => Effect.Effect<DelegateTaskDetails, E, R>,
       context?: OrchestrationMessageContext,
     ) => Effect.Effect<DelegateTaskDetails, E | WorkflowsError, R>;
@@ -124,6 +127,7 @@ export class WorkflowsService extends Context.Service<
 
 type DelegationCommand = Extract<OrchestrationV2ServerCommand, { type: "delegated_task.request" }>;
 const launchDetails = Schema.Struct({
+  attachments: Schema.optionalKey(Schema.Array(ChatAttachment)),
   parentRunId: RunId,
   parentNodeId: NodeId,
   task: Schema.String,
@@ -253,6 +257,7 @@ const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig.ServerConfig;
+  const localFiles = yield* LocalFiles.LocalFileAttachments;
   const threads = yield* Threads.ThreadManagementService;
   const launch = yield* Launch.ThreadLaunchService;
   const folders = yield* Folders.ManagedProjectFolders;
@@ -863,8 +868,38 @@ const make = Effect.gen(function* () {
         ),
         ...(workspaceStrategy ? { workspaceStrategy } : {}),
       };
-      yield* saveAdmission({ ...admission, command: details });
     }
+    let discard = Effect.void;
+    if (!details.attachments?.length && input.attachmentPaths?.length) {
+      // Restore a reservation interrupted before intake, or copy a previous
+      // delivery into a retried child's own store so either chat can be deleted.
+      const previous = agent.retryOf
+        ? threadAdmissions.get(agent.retryOf)?.command?.attachments
+        : undefined;
+      const project =
+        !previous?.length && !parent.thread.worktreePath && Option.isSome(projects)
+          ? yield* projects.value.getById(parent.thread.projectId)
+          : Option.none();
+      const workspaceRoot = previous?.length
+        ? config.attachmentsDir
+        : (parent.thread.worktreePath ?? Option.getOrUndefined(project)?.workspaceRoot);
+      if (!workspaceRoot)
+        return yield* new WorkflowsError({
+          reason: "notFound",
+          message: "Sender workspace not found.",
+        });
+      const copies = yield* localFiles
+        .copyToThread({
+          paths: previous?.length ? previous : input.attachmentPaths,
+          threadId: admission.threadId,
+          workspaceRoot,
+        })
+        .pipe(Effect.mapError((e) => new WorkflowsError({ reason: "start", message: e.message })));
+      details = { ...details, attachments: copies.attachments };
+      discard = copies.discard;
+    }
+    if (details !== admission.command)
+      yield* saveAdmission({ ...admission, command: details }).pipe(Effect.onError(() => discard));
     if (!(yield* threads.hasReceipt(CommandId.make(admission.key)))) {
       yield* resolveRuntimeMode(parent.thread.runtimeMode, details.runtimeMode);
       yield* resolveInteractionMode(parent.thread.interactionMode, details.interactionMode);
@@ -1457,6 +1492,7 @@ const make = Effect.gen(function* () {
         prepared.input,
         handoffContext,
         admission ? (command) => admitCommand(key, command) : undefined,
+        admission?.command?.attachments,
       ).pipe(
         Effect.onError(() =>
           Effect.gen(function* () {
@@ -1792,6 +1828,7 @@ const make = Effect.gen(function* () {
           threadLink: _link,
           ...clean
         } = next;
+        const retryCommand = original?.command ?? legacyCommand;
         const admission: Admission = {
           key,
           runId,
@@ -1801,8 +1838,8 @@ const make = Effect.gen(function* () {
           input: { ...input, mode: "async" },
           launched: false,
           noticePending: true,
-          ...(!input.withEdits && (original?.command ?? legacyCommand)
-            ? { command: (original?.command ?? legacyCommand)! }
+          ...(!input.withEdits && retryCommand
+            ? { command: { ...retryCommand, attachments: [] } }
             : {}),
         };
         admissions.set(key, admission);
@@ -1983,4 +2020,4 @@ const make = Effect.gen(function* () {
   return service;
 });
 
-export const layer = Layer.effect(WorkflowsService, make);
+export const layer = Layer.effect(WorkflowsService, make).pipe(Layer.provide(LocalFiles.layer));

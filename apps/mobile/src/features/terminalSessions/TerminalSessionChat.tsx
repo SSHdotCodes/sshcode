@@ -280,6 +280,7 @@ function TerminalSessionMessage(props: {
   const body = (
     <SelectableMarkdownText
       markdown={props.item.text}
+      plainValues={props.item.role === "assistant"}
       textStyle={styles.nativeTextStyle}
       preserveSoftBreaks
       isStreaming={props.streaming}

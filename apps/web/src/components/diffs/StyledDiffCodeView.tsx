@@ -85,6 +85,7 @@ export const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
 }
 
 [data-diffs-header] {
+  --diff-header-copy-opacity: 0;
   position: sticky !important;
   top: 0;
   z-index: 4;
@@ -97,6 +98,17 @@ export const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
   min-height: 32px !important;
   padding-block: 6px !important;
   padding-inline: 8px 12px !important;
+}
+
+[data-diffs-header]:hover,
+[data-diffs-header]:focus-within {
+  --diff-header-copy-opacity: 1;
+}
+
+@media (pointer: coarse) {
+  [data-diffs-header] {
+    --diff-header-copy-opacity: 1;
+  }
 }
 
 [data-diffs-header]:hover {

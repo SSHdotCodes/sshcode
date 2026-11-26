@@ -42,6 +42,7 @@ import {
   withoutGrades,
   toolsListRequestIds,
 } from "./AgentToolCatalog.ts";
+import { callerUsesCompactCatalog } from "./EagerAgentToolCatalog.ts";
 import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -297,6 +298,32 @@ it("drops the grades input from subagent tools when grading is off", () => {
   // Only the subagent tools carry grades; other tools keep their schemas untouched.
   expect(tools[1].inputSchema.properties.grades).toEqual({ type: "array" });
   expect(rewriteToolsListBody(body, new Set(["3"]), () => true)).toBe(body);
+});
+
+it("uses the compact catalog for the eager harnesses by driver and registry identity", () => {
+  const instances = {
+    flash: { driver: "antigravity" },
+    research: { driver: "muse" },
+    implementation: { driver: "acpRegistry", config: { agentId: "devin" } },
+    local: { driver: "acpRegistry", config: { agentId: "hermes" } },
+    alternate: { driver: "acpRegistry", config: { agentId: "kimi" } },
+    devin: { driver: "acpRegistry", config: { agentId: "other" } },
+    coding: { driver: "codex" },
+  };
+  for (const id of [
+    "antigravity",
+    "muse",
+    "flash",
+    "research",
+    "implementation",
+    "local",
+    "alternate",
+  ]) {
+    expect(callerUsesCompactCatalog(instances, id), id).toBe(true);
+  }
+  for (const id of ["devin", "coding", undefined]) {
+    expect(callerUsesCompactCatalog(instances, id), id).toBe(false);
+  }
 });
 
 it("gives Antigravity chats tool schemas Gemini accepts", () => {

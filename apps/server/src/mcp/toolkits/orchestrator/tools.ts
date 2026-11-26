@@ -72,7 +72,7 @@ const threadMetadataDependencies = [
 
 const OrchestratorCapabilitiesTool = Tool.make("orchestrator_capabilities", {
   description:
-    "Live provider/model catalog, inherited settings and orchestration features. Avoid accountUnavailable; credit warnings allow retries. Other account failures reject. 20 models per provider by default; includeOptions=true adds option descriptors. Filter with providerInstanceId and modelSearch; page via cursor=nextCursor. Superseded and legacy models show only when modelSearch names them. images:false cannot read images. Quota: usage_limits.",
+    "Pick providers and models. Overview shows 6 models per provider. Filter by providerInstanceId or modelSearch and page with cursor=nextCursor for more. includeOptions adds model settings. Search for legacy/superseded ids explicitly. images:false means text only. Avoid accountUnavailable. Credit warnings allow retry. See usage_limits for quotas.",
   parameters: OrchestratorMcpCapabilitiesInput,
   success: OrchestratorMcpCapabilitiesResult,
   failure: OrchestratorMcpFailure,
@@ -86,7 +86,7 @@ const OrchestratorCapabilitiesTool = Tool.make("orchestrator_capabilities", {
 
 const UsageLimitsTool = Tool.make("usage_limits", {
   description:
-    "Provider quotas, credits, resets and freshness. Refreshes stale readings for up to 3s. Use to choose subagent providers; spare quota is no reason to delegate.",
+    "Provider quotas, credits, resets and freshness. Refreshes stale readings for up to 3s. Use to choose subagent providers; spare quota is no reason to delegate. The limited flag is authoritative. 100% can be rounded.",
   parameters: UsageLimitsInput,
   success: UsageLimitsResult,
   failure: OrchestratorMcpFailure,
@@ -101,7 +101,7 @@ const UsageLimitsTool = Tool.make("usage_limits", {
 
 export const DelegateTaskTool = Tool.make("delegate_task", {
   description:
-    "Start one child owned by this thread, with only your self-contained task brief and no parent history. Requires a running agent in an SSHCode thread. Shares this checkout; isolation='worktree' starts from its last local commit, without uncommitted edits. From a scratch chat also pass the absolute repositoryPath; naming it in task text does not select it. Settings inherit unless target overrides them; requested runtimeMode must be supported, inherited modes step down if needed. Use a new clientRequestId for each task or independent review round; reuse only for retries of that call. Follow-ups needing the same child's history use t3_thread_send with its taskId, which every thread tool and task_status/cancel also accepts, unless its workspace was removed. mode='wait' ends on completion, a question or timeout; waitTimedOut leaves the child running.",
+    "Start a child owned by this thread with a self-contained task brief and no parent history. worktree starts at the last local commit, without uncommitted edits unless withEdits=true. In a scratch chat pass an absolute repositoryPath. Settings inherit. Permission modes may step down. Use a new clientRequestId for each task or independent review round and reuse only for retries. Follow up via t3_thread_send with its taskId. Task ids or unique request keys work in every thread tool and task_status/cancel until workspace removal. wait returns on completion, a question or waitTimedOut. Read more at nextSummaryOffset via task_status.",
   parameters: OrchestratorMcpDelegateTaskInput,
   success: OrchestratorMcpDelegateTaskResult,
   failure: OrchestratorMcpFailure,
@@ -114,7 +114,7 @@ export const DelegateTaskTool = Tool.make("delegate_task", {
 
 const TaskStatusTool = Tool.make("task_status", {
   description:
-    "Read a task owned by this parent thread. Summary describes its original run; published results stay stable. workState distinguishes working, waiting_for_children and result_available. A finished turn with nested work is not a finished task. failure has provider errors and may remain retryable after automatic retries. hasPendingChildRuns includes later child turns even after the task ends; task_cancel stops them too. Held work reports held. latestTerminal* reports later non-monitor results, omitted when they would repeat summary. Completion wakes and terminal reads acknowledge parent delivery.",
+    "Read subagent status and report. summary is the original result. Pass nextSummaryOffset or a wake's UTF-16 offset as summaryOffset. latestTerminal* describes later non-monitor turns, omitted when they would repeat summary. workState distinguishes working, waiting_for_children and result_available. failure may be retryable. hasPendingChildRuns flags later turns. Wakes and terminal reads acknowledge delivery.",
   parameters: OrchestratorMcpTaskStatusInput,
   success: OrchestratorMcpDelegateTaskResult,
   failure: OrchestratorMcpFailure,
@@ -142,7 +142,7 @@ const WorkflowStopTool = Tool.make("t3_workflow_stop", {
   description:
     "Stop one running Claude workflow in a SSHCode thread. Use the workflow coordinator's subagentId returned by t3_thread_read with view='activity'. Stops the whole workflow, including its phases and agents. Does not stop the parent thread or other workflows. Individual workflow phases and agents cannot be stopped separately.",
   parameters: OrchestrationV2StopWorkflowInput,
-  success: Schema.Struct({}),
+  success: Schema.Record(Schema.String, Schema.Never),
   failure: OrchestratorMcpFailure,
   failureMode: "return",
   dependencies,
@@ -152,7 +152,7 @@ const WorkflowStopTool = Tool.make("t3_workflow_stop", {
 
 export const ScheduleTaskTool = Tool.make("schedule_task", {
   description:
-    "Create persistent scheduled work; prompt and schedule are required. With scheduledTaskId, update only supplied fields; enabled=false pauses it. schedule is an object: {type:'interval',everyMs:3600000}, {type:'fixed_time',timeOfDay:'09:00',weekdays:[1,2,3,4,5]}, {type:'once',runAt:'2027-01-15T14:30:00.000Z'}, or {type:'webhook'}. One-shot messages steer an active thread or start an idle one, and deliver when the environment returns if it was offline. Report nextRunAt or webhookUrl; only creation returns it, given T3 Connect remote access and run permission. Don't share a local path. Webhook results carry webhookSetup with template and signature mechanics. Omit projectId for this thread's project, where bindToCurrentThread applies; other projects always get new threads. Provider/model/runtime settings inherit from this thread, or the project's default without a caller.",
+    "Create, edit or pause scheduled work. Creation needs prompt and schedule. Updates with scheduledTaskId change supplied fields only. enabled=false pauses. The schedule is an object such as {type:'interval',everyMs:3600000}, {type:'fixed_time',timeOfDay:'09:00',weekdays:[1,2,3,4,5]}, {type:'once',runAt:'2027-01-15T14:30:00.000Z'} or {type:'webhook'}. One-shots steer active threads or start idle ones, even after reconnect. Report nextRunAt or share webhookUrl (creation only with T3 Connect and run permission). See webhookSetup. Bind to this project's thread or start new ones. Inherits caller or project defaults.",
   parameters: OrchestratorMcpSaveScheduledTaskInput,
   success: OrchestratorMcpScheduleTaskResult,
   failure: OrchestratorMcpFailure,
@@ -184,7 +184,7 @@ const PreviewWebhookTool = Tool.make("webhook_preview", {
 const ListScheduledTasksTool = Tool.make("list_scheduled_tasks", {
   parameters: OrchestratorMcpListScheduledTasksInput,
   description:
-    "List a project's scheduled tasks. Omit projectId for this thread's project, or all projects outside a thread. Use scheduledTaskId with schedule_task to update.",
+    "List scheduled tasks. Defaults to this thread's project, or all projects outside a thread. Filter by scheduledTaskId for its full prompt. Edit via schedule_task.",
   success: OrchestratorMcpListScheduledTasksResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
@@ -228,9 +228,11 @@ const ListApiKeysTool = Tool.make("list_api_keys", {
   description:
     "List this chat's available API key names, scopes and expiries, never values. Excludes other threads' private keys and removes expired ones. Missing: request_api_key. To use: prepare_api_key.",
   parameters: Tool.EmptyParams,
-  success: Schema.Array(
-    Schema.Struct({ name: ApiKeyName, scope: ApiKeyScope, expiresAt: ApiKeyExpiry }),
-  ),
+  success: Schema.Struct({
+    keys: Schema.Array(
+      Schema.Struct({ name: ApiKeyName, scope: ApiKeyScope, expiresAt: ApiKeyExpiry }),
+    ),
+  }),
   failure: Schema.Union([ApiKeyError, OrchestratorMcpFailure]),
   failureMode: "return",
   dependencies: [
@@ -293,7 +295,7 @@ const RequestSecretTool = Tool.make("request_secret", {
 
 const AskUserTool = Tool.make("ask_user", {
   description:
-    "Ask for a user decision with a card. Put the recommended option first, its label ending '(Recommended)'; omit options for free text. Unanswered after 10 minutes, it submits that option unless important=true. Answers arrive as new messages, possibly mid-turn. Up to 4 questions.",
+    "Ask up to four user questions on a card. Put the '(Recommended)' choice first. Answers arrive as messages, possibly mid-turn.",
   parameters: OrchestratorMcpAskUserInput,
   success: OrchestratorMcpAskUserResult,
   failure: OrchestratorMcpFailure,
@@ -318,7 +320,7 @@ export const CreateThreadsTool = Tool.make("create_threads", {
 
 const ThreadListTool = Tool.make("t3_thread_list", {
   description:
-    "List T3 threads in a project, newest first. Omit projectId for the calling thread's project. Filter by durable run status, title, or settled state (settled=true lists threads the user or auto-settlement moved out of the active list), or snoozed state, and paginate with the returned cursor. A snoozed thread wakes early when it asks for something, fails, or completes.",
+    "List project threads, newest first. Defaults to this thread's project and 20 rows. Filter by run status, title, settled or snoozed. Page with nextCursor. includeDetails adds metadata. Snoozed threads wake on a question, failure or completion.",
   parameters: OrchestratorMcpThreadListInput,
   success: OrchestratorMcpThreadListResult,
   failure: OrchestratorMcpFailure,
@@ -332,7 +334,7 @@ const ThreadListTool = Tool.make("t3_thread_list", {
 
 const ThreadReadTool = Tool.make("t3_thread_read", {
   description:
-    "Read any thread's durable state and paginated timeline in this environment. Default messages view: user/assistant messages and proposed plans; activity: all summarized items. Reading an untruncated terminal result of this thread's direct app-owned child acknowledges its completion delivery. Latest limit items in position order (fromEnd=false: first), ~30k chars max. Page forward afterPosition=nextPosition, back beforePosition=prevPosition (exclusive) while hasMore. query: case-insensitive all-words match on title/text in the view, newest first with snippet, scanning at most 1000 items/call; continue with same query/view and beforePosition=prevPosition while hasMore, even after an empty page. search.hasMoreMatches: true another match, false exhausted, null unknown past search.scanLimitReached. Don't combine afterPosition with backward/search reads, or itemId with query/backward reads. Long text: itemId + textOffset=nextTextOffset while present (UTF-16 units). Includes snooze state; an item's omitted sourceThreadId is this thread.",
+    "Read thread state and latest items by default (max ~30k chars). fromEnd=false starts at the beginning. messages includes plans; activity includes tools. Continue with afterPosition=nextPosition or beforePosition=prevPosition. query is a case-insensitive all-words match, newest first, with snippets. Scans at most 1000 items. Keep query/view and page back even past empty pages. search.hasMoreMatches is true for more, false if exhausted, null unknown past search.scanLimitReached. Read full text with itemId, then textOffset=nextTextOffset (UTF-16). itemId excludes query/backward paging. Reading a full child result acknowledges delivery. Omitted sourceThreadId means this thread.",
   parameters: OrchestratorMcpThreadReadInput,
   success: OrchestratorMcpThreadReadResult,
   failure: OrchestratorMcpFailure,
@@ -361,7 +363,7 @@ export const ThreadUpdateTool = Tool.make("t3_thread_update", {
 
 const ThreadSendTool = Tool.make("t3_thread_send", {
   description:
-    "Send to a thread in this environment; its permission modes cannot exceed yours. For independent review rounds use delegate_task with the full brief and a new clientRequestId. Follow-ups needing a child's history use its taskId; a completed task gets a new short taskId, whose completion notifies the parent. Original results stay stable. If its workspace was removed, start a new delegate instead. To answer a pending question, use t3_pending_request_respond, never a message. mode='auto' starts idle threads, steers active turns or queues until steerable. From a child to its parent, auto holds progress for the next turn, waking it within 2 minutes; queue wakes it now. queue requests a separate turn, steer updates one in flight, restart interrupts and restarts. Reuse clientRequestId only for retries.",
+    "Message a T3 thread within your permission modes. A peer run wakes you on completion. Independent review rounds use delegate_task with the full brief and a new key. For child history use its taskId. A completed task gets a new short taskId and wakes its parent on completion. If its workspace was removed, delegate again. Answer pending questions with t3_pending_request_respond, never a message. auto starts idle or steers/queues busy threads. Child-to-parent auto holds text-only progress up to 2 min, queue wakes now. queue starts a separate turn, steer updates it, restart interrupts it. Reuse clientRequestId only for retries.",
   parameters: OrchestratorMcpThreadSendInput,
   success: OrchestratorMcpThreadSendResult,
   failure: OrchestratorMcpFailure,
@@ -406,7 +408,7 @@ const monitorDependencies = [
 
 const MonitorStartTool = Tool.make("monitor_start", {
   description:
-    "Needs a full-access/default thread. Starts a shell command in this thread's working directory; returns monitorId immediately. For work over 10 minutes (training, builds, uploads, servers) use durable:true: it survives server restarts, returns logPath for complete stdout/stderr, is adopted without relaunching, is never stopped by output volume and has no default timeout (timeoutMs up to 24 h). wakeOn:false wakes only on exit; a regex wakes on matching stdout/stderr lines plus exit; omit for throttled output (durable: exit only). A repeating error also wakes once. Ordinary monitors batch nearby output and stop on excessive output, so use line-buffered filters (grep --line-buffered, sed -u, awk with fflush()); their default timeout is 1 h, removed by persistent:true. restartable:true relaunches ordinary read-only waits after restart; silenceMs reports quiet periods. Neither option applies to durable jobs. Stop, archive or removal kills the whole job group. At most 8 per thread. Reuse clientRequestId when retrying.",
+    "Run a shell command in this thread's directory (full-access/default). Returns monitorId now and wake on output or exit. For work over 10 min use durable:true to survive restarts and retain output at logPath. Ordinary monitors default to 1 h unless persistent:true and stop on excessive output. Use line-buffered output, wakeOn for milestones, restartable:true for read-only waits, and silenceMs for stalled output. Repeating errors can wake once. timeoutMs up to 24 h. Stop, archive or removal kills the entire process group. At most 8 per thread. Reuse clientRequestId only for retries.",
   parameters: MonitorStartInput,
   success: MonitorStartResult,
   failure: OrchestratorMcpFailure,
@@ -432,8 +434,8 @@ const MonitorStopTool = Tool.make("monitor_stop", {
 
 const MonitorListTool = Tool.make("monitor_list", {
   description:
-    "List this thread's active app-owned monitors and recent output. Don't poll this list. Native Claude Code monitors remain managed by the native Monitor tool.",
-  parameters: Tool.EmptyParams,
+    "List this thread's monitors. includeOutput=true adds recent output. Wait for wakes instead of polling. Claude's native monitors use Monitor.",
+  parameters: Schema.Struct({ includeOutput: Schema.optional(Schema.Boolean) }),
   success: MonitorListResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",

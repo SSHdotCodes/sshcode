@@ -176,6 +176,7 @@ export type ProviderSessionManagerV2Error = typeof ProviderSessionManagerV2Error
 export interface ProviderSessionManagerV2Shape {
   readonly shutdown: Effect.Effect<void>;
   readonly open: (input: {
+    readonly isSubagent?: boolean;
     readonly threadId: ThreadId;
     readonly providerSessionId: ProviderSessionId;
     readonly modelSelection: ModelSelection;
@@ -2664,6 +2665,7 @@ export const layerWithOptions = (
                 .openSession({
                   threadId: input.threadId,
                   keepWarm,
+                  ...(input.isSubagent ? { isSubagent: true } : {}),
                   providerSessionId: input.providerSessionId,
                   modelSelection: input.modelSelection,
                   runtimePolicy: input.runtimePolicy,

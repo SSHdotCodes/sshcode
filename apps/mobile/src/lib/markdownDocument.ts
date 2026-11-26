@@ -124,9 +124,27 @@ export function markdownHtmlContent(content: string): string {
   });
 }
 
+const MAY_HAVE_HTML = /<(?:!--|\/?[a-z])/i;
+// Closed top-level fences, matched in document order, and one-line single-backtick spans.
+const CODE_FENCE =
+  /^ {0,3}(?:(`{3,})[^`\n]*\n[\s\S]*?^ {0,3}\1`*|(~{3,})[^\n]*\n[\s\S]*?^ {0,3}\2~*)[ \t]*$/gm;
+const CODE_SPAN = /(^|[^`])`[^`\n]+`(?!`)/g;
+
+/**
+ * Whether a tag-like run may sit outside code. Agent replies are full of `<View>` and
+ * `Array<string>` in code, and the full parse below is a long frame on Hermes for each
+ * row that mounts while a chat scrolls. Unusual code (escaped backticks, nested or
+ * unclosed fences) keeps a tag visible here, so a wrong guess only costs the parse.
+ */
+function mayHaveHtmlOutsideCode(markdown: string): boolean {
+  if (!MAY_HAVE_HTML.test(markdown)) return false;
+  if (markdown.includes("\\`")) return true;
+  return MAY_HAVE_HTML.test(markdown.replace(CODE_FENCE, "").replace(CODE_SPAN, "$1"));
+}
+
 /** Convert parsed HTML fragments only, preserving Markdown code and source around them. */
 export function markdownWithHtml(markdown: string): string {
-  if (!/<(?:!--|\/?[a-z])/i.test(markdown)) return markdown;
+  if (!mayHaveHtmlOutsideCode(markdown)) return markdown;
   const edits: Array<{ start: number; end: number; content: string }> = [];
   const visit = (node: MarkdownNode) => {
     if (node.type === "html") {

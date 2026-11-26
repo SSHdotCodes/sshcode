@@ -10,6 +10,15 @@ import {
 } from "./sourceControl.ts";
 
 describe("source control presentation", () => {
+  it("recognizes GitLab.com's alternate SSH transport", () => {
+    expect(
+      detectSourceControlProviderFromRemoteUrl("ssh://git@altssh.gitlab.com:443/team/repo.git"),
+    ).toMatchObject({
+      name: "GitLab",
+      baseUrl: "https://gitlab.com",
+    });
+  });
+
   it("uses merge request terminology for GitLab", () => {
     expect(getChangeRequestTerminologyForKind(SourceControlProviderKind.make("gitlab"))).toEqual({
       shortLabel: "MR",

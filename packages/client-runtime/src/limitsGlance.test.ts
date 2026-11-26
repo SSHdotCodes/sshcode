@@ -1,5 +1,6 @@
 import { ProviderDriverKind } from "@t3tools/contracts";
 import type { LimitAccount, LimitPool, LimitPoolWindow } from "@t3tools/shared/usageLimits";
+import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -14,7 +15,7 @@ import {
   statusRowVisibleRings,
   summarizeProviderLimits,
   tightestProviderLimits,
-} from "./limitsGlance";
+} from "./limitsGlance.ts";
 
 const NOW = Date.parse("2026-10-15T12:00:00.000Z");
 
@@ -293,7 +294,7 @@ describe("plan use", () => {
 
   it("reads each chat's latest run, on the plan a working one runs on", () => {
     const runs = planRunsFromThreads([
-      thread("codex", new Date(NOW - HOUR).toISOString()),
+      thread("codex", DateTime.formatIso(DateTime.makeUnsafe(NOW - HOUR))),
       thread("claudeAgent", null),
       thread("claudeAgent", null, { status: "running", providerInstanceId: "claudeAgent_work" }),
     ]);

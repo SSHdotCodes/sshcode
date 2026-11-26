@@ -508,6 +508,8 @@ describe("AcpRegistryAdapterV2", () => {
       readonly failsConfiguration?: boolean;
       readonly storedModel?: string;
       readonly rejectedMessage?: string;
+      readonly runtimeMode?: "approval-required" | "auto" | "full-access";
+      readonly liveRuntimeMode?: "approval-required" | "auto" | "full-access";
     }) {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -567,12 +569,31 @@ describe("AcpRegistryAdapterV2", () => {
             ],
           },
           runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-            runtimeMode: "approval-required",
+            runtimeMode: input.runtimeMode ?? "approval-required",
             interactionMode: "default",
             cwd: replayDir,
           }),
         })
         .pipe(
+          Effect.tap((runtime) =>
+            Effect.gen(function* () {
+              if (input.liveRuntimeMode === undefined) return;
+              const providerThread = yield* runtime.ensureThread({
+                threadId: ThreadId.make("thread-acp-registry-mode-pick"),
+                modelSelection: { instanceId, model: input.storedModel ?? "default" },
+                runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+                  runtimeMode: input.runtimeMode ?? "approval-required",
+                  interactionMode: "default",
+                  cwd: replayDir,
+                }),
+              });
+              assert.isDefined(runtime.setRuntimeMode);
+              yield* runtime.setRuntimeMode!({
+                providerThreadId: providerThread.id,
+                runtimeMode: input.liveRuntimeMode,
+              });
+            }),
+          ),
           Effect.match({
             onFailure: (error) => {
               assert.equal(input.failsConfiguration, true);
@@ -764,9 +785,39 @@ describe("AcpRegistryAdapterV2", () => {
           outbound("session/set_mode", { sessionId: "agent-session", modeId: "autoEdit" }),
           answer("session/set_mode", {}),
         ],
-        storedModePick: "autoEdit",
+        storedModePick: "default",
+        runtimeMode: "auto",
       }).pipe(Effect.provide(layerTest), Effect.scoped),
     );
+
+    it.effect("applies the lock to an already open Devin-shaped session", () => {
+      const mode = (currentValue: string) => ({
+        id: "mode",
+        name: "Session Mode",
+        category: "mode",
+        type: "select",
+        currentValue,
+        options: ["code", "smart", "ask", "plan", "bypassPermissions"].map((value) => ({
+          value,
+          name: value,
+        })),
+      });
+      return openWithStoredModePick({
+        setup: { configOptions: [mode("code")] },
+        storedModePick: "unused",
+        storedOptions: [{ id: "mode", value: "bypassPermissions" }],
+        runtimeMode: "approval-required",
+        liveRuntimeMode: "auto",
+        modeFrames: [
+          outbound("session/set_config_option", {
+            sessionId: "agent-session",
+            configId: "mode",
+            value: "smart",
+          }),
+          answer("session/set_config_option", { configOptions: [mode("smart")] }),
+        ],
+      }).pipe(Effect.provide(layerTest), Effect.scoped);
+    });
 
     it.effect("switches a mode config option under its own id", () =>
       openWithStoredModePick({

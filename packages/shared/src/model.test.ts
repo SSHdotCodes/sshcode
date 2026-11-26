@@ -418,7 +418,7 @@ describe("provider-reported option display", () => {
   };
 
   it("shows explicit reports without adding a choice or a dispatch option", () => {
-    expect(getProviderOptionCurrentLabel(descriptor, selection, reported)).toBe("Default");
+    expect(getProviderOptionCurrentLabel(descriptor, selection, reported)).toBeUndefined();
     expect(
       getProviderOptionCurrentLabel(descriptor, selection, {
         ...reported,
@@ -434,7 +434,7 @@ describe("provider-reported option display", () => {
     ).toBe("None");
     expect(descriptor.options.map((option) => option.id)).toEqual(["none", "thinking"]);
     expect(buildProviderOptionSelectionsFromDescriptors([descriptor])).toBeUndefined();
-    expect(getProviderOptionCurrentLabel(descriptor, selection)).toBe("Unknown");
+    expect(getProviderOptionCurrentLabel(descriptor, selection)).toBeUndefined();
     const effortDescriptor = { ...descriptor, id: "effort", currentValue: "default" };
     expect(getProviderOptionCurrentLabel(effortDescriptor, selection)).toBeUndefined();
     expect(
@@ -449,10 +449,36 @@ describe("provider-reported option display", () => {
         ...reported,
         options: [{ id: "effort", value: "default" }],
       }),
-    ).toBe("Default");
+    ).toBeUndefined();
     expect(
       getProviderOptionCurrentLabel({ ...descriptor, currentValue: "thinking" }, selection),
-    ).toBe("Unknown");
+    ).toBe("Thinking");
+  });
+
+  it("resolves a default report to the native effort and an unset option to the catalog default", () => {
+    const withDefault = {
+      ...descriptor,
+      nativeValue: "none",
+      options: [
+        { id: "none", label: "None" },
+        { id: "thinking", label: "Thinking", isDefault: true },
+      ],
+    };
+    expect(getProviderOptionCurrentLabel(withDefault, selection)).toBe("Thinking");
+    expect(
+      getProviderOptionCurrentLabel({ ...withDefault, currentValue: "retired" }, selection),
+    ).toBe("Thinking");
+    expect(getProviderOptionCurrentLabel({ ...descriptor, nativeValue: "none" }, selection)).toBe(
+      "None",
+    );
+    expect(getProviderOptionCurrentLabel(withDefault, selection, reported)).toBe("None");
+    expect(
+      getProviderOptionCurrentLabel(
+        { ...descriptor, currentValue: "thinking" },
+        selection,
+        reported,
+      ),
+    ).toBe("Thinking");
   });
 
   it.each([
@@ -460,7 +486,14 @@ describe("provider-reported option display", () => {
     { ...selection, instanceId: ProviderInstanceId.make("other") },
     { ...selection, options: [{ id: "variant", value: "none" }] },
   ])("ignores reports after changing the model, instance, or option: %j", (selected) => {
-    expect(getProviderOptionCurrentLabel(descriptor, selected, reported)).toBe("Unknown");
+    const [resolved] = getProviderOptionDescriptors({
+      caps: { optionDescriptors: [descriptor] },
+      selections: selected.options,
+    });
+    const report = { ...selection, options: [{ id: "variant", value: "thinking" }] };
+    expect(getProviderOptionCurrentLabel(resolved, selected, report)).toBe(
+      selected.options?.length ? "None" : undefined,
+    );
   });
 });
 

@@ -9,7 +9,6 @@ import { threadHasUnseenCompletion } from "../../lib/thread-summaries";
 export { threadHasUnseenCompletion };
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import {
-  canSnooze,
   effectiveSnoozed,
   hasQueuedTurnStart,
   QUEUED_TURN_START_GRACE_MS,
@@ -438,11 +437,6 @@ export interface ThreadListV2ThreadListItem {
       equality only sees a change on rows that actually draw a time. Blank
       while the row renders a status label or the wake countdown instead. */
   readonly timeLabel: string;
-  /** Minute clock feeding the row's native snooze menu, carried only on rows
-      whose menu holds snooze presets (capability-gated rows the user may
-      snooze). Keeping it out of the list's `extraData` means the minute tick
-      re-renders just these rows instead of every visible one. */
-  readonly snoozePresetMinute: string | undefined;
   /** Inset hairline drawn under the row. Precomputed from the final order so
       a neighbour change (e.g. the snoozed shelf appearing) updates the row
       through recycled-list equality instead of leaving a stale divider. */
@@ -523,7 +517,6 @@ export function threadListV2ListItemsAreEqual(
         previous.item.longRunningStatus === item.item.longRunningStatus &&
         previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
         previous.timeLabel === item.timeLabel &&
-        previous.snoozePresetMinute === item.snoozePresetMinute &&
         previous.showTrailingDivider === item.showTrailingDivider &&
         previous.hasQueuedMessages === item.hasQueuedMessages &&
         previous.canMoveUp === item.canMoveUp &&
@@ -581,10 +574,6 @@ export function buildThreadListV2ListItems(input: {
   readonly settledShelfExpanded?: boolean;
   readonly snoozedShelfExpanded?: boolean;
   readonly snoozeLabelNow?: string;
-  /** Environments whose server supports thread.snooze. Rows on other
-      environments never carry the minute clock that feeds the snooze menu.
-      Absent = no gating (tests). */
-  readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
   /** Thread keys (`environmentId:threadId`) with a message waiting in the
       outbox; stamped onto the matching rows as `hasQueuedMessages`. */
   readonly queuedThreadKeys?: ReadonlySet<string>;
@@ -606,16 +595,6 @@ export function buildThreadListV2ListItems(input: {
       item.snoozed && item.thread.snoozedUntil != null && input.snoozeLabelNow !== undefined
         ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow })
         : undefined;
-    // The minute clock belongs on the item, not the list's extraData, so the
-    // recycler's equality can confine the per-minute re-render to rows whose
-    // snooze menu actually shows preset times.
-    const snoozePresetMinute =
-      !item.snoozed &&
-      input.snoozeLabelNow !== undefined &&
-      (input.snoozeEnvironmentIds?.has(item.thread.environmentId) ?? true) &&
-      canSnooze(item.thread, { now: input.snoozeLabelNow })
-        ? input.snoozeLabelNow
-        : undefined;
     const threadKey = `${item.thread.environmentId}:${item.thread.id}`;
     const move = input.moveAvailability?.get(threadKey);
     return {
@@ -624,7 +603,6 @@ export function buildThreadListV2ListItems(input: {
       item,
       snoozeWakeLabelText,
       timeLabel: resolveThreadListV2ItemTimeLabel(item, snoozeWakeLabelText !== undefined),
-      snoozePresetMinute,
       showTrailingDivider: false,
       hasQueuedMessages: queuedThreadKeys?.has(threadKey) === true,
       canMoveUp: move?.canMoveUp === true,

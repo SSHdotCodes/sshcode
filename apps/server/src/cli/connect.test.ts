@@ -13,6 +13,7 @@ import * as Terminal from "effect/Terminal";
 import * as BootService from "../cloud/bootService.ts";
 import {
   acquireRelayClientForLink,
+  connectNextStep,
   headlessSessionConfig,
   reportCloudDisconnectResults,
 } from "./connect.ts";
@@ -192,3 +193,21 @@ it.effect("keeps disconnect causes in structured logs and out of console warning
     ),
   );
 });
+
+it.effect("gives the next step for the server linked in this data directory", () =>
+  Effect.gen(function* () {
+    const baseDir = Option.some("/tmp/connect example");
+    const service = yield* connectNextStep(
+      Option.some({ pid: process.pid, serviceManaged: true }),
+      false,
+      baseDir,
+    );
+    assert.include(service, "service restart --base-dir '/tmp/connect example'");
+    const foreground = yield* connectNextStep(Option.some({ pid: process.pid }), true, baseDir);
+    assert.include(foreground, "Restart the running server to publish agent activity");
+    const stopped = yield* connectNextStep(Option.some({ pid: -1 }), false, baseDir);
+    assert.include(stopped, "serve --base-dir '/tmp/connect example'");
+    const firstStart = yield* connectNextStep(Option.none(), true, baseDir);
+    assert.include(firstStart, "Start SSHCode to publish agent activity");
+  }),
+);

@@ -512,6 +512,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["hide fold running monitoring threads chats inbox sidebar shelf"],
   },
   {
+    id: "chat-list-tabs",
+    title: "Chat list tabs",
+    to: "/settings/chats",
+    searchTerms: ["show hide folder folders session tabs chips sidebar"],
+  },
+  {
     id: "session-boxes",
     title: "Show chats as boxes",
     to: "/settings/chats",
@@ -871,7 +877,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "subagent-grading",
     title: "Grade subagents",
     to: "/settings/model-rankings",
-    searchTerms: ["grades rating score rate review subagent results quality stars"],
+    searchTerms: ["grades rating score rate flag review subagent results quality stars"],
   },
   {
     id: "skills",

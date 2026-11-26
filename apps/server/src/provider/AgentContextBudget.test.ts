@@ -4,7 +4,11 @@ import { ComputerUseService } from "../computer/ComputerUseService.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
+import { kimiMcpDiscoveryInstructions } from "@t3tools/provider-acp-registry/server";
 import { McpProviderSessions } from "@t3tools/provider-core/server/McpProviderSessions";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
+import type { JsonSchemaType } from "@modelcontextprotocol/sdk/validation";
+import { ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpServer } from "effect/ai";
@@ -42,7 +46,10 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import { SourceControlRepositoryService } from "../sourceControl/SourceControlRepositoryService.ts";
 import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import { VcsStatusBroadcaster } from "../vcs/VcsStatusBroadcaster.ts";
-import { buildCodexTurnStartParams } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import {
+  buildCodexTurnStartParams,
+  codexBackgroundCommandDetail,
+} from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import {
   t3AcpInstructionState,
   t3AcpPromptWithInstructions,
@@ -55,10 +62,19 @@ import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeI
 import { writeAgentQualityArtifact } from "../orchestration-v2/testkit/AgentQualityRecorder.ts";
 import { auditToolSchemas } from "../../../../scripts/lib/agentQuality.ts";
 import { OrchestratorToolkit } from "../mcp/toolkits/orchestrator/tools.ts";
+import {
+  agentToolDiscoveryCatalog,
+  rewriteToolsListBody,
+  type ToolsListTransform,
+  withGeminiSafeEnums,
+} from "../mcp/AgentToolCatalog.ts";
+import { withCompactAgentCatalog } from "../mcp/EagerAgentToolCatalog.ts";
+import { deferMcpCatalog, deferredMcpHarness } from "../mcp/DeferredMcpCatalog.ts";
 import { PreviewSnapshotTool } from "../mcp/toolkits/preview/tools.ts";
 import { Tool } from "effect/ai";
 import { buildCodexDeveloperInstructions } from "./CodexDeveloperInstructions.ts";
 import { ProviderRegistry } from "./ProviderRegistry.ts";
+import { antigravityMcpDiscoveryInstructions } from "./acp/AntigravityAcpSupport.ts";
 import budget from "./agentContextBudget.json" with { type: "json" };
 
 // Registration only stores tool definitions, so the handlers' services are never called.
@@ -118,7 +134,7 @@ const claudeSystemAppend = () => {
   return typeof systemPrompt === "object" && "append" in systemPrompt ? systemPrompt.append : "";
 };
 
-const codexTurn = () =>
+const codexTurn = (toolDiscoveryCatalog?: string) =>
   buildCodexTurnStartParams({
     nativeThreadId: "context-budget",
     codexInput: [{ type: "text", text: "Continue.", text_elements: [] }],
@@ -127,21 +143,33 @@ const codexTurn = () =>
     hasT3Mcp: true,
     browserToolsAvailable: true,
     deviceToolsAvailable: true,
+    toolDiscoveryCatalog,
   });
+
+const withCompactGeminiCatalog: ToolsListTransform = (tool) =>
+  withGeminiSafeEnums(withCompactAgentCatalog(tool));
 
 // Lower this budget when context shrinks; increases must be deliberate and eval-checked.
 // Output schemas are counted apart: Codex code mode shows them as return types
 // when it loads a tool, and Claude's API has no place for them.
-const toolListBytes = (tools: typeof McpHttpServer.layerAllTools, part: "input" | "output") =>
+const toolListBytes = (
+  tools: typeof McpHttpServer.layerAllTools,
+  part: "input" | "output",
+  transform?: ToolsListTransform,
+) =>
   Effect.gen(function* () {
     const mcp = yield* McpServer.McpServer;
     return utf8Bytes(
       JSON.stringify(
-        mcp.tools.map(({ tool }) =>
-          part === "input"
-            ? { name: tool.name, description: tool.description, inputSchema: tool.inputSchema }
-            : (tool.outputSchema ?? null),
-        ),
+        mcp.tools.map(({ tool }) => {
+          if (part === "output") return tool.outputSchema ?? null;
+          const advertised = transform ? transform({ ...tool }) : tool;
+          return {
+            name: advertised.name,
+            description: advertised.description,
+            inputSchema: advertised.inputSchema,
+          };
+        }),
       ),
     );
   }).pipe(
@@ -155,17 +183,161 @@ const toolInventory = Effect.gen(function* () {
   const tools = mcp.tools
     .map(({ tool }) => ({
       name: tool.name,
+      nameBytes: utf8Bytes(tool.name),
       descriptionBytes: utf8Bytes(tool.description ?? ""),
       inputSchemaBytes: utf8Bytes(JSON.stringify(tool.inputSchema)),
+      eagerDescriptionBytes: utf8Bytes(String(withCompactAgentCatalog({ ...tool }).description)),
+      eagerInputSchemaBytes: utf8Bytes(
+        JSON.stringify(withCompactAgentCatalog({ ...tool }).inputSchema),
+      ),
       outputSchemaBytes: utf8Bytes(JSON.stringify(tool.outputSchema ?? null)),
     }))
     .toSorted((a, b) => a.name.localeCompare(b.name));
-  return { tools, schemaAudit: auditToolSchemas(mcp.tools.map(({ tool }) => tool)) };
+  return {
+    tools,
+    schemaAudit: auditToolSchemas(mcp.tools.map(({ tool }) => tool)),
+    eagerTools: mcp.tools.map(({ tool }) => {
+      const { name, description, inputSchema } = withCompactAgentCatalog({ ...tool });
+      return { name, description, inputSchema };
+    }),
+  };
 }).pipe(
   Effect.provide(
     McpHttpServer.layerAgentTools.pipe(
       Layer.provideMerge(McpServer.McpServer.layer),
       Layer.provide(toolHandlerServices),
+    ),
+  ),
+);
+
+it.effect("the eager catalog round-trips and compiles with the MCP SDK", () =>
+  Effect.gen(function* () {
+    const mcp = yield* McpServer.McpServer;
+    const catalog = mcp.tools.map(({ tool }) => tool);
+    const expected = catalog.map(({ name }) => name);
+    const representativeCalls = {
+      delegate_task: [
+        { task: "Review this patch for regressions.", isolation: "worktree", mode: "async" },
+        { task: "Read this screenshot.", attachmentPaths: ["screenshots/example.png"] },
+      ],
+      monitor_start: [
+        {
+          command: "sleep 60",
+          description: "Wait for a background check",
+          durable: true,
+          wakeOn: false,
+        },
+      ],
+      search_x: [{ query: "from:example changelog", deep: true }],
+      schedule_task: [
+        { prompt: "Check the build.", schedule: { type: "interval", everyMs: 3_600_000 } },
+        {
+          prompt: "Check the build.",
+          schedule: { type: "fixed_time", timeOfDay: "09:00", weekdays: [1] },
+        },
+        {
+          prompt: "Check the build.",
+          schedule: { type: "once", runAt: "2027-01-15T14:30:00.000Z" },
+        },
+        { prompt: "Check the build.", schedule: { type: "webhook" } },
+      ],
+    } as Readonly<Record<string, ReadonlyArray<object>>>;
+    const validator = new AjvJsonSchemaValidator();
+    // Muse uses HTTP and ACP forwards the same tools/list JSON over stdio or
+    // MCP-over-ACP. Antigravity gets the Gemini enum adaptation on HTTP.
+    for (const tools of [
+      catalog,
+      catalog.map((tool) => withCompactAgentCatalog({ ...tool })),
+      catalog.map((tool) => withCompactGeminiCatalog({ ...tool })),
+    ]) {
+      const parsed = ListToolsResultSchema.parse(JSON.parse(JSON.stringify({ tools })));
+      expect(parsed.tools.map(({ name }) => name)).toEqual(expected);
+      for (const tool of parsed.tools) {
+        const validate = validator.getValidator(tool.inputSchema as JsonSchemaType);
+        expect(() => validate({}), tool.name).not.toThrow();
+        for (const args of representativeCalls[tool.name] ?? []) {
+          expect(validate(args).valid, tool.name).toBe(true);
+        }
+        if (tool.outputSchema) {
+          expect(() =>
+            validator.getValidator(tool.outputSchema as JsonSchemaType)({}),
+          ).not.toThrow();
+        }
+      }
+    }
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerAgentTools.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(toolHandlerServices),
+      ),
+    ),
+  ),
+);
+
+it.effect("replays six Devin and Muse actions with every tool reachable", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const tools = server.tools.map(({ tool }) => ({ ...tool }));
+    const full = tools.map(withCompactAgentCatalog);
+    const wire = rewriteToolsListBody(
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools } }),
+      new Set(["1"]),
+      () => true,
+      withCompactAgentCatalog,
+      deferMcpCatalog,
+    );
+    const catalog = ListToolsResultSchema.parse(JSON.parse(wire).result).tools;
+    const dispatcher = catalog.find(({ name }) => name === "t3_tool")!;
+    const indexed = (dispatcher.description ?? "")
+      .split("\n")
+      .slice(1)
+      .map((line) => line.split(": ", 1)[0]);
+    expect(
+      [
+        ...catalog.filter(({ name }) => name !== "t3_tool").map(({ name }) => name),
+        ...indexed,
+      ].toSorted(),
+    ).toEqual(full.map(({ name }) => name).toSorted());
+    const validator = new AjvJsonSchemaValidator();
+    const instances = { implementation: { driver: "acpRegistry", config: { agentId: "devin" } } };
+    const script = [
+      ["delegate_task", { task: "Review this patch." }, false],
+      ["monitor_start", { command: "sleep 60", description: "Wait", wakeOn: false }, false],
+      ["t3_thread_read", { threadId: "thread-1", view: "messages" }, false],
+      ["search_x", { query: "from:example changelog" }, false],
+      ["preview_open", {}, true],
+      ["list_scheduled_tasks", {}, true],
+    ] as const;
+    for (const [instance, harness] of [
+      ["implementation", "devin"],
+      ["muse", "muse"],
+    ] as const) {
+      expect(deferredMcpHarness(instances, instance)).toBe(harness);
+      for (const [name, input, deferred] of script) {
+        const offered = catalog.find((entry) => entry.name === name);
+        expect(offered === undefined, `${harness} ${name}`).toBe(deferred);
+        if (deferred) {
+          expect(indexed).toContain(name);
+          const validateRequest = validator.getValidator(dispatcher.inputSchema as JsonSchemaType);
+          expect(validateRequest({ name }).valid).toBe(true);
+          expect(validateRequest({ name, input }).valid).toBe(true);
+        }
+        const targetSchema =
+          offered?.inputSchema ?? full.find((entry) => entry.name === name)?.inputSchema;
+        expect(validator.getValidator(targetSchema as JsonSchemaType)(input).valid, name).toBe(
+          true,
+        );
+      }
+    }
+    expect(deferredMcpHarness(instances, "antigravity")).toBeUndefined();
+    expect(deferredMcpHarness(instances, undefined)).toBeUndefined();
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerAgentTools.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(toolHandlerServices),
+      ),
     ),
   ),
 );
@@ -199,23 +371,34 @@ it.effect("keeps forbidden guidance words out of every tool description", () => 
 
 it.effect("agent context matches the committed budget", () =>
   Effect.gen(function* () {
-    const codex = yield* codexTurn();
-    const repeatedCodex = yield* codexTurn();
+    const discovery = agentToolDiscoveryCatalog(() => true);
+    const codex = yield* codexTurn(discovery);
+    const repeatedCodex = yield* codexTurn(discovery);
     const contextText = Object.values(codex.additionalContext ?? {})
+      .filter((entry) => entry !== codex.additionalContext?.t3_code_tool_catalog)
       .map((entry) => entry.value)
       .join("");
     expect(contextText).not.toContain("SSHCode collaborative browser");
     expect(contextText).not.toContain("## SSHCode devices");
     const acpState = t3AcpInstructionState({ interactionMode: "default", hasT3Mcp: true });
     const prompt = "Continue.";
+    const discoveryBytes = (toolDiscoveryInstructions: string) => {
+      const state = t3AcpInstructionState({ ...acpState, toolDiscoveryInstructions });
+      expect(t3AcpPromptWithInstructions({ prompt, state, previousState: state })).toBe(prompt);
+      return (
+        utf8Bytes(t3AcpPromptWithInstructions({ prompt, state })) -
+        utf8Bytes(t3AcpPromptWithInstructions({ prompt, state: acpState }))
+      );
+    };
     const cursorPrompt = (runOrdinal: number) =>
       t3OrchestrationPromptForFirstRun({ prompt, runOrdinal, hasT3Mcp: true });
-    const openCodeSystem = [
-      t3OrchestrationSystemPrompt(true),
-      buildRuntimeInstructions({ harness: "OpenCode" }),
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+    const openCodeSystem = (isSubagent: boolean) =>
+      [
+        t3OrchestrationSystemPrompt(true, undefined, undefined, isSubagent),
+        buildRuntimeInstructions({ harness: "OpenCode" }),
+      ]
+        .filter(Boolean)
+        .join("\n\n");
     const measured = {
       subagentOrchestrationBytes: utf8Bytes(T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT),
       subagentAcpBootstrapAddedBytes:
@@ -237,6 +420,12 @@ it.effect("agent context matches the committed budget", () =>
           (codex.additionalContext?.[key]?.value === entry.value ? 0 : utf8Bytes(entry.value)),
         0,
       ),
+      codexBackgroundWakeAsciiBytes: utf8Bytes(
+        codexBackgroundCommandDetail({
+          command: "a".repeat(201),
+          aggregatedOutput: "z".repeat(1001),
+        }),
+      ),
       codexPlanFallbackBytes: utf8Bytes(buildCodexDeveloperInstructions("plan")),
       acpBootstrapAddedBytes:
         utf8Bytes(t3AcpPromptWithInstructions({ prompt, state: acpState })) - utf8Bytes(prompt),
@@ -256,18 +445,61 @@ it.effect("agent context matches the committed budget", () =>
         utf8Bytes(`${cursorPrompt(1)}\n\n${buildRuntimeInstructions({ harness: "Cursor" })}`) -
         utf8Bytes(prompt),
       cursorRepeatedTurnAddedBytes: utf8Bytes(cursorPrompt(2)) - utf8Bytes(prompt),
-      openCodeSystemBytes: utf8Bytes(openCodeSystem),
+      openCodeSystemBytes: utf8Bytes(openCodeSystem(false)),
+      deferredMcpCatalogJsonBytes: yield* Effect.gen(function* () {
+        const server = yield* McpServer.McpServer;
+        return utf8Bytes(
+          JSON.stringify(
+            deferMcpCatalog(server.tools.map(({ tool }) => withCompactAgentCatalog({ ...tool }))),
+          ),
+        );
+      }).pipe(
+        Effect.provide(
+          McpHttpServer.layerAgentTools.pipe(
+            Layer.provideMerge(McpServer.McpServer.layer),
+            Layer.provide(toolHandlerServices),
+          ),
+        ),
+      ),
+      openCodeSubagentSystemBytes: utf8Bytes(openCodeSystem(true)),
       mcpToolListJsonBytes: yield* toolListBytes(McpHttpServer.layerAllTools, "input"),
       agentMcpToolListJsonBytes: yield* toolListBytes(McpHttpServer.layerAgentTools, "input"),
+      agentGeminiMcpToolListJsonBytes: yield* toolListBytes(
+        McpHttpServer.layerAgentTools,
+        "input",
+        withGeminiSafeEnums,
+      ),
+      eagerAgentMcpToolListJsonBytes: yield* toolListBytes(
+        McpHttpServer.layerAgentTools,
+        "input",
+        withCompactAgentCatalog,
+      ),
+      eagerAgentGeminiMcpToolListJsonBytes: yield* toolListBytes(
+        McpHttpServer.layerAgentTools,
+        "input",
+        withCompactGeminiCatalog,
+      ),
+      antigravityMcpDiscoveryCatalogBytes: discoveryBytes(
+        antigravityMcpDiscoveryInstructions(discovery),
+      ),
+      kimiMcpDiscoveryCatalogBytes: discoveryBytes(kimiMcpDiscoveryInstructions(discovery)),
+      codexMcpDiscoveryCatalogBytes: utf8Bytes(
+        codex.additionalContext?.t3_code_tool_catalog?.value ?? "",
+      ),
       agentMcpToolOutputSchemaJsonBytes: yield* toolListBytes(
         McpHttpServer.layerAgentTools,
         "output",
       ),
     };
     const inventory = yield* toolInventory;
+    const discoveryNames = discovery.split("\n").map((line) => line.split(" — ")[0]);
+    expect(discoveryNames.toSorted()).toEqual(inventory.tools.map((tool) => tool.name));
     yield* Effect.promise(() =>
       writeAgentQualityArtifact("context-budget", { measured, ...inventory }),
     );
+    expect(measured.eagerAgentMcpToolListJsonBytes).toBeLessThan(30_000);
+    expect(measured.eagerAgentGeminiMcpToolListJsonBytes).toBeLessThan(30_000);
+    expect(measured.deferredMcpCatalogJsonBytes).toBeLessThanOrEqual(10_000);
     expect(measured).toEqual(budget);
   }),
 );

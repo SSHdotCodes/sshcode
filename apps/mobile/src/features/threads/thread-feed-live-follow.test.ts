@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   resolveThreadFeedLiveFollow,
@@ -150,34 +150,39 @@ describe("resolveThreadFeedLiveFollow", () => {
     expect(resolveThreadFeedLiveFollow(true, { type: "user-scroll-begin" })).toBe(false);
   });
 
-  it("stays paused away from the actual end", () => {
-    expect(
-      resolveThreadFeedLiveFollow(false, {
-        type: "scroll",
-        isAtEnd: false,
-        userScrollSessionActive: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not mistake programmatic layout compensation for a user scroll", () => {
+  it("keeps following programmatic layout compensation without reading the list", () => {
+    const readIsAtEnd = vi.fn(() => false);
     expect(
       resolveThreadFeedLiveFollow(true, {
         type: "scroll",
-        isAtEnd: false,
+        readIsAtEnd,
         userScrollSessionActive: false,
       }),
     ).toBe(true);
+    expect(readIsAtEnd).not.toHaveBeenCalled();
   });
 
-  it("does not re-arm at the end while a user scroll session is active", () => {
+  it("keeps follow paused throughout a user gesture without reading the list", () => {
+    const readIsAtEnd = vi.fn(() => true);
     expect(
       resolveThreadFeedLiveFollow(false, {
         type: "scroll",
-        isAtEnd: true,
+        readIsAtEnd,
         userScrollSessionActive: true,
       }),
     ).toBe(false);
+    expect(readIsAtEnd).not.toHaveBeenCalled();
+  });
+
+  it("queries the end only until a paused list catches up", () => {
+    const readIsAtEnd = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const event = { type: "scroll", readIsAtEnd, userScrollSessionActive: false } as const;
+    let following = resolveThreadFeedLiveFollow(false, event);
+    expect(following).toBe(false);
+    following = resolveThreadFeedLiveFollow(following, event);
+    expect(following).toBe(true);
+    expect(resolveThreadFeedLiveFollow(following, event)).toBe(true);
+    expect(readIsAtEnd).toHaveBeenCalledTimes(2);
   });
 
   it.each([

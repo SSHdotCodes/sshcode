@@ -22,6 +22,7 @@ import {
   type ChatAttachment,
   ChatTabsError,
   type ChatTabsCommand,
+  isTerminalRunStatus,
   CommandId,
   MessageId,
   OrchestrationV2StopWorkflowError,
@@ -148,6 +149,7 @@ export interface ThreadManagementSendInput {
   readonly messageId: MessageId;
   readonly scheduledTaskId?: ScheduledTaskId;
   readonly senderThreadId?: ThreadId;
+  readonly notifySenderOnCompletion?: boolean;
   readonly text: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly modelSelection?: ModelSelection;
@@ -436,7 +438,10 @@ export interface ThreadManagementServiceShape {
       threadId: ThreadId;
       type: OrchestrationV2ServerCommand["type"];
     },
-    run: (accepted: boolean) => Effect.Effect<A, E, R>,
+    run: (
+      accepted: boolean,
+      checkAccepted: Effect.Effect<boolean, Orchestrator.OrchestratorDispatchError>,
+    ) => Effect.Effect<A, E, R>,
     initialMessageCommandId?: CommandId,
   ) => Effect.Effect<A, E | Orchestrator.OrchestratorDispatchError, R>;
   readonly waitForThreadStartup: (input: {
@@ -537,17 +542,7 @@ export function isActiveRun(run: OrchestrationV2Run): boolean {
   );
 }
 
-export function isTerminalRunStatus(
-  status: OrchestrationV2Run["status"],
-): status is ThreadManagementTerminalRunStatus {
-  return (
-    status === "completed" ||
-    status === "failed" ||
-    status === "cancelled" ||
-    status === "interrupted" ||
-    status === "rolled_back"
-  );
-}
+export { isTerminalRunStatus };
 
 export function latestRun(
   projection: Pick<OrchestrationV2ThreadProjection, "runs">,
@@ -836,13 +831,14 @@ const make = Effect.gen(function* () {
             }
             return receipt.value.status === "accepted";
           });
-        const claimed = yield* accepted(command.commandId, command.type);
+        const checkAccepted = accepted(command.commandId, command.type);
+        const claimed = yield* checkAccepted;
         // Creating the chat can commit before its first message does.
         const complete =
           claimed &&
           (initialMessageCommandId === undefined ||
             (yield* accepted(initialMessageCommandId, "message.dispatch")));
-        return yield* run(complete);
+        return yield* run(complete, checkAccepted);
       }),
     );
 
@@ -1001,6 +997,7 @@ const make = Effect.gen(function* () {
         messageId: input.messageId,
         ...(input.scheduledTaskId === undefined ? {} : { scheduledTaskId: input.scheduledTaskId }),
         ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
+        ...(input.notifySenderOnCompletion && { notifySenderOnCompletion: true }),
         text: input.text,
         attachments: input.attachments,
         ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),

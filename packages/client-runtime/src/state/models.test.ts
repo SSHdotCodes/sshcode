@@ -19,6 +19,17 @@ describe("resolveThreadWaitingStartedAt", () => {
     );
   });
 
+  it("times an open prompt from its most recent transition back to waiting", () => {
+    const backgroundWaitStartedAt = "2026-06-20T04:03:00.000Z";
+    expect(
+      resolveThreadWaitingStartedAt({
+        latestRun: { completedAt: null },
+        pendingBackgroundTasks: [{ taskId: "timer", kind: "background_task" }],
+        backgroundWaitStartedAt,
+      }),
+    ).toBe(backgroundWaitStartedAt);
+  });
+
   it("keeps the turn completion when holding work started during the turn", () => {
     const duringTurn = {
       ...lateSubagent,

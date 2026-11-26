@@ -917,7 +917,7 @@ export type SidebarQuickFilter = "all" | "unread" | "needs-you";
 export function sidebarThreadAttentionLabel(thread: SidebarThreadSummary): string | null {
   const status = resolveSidebarThreadStatus(thread);
   if (status === "approval") return "Needs approval";
-  if (status === "input") return "Reply needed";
+  if (status === "input") return "Needs you";
   if (status === "failed") return "Failed";
   if (status === "limited") return "Usage limit";
   return thread.hasActionableProposedPlan ? "Plan ready" : null;

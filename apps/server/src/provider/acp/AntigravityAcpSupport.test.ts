@@ -10,16 +10,40 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import {
+  antigravityMcpServers,
   antigravityPermissionMode,
   applyAntigravityAcpModelSelection,
   antigravityClientInfo,
   buildAntigravityPrompt,
 } from "./AntigravityAcpSupport.ts";
+
+it("requests lazy MCP only for T3's server on supported agy releases", () => {
+  const servers = [
+    { name: "t3-code", command: "/cli", args: [], env: [], _meta: { existing: true } },
+    { name: "other", command: "/other", args: [], env: [] },
+  ] satisfies ReadonlyArray<EffectAcpSchema.McpServer>;
+  const handshake = (version: string) =>
+    ({
+      protocolVersion: 1,
+      agentInfo: { name: "Antigravity ACP Server", version },
+    }) satisfies EffectAcpSchema.InitializeResponse;
+  expect(antigravityMcpServers(servers, handshake("1.5.16"))).toBe(servers);
+  expect(antigravityMcpServers(servers, { protocolVersion: 1 })).toBe(servers);
+  expect(antigravityMcpServers(servers, handshake("1.5.17"))).toEqual([
+    { ...servers[0], _meta: { existing: true, antigravity: { forceAllToolsEager: false } } },
+    servers[1],
+  ]);
+  const withoutMetadata = { name: "t3-code", command: "/cli", args: [], env: [] };
+  expect(antigravityMcpServers([withoutMetadata], handshake("1.5.17"))).toEqual([
+    { ...withoutMetadata, _meta: { antigravity: { forceAllToolsEager: false } } },
+  ]);
+});
 
 const modelConfig = {
   id: "model",
@@ -345,11 +369,8 @@ it.layer(NodeServices.layer)("buildAntigravityPrompt", (it) => {
 
   it.effect.each([
     { name: "archive.zip", mimeType: "application/zip" },
-    { name: "clip.mp4", mimeType: "video/mp4" },
-    { name: "recording.aiff", mimeType: "audio/aiff" },
     { name: "large.pdf", mimeType: "application/pdf", sizeBytes: 75_000_000 },
     { name: "large.txt", mimeType: "text/plain", sizeBytes: 1024 * 1024 + 1 },
-    { name: "large.wav", mimeType: "audio/wav", sizeBytes: 20 * 1024 * 1024 + 1 },
   ])("keeps $name as a file path without reading or spending the native media budget", (file) =>
     Effect.gen(function* () {
       const fixture = yield* makeAttachmentFixture();
@@ -376,6 +397,146 @@ it.layer(NodeServices.layer)("buildAntigravityPrompt", (it) => {
         { type: "text", text: input },
         { type: "resource_link", uri: pdf.uri, name: "report.pdf", mimeType: "application/pdf" },
       ]);
+    }),
+  );
+
+  it.effect.each([
+    {
+      name: "clip.MOV",
+      declared: "application/octet-stream",
+      mimeType: "video/quicktime",
+      size: 20 * 1024 * 1024,
+    },
+    { name: "clip.mp4", declared: "video/mp4", mimeType: "video/mp4", size: 123 },
+    { name: "large.mp4", declared: "video/mp4", mimeType: "video/mp4", size: 20 * 1024 * 1024 + 1 },
+    { name: "large.wav", declared: "audio/wav", mimeType: "audio/wav", size: 20 * 1024 * 1024 + 1 },
+    { name: "recording.aiff", declared: "audio/aiff", mimeType: "audio/aiff", size: 123 },
+  ])("links $name with a native viewer instruction", ({ name, declared, mimeType, size }) =>
+    Effect.gen(function* () {
+      const fixture = yield* makeAttachmentFixture();
+      const attachment = { ...textAttachment, name, mimeType: declared };
+      const file = yield* fixture.write(attachment, "");
+      yield* fixture.fs.truncate(file.filePath, size);
+      const prompt = yield* buildAntigravityPrompt({
+        input: undefined,
+        attachments: [attachment],
+        attachmentsDir: fixture.attachmentsDir,
+        promptCapabilities: { audio: true, embeddedContext: true },
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fixture.fs,
+          stream: () => Stream.die("Must not read media for a link"),
+        }),
+      );
+      expect(prompt).toEqual([
+        { type: "resource_link", uri: file.uri, name, mimeType },
+        {
+          type: "text",
+          text: `${size > 20 * 1024 * 1024 ? "Over the 20 MiB inline limit. " : ""}Use read_file on ${file.filePath} for native media.`,
+        },
+      ]);
+    }),
+  );
+
+  it.effect("opens M4A through a session-scoped MP4 copy with identical bytes", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeAttachmentFixture();
+      const attachment = { ...textAttachment, name: "voice.m4a", mimeType: "audio/mp4" };
+      const original = yield* fixture.write(attachment, "MPEG-4 audio");
+      const path = yield* Path.Path;
+      const copy = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const blocks = yield* buildAntigravityPrompt({
+            input: undefined,
+            attachments: [attachment],
+            attachmentsDir: fixture.attachmentsDir,
+            promptCapabilities: { audio: false, embeddedContext: true },
+          });
+          const link = blocks[0];
+          if (link?.type !== "resource_link") throw new Error("Missing media link");
+          const file = yield* path.fromFileUrl(new URL(link.uri));
+          expect(file).toMatch(/\.mp4$/);
+          expect(yield* fixture.fs.readFileString(file)).toBe("MPEG-4 audio");
+          expect(blocks[1]).toEqual({
+            type: "text",
+            text: `Use read_file on ${file} for native media.`,
+          });
+          return file;
+        }),
+      );
+      expect(yield* fixture.fs.exists(copy)).toBe(false);
+      expect(yield* fixture.fs.readFileString(original.filePath)).toBe("MPEG-4 audio");
+      expect(
+        yield* buildAntigravityPrompt({
+          input: undefined,
+          attachments: [attachment],
+          attachmentsDir: fixture.attachmentsDir,
+          promptCapabilities: { audio: true },
+        }),
+      ).toEqual([
+        {
+          type: "audio",
+          mimeType: "audio/mp4",
+          data: Buffer.from("MPEG-4 audio").toString("base64"),
+        },
+      ]);
+    }),
+  );
+
+  it.effect.each(["aac", "flac"])("preserves %s audio with a stream-copy remux", (ext) =>
+    Effect.gen(function* () {
+      const fixture = yield* makeAttachmentFixture();
+      const media = { ...textAttachment, name: `voice.${ext}`, mimeType: `audio/${ext}` };
+      const source = yield* fixture.write(media, "audio frames");
+      const input = {
+        input: undefined,
+        attachments: [media],
+        attachmentsDir: fixture.attachmentsDir,
+        promptCapabilities: { audio: false },
+      };
+      const prepared = yield* buildAntigravityPrompt({
+        ...input,
+        mediaSpawner: {
+          exitCode: (command) =>
+            Effect.gen(function* () {
+              if (command._tag !== "StandardCommand")
+                return yield* Effect.die("Expected a single remux process");
+              expect(command.command).toBe("ffmpeg");
+              expect(command.args.join(" ")).toContain(
+                `-f ${ext} -i ${source.filePath} -map 0:a:0 -c:a copy`,
+              );
+              const dest = command.args.at(-1)!;
+              yield* fixture.fs.writeFileString(dest, "audio packets in MP4");
+              return ChildProcessSpawner.ExitCode(0);
+            }),
+        },
+      });
+      const link = prepared[0];
+      if (link?.type !== "resource_link") return yield* Effect.die("Missing MP4 link");
+      expect(link.mimeType).toBe("audio/mp4");
+      expect(link.uri.endsWith("/audio.mp4")).toBe(true);
+
+      const failed = yield* buildAntigravityPrompt({
+        ...input,
+        mediaSpawner: { exitCode: () => Effect.succeed(ChildProcessSpawner.ExitCode(1)) },
+      });
+      expect(failed).toEqual([
+        { type: "resource_link", uri: source.uri, name: media.name, mimeType: media.mimeType },
+        {
+          type: "text",
+          text: `Use read_file on a lossless MP4 remux of ${source.filePath} for native media.`,
+        },
+      ]);
+      expect(yield* buildAntigravityPrompt(input)).toEqual(failed);
+      yield* fixture.fs.truncate(source.filePath, 20 * 1024 * 1024 + 1);
+      const oversized = yield* buildAntigravityPrompt({
+        ...input,
+        mediaSpawner: { exitCode: () => Effect.die("Oversized media must stay on disk") },
+      });
+      expect(oversized[0]).toEqual(failed[0]);
+      expect(oversized[1]).toMatchObject({
+        text: expect.stringContaining("Over the 20 MiB inline limit."),
+      });
     }),
   );
 
@@ -414,7 +575,11 @@ it.layer(NodeServices.layer)("buildAntigravityPrompt", (it) => {
               Effect.die("Unnegotiated attachments must not be read").pipe(Stream.fromEffect),
           }),
         );
-        expect(prompt).toEqual([{ type: "text", text: input }]);
+        expect(prompt).toEqual([
+          { type: "text", text: input },
+          { type: "resource_link", uri: sound.uri, name: audio.name, mimeType: audio.mimeType },
+          { type: "text", text: `Use read_file on ${sound.filePath} for native media.` },
+        ]);
         expect(
           yield* buildAntigravityPrompt({
             input: "Continue",

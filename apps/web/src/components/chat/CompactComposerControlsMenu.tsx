@@ -19,6 +19,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   runtimeModeOptions: ReadonlyArray<{
     readonly mode: RuntimeMode;
     readonly label: string;
+    readonly description?: string;
   }>;
   showInteractionModeToggle: boolean;
   traitsMenuContent?: ReactNode;
@@ -85,7 +86,14 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         >
           {props.runtimeModeOptions.map((option) => (
             <MenuRadioItem key={option.mode} value={option.mode}>
-              {option.label}
+              <span className="flex flex-col">
+                {option.label}
+                {option.description ? (
+                  <span className="max-w-56 text-pretty text-muted-foreground text-xs">
+                    {option.description}
+                  </span>
+                ) : null}
+              </span>
             </MenuRadioItem>
           ))}
         </MenuRadioGroup>

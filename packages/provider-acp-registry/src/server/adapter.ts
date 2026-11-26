@@ -1,4 +1,5 @@
 import {
+  devinStepUsage,
   normalizeDevinSessionUpdate,
   steerDevinTurn,
   normalizeDevinToolCall,
@@ -9,11 +10,17 @@ import {
   extractCopilotSubagentUpdate,
   makeCopilotSubagentRouting,
 } from "./copilotAcp.ts";
+import {
+  kimiDiscoveryEnvironment,
+  kimiMcpDiscoveryInstructions,
+  kimiSupportsMcpDiscovery,
+} from "./kimiMcpDiscovery.ts";
 import { defaultInstanceIdForDriver, ProviderDriverKind } from "@t3tools/contracts";
 import { readCustomModelEntries } from "@t3tools/shared/model";
 import { AcpRegistrySettings } from "../settings.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveSelfInvocation, type SelfInvocation } from "@t3tools/shared/nodeRuntime";
+import type * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -24,6 +31,7 @@ import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
+import type * as EffectAcpSchema from "effect-acp/compat";
 
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
@@ -143,6 +151,11 @@ export function acpRegistryPromptFailure(agentId: string, cause: unknown) {
 function makeAcpRegistryRuntime(
   options: AcpRegistryAdapterV2Options,
   catalog: AcpRegistrySupport.AcpRegistryCatalog["Service"],
+  sessionDiscovery?: {
+    readonly enabled: WeakSet<EffectAcpSchema.InitializeResponse>;
+    readonly services: Context.Context<FileSystem.FileSystem | Path.Path>;
+    readonly managedStateDir?: string;
+  },
 ) {
   return (
     input: AcpAdapterV2RuntimeInput,
@@ -164,18 +177,32 @@ function makeAcpRegistryRuntime(
               }),
           ),
         );
+      const environment =
+        processEnvironment === undefined
+          ? resolved.spawn.env
+          : { ...resolved.spawn.env, ...processEnvironment };
+      const discoveryEnvironment = sessionDiscovery
+        ? yield* kimiDiscoveryEnvironment(
+            environment ?? options.environment,
+            sessionDiscovery.managedStateDir,
+          ).pipe(Effect.provide(sessionDiscovery.services))
+        : undefined;
+      const spawnEnvironment = discoveryEnvironment ?? environment;
       const context = yield* Layer.build(
         AcpSessionRuntime.layer({
           ...runtimeInput,
           cancelBehavior: "wait-for-prompt",
           cancelTimeout: "10 seconds",
           spawn:
-            processEnvironment === undefined
+            spawnEnvironment === undefined
               ? resolved.spawn
-              : {
-                  ...resolved.spawn,
-                  env: { ...resolved.spawn.env, ...processEnvironment },
-                },
+              : { ...resolved.spawn, env: spawnEnvironment },
+          ...(sessionDiscovery && discoveryEnvironment
+            ? {
+                onInitialized: (agent) =>
+                  Effect.sync(() => void sessionDiscovery.enabled.add(agent)),
+              }
+            : {}),
           ...(options.settings.authMethodId ? { authMethodId: options.settings.authMethodId } : {}),
           customModels: readCustomModelEntries(options.settings.customModels).map(
             (entry) => entry.slug,
@@ -199,6 +226,20 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
   const startupKey =
     options.settings.source === "local" ? `local:${options.instanceId}` : registryAgentId;
   const isDevin = registryAgentId === "devin";
+  // Kimi Code can defer ACP-injected servers when the profile opts in.
+  const kimiDiscovery =
+    registryAgentId === "kimi" ||
+    (options.settings.source === "local" &&
+      /(?:^|[/\\])kimi(?:-steer)?(?:\.exe)?$/iu.test(options.settings.commandPath))
+      ? {
+          enabled: new WeakSet<EffectAcpSchema.InitializeResponse>(),
+          services: yield* Effect.context<FileSystem.FileSystem | Path.Path>(),
+          ...Option.match(yield* Effect.serviceOption(ProviderHost.ProviderHost), {
+            onNone: () => ({}),
+            onSome: (host) => ({ managedStateDir: host.paths.stateDir }),
+          }),
+        }
+      : undefined;
   // Local installs launch the `copilot` binary directly with no registry id.
   const isCopilot =
     registryAgentId === "github-copilot-cli" ||
@@ -230,6 +271,7 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
             "cognition.ai/subagentSupport": true,
             "cognition.ai/messageGrouping": true,
           },
+          extractStepUsage: devinStepUsage,
           normalizeSessionUpdate: normalizeDevinSessionUpdate,
           normalizeToolCall: normalizeDevinToolCall,
           extractSubagentUpdate: extractDevinSubagentUpdate,
@@ -243,7 +285,14 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
           normalizeSessionUpdate: copilotRouting.normalizeSessionUpdate,
           extractSubagentUpdate: extractCopilotSubagentUpdate,
         }),
-    makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(options, catalog),
+    ...(kimiDiscovery
+      ? {
+          mcpDiscoveryInstructions: kimiMcpDiscoveryInstructions,
+          supportsMcpDiscovery: (agent, model) =>
+            kimiDiscovery.enabled.has(agent) && kimiSupportsMcpDiscovery(agent, model),
+        }
+      : {}),
+    makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(options, catalog, kimiDiscovery),
     ...(runtimeCoordinator === undefined
       ? {}
       : {

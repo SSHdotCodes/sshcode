@@ -64,7 +64,9 @@ export const MonitorStartResult = Schema.Struct({
 });
 export const MonitorStopResult = Schema.Struct({ stopped: Schema.Boolean });
 export const MonitorListResult = Schema.Struct({
-  monitors: Schema.Array(MonitorInfo),
+  monitors: Schema.Array(
+    MonitorInfo.mapFields((fields) => ({ ...fields, threadId: Schema.optionalKey(ThreadId) })),
+  ),
   /** Set when the list is unchanged since the caller's last check. */
   notice: Schema.optional(Schema.String),
 });

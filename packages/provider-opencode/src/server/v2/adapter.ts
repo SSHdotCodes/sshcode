@@ -1084,6 +1084,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       lastError: string | null,
     ) =>
       Effect.gen(function* () {
+        // The session is shared by every thread on this instance and is persisted
+        // once per attached thread, so a repeat of the same state is not worth a write.
+        if (session.status === status && session.lastError === lastError) return;
         session = { ...session, status, lastError, updatedAt: yield* DateTime.now };
         yield* emit({ type: "provider_session.updated", driver, providerSession: session });
       });
@@ -1255,20 +1258,25 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const startedAt = turn.startedAt.get(id) ?? updatedAt;
       const completedAt = status === "running" ? null : updatedAt;
       const nativeId = `${turn.scope}${id}`;
-      yield* emitNode(state, turn, nativeId, "tool_call", status, startedAt, completedAt);
-      yield* emit({
-        type: "turn_item.updated",
-        driver,
-        turnItem: openCodeToolTurnItem(
-          itemBase(state, turn, nativeId, status, startedAt, completedAt, updatedAt),
-          {
-            name: tool.name,
-            input: tool.input,
-            output: result?.output,
-            completedMetadata: status === "completed" ? result?.metadata : undefined,
-          },
-        ),
-      });
+      const turnItem = openCodeToolTurnItem(
+        itemBase(state, turn, nativeId, status, startedAt, completedAt, updatedAt),
+        {
+          name: tool.name,
+          input: tool.input,
+          output: result?.output,
+          completedMetadata: status === "completed" ? result?.metadata : undefined,
+        },
+      );
+      yield* emitNode(
+        state,
+        turn,
+        nativeId,
+        "tool_call",
+        turnItem.status === "failed" ? "failed" : status,
+        startedAt,
+        completedAt,
+      );
+      yield* emit({ type: "turn_item.updated", driver, turnItem });
       const metadata = result?.metadata;
       if (
         tool.name !== "execute" ||
@@ -3562,13 +3570,20 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           );
         if (added) state.mcp = wanted;
       }
+      const toolCatalog =
+        state.mcp === undefined || mcpSession?.toolDiscoveryCatalog === undefined
+          ? ""
+          : yield* mcpSession.toolDiscoveryCatalog;
       const instructions = [
         buildRuntimeInstructions({ harness: "OpenCode", model: turnInput.modelSelection.model }),
         t3OrchestrationSystemPrompt(
           state.mcp !== undefined,
           turnInput.threadId,
           yield* SubagentsEnabled,
+          turnInput.appThread.lineage?.relationshipToParent === "subagent",
         ),
+        toolCatalog &&
+          `Available t3-code MCP tools. Find a deferred tool's definition with Code Mode search({query: name, limit: 1}).\n${toolCatalog}`,
       ]
         .filter((part) => part !== undefined && part.length > 0)
         .join("\n\n");

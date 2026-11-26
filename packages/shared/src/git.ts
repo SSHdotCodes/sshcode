@@ -175,6 +175,11 @@ function azureDevOpsRepositoryKey(host: string, segments: ReadonlyArray<string>)
     : `${organization}.visualstudio.com/${project}/_git/${repository}`;
 }
 
+function repositoryKeyForRemote(host: string, segments: ReadonlyArray<string>): string {
+  const webHost = host === "altssh.gitlab.com" ? "gitlab.com" : host;
+  return azureDevOpsRepositoryKey(host, segments) ?? `${webHost}/${segments.join("/")}`;
+}
+
 /**
  * Normalize a git remote URL into a stable comparison key.
  */
@@ -190,10 +195,7 @@ export function normalizeGitRemoteUrl(value: string): string {
       const url = new URL(normalized);
       const repositorySegments = url.pathname.split("/").filter((segment) => segment.length > 0);
       if (url.hostname && repositorySegments.length > 1) {
-        return (
-          azureDevOpsRepositoryKey(url.hostname, repositorySegments) ??
-          `${url.hostname}/${repositorySegments.join("/")}`
-        );
+        return repositoryKeyForRemote(url.hostname, repositorySegments);
       }
     } catch {
       // Keep handling URL-shaped fallbacks below.
@@ -206,7 +208,7 @@ export function normalizeGitRemoteUrl(value: string): string {
   const scpHost = scpStyleHostAndPath?.[1];
   const scpPath = scpStyleHostAndPath?.[2];
   if (scpHost && scpPath) {
-    return azureDevOpsRepositoryKey(scpHost, scpPath.split("/")) ?? `${scpHost}/${scpPath}`;
+    return repositoryKeyForRemote(scpHost, scpPath.split("/"));
   }
 
   // Fallback keys reach clients too. Keep the SSH login, hostname and repository path.

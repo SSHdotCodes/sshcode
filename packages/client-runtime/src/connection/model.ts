@@ -99,6 +99,7 @@ export class ConnectionBlockedError extends Schema.TaggedError<ConnectionBlocked
   "ConnectionBlockedError",
   {
     reason: ConnectionBlockedReason,
+    pairingExpired: Schema.optionalKey(Schema.Boolean),
     detail: Schema.String,
     traceId: Schema.optionalKey(Schema.String),
     ...ConnectionFailureSource,

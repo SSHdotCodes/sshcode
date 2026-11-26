@@ -395,6 +395,7 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
       const ready = yield* checkProvider(makeOpenCodeSettings());
       NodeAssert.equal(ready.status, "ready");
       NodeAssert.equal(ready.auth.status, "authenticated");
+      NodeAssert.deepEqual(ready.models[0]?.capabilities?.optionDescriptors, []);
       NodeAssert.deepEqual(
         ready.models.map((model) => model.slug),
         ["example/live-model"],
@@ -444,23 +445,24 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
-  it.effect("emits OpenCode variant defaults so trait picker can resolve a visible selection", () =>
+  it.effect("uses the OpenRouter model's configured effort and lists only enabled variants", () =>
     Effect.gen(function* () {
       runtimeMock.state.inventory = {
         providerList: {
-          connected: ["openai"],
+          connected: ["openrouter"],
           all: [
             {
-              id: "openai",
-              name: "OpenAI",
+              id: "openrouter",
+              name: "OpenRouter",
               models: {
-                "gpt-5.4": {
-                  id: "gpt-5.4",
-                  name: "GPT-5.4",
+                "inkling-2-mini": {
+                  id: "inkling-2-mini",
+                  name: "Inkling 2 Mini",
+                  options: { reasoning: { effort: "high" } },
                   variants: {
                     none: {},
                     low: {},
-                    medium: {},
+                    medium: { disabled: true },
                     high: {},
                     xhigh: {},
                   },
@@ -477,7 +479,7 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
       };
 
       const snapshot = yield* checkProvider(makeOpenCodeSettings());
-      const model = snapshot.models.find((entry) => entry.slug === "openai/gpt-5.4");
+      const model = snapshot.models.find((entry) => entry.slug === "openrouter/inkling-2-mini");
 
       NodeAssert.ok(model);
       const variantDescriptor = model.capabilities?.optionDescriptors?.find(
@@ -486,7 +488,11 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
       NodeAssert.ok(variantDescriptor && variantDescriptor.type === "select");
       NodeAssert.equal(
         variantDescriptor.options.find((option) => option.isDefault === true)?.id,
-        "medium",
+        "high",
+      );
+      NodeAssert.deepEqual(
+        variantDescriptor.options.map((choice) => choice.id),
+        ["none", "low", "high", "xhigh"],
       );
       const agentDescriptor = model.capabilities?.optionDescriptors?.find(
         (descriptor) => descriptor.id === "agent" && descriptor.type === "select",
@@ -586,7 +592,7 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
     Effect.gen(function* () {
       runtimeMock.state.versionStdout = "opencode v2.0.18\n";
       const snapshot = yield* checkProvider(
-        makeOpenCodeSettings(),
+        makeOpenCodeSettings({ customModels: ["custom/unlisted"] }),
         process.cwd(),
         undefined,
         undefined,
@@ -596,6 +602,7 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
             providerID: "opencode",
             id: "space-bunny-free",
             name: "Space Bunny Free",
+            defaultVariant: "low",
             variants: [{ id: "low" }, { id: "medium" }, { id: "high" }],
           },
         ]),
@@ -617,13 +624,19 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
       );
       NodeAssert.deepEqual(
         snapshot.models.map((model) => model.slug),
-        ["opencode/big-pickle", "opencode/space-bunny-free"],
+        ["opencode/big-pickle", "opencode/space-bunny-free", "custom/unlisted"],
       );
       const variant = snapshot.models.find((model) => model.slug === "opencode/space-bunny-free")
         ?.capabilities?.optionDescriptors?.[0];
       NodeAssert.deepEqual(
         variant?.type === "select" ? variant.options.map((option) => option.id) : [],
         ["low", "medium", "high"],
+      );
+      NodeAssert.equal(variant?.currentValue, "low");
+      NodeAssert.ok(
+        !snapshot.models
+          .find((model) => model.isCustom)
+          ?.capabilities?.optionDescriptors?.some((descriptor) => descriptor.id === "variant"),
       );
       NodeAssert.equal(runtimeMock.state.sdkClientInputs.length, 0);
     }),
@@ -728,7 +741,7 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
           ["thinking", "On"],
         ],
       );
-      NodeAssert.equal(variant.currentValue, "thinking");
+      NodeAssert.equal(variant.currentValue, undefined);
     }),
   );
 

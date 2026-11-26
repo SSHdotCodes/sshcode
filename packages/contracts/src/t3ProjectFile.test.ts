@@ -12,6 +12,7 @@ describe("T3ProjectFile", () => {
     const decoded = decode({
       $schema: "https://t3.codes/schema/t3.json",
       iconPath: "assets/logo.svg",
+      worktreeSetupCache: { inputs: ["**/pnpm-lock.yaml", "scripts/setup.ts"] },
       scripts: [
         {
           name: "Dev",
@@ -27,6 +28,7 @@ describe("T3ProjectFile", () => {
     });
 
     expect(decoded.iconPath).toBe("assets/logo.svg");
+    expect(decoded.worktreeSetupCache?.inputs).toEqual(["**/pnpm-lock.yaml", "scripts/setup.ts"]);
     expect(decoded.scripts).toHaveLength(3);
     expect(decoded.scripts?.[1]).toEqual({ name: "Test", command: "pnpm test" });
     expect(decoded.scripts?.[2]?.async).toBe(false);

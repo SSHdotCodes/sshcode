@@ -12,7 +12,7 @@ import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
 import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 import { AppText as Text } from "../../components/AppText";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
-import { serverEnvironment } from "../../state/server";
+import { chatListTabsEnabledAtom, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsDisclosureSection } from "./components/SettingsDisclosureSection";
@@ -63,9 +63,33 @@ export function SettingsThreadsRouteScreen() {
 
 function ChatListLayoutSection() {
   const [layout, setLayout] = useHomeListLayout();
+  const enabled = useAtomValue(chatListTabsEnabledAtom);
+  const { availableTargets } = useSettingsEnvironmentFilter();
+  const writable = useEnvironmentsWithScope(availableTargets, AuthSettingsWriteScope);
+  const syncTargets = availableTargets.filter(
+    (target) => supportsSharedSettingsSync(target) && writable.has(target.environmentId),
+  );
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings);
   return (
     <View className="gap-3">
       <SettingsSection title="Chat list">
+        <SettingsSwitchRow
+          icon="folder"
+          label="Chat list tabs"
+          subtitle="Show tabs for your folders above the chat list"
+          value={enabled !== false}
+          disabled={syncTargets.length === 0}
+          onValueChange={(value) => {
+            for (const { environmentId } of syncTargets) {
+              if (readEnvironmentScope(environmentId, AuthSettingsWriteScope)) {
+                void updateSettings({
+                  environmentId,
+                  input: { patch: { chatListTabsEnabled: value } },
+                });
+              }
+            }
+          }}
+        />
         <SettingsSwitchRow
           icon="square.on.square"
           label="Show chats as boxes"

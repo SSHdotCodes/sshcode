@@ -17,6 +17,18 @@ describe("resolveUsageAccess", () => {
     },
   );
 
+  it("shows why the supervisor blocked a connection before its session check", () => {
+    const error = "The environment credential is invalid.";
+    expect(
+      resolveUsageAccess({
+        connectionPhase: "error",
+        connectionError: error,
+        session: null,
+        hasSessionError: false,
+      }),
+    ).toEqual({ canReadDiagnostics: false, isPending: false, error });
+  });
+
   it.each(["connecting", "reconnecting", "connected"] as const)(
     "waits for a session check while %s",
     (connectionPhase) => {

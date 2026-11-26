@@ -7834,11 +7834,6 @@ export default function ChatView(props: ChatViewProps) {
   const publishComposerOverlayHeight = (height: number) => {
     const nextHeight = Math.ceil(height);
     if (nextHeight <= 0) return;
-    // Where the transcript fades out under an open chat's embers (index.css).
-    composerOverlayElement?.parentElement?.style.setProperty(
-      "--chat-composer-floor",
-      `${nextHeight}px`,
-    );
     const isResting = overlayComposerIsResting({
       composerMounted: composerMountedRef.current,
       composerReportedResting: composerRestingRef.current,
@@ -7886,6 +7881,13 @@ export default function ChatView(props: ChatViewProps) {
           })
         : nextHeight;
     setScrollToEndClearance(clearance);
+    // The transcript's fade (index.css) follows the overlay. Read geometry
+    // first and leave the existing style alone when its height is unchanged.
+    const style = composerOverlayElement?.parentElement?.style;
+    const floor = `${nextHeight}px`;
+    if (style && style.getPropertyValue("--chat-composer-floor") !== floor) {
+      style.setProperty("--chat-composer-floor", floor);
+    }
   };
   const publishComposerOverlayHeightStable = useStableCallback(publishComposerOverlayHeight);
   // The composer reports its resting flag from a layout effect, which runs
@@ -7898,13 +7900,12 @@ export default function ChatView(props: ChatViewProps) {
     composerRestingRef.current = resting;
   };
   const onComposerRestingChangeStable = useStableCallback(onComposerRestingChange);
-  // A held reservation belongs to the previous thread's draft. Rebuild it from
-  // this thread's overlay so a tall draft elsewhere does not pad this one.
+  // Reset the reservation when a different chat or status bar owns the
+  // overlay. The next layout effect measures after those refs are current.
   useLayoutEffect(() => {
-    if (!composerOverlayElement) return;
+    composerMountedRef.current = composerMounted;
     composerTimelineInsetRef.current = 0;
-    publishComposerOverlayHeightStable(composerOverlayElement.getBoundingClientRect().height);
-  }, [activeThreadKey, composerOverlayElement, publishComposerOverlayHeightStable]);
+  }, [activeThreadKey, composerMounted, composerOverlayElement]);
 
   useLayoutEffect(() => {
     if (!composerOverlayElement) return;
@@ -7915,16 +7916,13 @@ export default function ChatView(props: ChatViewProps) {
 
     updateHeight();
     return observeResize(composerOverlayElement, updateHeight);
-  }, [composerOverlayElement, publishComposerOverlayHeightStable, showScrollToBottom]);
-  // Swapping the composer for the status bar (or back) changes what the
-  // overlay holds, so rebuild the reservation from the new content.
-  useLayoutEffect(() => {
-    if (composerMountedRef.current === composerMounted) return;
-    composerMountedRef.current = composerMounted;
-    if (!composerOverlayElement) return;
-    composerTimelineInsetRef.current = 0;
-    publishComposerOverlayHeightStable(composerOverlayElement.getBoundingClientRect().height);
-  }, [composerMounted, composerOverlayElement, publishComposerOverlayHeightStable]);
+  }, [
+    activeThreadKey,
+    composerMounted,
+    composerOverlayElement,
+    publishComposerOverlayHeightStable,
+    showScrollToBottom,
+  ]);
   const openPanelPullRequestUrl = useOpenPanelPullRequestUrl(activeThreadRef);
   const activeThreadReferenceCopyTarget = useMemo(
     () =>

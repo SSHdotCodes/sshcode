@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc-rs --noEmit",
-    "test": "vp test run --config ../vite.config.ts --dir ."
+    "test": "node --test usage-report/ && vp test run --config ../vite.config.ts --dir ."
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",
@@ -21,6 +21,7 @@
     "@effect/vitest": "catalog:",
     "@types/plist": "catalog:",
     "@types/pngjs": "6.0.5",
+    "playwright-core": "1.60.0",
     "typescript": "catalog:",
     "typescript-legacy": "npm:typescript@~6.0.3",
     "vite-plus": "catalog:"

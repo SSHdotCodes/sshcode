@@ -45,6 +45,7 @@ import { randomUUID, cn } from "../../lib/utils";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { subagentRankingsEnvironment, modelRankingsEnvironment } from "../../state/server";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import { Link } from "@tanstack/react-router";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -86,7 +87,7 @@ function SubagentGradingRow() {
     <SettingsRow
       serverScoped
       {...searchableSetting("subagent-grading")}
-      description="Leads rate each subagent result they check, 1 to 5. The grade shows on the subagent's card and feeds these rankings. Off removes grading from agents, so it costs no tokens."
+      description="Leads flag subagent work that fell short, 1 to 6 with a reason; work they don't flag counts as fine. Flags show on the subagent's card and feed these rankings. Off removes grading from agents, so it costs no tokens."
       settingKeys={["subagentGrading"]}
       control={
         <ScopedSwitch
@@ -174,24 +175,20 @@ function ModelRankingsEditor({
 
   return (
     <SettingsPageContainer className="gap-4">
-      <div className="space-y-2 px-3 sm:px-4">
-        <h1 id="model-rankings" className="text-lg font-medium">
-          Model family rankings
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Agents pick subagents from the highest tier. A model you name in chat always wins.
+      <div id="model-rankings" className="space-y-2 px-3 sm:px-4">
+        <p className="max-w-xl text-xs leading-relaxed text-muted-foreground">
+          Agents pick subagents from the highest tier. A model you name in chat always wins.{" "}
+          <span role="status" aria-live="polite">
+            {saving ? "Saving…" : "Changes save automatically."}
+          </span>
         </p>
         {!canWrite ? (
-          <p className="text-sm text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             Settings access is required to edit rankings.
           </p>
         ) : null}
-        <p role="status" aria-live="polite" className="text-xs text-muted-foreground">
-          {saving ? "Saving…" : "Changes save automatically."}
-        </p>
-        <SubagentGradingRow />
         {error ? (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="text-xs text-destructive">
             {error}
           </p>
         ) : null}
@@ -216,13 +213,16 @@ function ModelRankingsEditor({
           </div>
         ) : null}
       </div>
+      <SettingsSection title="Subagent grading" hideTitle>
+        <SubagentGradingRow />
+      </SettingsSection>
       <SettingsSection title="Task category" hideTitle variant="plain">
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-1.5 px-3 sm:px-4">
           {categories.map((item) => (
             <Button
               key={item.id}
               size="sm"
-              variant={item.id === category.id ? "default" : "outline"}
+              variant={item.id === category.id ? "outline" : "ghost-muted"}
               aria-pressed={item.id === category.id}
               onClick={() => {
                 setCategoryId(item.id);
@@ -245,7 +245,7 @@ function ModelRankingsEditor({
         </div>
         {addingCategory ? (
           <form
-            className="mt-3 flex max-w-md gap-2"
+            className="mt-3 flex max-w-md gap-2 px-3 sm:px-4"
             onSubmit={(event) => {
               event.preventDefault();
               if (!newCategory.trim() || categories.length >= 30 || disabled) return;
@@ -257,6 +257,7 @@ function ModelRankingsEditor({
             }}
           >
             <Input
+              size="sm"
               aria-label="New task category"
               placeholder="Category name"
               maxLength={80}
@@ -305,7 +306,7 @@ function ModelRankingsEditor({
         }
       >
         {!ordered.length && rows.length ? (
-          <p className="mt-3 text-xs text-muted-foreground">
+          <p className="px-3 text-xs text-muted-foreground sm:px-4">
             Drag families into a tier, or use their menus. Left comes first within each tier.
           </p>
         ) : null}
@@ -331,7 +332,7 @@ function ModelRankingsEditor({
           }}
         >
           <div
-            className="mt-4 rounded-lg border border-border"
+            className="rounded-xl border border-border/60 bg-card/45 shadow-xs/5"
             aria-label={`${category.name} tier list`}
           >
             {ModelRankingTier.literals.map((tier) => (
@@ -340,14 +341,14 @@ function ModelRankingsEditor({
               </RankingTier>
             ))}
           </div>
-          <div className="mt-4 rounded-lg border border-dashed border-border">
+          <div className="mt-3 rounded-xl border border-dashed border-border/80">
             <RankingTier tier={null} rows={rows}>
               {renderChips(null)}
             </RankingTier>
           </div>
         </DndContext>
         {noteRow ? (
-          <div className="mt-4 max-w-lg">
+          <div className="mt-4 max-w-lg px-3 sm:px-4">
             <p className="mb-2 text-xs text-muted-foreground">Note for {noteRow.entry.label}</p>
             <ModelRankingNoteField
               key={`${category.id}:${noteRow.entry.id}:${draftVersion}`}
@@ -377,12 +378,16 @@ function ModelRankingsEditor({
           </div>
         ) : null}
         {!rows.length ? (
-          <p className="py-4 text-sm text-muted-foreground">
-            No usable families available. Enable a provider in this environment, or show all
-            families.
-          </p>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 pt-3 sm:px-4">
+            <p className="text-xs text-muted-foreground">
+              No usable families yet. Turn on a provider to rank its models, or show all families.
+            </p>
+            <Button size="xs" variant="outline" render={<Link to="/settings/providers" />}>
+              Open Providers
+            </Button>
+          </div>
         ) : null}
-        <div className="mt-4">
+        <div className="px-3 pt-3 sm:px-4">
           <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
             <input
               type="checkbox"
@@ -398,12 +403,12 @@ function ModelRankingsEditor({
 }
 
 const TIER_COLORS: Record<ModelRankingTier, string> = {
-  S: "bg-red-200 text-red-950 dark:bg-red-400/25 dark:text-red-200",
-  A: "bg-orange-200 text-orange-950 dark:bg-orange-400/25 dark:text-orange-200",
-  B: "bg-amber-200 text-amber-950 dark:bg-amber-400/25 dark:text-amber-200",
-  C: "bg-green-200 text-green-950 dark:bg-green-400/25 dark:text-green-200",
-  D: "bg-blue-200 text-blue-950 dark:bg-blue-400/25 dark:text-blue-200",
-  F: "bg-slate-200 text-slate-900 dark:bg-slate-400/25 dark:text-slate-200",
+  S: "bg-red-100 text-red-900 dark:bg-red-400/15 dark:text-red-200",
+  A: "bg-orange-100 text-orange-900 dark:bg-orange-400/15 dark:text-orange-200",
+  B: "bg-amber-100 text-amber-900 dark:bg-amber-400/15 dark:text-amber-200",
+  C: "bg-green-100 text-green-900 dark:bg-green-400/15 dark:text-green-200",
+  D: "bg-blue-100 text-blue-900 dark:bg-blue-400/15 dark:text-blue-200",
+  F: "bg-slate-100 text-slate-900 dark:bg-slate-400/15 dark:text-slate-200",
 };
 const tierId = (tier: ModelRankingTier | null) => `tier:${tier ?? "unranked"}`;
 const chipId = (id: string) => `family:${id}`;
@@ -423,17 +428,18 @@ function RankingTier({
       ref={setNodeRef}
       aria-label={tier ? `Tier ${tier}` : "Unranked"}
       className={cn(
-        "flex min-h-14 rounded-[inherit]",
-        tier && "border-b border-border last:border-b-0",
+        "flex min-h-12 first:rounded-t-xl last:rounded-b-xl",
+        tier && "border-b border-border/50 last:border-b-0",
+        "transition-colors duration-120 motion-reduce:transition-none",
         isOver && "bg-accent/50",
       )}
     >
       <h3
         className={cn(
-          "flex w-14 shrink-0 items-center justify-center self-stretch text-lg font-semibold sm:w-16",
+          "flex w-12 shrink-0 items-center justify-center self-stretch text-sm font-semibold sm:w-14",
           tier ? TIER_COLORS[tier] : "w-20 px-2 text-xs font-medium text-muted-foreground sm:w-20",
-          tier === "S" && "rounded-tl-lg",
-          tier === "F" && "rounded-bl-lg",
+          tier === "S" && "rounded-tl-xl",
+          tier === "F" && "rounded-bl-xl",
         )}
       >
         {tier ?? "Unranked"}

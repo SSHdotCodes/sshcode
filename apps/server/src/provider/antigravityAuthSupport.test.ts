@@ -57,7 +57,6 @@ describe("Antigravity process environment", () => {
     platform: "linux",
     geminiHome: "/t3/userdata/providers/antigravity/profile",
     acpDirectory: "/t3/userdata/providers/antigravity/profile/antigravity-acp",
-    tokenPath: "/t3/userdata/providers/antigravity/profile/antigravity-acp/acp_token.json",
     tempDirectory: "/t3/userdata/providers/antigravity/profile/antigravity-acp/tmp",
     browserCommand: "managed-browser-helper",
   };
@@ -105,7 +104,6 @@ describe("Antigravity process environment", () => {
         CUSTOM_SETTING: "keep-this",
         GEMINI_HOME: profile.geminiHome,
         AGY_ACP_FORCE_FILE_STORAGE: "1",
-        AGY_CLI_DISABLE_AUTO_UPDATE: "true",
         ANTIGRAVITY_HARNESS_PATH: "/release/harness",
         BROWSER: profile.browserCommand,
         PYTHONUNBUFFERED: "1",
@@ -246,7 +244,6 @@ describe("Antigravity process environment", () => {
       platform: "win32",
       geminiHome: "C:\\state\\providers\\antigravity\\profile",
       acpDirectory: "C:\\state\\providers\\antigravity\\profile\\antigravity-acp",
-      tokenPath: "C:\\state\\providers\\antigravity\\profile\\antigravity-acp\\acp_token.json",
       tempDirectory: "C:\\state\\providers\\antigravity\\profile\\antigravity-acp\\tmp",
       browserCommand: "managed-browser-helper",
     };
@@ -735,15 +732,16 @@ it.layer(NodeServices.layer)("Antigravity profile preparation", (it) => {
 
       expect(profile.geminiHome).toBe(path.join(temporaryDirectory, "profile"));
       expect(yield* fs.exists(profile.acpDirectory)).toBe(true);
-      expect(yield* fs.exists(profile.tokenPath)).toBe(false);
+      const tokenPath = path.join(profile.acpDirectory, "acp_token.json");
+      expect(yield* fs.exists(tokenPath)).toBe(false);
       if ((yield* HostProcess.Platform) !== "win32") {
         expect((yield* fs.stat(profile.geminiHome)).mode & 0o777).toBe(0o700);
         expect((yield* fs.stat(profile.acpDirectory)).mode & 0o777).toBe(0o700);
       }
 
-      yield* fs.writeFileString(profile.tokenPath, "synthetic-token-fixture");
+      yield* fs.writeFileString(tokenPath, "synthetic-token-fixture");
       yield* prepareAntigravityProfile({ profileDirectory: profile.geminiHome });
-      expect(yield* fs.readFileString(profile.tokenPath)).toBe("synthetic-token-fixture");
+      expect(yield* fs.readFileString(tokenPath)).toBe("synthetic-token-fixture");
     }),
   );
 

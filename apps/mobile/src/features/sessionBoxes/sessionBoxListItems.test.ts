@@ -25,7 +25,6 @@ function threadItem(
     item: { thread, snoozed: false, pinned },
     snoozeWakeLabelText: undefined,
     timeLabel: "",
-    snoozePresetMinute: undefined,
     showTrailingDivider: false,
     hasQueuedMessages: false,
     canMoveUp: false,

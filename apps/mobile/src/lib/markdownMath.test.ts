@@ -47,6 +47,16 @@ describe("mobile markdown math", () => {
     expect(mayRenderMath("ordinary text", false)).toBe(false);
   });
 
+  it("uses body text for opted-in values next to math and retains their copy source", () => {
+    const source = "At `` 54.5% ``, $x^2$ runs with `lr=2.0e-6`.";
+    const styled = markdownWithTypesetMath(source, findMathBlocks(source, false, undefined, true));
+    const html = styled.diagrams.get("t3-math:0")?.html;
+    expect(html).toContain('<span class="plain-value" data-copy-source="`` 54.5% ``">54.5%</span>');
+    expect(html).toContain("<code>lr=2.0e-6</code>");
+    expect(styled.diagrams.get("t3-math:0")?.source).toBe(source);
+    expect(render(source).diagrams.get("t3-math:0")?.html).toContain("<code>54.5%</code>");
+  });
+
   it("keeps invalid formulas as source without losing neighboring blocks", () => {
     const source = "Bad $\\unknowncommand$.\n\nGood $x^2$.";
     const result = render(source);

@@ -219,6 +219,14 @@ it("keeps a pending native steer visible in the feed", () => {
   });
 });
 
+it("marks a steer that reached a waiting agent", () => {
+  const item = { ...userMessage(), inputIntent: "steer" as const, agentWasWaiting: true as const };
+  expect(buildThreadFeed([projected(item, 0)])[0]).toMatchObject({
+    type: "message",
+    message: { inputIntent: "steer", agentWasWaiting: true },
+  });
+});
+
 function command(updatedAt = "2026-06-20T00:00:02.000Z") {
   return {
     ...base("item-command", updatedAt, 1),
@@ -2167,7 +2175,7 @@ describe("retained v2 feed presentation", () => {
     { envelope: "text", output: { content: [{ type: "text", text: '{"taskId":"a"}' }] } },
     { envelope: "short handle", output: { taskId: "handle-a", childThreadId: "child-a" } },
   ])(
-    "folds matched $envelope delegations without hiding pending, failed or unmatched calls",
+    "folds $envelope delegations into their cards, keeping failed calls and calls without a card",
     ({ output }) => {
       const agent = (
         id: string,
@@ -2222,10 +2230,10 @@ describe("retained v2 feed presentation", () => {
           : [],
       );
       expect(groups[0]).toEqual(["a", "b"]);
+      // The pending call has no output yet; it takes the run's unclaimed card b.
       expect(groups.flat()).toEqual([
         "a",
         "b",
-        "pending",
         "unmatched",
         "failed",
         "error-output",
@@ -2246,6 +2254,45 @@ describe("retained v2 feed presentation", () => {
       ).toBeUndefined();
     },
   );
+
+  it("shows a finished delegation without output as its card, below the group's other tools", () => {
+    const feed = buildThreadFeed([
+      projected(command(), 1),
+      projected(
+        {
+          ...base("delegation", "2026-06-20T00:00:03.000Z", 2),
+          type: "dynamic_tool",
+          toolName: "mcp__t3-code__delegate_task",
+          input: { task: "Review the fix" },
+        },
+        2,
+      ),
+      projected(
+        {
+          ...base("card", "2026-06-20T00:00:04.000Z", 3),
+          type: "subagent",
+          subagentId: NodeId.make("card"),
+          origin: "app_owned",
+          driver: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          childThreadId: ThreadId.make("child-card"),
+          prompt: "Review the fix",
+          result: null,
+        },
+        3,
+      ),
+    ]);
+    const groups = feed.flatMap((entry) =>
+      entry.type === "activity-group" ? [entry.activities] : [],
+    );
+    expect(groups.map((group) => group.map((activity) => activity.projectedItem.item.id))).toEqual([
+      ["item-command"],
+      ["card"],
+    ]);
+    expect(
+      summarizeToolGroup(groups[0]!.map((activity) => activity.workEntry)).summary,
+    ).not.toMatch(/elegat/);
+  });
 
   it("keeps subagents from different provider turns in separate cards", () => {
     const agent = (id: string, index: number) =>

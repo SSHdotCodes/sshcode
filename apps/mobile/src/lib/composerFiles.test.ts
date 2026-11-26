@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { PROVIDER_SEND_TURN_MAX_IMAGE_BYTES } from "@t3tools/contracts";
+import {
+  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+} from "@t3tools/contracts";
 import type { ImagePickerAsset } from "expo-image-picker";
 
 const mocks = vi.hoisted(() => ({
@@ -15,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   readBase64: vi.fn(),
   manipulate: vi.fn(),
   release: vi.fn(),
+  nativeControls: vi.fn(),
+  exportVideo: vi.fn(),
 }));
 
 vi.mock("expo-file-system", () => {
@@ -75,6 +80,7 @@ vi.mock("expo-file-system", () => {
     File,
     FileMode: { ReadOnly: "r", WriteOnly: "w" },
     Paths: {
+      cache: { uri: "file:///cache" },
       get document() {
         return { uri: mocks.documentUri };
       },
@@ -82,10 +88,12 @@ vi.mock("expo-file-system", () => {
   };
 });
 
+vi.mock("expo", () => ({ requireOptionalNativeModule: mocks.nativeControls }));
 vi.mock("expo-image-picker", () => ({
   launchImageLibraryAsync: mocks.pickMedia,
   requestCameraPermissionsAsync: mocks.cameraPermission,
   launchCameraAsync: mocks.takePhoto,
+  UIImagePickerPreferredAssetRepresentationMode: { Current: "current" },
 }));
 vi.mock("expo-document-picker", () => ({ getDocumentAsync: mocks.pickFile }));
 vi.mock("expo-image-manipulator", () => ({
@@ -116,6 +124,8 @@ describe("composer file attachments", () => {
     mocks.open.mockReset();
     mocks.size.mockReset();
     mocks.readBase64.mockReset();
+    mocks.nativeControls.mockReset();
+    mocks.exportVideo.mockReset();
     mocks.size.mockImplementation((uri: string) => (uri.startsWith("content:") ? null : 42));
   });
 
@@ -229,13 +239,15 @@ describe("composer file attachments", () => {
           assets: [{ ...photo, mimeType }],
         });
 
-        const result = await pickComposerImages({ existingCount: 0 });
+        const result = await pickComposerMedia({ existingCount: 0, maxVideoBytes: 1024 });
 
-        expect(mocks.pickMedia).toHaveBeenCalledWith(expect.objectContaining({ base64: false }));
+        expect(mocks.pickMedia).toHaveBeenCalledWith(
+          expect.objectContaining({ base64: false, preferredAssetRepresentationMode: "current" }),
+        );
         expect(mocks.manipulate).toHaveBeenCalledWith(photo.uri);
         expect(mocks.readBase64).not.toHaveBeenCalled();
         expect(result).toEqual({
-          images: [
+          attachments: [
             {
               id: "attachment-id",
               type: "image",
@@ -430,6 +442,7 @@ describe("composer file attachments", () => {
       expect(mocks.pickMedia).toHaveBeenCalledWith(
         expect.objectContaining({
           mediaTypes: ["images", "videos"],
+          preferredAssetRepresentationMode: "current",
           shouldDownloadFromNetwork: true,
         }),
       );
@@ -461,6 +474,9 @@ describe("composer file attachments", () => {
 
       expect(mocks.pickMedia).toHaveBeenCalledWith(
         expect.objectContaining({ mediaTypes: ["images"] }),
+      );
+      expect(mocks.pickMedia.mock.calls[0]?.[0]).not.toHaveProperty(
+        "preferredAssetRepresentationMode",
       );
       expect(result.images).toEqual([
         expect.objectContaining({ type: "image", name: "photo.png" }),
@@ -498,20 +514,28 @@ describe("composer file attachments", () => {
       ]);
     });
 
+    it("keeps a video at the upload limit even when the picker reports larger metadata", async () => {
+      const limit = 50 * 1024 * 1024;
+      mocks.pickMedia.mockResolvedValue({
+        canceled: false,
+        assets: [{ ...video, fileSize: 63 * 1024 * 1024 }],
+      });
+      mocks.size.mockReturnValue(limit);
+
+      await expect(pickComposerMedia({ existingCount: 0, maxVideoBytes: limit })).resolves.toEqual({
+        attachments: [expect.objectContaining({ name: video.fileName, sizeBytes: limit })],
+        error: null,
+      });
+      expect(mocks.nativeControls).not.toHaveBeenCalled();
+    });
+
     it.each([
-      {
-        reason: "picker size exceeds the server limit",
-        reported: 2 * 1024 * 1024,
-        stored: 42,
-        limit: 1024 * 1024,
-        error: "'clip.mov' exceeds the 1 MB attachment limit.",
-      },
       {
         reason: "actual size exceeds the server limit",
         reported: 42,
         stored: 2 * 1024 * 1024,
         limit: 1024 * 1024,
-        error: "'clip.mov' exceeds the 1 MB attachment limit.",
+        error: "'clip.mov' is 2 MB; the limit is 1 MB.",
       },
       {
         reason: "stored copy is empty",
@@ -522,10 +546,10 @@ describe("composer file attachments", () => {
       },
       {
         reason: "server advertises more than the contract limit",
-        reported: 51 * 1024 * 1024,
-        stored: 42,
+        reported: 42,
+        stored: 63 * 1024 * 1024,
         limit: 80 * 1024 * 1024,
-        error: "'clip.mov' exceeds the 50 MB attachment limit.",
+        error: "'clip.mov' is 63 MB; the limit is 50 MB.",
       },
     ])(
       "rejects a video when $reason while retaining the selected photo",
@@ -572,6 +596,116 @@ describe("composer file attachments", () => {
         error: "Could not download video from iCloud.",
       });
       expect(isForegroundHandoffActive()).toBe(false);
+    });
+  });
+
+  describe("oversized videos", () => {
+    const mb = 1024 * 1024;
+    const sourceUri = "file:///cache/ImagePicker/recording.mov";
+    const durableUri = "file:///documents/t3-composer-attachments/attachment-id-recording.mp4";
+    const hevcUri = "file:///cache/t3-composer-video-exports/hevc.mp4";
+    const h264Uri = "file:///cache/t3-composer-video-exports/720.mp4";
+    const lowUri = "file:///cache/t3-composer-video-exports/480.mp4";
+    const maxVideoBytes = PROVIDER_SEND_TURN_MAX_FILE_BYTES;
+
+    beforeEach(() => {
+      mocks.pickMedia.mockResolvedValue({
+        canceled: false,
+        assets: [{ uri: sourceUri, type: "video", fileName: "recording.mov", fileSize: 5 }],
+      });
+      mocks.nativeControls.mockReturnValue({ exportAttachmentVideo: mocks.exportVideo });
+      mocks.size.mockImplementation((uri) => (uri.endsWith(".mov") ? 200 : 25) * mb);
+    });
+
+    it("tries HEVC, then H.264 at 720p and 480p, keeping only the file that fits", async () => {
+      const onCompressing = vi.fn();
+      mocks.exportVideo.mockImplementation(async (_uri, preset) => {
+        expect(onCompressing).toHaveBeenCalledExactlyOnceWith("recording.mov");
+        expect(isForegroundHandoffActive()).toBe(true);
+        if (preset === "hevc1080") return { uri: hevcUri, sizeBytes: 80 * mb, durationSeconds: 90 };
+        expect(mocks.delete).toHaveBeenCalledWith(hevcUri);
+        if (preset === "h264720") throw new Error("Unsupported preset");
+        return { uri: lowUri, sizeBytes: 25 * mb, durationSeconds: 90 };
+      });
+
+      const result = await pickComposerMedia({ existingCount: 0, maxVideoBytes, onCompressing });
+
+      expect(mocks.exportVideo.mock.calls).toEqual([
+        [sourceUri, "hevc1080"],
+        [sourceUri, "h264720"],
+        [sourceUri, "h264480"],
+      ]);
+      expect(mocks.delete.mock.calls).toEqual([[hevcUri], [lowUri], [sourceUri]]);
+      expect(mocks.copy).toHaveBeenCalledExactlyOnceWith(lowUri, durableUri);
+      expect(result).toEqual({
+        attachments: [
+          expect.objectContaining({
+            name: "recording.mp4",
+            mimeType: "video/mp4",
+            sizeBytes: 25 * mb,
+            fileUri: durableUri,
+          }),
+        ],
+        error: null,
+      });
+      expect(isForegroundHandoffActive()).toBe(false);
+      await removePersistedComposerAttachmentFile(durableUri);
+      expect(mocks.delete).toHaveBeenLastCalledWith(durableUri);
+    });
+
+    it("reports the measured source size and estimates a fitting duration from the exports", async () => {
+      mocks.exportVideo
+        .mockResolvedValueOnce({ uri: hevcUri, sizeBytes: 150 * mb, durationSeconds: 240 })
+        .mockResolvedValueOnce({ uri: h264Uri, sizeBytes: 120 * mb, durationSeconds: 240 })
+        .mockResolvedValueOnce({ uri: lowUri, sizeBytes: 100 * mb, durationSeconds: 240 });
+
+      await expect(pickComposerMedia({ existingCount: 0, maxVideoBytes })).resolves.toEqual({
+        attachments: [],
+        error: "'recording.mov' is 200 MB; the limit is 50 MB. Keep it under about 2 minutes.",
+      });
+      expect(mocks.copy).not.toHaveBeenCalled();
+      expect(mocks.delete.mock.calls).toEqual([[hevcUri], [h264Uri], [lowUri], [sourceUri]]);
+      expect(isForegroundHandoffActive()).toBe(false);
+    });
+
+    it("cleans up the export even if the draft copy fails", async () => {
+      mocks.exportVideo.mockResolvedValueOnce({
+        uri: hevcUri,
+        sizeBytes: 25 * mb,
+        durationSeconds: 90,
+      });
+      mocks.copy.mockImplementationOnce(() => {
+        throw new Error("Out of space");
+      });
+
+      await expect(pickComposerMedia({ existingCount: 0, maxVideoBytes })).resolves.toEqual({
+        attachments: [],
+        error: "Out of space",
+      });
+      expect(mocks.delete.mock.calls).toEqual([[durableUri], [hevcUri], [sourceUri]]);
+      expect(isForegroundHandoffActive()).toBe(false);
+    });
+
+    it("handles a video opened through Files without touching a sender-owned source", async () => {
+      const documentUri = "file:///sender/Documents/recording.mov";
+      mocks.pickFile.mockResolvedValue({
+        canceled: false,
+        assets: [{ uri: documentUri, name: "recording.mov" }],
+      });
+      mocks.exportVideo.mockResolvedValueOnce({
+        uri: hevcUri,
+        sizeBytes: 25 * mb,
+        durationSeconds: 90,
+      });
+
+      const result = await pickComposerFiles({ existingCount: 0, maxBytes: maxVideoBytes });
+
+      expect(result.files).toEqual([
+        expect.objectContaining({ name: "recording.mp4", fileUri: durableUri }),
+      ]);
+      expect(result.error).toBeNull();
+      expect(mocks.exportVideo).toHaveBeenCalledExactlyOnceWith(documentUri, "hevc1080");
+      expect(mocks.delete.mock.calls).toEqual([[hevcUri]]);
     });
   });
 

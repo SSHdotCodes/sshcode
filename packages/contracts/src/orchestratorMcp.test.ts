@@ -35,9 +35,25 @@ describe("orchestrator MCP contracts", () => {
       OrchestratorMcpThreadSendInput,
     ]) {
       expect(JSON.stringify(Schema.toJsonSchemaDocument(schema).schema)).toContain(
-        "Rate work against the brief, not findings",
+        "Flag work that fell short of the brief",
       );
     }
+  });
+  it("accepts optional file paths on sends and delegations", () => {
+    const attachmentPaths = ["clip.mov", "voice.m4a"];
+    expect(decodeDelegateTaskInput({ task: "Inspect", attachmentPaths }).attachmentPaths).toEqual(
+      attachmentPaths,
+    );
+    expect(
+      decodeThreadSendInput({ threadId: "child", message: "Inspect", attachmentPaths })
+        .attachmentPaths,
+    ).toEqual(attachmentPaths);
+    expect(() =>
+      decodeDelegateTaskInput({ task: "Inspect", attachmentPaths: Array(101).fill("file") }),
+    ).toThrow();
+    expect(() =>
+      decodeThreadSendInput({ threadId: "child", message: "Inspect", attachmentPaths: [" "] }),
+    ).toThrow();
   });
   it("decodes a JSON-stringified delegate target as the same object", () => {
     const target = {

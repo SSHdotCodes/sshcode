@@ -1,35 +1,71 @@
-import { useContext, useEffect, useMemo, useRef, useState } from "react";
-import { Image, Modal, PixelRatio, Platform, Pressable, View } from "react-native";
-import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  Image,
+  Keyboard,
+  KeyboardAvoidingView,
+  Modal,
+  PixelRatio,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Svg, { Image as SvgImage, Path } from "react-native-svg";
+import Svg, { G, Image as SvgImage, Path, Text as SvgText } from "react-native-svg";
 import {
   changeMarkup,
+  changeMarkupText,
   EMPTY_MARKUP_HISTORY,
-  imagePoint,
-  loopToEllipse,
   MARKUP_COLORS,
+  MARKUP_SNAP_DURATION_MS,
+  MARKUP_TEXT_WEIGHT,
   MARKUP_TOOLS,
   MARKUP_WIDTHS,
   markupName,
   markupPath,
+  markupTextHalo,
+  markupTextLayout,
+  previewMarkup,
   redoMarkup,
+  shapeBounds,
   undoMarkup,
+  type MarkupItem,
   type MarkupShape,
+  type MarkupText,
   type MarkupTool,
 } from "@t3tools/client-runtime/image-markup";
 import { AppText } from "./AppText";
 import type { ResolvedFilePreviewSource } from "./FilePreviewModal.types";
 import { ImageMarkupDraftKey } from "./ImageMarkupContext";
+import { createMarkupGesture, createMarkupInteraction } from "./imageMarkupGesture";
 import { attachMarkedImage, markupDraftAttachment } from "../state/imageMarkupAttachment";
 import { useMediaActions } from "../state/mediaActions";
 import { uuidv4 } from "../lib/uuid";
 
-const TOOL_LABELS = { ellipse: "Circle", rectangle: "Rectangle", arrow: "Arrow", pen: "Pen" };
+const TOOL_LABELS = {
+  ellipse: "Circle",
+  rectangle: "Rectangle",
+  arrow: "Arrow",
+  pen: "Pen",
+  text: "Text",
+};
 const COLOR_LABELS = ["Red", "Yellow", "Green", "Blue", "White", "Black"];
+const TEXT_EDIT_ACCENT = "#38bdf8";
 
 function MarkupButton(props: {
   label: string;
+  caption?: string;
   selected?: boolean;
   disabled?: boolean;
   onPress: () => void;
@@ -43,8 +79,82 @@ function MarkupButton(props: {
       onPress={props.onPress}
       className={`min-h-11 min-w-11 items-center justify-center rounded-lg px-3 disabled:opacity-40 ${props.selected ? "bg-blue-600" : "active:bg-white/15"}`}
     >
-      <AppText className="font-t3-medium text-sm text-white">{props.label}</AppText>
+      <AppText className="font-t3-medium text-sm text-white">
+        {props.caption ?? props.label}
+      </AppText>
     </Pressable>
+  );
+}
+
+function MarkupTextInput(props: {
+  label: MarkupText;
+  width: number;
+  height: number;
+  onChange: (content: string) => void;
+  onCommit: () => void;
+}) {
+  const { x, y, fontSize } = markupTextLayout(props.label, props.width, props.height);
+  const font = {
+    fontSize,
+    fontWeight: `${MARKUP_TEXT_WEIGHT}`,
+    lineHeight: fontSize * 1.2,
+    includeFontPadding: false,
+  } as const;
+  return (
+    <View
+      style={{
+        position: "absolute",
+        left: x,
+        top: y - fontSize,
+        minWidth: fontSize / 2,
+        paddingRight: 2,
+      }}
+    >
+      <Text
+        accessible={false}
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        allowFontScaling={false}
+        numberOfLines={1}
+        style={{ ...font, opacity: 0 }}
+      >
+        {props.label.content || "\u200b"}
+      </Text>
+      <View
+        pointerEvents="none"
+        style={{
+          ...StyleSheet.absoluteFill,
+          left: -2,
+          right: -2,
+          borderWidth: 1,
+          borderStyle: "dashed",
+          borderColor: TEXT_EDIT_ACCENT,
+          borderRadius: 3,
+        }}
+      />
+      {/* The SVG paints the draft. The native input handles the caret, selection, and IME. */}
+      <TextInput
+        accessibilityLabel="Markup text"
+        autoFocus
+        selectTextOnFocus={!!props.label.content}
+        allowFontScaling={false}
+        value={props.label.content}
+        returnKeyType="done"
+        underlineColorAndroid="transparent"
+        selectionColor={Platform.OS === "android" ? `${TEXT_EDIT_ACCENT}66` : TEXT_EDIT_ACCENT}
+        cursorColor={TEXT_EDIT_ACCENT}
+        onChangeText={props.onChange}
+        onBlur={props.onCommit}
+        onSubmitEditing={props.onCommit}
+        style={{
+          ...StyleSheet.absoluteFill,
+          ...font,
+          padding: 0,
+          color: "transparent",
+          backgroundColor: "transparent",
+        }}
+      />
+    </View>
   );
 }
 
@@ -63,10 +173,14 @@ export function ImageMarkupEditor(props: {
   const [stage, setStage] = useState({ width: 1, height: 1 });
   const [tool, setTool] = useState<MarkupTool>("ellipse");
   const [color, setColor] = useState(MARKUP_COLORS[0]!);
-  const [width, setWidth] = useState(MARKUP_WIDTHS[1]!);
+  const [size, setSize] = useState(1);
   const [history, setHistory] = useState(EMPTY_MARKUP_HISTORY);
-  const [drawing, setDrawing] = useState<MarkupShape | null>(null);
-  const active = useRef<MarkupShape | null>(null);
+  const [drawing, setDrawing] = useState<MarkupItem | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [editing, setEditing] = useState<MarkupText | null>(null);
+  const [snapped, setSnapped] = useState<MarkupShape | null>(null);
+  const [interaction] = useState(createMarkupInteraction);
+  const exportAfterEditing = useRef(false);
   const svg = useRef<Svg>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -119,43 +233,72 @@ export function ImageMarkupEditor(props: {
   const fit = image ? Math.min(stage.width / image.width, stage.height / image.height) : 1;
   const viewWidth = image ? image.width * fit : 1;
   const viewHeight = image ? image.height * fit : 1;
+  const selectedText = history.present.find(
+    (item): item is MarkupText => item.tool === "text" && item.id === selected,
+  );
+  useEffect(() => {
+    if (!snapped) return;
+    const timer = setTimeout(() => setSnapped(null), MARKUP_SNAP_DURATION_MS);
+    return () => clearTimeout(timer);
+  }, [snapped]);
 
+  const startEditing = useCallback(
+    (text: MarkupText) => {
+      setSnapped(null);
+      interaction.setTextDraft(text);
+      setEditing(text);
+    },
+    [interaction],
+  );
+  const finishText = () => {
+    const text = interaction.getTextDraft();
+    if (!text) return;
+    interaction.setTextDraft(null);
+    Keyboard.dismiss();
+    setHistory((value) => changeMarkupText(value, text));
+    setSelected(text.content.trim() ? text.id : null);
+    setEditing(null);
+  };
+  const undo = () => {
+    finishText();
+    setSnapped(null);
+    setHistory(undoMarkup);
+  };
+  const redo = () => {
+    finishText();
+    setSnapped(null);
+    setHistory(redoMarkup);
+  };
+
+  const gestureEnabled = loaded && !editing && !result && !busy;
   const gesture = useMemo(
     () =>
-      Gesture.Pan()
-        .minDistance(0)
-        .maxPointers(1)
-        .enabled(loaded && !result && !busy)
-        .runOnJS(true)
-        .onStart((event) => {
-          const shape = {
-            tool,
-            color,
-            width,
-            points: [imagePoint(event.x, event.y, viewWidth, viewHeight)],
-          };
-          active.current = shape;
-          setDrawing(shape);
-        })
-        .onUpdate((event) => {
-          const current = active.current;
-          if (!current) return;
-          const next = imagePoint(event.x, event.y, viewWidth, viewHeight);
-          const shape = {
-            ...current,
-            points: current.tool === "pen" ? [...current.points, next] : [current.points[0]!, next],
-          };
-          active.current = shape;
-          setDrawing(shape);
-        })
-        .onFinalize((_, success) => {
-          const shape = active.current;
-          if (success && shape)
-            setHistory((value) => changeMarkup(value, [...value.present, loopToEllipse(shape)]));
-          active.current = null;
-          setDrawing(null);
-        }),
-    [busy, loaded, result, tool, color, width, viewWidth, viewHeight],
+      createMarkupGesture({
+        color,
+        enabled: gestureEnabled,
+        items: history.present,
+        setDrawing,
+        setHistory,
+        setSelected,
+        setSnapped,
+        size,
+        startEditing,
+        state: interaction,
+        tool,
+        viewHeight,
+        viewWidth,
+      }),
+    [
+      gestureEnabled,
+      tool,
+      color,
+      size,
+      viewWidth,
+      viewHeight,
+      history.present,
+      startEditing,
+      interaction,
+    ],
   );
 
   const attach = async (file: { uri: string; name: string }, replaceId?: string) => {
@@ -180,7 +323,7 @@ export function ImageMarkupEditor(props: {
   };
   const done = () =>
     run(async () => {
-      if (!image || !svg.current || !loaded || active.current) return;
+      if (!image || !svg.current || !loaded || interaction.getActiveDrag()) return;
       const snapshot = svg.current;
       const base64 = await new Promise<string>((resolve, reject) => {
         const timer = setTimeout(
@@ -229,7 +372,16 @@ export function ImageMarkupEditor(props: {
   const cancel = () => {
     if (!busyRef.current && !media.busy) props.onCancel();
   };
-  const shapes = drawing ? [...history.present, drawing] : history.present;
+  const finishExport = useEffectEvent(() => void done());
+  useEffect(() => {
+    if (!editing && exportAfterEditing.current) {
+      exportAfterEditing.current = false;
+      finishExport();
+    }
+  }, [editing]);
+  const items = previewMarkup(history.present, editing ?? drawing);
+  const snapBounds =
+    snapped && history.present.at(-1) === snapped ? shapeBounds(snapped.points) : null;
   return (
     <Modal visible presentationStyle="fullScreen" animationType="fade" onRequestClose={cancel}>
       <GestureHandlerRootView
@@ -240,173 +392,332 @@ export function ImageMarkupEditor(props: {
           paddingBottom: Math.max(insets.bottom, 12),
         }}
       >
-        <View className="flex-row items-center justify-between px-2">
-          <MarkupButton label="Cancel" disabled={busy || media.busy !== null} onPress={cancel} />
-          <AppText className="font-t3-semibold text-white">Markup</AppText>
-          {!result ? (
-            <MarkupButton
-              label={busy ? "Preparing…" : "Done"}
-              disabled={busy || !loaded || !!drawing}
-              onPress={() => void done()}
-            />
-          ) : (
-            <MarkupButton
-              label="Close"
-              disabled={busy || media.busy !== null}
-              onPress={props.onClose}
-            />
-          )}
-        </View>
-        {error && (
-          <AppText accessibilityRole="alert" className="px-4 py-2 text-center text-sm text-red-400">
-            {error}
-          </AppText>
-        )}
-        <View
-          className="flex-1 items-center justify-center"
-          onLayout={(event) => setStage(event.nativeEvent.layout)}
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
-          {image ? (
-            <GestureDetector gesture={gesture}>
-              <View collapsable={false} style={{ width: viewWidth, height: viewHeight }}>
-                {result ? (
-                  <Image
-                    source={{ uri: result.uri }}
-                    style={{ width: viewWidth, height: viewHeight }}
-                    resizeMode="contain"
-                  />
-                ) : (
-                  <Svg
-                    ref={svg}
-                    width={viewWidth}
-                    height={viewHeight}
-                    viewBox={`0 0 ${image.width} ${image.height}`}
-                  >
-                    <SvgImage
-                      href={{ uri: image.uri }}
-                      width={image.width}
-                      height={image.height}
-                      onLoad={() => setLoaded(true)}
-                    />
-                    {shapes.map((shape, index) => (
-                      <Path
-                        key={index}
-                        d={markupPath(shape, image.width, image.height)}
-                        fill="none"
-                        stroke={shape.color}
-                        strokeWidth={shape.width * Math.min(image.width, image.height)}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    ))}
-                  </Svg>
-                )}
-              </View>
-            </GestureDetector>
-          ) : (
-            !error && <AppText className="text-white/70">Loading image…</AppText>
-          )}
-        </View>
-        {result ? (
-          <View className="gap-2 px-3 pt-3">
-            {draftKey && (
-              <Pressable
-                accessibilityRole="button"
-                disabled={busy || media.busy !== null}
-                onPress={() => void run(() => attach(result))}
-                className="min-h-12 items-center justify-center rounded-xl bg-blue-600 disabled:opacity-40"
-              >
-                <AppText className="font-t3-semibold text-white">
-                  {busy ? "Attaching…" : "Add to chat"}
-                </AppText>
-              </Pressable>
-            )}
-            <View className="flex-row flex-wrap justify-center">
-              {media.actions
-                .filter((action) => action.id === "save-to-photos" || action.id === "save")
-                .map((action) => (
-                  <MarkupButton
-                    key={action.id}
-                    label={action.title}
-                    disabled={busy || action.disabled}
-                    onPress={action.run}
-                  />
-                ))}
+          <View className="flex-row items-center justify-between px-2">
+            <MarkupButton label="Cancel" disabled={busy || media.busy !== null} onPress={cancel} />
+            <AppText className="font-t3-semibold text-white">Markup</AppText>
+            {!result ? (
               <MarkupButton
-                label="Keep editing"
-                disabled={busy || media.busy !== null}
+                label={busy ? "Preparing…" : "Done"}
+                disabled={busy || !loaded || !!drawing}
                 onPress={() => {
-                  setLoaded(false);
-                  setResult(null);
+                  if (interaction.getTextDraft()) {
+                    exportAfterEditing.current = true;
+                    finishText();
+                  } else {
+                    void done();
+                  }
                 }}
               />
-            </View>
+            ) : (
+              <MarkupButton
+                label="Close"
+                disabled={busy || media.busy !== null}
+                onPress={props.onClose}
+              />
+            )}
           </View>
-        ) : (
-          <View className="gap-1 px-2 pt-2">
-            <View className="flex-row justify-center">
-              {MARKUP_TOOLS.map((entry) => (
-                <MarkupButton
-                  key={entry}
-                  label={TOOL_LABELS[entry]}
-                  selected={tool === entry}
-                  disabled={busy}
-                  onPress={() => setTool(entry)}
-                />
-              ))}
-            </View>
-            <View className="flex-row items-center justify-center gap-2">
-              {MARKUP_COLORS.map((entry, index) => (
-                <Pressable
-                  key={entry}
-                  accessibilityRole="button"
-                  accessibilityLabel={COLOR_LABELS[index]}
-                  accessibilityState={{ selected: color === entry }}
-                  disabled={busy}
-                  onPress={() => setColor(entry)}
-                  className="min-h-11 min-w-11 items-center justify-center"
-                >
+          {error && (
+            <AppText
+              accessibilityRole="alert"
+              className="px-4 py-2 text-center text-sm text-red-400"
+            >
+              {error}
+            </AppText>
+          )}
+          <View
+            className="flex-1 items-center justify-center"
+            onLayout={(event) => setStage(event.nativeEvent.layout)}
+          >
+            {editing && (
+              <Pressable accessible={false} className="absolute inset-0" onPress={finishText} />
+            )}
+            {image ? (
+              <View style={{ width: viewWidth, height: viewHeight }}>
+                <GestureDetector gesture={gesture}>
+                  <View collapsable={false} style={{ width: viewWidth, height: viewHeight }}>
+                    {result ? (
+                      <Image
+                        source={{ uri: result.uri }}
+                        style={{ width: viewWidth, height: viewHeight }}
+                        resizeMode="contain"
+                      />
+                    ) : (
+                      <Svg
+                        ref={svg}
+                        width={viewWidth}
+                        height={viewHeight}
+                        viewBox={`0 0 ${image.width} ${image.height}`}
+                      >
+                        <SvgImage
+                          href={{ uri: image.uri }}
+                          width={image.width}
+                          height={image.height}
+                          onLoad={() => setLoaded(true)}
+                        />
+                        {items.map((item) => {
+                          if (item.tool === "text") {
+                            const { x, y, fontSize } = markupTextLayout(
+                              item,
+                              image.width,
+                              image.height,
+                            );
+                            return (
+                              <G key={item.id} fontSize={fontSize} fontWeight={MARKUP_TEXT_WEIGHT}>
+                                {markupTextHalo(item.color, fontSize).map((layer) => (
+                                  <SvgText
+                                    key={layer.width}
+                                    x={x}
+                                    y={y + layer.offset}
+                                    fill="none"
+                                    stroke={layer.color}
+                                    strokeOpacity={layer.opacity}
+                                    strokeWidth={layer.width}
+                                    strokeLinejoin="round"
+                                  >
+                                    {item.content}
+                                  </SvgText>
+                                ))}
+                                <SvgText x={x} y={y} fill={item.color}>
+                                  {item.content}
+                                </SvgText>
+                              </G>
+                            );
+                          }
+                          return (
+                            <Path
+                              key={item.id}
+                              d={markupPath(item, image.width, image.height)}
+                              fill="none"
+                              stroke={item.color}
+                              strokeWidth={item.width * Math.min(image.width, image.height)}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          );
+                        })}
+                      </Svg>
+                    )}
+                  </View>
+                </GestureDetector>
+                {!result && tool === "text" && (
                   <View
+                    pointerEvents="none"
+                    accessibilityElementsHidden
+                    importantForAccessibility="no-hide-descendants"
+                    className="absolute inset-0 overflow-hidden"
+                  >
+                    {items.map((item) => {
+                      if (item.tool !== "text" || editing?.id === item.id) return null;
+                      const { x, y, fontSize } = markupTextLayout(item, viewWidth, viewHeight);
+                      const highlighted = selected === item.id;
+                      return (
+                        <Text
+                          key={item.id}
+                          allowFontScaling={false}
+                          numberOfLines={1}
+                          onTextLayout={(event) => {
+                            const width = event.nativeEvent.lines[0]?.width;
+                            if (width !== undefined) interaction.setLabelWidth(item.id, width);
+                          }}
+                          style={{
+                            position: "absolute",
+                            left: x,
+                            top: y - fontSize,
+                            fontSize,
+                            fontWeight: `${MARKUP_TEXT_WEIGHT}`,
+                            color: "transparent",
+                            borderBottomWidth: highlighted ? 1 : 0,
+                            borderColor: "#38bdf8",
+                          }}
+                        >
+                          {item.content}
+                        </Text>
+                      );
+                    })}
+                  </View>
+                )}
+                {!result && editing && (
+                  <>
+                    <Pressable
+                      accessible={false}
+                      className="absolute inset-0"
+                      onPress={finishText}
+                    />
+                    <MarkupTextInput
+                      key={editing.id}
+                      label={editing}
+                      width={viewWidth}
+                      height={viewHeight}
+                      onChange={(content) => {
+                        const draft = interaction.getTextDraft();
+                        if (!draft) return;
+                        const next = { ...draft, content };
+                        interaction.setTextDraft(next);
+                        setEditing(next);
+                      }}
+                      onCommit={finishText}
+                    />
+                  </>
+                )}
+                {!result && snapBounds && (
+                  <View
+                    className="absolute"
                     style={{
-                      width: 26,
-                      height: 26,
-                      backgroundColor: entry,
-                      borderRadius: 13,
-                      borderWidth: color === entry ? 3 : 1,
-                      borderColor: color === entry ? "#60a5fa" : "#888888",
+                      left: Math.max(
+                        0,
+                        Math.min(
+                          viewWidth - 128,
+                          (snapBounds.x + snapBounds.width * 0.8) * viewWidth - 64,
+                        ),
+                      ),
+                      top:
+                        snapBounds.y * viewHeight >= 44
+                          ? snapBounds.y * viewHeight - 44
+                          : (snapBounds.y + snapBounds.height) * viewHeight,
+                    }}
+                  >
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={undo}
+                      hitSlop={6}
+                      className="min-h-9 w-32 items-center justify-center rounded-lg bg-black/85"
+                    >
+                      <AppText className="font-t3-medium text-sm text-white">Keep freehand</AppText>
+                    </Pressable>
+                  </View>
+                )}
+              </View>
+            ) : (
+              !error && <AppText className="text-white/70">Loading image…</AppText>
+            )}
+          </View>
+          {result ? (
+            <View className="gap-2 px-3 pt-3">
+              {draftKey && (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={busy || media.busy !== null}
+                  onPress={() => void run(() => attach(result))}
+                  className="min-h-12 items-center justify-center rounded-xl bg-blue-600 disabled:opacity-40"
+                >
+                  <AppText className="font-t3-semibold text-white">
+                    {busy ? "Attaching…" : "Add to chat"}
+                  </AppText>
+                </Pressable>
+              )}
+              <View className="flex-row flex-wrap justify-center">
+                {media.actions
+                  .filter((action) => action.id === "save-to-photos" || action.id === "save")
+                  .map((action) => (
+                    <MarkupButton
+                      key={action.id}
+                      label={action.title}
+                      disabled={busy || action.disabled}
+                      onPress={action.run}
+                    />
+                  ))}
+                <MarkupButton
+                  label="Keep editing"
+                  disabled={busy || media.busy !== null}
+                  onPress={() => {
+                    setLoaded(false);
+                    setResult(null);
+                  }}
+                />
+              </View>
+            </View>
+          ) : (
+            <View className="gap-1 px-2 pt-2">
+              <View className="flex-row justify-center">
+                {MARKUP_TOOLS.map((entry) => (
+                  <MarkupButton
+                    key={entry}
+                    label={TOOL_LABELS[entry]}
+                    caption={entry === "text" ? "T" : TOOL_LABELS[entry]}
+                    selected={tool === entry}
+                    disabled={busy}
+                    onPress={() => {
+                      finishText();
+                      setSelected(null);
+                      setTool(entry);
                     }}
                   />
-                </Pressable>
-              ))}
-            </View>
-            <View className="flex-row flex-wrap items-center justify-center">
-              {MARKUP_WIDTHS.map((entry, index) => (
+                ))}
+              </View>
+              <View className="flex-row items-center justify-center gap-2">
+                {MARKUP_COLORS.map((entry, index) => (
+                  <Pressable
+                    key={entry}
+                    accessibilityRole="button"
+                    accessibilityLabel={COLOR_LABELS[index]}
+                    accessibilityState={{ selected: color === entry }}
+                    disabled={busy}
+                    onPress={() => {
+                      finishText();
+                      setColor(entry);
+                    }}
+                    className="min-h-11 min-w-11 items-center justify-center"
+                  >
+                    <View
+                      style={{
+                        width: 26,
+                        height: 26,
+                        backgroundColor: entry,
+                        borderRadius: 13,
+                        borderWidth: color === entry ? 3 : 1,
+                        borderColor: color === entry ? "#60a5fa" : "#888888",
+                      }}
+                    />
+                  </Pressable>
+                ))}
+              </View>
+              <View className="flex-row flex-wrap items-center justify-center">
+                {MARKUP_WIDTHS.map((entry, index) => (
+                  <MarkupButton
+                    key={entry}
+                    label={
+                      tool === "text"
+                        ? ["Small text", "Medium text", "Large text"][index]!
+                        : ["Thin stroke", "Medium stroke", "Thick stroke"][index]!
+                    }
+                    caption={["S", "M", "L"][index]!}
+                    selected={size === index}
+                    disabled={busy}
+                    onPress={() => {
+                      finishText();
+                      setSize(index);
+                    }}
+                  />
+                ))}
+                <MarkupButton label="Undo" disabled={busy || !history.past.length} onPress={undo} />
                 <MarkupButton
-                  key={entry}
-                  label={["Thin", "Medium", "Thick"][index]!}
-                  selected={width === entry}
-                  disabled={busy}
-                  onPress={() => setWidth(entry)}
+                  label="Redo"
+                  disabled={busy || !history.future.length}
+                  onPress={redo}
                 />
-              ))}
-              <MarkupButton
-                label="Undo"
-                disabled={busy || !history.past.length}
-                onPress={() => setHistory(undoMarkup)}
-              />
-              <MarkupButton
-                label="Redo"
-                disabled={busy || !history.future.length}
-                onPress={() => setHistory(redoMarkup)}
-              />
-              <MarkupButton
-                label="Clear"
-                disabled={busy || !history.present.length}
-                onPress={() => setHistory((value) => changeMarkup(value, []))}
-              />
+                <MarkupButton
+                  label={selectedText ? "Delete text" : "Clear"}
+                  caption={selectedText ? "Delete" : "Clear"}
+                  disabled={busy || !history.present.length}
+                  onPress={() => {
+                    finishText();
+                    setSnapped(null);
+                    setSelected(null);
+                    setHistory((value) =>
+                      selectedText
+                        ? changeMarkupText(value, { ...selectedText, content: "" })
+                        : changeMarkup(value, []),
+                    );
+                  }}
+                />
+              </View>
             </View>
-          </View>
-        )}
+          )}
+        </KeyboardAvoidingView>
       </GestureHandlerRootView>
     </Modal>
   );

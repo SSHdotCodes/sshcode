@@ -92,7 +92,10 @@ export function UsageProviderSettings({
           />
         ) : null}
         {entries.length === 0 ? (
-          <SettingsRow title="No hubs configured" />
+          <SettingsRow
+            title="No hubs"
+            description="Add a CLIProxyAPI hub to show the quota of the accounts it pools."
+          />
         ) : (
           entries.map(([id, source]) => {
             const label = source.label?.trim() || source.url;

@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - Standalone Node benchmark.
+// @effect-diagnostics nodeBuiltinImport:off - Desktop comparison runs isolated child processes and reads their output artifacts.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";

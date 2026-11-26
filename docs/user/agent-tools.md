@@ -22,10 +22,10 @@ An older environment shows an update prompt instead of tool controls. Read-only 
 
 Every agent can read an X post from its link (`read_x_post`) and search X (`search_x`). Agents are told to search X on their own, the way they use web search, for news, launches, reactions and anything recent; you do not have to ask for it. Reading needs no account or key.
 
-Search uses whichever of these you have:
+By default, `search_x` tries the X API first.
 
-- **X API key (fast).** Save an X API Bearer Token for **All sessions** under the name `X_API_BEARER_TOKEN` in [API keys](api-keys.md). A search takes about a second. X bills each returned post, up to 10 per search, and this search covers the last 7 days.
-- **Grok Build (no key).** With Grok switched on and signed in, searches run on your Grok account and take from 10 seconds to a minute or more. SSHCode also uses Grok when the X API refuses a query or finds nothing.
+- **X API key (fast).** Save an X API Bearer Token for **All sessions** under the name `X_API_BEARER_TOKEN` in [API keys](api-keys.md). The API searches the last 7 days in about a second. If it finds nothing, the search ends there with “No posts in the last 7 days.” X bills each returned post, up to 10 per search.
+- **Grok Build (no key).** With Grok switched on and signed in, ask your agent to run `search_x` with `deep: true` for older posts. This goes straight to Grok and takes 1–4 minutes. SSHCode also uses Grok if there’s no API key or the API refuses the query or doesn’t respond.
 
 A Grok search runs in Grok's strict sandbox from an empty folder with web fetch off. It cannot read your files, and SSHCode refuses any command or file request it makes.
 

@@ -1,6 +1,5 @@
 import {
   AuthDiagnosticsReadScope,
-  type AuthSessionState,
   sessionGrantsScope,
   type SessionGrantInput,
 } from "@t3tools/contracts";
@@ -9,6 +8,7 @@ import type { EnvironmentConnectionPhase } from "../connection/presentation.ts";
 
 export function resolveUsageAccess(input: {
   readonly connectionPhase: EnvironmentConnectionPhase;
+  readonly connectionError?: string | null;
   readonly session: SessionGrantInput | null;
   readonly hasSessionError: boolean;
 }) {
@@ -29,7 +29,7 @@ export function resolveUsageAccess(input: {
     return {
       canReadDiagnostics: false,
       isPending,
-      error: isPending ? null : "This environment is not connected.",
+      error: isPending ? null : (input.connectionError ?? "This environment is not connected."),
     };
   }
   const canReadDiagnostics = sessionGrantsScope(input.session, AuthDiagnosticsReadScope);

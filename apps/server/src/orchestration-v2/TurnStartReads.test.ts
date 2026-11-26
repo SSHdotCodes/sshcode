@@ -9,6 +9,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ProviderThreadId,
+  RunAttemptId,
   RunId,
   ThreadId,
   TurnItemId,
@@ -284,6 +285,16 @@ it.effect.each(["sqlite", "memory"] as const)(
       assert.equal(context.messages.find((m) => m.id === messageId)?.text, "Continue");
       assert.isTrue(context.hasConversation);
       assert.deepEqual(context.turnItems, []);
+      assert.deepEqual(yield* store.getRunAttemptState(threadId, runId), {
+        status: run.status,
+        activeAttemptId: run.activeAttemptId,
+      });
+      const replacement = RunAttemptId.make("replacement-attempt");
+      yield* putRun({ ...run, activeAttemptId: replacement, status: "running" });
+      assert.deepEqual(yield* store.getRunAttemptState(threadId, runId), {
+        status: "running",
+        activeAttemptId: replacement,
+      });
       const providerThreadId = ProviderThreadId.make("provider-thread:current");
       yield* putRun({ ...run, providerThreadId });
       const handoff = {
@@ -469,6 +480,11 @@ it.effect.each(["sqlite", "memory"] as const)(
       );
       const other = ThreadId.make("other");
       yield* putThread({ ...thread, id: other });
+      assert.isUndefined(yield* store.getRunAttemptState(other, runId));
+      assert.instanceOf(
+        yield* store.getRunAttemptState(ThreadId.make("missing"), runId).pipe(Effect.flip),
+        ProjectionStore.ProjectionStoreThreadNotFoundError,
+      );
       assert.deepEqual((yield* store.getTurnStartContext(other, runId)).messages, []);
       assert.deepEqual(yield* store.getTurnStartHistory(other, [oldRunId]), []);
       assert.isFalse((yield* store.getTurnStartContext(other, runId)).hasConversation);

@@ -1,18 +1,11 @@
 import type { ProviderDriverKind, ProviderOptionDescriptor } from "@t3tools/contracts";
+import { acpSpeedChoices, acpSpeedIcon } from "@t3tools/shared/acpComposer";
 import { getProviderOptionCurrentValue } from "@t3tools/shared/model";
 import { ZapIcon } from "lucide-react";
 import { UltrafastIcon } from "../Icons";
 import { cn } from "~/lib/utils";
 import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { ComposerControlIcon, type ComposerControlSize } from "./ComposerControl";
-
-/** An ACP agent's Speed select (Devin): "fast", which Devin's SWE models call Lightning, against "standard". */
-export function acpSpeedChoices(descriptor: ProviderOptionDescriptor) {
-  if (descriptor.id !== "speed" || descriptor.type !== "select") return null;
-  const on = descriptor.options.find(({ id }) => id === "fast");
-  const off = descriptor.options.find(({ id }) => id === "standard");
-  return on && off ? { on, off } : null;
-}
 
 /**
  * A speed setting with only two states (Fast mode on or off), which the composer flips with one
@@ -51,12 +44,10 @@ export function getTraitsSpeedDisplay(
     };
   }
   const acpSpeed = acpSpeedChoices(descriptor);
-  if (acpSpeed) {
-    const fast = getProviderOptionCurrentValue(descriptor) === acpSpeed.on.id;
-    return {
-      label: fast ? acpSpeed.on.label : acpSpeed.off.label,
-      speedIcon: fast ? "fast" : null,
-    };
+  if (acpSpeed && descriptor.type === "select") {
+    const value = getProviderOptionCurrentValue(descriptor);
+    const choice = descriptor.options.find((option) => option.id === value) ?? acpSpeed.off;
+    return { label: choice.label, speedIcon: acpSpeedIcon(choice) };
   }
   if (provider !== "codex" || descriptor.id !== "serviceTier" || descriptor.type !== "select") {
     return null;
@@ -126,7 +117,7 @@ export function TraitsSpeedBolt({
 }) {
   // Lightning yellow for every provider. The color sits on the icon too: the composer control
   // greys out any svg without one.
-  const color = "text-yellow-500 dark:text-yellow-400";
+  const color = "text-warning dark:text-warning-foreground";
   return (
     <span
       ref={observeVisibleAnimation}

@@ -55,6 +55,10 @@ import {
   removePersistedComposerAttachmentFile,
 } from "../lib/composerImages";
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
+import {
+  isCompressingComposerVideo,
+  withComposerVideoPreparation,
+} from "./composer-video-preparation";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { createThreadFeedProjector } from "../lib/threadFeedProjection";
 import {
@@ -521,6 +525,7 @@ export function useThreadComposerState() {
     const edit = getQueuedRunEdit(threadKey);
     if (edit === null) return;
     const draftKey = queuedEditDraftKey(threadKey, edit.runId);
+    if (isCompressingComposerVideo(draftKey)) return;
     let draft = getComposerDraftSnapshot(draftKey);
     const text = draft.text.trim();
     if (text.length === 0) {
@@ -644,7 +649,11 @@ export function useThreadComposerState() {
 
       const threadKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
       const draft = getComposerDraftSnapshot(threadKey);
-      if (appAtomRegistry.get(composerContextImportsAtom)[threadKey]) return null;
+      if (
+        appAtomRegistry.get(composerContextImportsAtom)[threadKey] ||
+        isCompressingComposerVideo(threadKey)
+      )
+        return null;
       const thread = selectedThreadShell;
       const text = draft.text.trim();
       const attachments = draft.attachments;
@@ -824,86 +833,67 @@ export function useThreadComposerState() {
   );
 
   const onPickDraftMedia = useCallback(
-    async (source: "library" | "camera" = "library") => {
-      if (!selectedThreadShell) {
+    async (source: "library" | "camera" | "files" = "library") => {
+      if (!selectedThreadShell) return;
+
+      const capabilities = selectedEnvironmentRuntime?.serverConfig?.environment.capabilities;
+      const maxBytes = capabilities?.fileAttachments?.maxUploadBytes;
+      if (source === "files" && maxBytes === undefined) {
+        Alert.alert("Could not attach file", "This server does not support file attachments.");
         return;
       }
-
+      const ownerKey = scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id);
       const threadKey = activeComposerDraftKey(selectedThreadShell);
-      const existingQueuedCount =
-        getQueuedRunEdit(scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id))
-          ?.existingAttachments.length ?? 0;
+      const existingQueuedCount = getQueuedRunEdit(ownerKey)?.existingAttachments.length ?? 0;
       const maxAttachments = Math.max(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - existingQueuedCount);
       const insertion = captureComposerDraftInsertion(threadKey);
-      const capabilities = selectedEnvironmentRuntime?.serverConfig?.environment.capabilities;
-      const result = await pickComposerMedia({
-        source,
-        existingCount:
-          existingQueuedCount + countComposerDraftAttachmentsAfterSelection(threadKey, insertion),
-        maxVideoBytes:
-          capabilities?.attachmentUploads === true
-            ? capabilities.fileAttachments?.maxUploadBytes
-            : undefined,
-      });
-      const rejectedCount = appendComposerDraftAttachments(threadKey, result.attachments, {
-        appendReference: true,
-        insertion,
-        maxAttachments,
-      });
+      const existingCount =
+        existingQueuedCount + countComposerDraftAttachmentsAfterSelection(threadKey, insertion);
+      const { error, rejectedCount } = await withComposerVideoPreparation(
+        threadKey,
+        async (onCompressing) => {
+          const result =
+            source === "files"
+              ? await pickComposerFiles({ existingCount, maxBytes, onCompressing })
+              : await pickComposerMedia({
+                  source,
+                  existingCount,
+                  maxVideoBytes: capabilities?.attachmentUploads === true ? maxBytes : undefined,
+                  onCompressing,
+                });
+          const attachments = "files" in result ? result.files : result.attachments;
+          // Cancelling a queued edit deletes its draft. A late picker result must not recreate it.
+          if (threadKey !== ownerKey && activeComposerDraftKey(selectedThreadShell) !== threadKey) {
+            scheduleUnusedComposerAttachmentCleanup(attachments);
+            return { error: null, rejectedCount: 0 };
+          }
+          return {
+            error: result.error,
+            rejectedCount: appendComposerDraftAttachments(threadKey, attachments, {
+              appendReference: true,
+              insertion,
+              maxAttachments,
+            }),
+          };
+        },
+      );
       const problems = [
-        ...(result.error ? [result.error] : []),
+        ...(error ? [error] : []),
         ...(rejectedCount > 0
           ? [`You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} attachments per message.`]
           : []),
       ];
       if (problems.length > 0) {
-        Alert.alert("Could not attach photo or video", problems.join("\n\n"));
+        Alert.alert(
+          source === "files" ? "Could not attach file" : "Could not attach photo or video",
+          problems.join("\n\n"),
+        );
       }
     },
-    [composerDrafts, selectedEnvironmentRuntime?.serverConfig, selectedThreadShell],
+    [selectedEnvironmentRuntime?.serverConfig, selectedThreadShell],
   );
 
-  const onPickDraftFiles = useCallback(async () => {
-    if (!selectedThreadShell) {
-      return;
-    }
-    const maxBytes =
-      selectedEnvironmentRuntime?.serverConfig?.environment.capabilities.fileAttachments
-        ?.maxUploadBytes;
-    if (maxBytes === undefined) {
-      Alert.alert("Could not attach file", "This server does not support file attachments.");
-      return;
-    }
-
-    const threadKey = activeComposerDraftKey(selectedThreadShell);
-    const existingQueuedCount =
-      getQueuedRunEdit(scopedThreadKey(selectedThreadShell.environmentId, selectedThreadShell.id))
-        ?.existingAttachments.length ?? 0;
-    const maxAttachments = Math.max(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS - existingQueuedCount);
-    const insertion = captureComposerDraftInsertion(threadKey);
-    // pickComposerFiles clamps the advertised limit to the contract maximum.
-    const result = await pickComposerFiles({
-      existingCount:
-        existingQueuedCount + countComposerDraftAttachmentsAfterSelection(threadKey, insertion),
-      maxBytes,
-    });
-    const rejectedCount = appendComposerDraftAttachments(threadKey, result.files, {
-      appendReference: true,
-      insertion,
-      maxAttachments,
-    });
-    // The picker error and the live-cap rejection can both happen in one
-    // pick; report both in a single alert.
-    const problems = [
-      ...(result.error ? [result.error] : []),
-      ...(rejectedCount > 0
-        ? [`You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`]
-        : []),
-    ];
-    if (problems.length > 0) {
-      Alert.alert("Could not attach file", problems.join("\n\n"));
-    }
-  }, [composerDrafts, selectedEnvironmentRuntime?.serverConfig, selectedThreadShell]);
+  const onPickDraftFiles = useCallback(() => onPickDraftMedia("files"), [onPickDraftMedia]);
 
   const onPasteIntoDraft = useCallback(async () => {
     if (!selectedThreadShell) {

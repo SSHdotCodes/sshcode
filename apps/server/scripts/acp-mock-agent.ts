@@ -31,6 +31,8 @@ if (process.env.T3_ACP_ENV_LOG_PATH) {
 const exitLogPath = process.env.T3_ACP_EXIT_LOG_PATH;
 const antigravityProfile = process.env.T3_ACP_ANTIGRAVITY === "1";
 const antigravityWakeSteer = process.env.T3_ACP_ANTIGRAVITY_WAKE_STEER === "1";
+const antigravityThoughtLevel = process.env.T3_ACP_ANTIGRAVITY_THOUGHT_LEVEL === "1";
+const antigravityResumeThoughtLevel = process.env.T3_ACP_RESUME_THOUGHT_LEVEL;
 const advertisedCommandNames = (process.env.T3_ACP_AVAILABLE_COMMANDS ?? "")
   .split(",")
   .map((name) => name.trim())
@@ -167,16 +169,22 @@ const permissionRequestCount = Math.max(
 );
 const sessionId = "mock-session-1";
 
-let currentModeId = antigravityProfile ? (process.env.T3_ACP_INITIAL_MODE ?? "default") : "ask";
+let currentModeId = qaFixture
+  ? "code"
+  : antigravityProfile
+    ? (process.env.T3_ACP_INITIAL_MODE ?? "default")
+    : "ask";
 let currentModelId = qaFixture
   ? QA_MODELS[0]!.value
   : antigravityProfile
     ? "gemini-test-low"
     : "default";
+let currentAntigravityThoughtLevel = "high";
 let parameterizedModelPicker = false;
 let currentReasoning = "medium";
 let currentContext = "272k";
 let currentFast = false;
+let currentSpeed = "standard";
 let currentAgent = "";
 let authenticated = !requiresAuthentication;
 let promptCount = 0;
@@ -240,6 +248,8 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
       reasoning: currentReasoning,
       context: currentContext,
       fast: currentFast,
+      speed: currentSpeed,
+      mode: currentModeId,
     });
   if (omitModelConfigOption) {
     return [];
@@ -262,6 +272,30 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
         currentValue: currentModeId,
         options: availableModes.map((mode) => ({ value: mode.id, name: mode.name })),
       },
+      ...(antigravityThoughtLevel
+        ? [
+            {
+              configId: "thought_level",
+              name: "Thinking Level",
+              category: "thought_level",
+              type: "select" as const,
+              currentValue: currentAntigravityThoughtLevel,
+              options:
+                currentModelId === "gemini-test-high"
+                  ? [
+                      { value: "low", name: "Low" },
+                      { value: "medium", name: "Medium" },
+                      { value: "high", name: "High" },
+                    ]
+                  : [
+                      { value: "low", name: "Low" },
+                      { value: "medium", name: "Medium" },
+                      { value: "high", name: "High" },
+                      { value: "xhigh", name: "Extra" },
+                    ],
+            },
+          ]
+        : []),
     ];
   }
   if (parameterizedModelPicker) {
@@ -716,6 +750,9 @@ const program = Effect.gen(function* () {
         yield* Deferred.await(resumeRelease);
       }
       if (antigravityProfile) {
+        if (antigravityResumeThoughtLevel) {
+          currentAntigravityThoughtLevel = antigravityResumeThoughtLevel;
+        }
         yield* publishAntigravityCommands(request.sessionId);
       }
       return {
@@ -922,6 +959,12 @@ const program = Effect.gen(function* () {
       }
       if (request.configId === "model" && typeof request.value === "string") {
         currentModelId = request.value;
+        if (antigravityProfile && antigravityThoughtLevel) {
+          currentAntigravityThoughtLevel = request.value === "gemini-test-high" ? "medium" : "high";
+        }
+      }
+      if (request.configId === "thought_level" && typeof request.value === "string") {
+        currentAntigravityThoughtLevel = request.value;
       }
       if (request.configId === "agent" && typeof request.value === "string") {
         currentAgent = request.value;
@@ -934,6 +977,9 @@ const program = Effect.gen(function* () {
       }
       if (request.configId === "fast") {
         currentFast = request.value === true || request.value === "true";
+      }
+      if (qaFixture && request.configId === "speed") {
+        currentSpeed = request.value === "fast" ? "fast" : "standard";
       }
       return {
         configOptions: configOptions(),
@@ -1778,11 +1824,34 @@ const program = Effect.gen(function* () {
           },
         });
         yield* agent.client.notifyMcp({ connectionId, method: "notifications/initialized" });
+        // Report the delegation as a tool call without output, the way Codex records it, so a
+        // UI check can see the row fold into the subagent card.
+        const toolCallId = `qa-tool-${promptCount}`;
+        if (qaTool.name === "delegate_task") {
+          yield* agent.client.sessionUpdate({
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId,
+              title: qaTool.name,
+              kind: "other",
+              status: "in_progress",
+              rawInput: { server: "t3-code", tool: qaTool.name, arguments: qaTool.arguments },
+              _meta: { is_mcp_tool_call: true },
+            },
+          });
+        }
         const result = yield* agent.client.messageMcp({
           connectionId,
           method: "tools/call",
           params: { name: qaTool.name, arguments: qaTool.arguments },
         });
+        if (qaTool.name === "delegate_task") {
+          yield* agent.client.sessionUpdate({
+            sessionId: requestedSessionId,
+            update: { sessionUpdate: "tool_call_update", toolCallId, status: "completed" },
+          });
+        }
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
@@ -1887,6 +1956,194 @@ const program = Effect.gen(function* () {
         yield* Effect.sleep("120 seconds");
       }
 
+      // QA: "qa:images" reads the workspace's sheets/*.jpg one at a time, about a second
+      // apart, returning each as tool output the way Gemini reads contact sheets, so a UI
+      // check can watch a work group's image strip grow while the turn is still running.
+      if (qaFixture && promptMentions(request.prompt, "qa:images")) {
+        const directory = `${process.cwd()}/sheets`;
+        const sheets = NodeFS.existsSync(directory)
+          ? NodeFS.readdirSync(directory)
+              .filter((name) => name.endsWith(".jpg"))
+              .sort()
+          : [];
+        for (const [index, name] of sheets.entries()) {
+          if (cancelledSessions.has(requestedSessionId))
+            return yield* finishPrompt(requestedSessionId, "cancelled");
+          const toolCallId = `qa-images-${promptCount}-${index}`;
+          const path = `${directory}/${name}`;
+          yield* agent.client.sessionUpdate({
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId,
+              title: `Read sheets/${name}`,
+              kind: "read",
+              status: "pending",
+              rawInput: { path },
+            },
+          });
+          yield* Effect.sleep("1200 millis");
+          yield* agent.client.sessionUpdate({
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId,
+              status: "completed",
+              // Returned as tool output, as Gemini's file reads are.
+              content: [
+                {
+                  type: "content",
+                  content: {
+                    type: "image",
+                    mimeType: "image/jpeg",
+                    data: NodeFS.readFileSync(path).toString("base64"),
+                  },
+                },
+              ],
+            },
+          });
+        }
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: `Looked at ${sheets.length} contact sheets.` },
+          },
+        });
+        return yield* finishPrompt(requestedSessionId, "end_turn");
+      }
+
+      // QA: "qa:rich" answers like a real coding turn (search, reads, an edit, a test run, then
+      // a markdown reply with a list and code), so many of them make a realistic long chat to
+      // screenshot and to measure scrolling on.
+      if (qaFixture && promptMentions(request.prompt, "qa:rich")) {
+        const files = [
+          "src/features/threads/ThreadFeed.tsx",
+          "src/features/home/HomeScreen.tsx",
+          "src/lib/threadFeedProjection.ts",
+          "src/components/MarkdownView.tsx",
+          "src/features/settings/SettingsSheet.tsx",
+        ];
+        const file = files[promptCount % files.length]!;
+        const symbol = ["rowHeight", "groupTools", "renderItem", "measureText", "sectionGap"][
+          promptCount % 5
+        ]!;
+        const say = (id: string, text: string) =>
+          agent.client.sessionUpdate({
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              messageId: `qa-rich-${promptCount}-${id}`,
+              content: { type: "text", text },
+            },
+          });
+        const tool = (
+          id: string,
+          title: string,
+          kind: "read" | "search" | "edit" | "execute",
+          rawInput: Record<string, string>,
+          content: ReadonlyArray<AcpSchema.ToolCallContent>,
+        ) =>
+          Effect.gen(function* () {
+            const toolCallId = `qa-rich-${promptCount}-${id}`;
+            yield* agent.client.sessionUpdate({
+              sessionId: requestedSessionId,
+              update: {
+                sessionUpdate: "tool_call_update",
+                toolCallId,
+                title,
+                kind,
+                status: "pending",
+                rawInput,
+              },
+            });
+            yield* agent.client.sessionUpdate({
+              sessionId: requestedSessionId,
+              update: {
+                sessionUpdate: "tool_call_update",
+                toolCallId,
+                status: "completed",
+                content,
+              },
+            });
+          });
+        const text = (value: string): AcpSchema.ToolCallContent => ({
+          type: "content",
+          content: { type: "text", text: value },
+        });
+        yield* say(
+          "intro",
+          `I'll trace where \`${symbol}\` is computed in \`${file}\` and check what changes on each update.`,
+        );
+        yield* tool("search", `Search for ${symbol}`, "search", { pattern: symbol }, [
+          text(`${file}:42\n${file}:118\nsrc/lib/layout.ts:7`),
+        ]);
+        yield* tool("read-1", `Read ${file}`, "read", { path: file }, [
+          text(
+            `export function ${symbol}(input: Input) {\n  return input.size * 2;\n}\n`.repeat(8),
+          ),
+        ]);
+        yield* tool("read-2", "Read src/lib/layout.ts", "read", { path: "src/lib/layout.ts" }, [
+          text("export const GAP = 12;\nexport const ROW = 44;\n".repeat(10)),
+        ]);
+        yield* tool("edit", `Edit ${file}`, "edit", { path: file }, [
+          {
+            type: "diff",
+            path: file,
+            oldText: `const value = ${symbol}(input);\nreturn <Row height={value} />;\n`,
+            newText: `const value = useMemo(() => ${symbol}(input), [input]);\nreturn <Row height={value} />;\n`,
+          },
+        ]);
+        yield* tool(
+          "test",
+          `vp test run ${file.replace(".tsx", ".test.tsx").replace(/\.ts$/, ".test.ts")}`,
+          "execute",
+          { command: `vp test run ${file}` },
+          [
+            text(
+              ` ✓ ${file} (${6 + (promptCount % 9)} tests) 412ms\n\n Test Files  1 passed (1)\n      Tests  ${6 + (promptCount % 9)} passed`,
+            ),
+          ],
+        );
+        yield* say(
+          "reply",
+          [
+            `Found it. \`${symbol}\` ran on every render, so each streamed chunk recomputed it for the whole list.`,
+            "",
+            "### What changed",
+            "",
+            `- **${file}**: memoized \`${symbol}\` on its input, so unchanged rows skip the work.`,
+            "- Kept the row height stable while text streams in, which stops the list from jumping.",
+            `- Added a test that renders ${20 + promptCount} rows and checks each one measures once.`,
+            "",
+            "```tsx",
+            `export function Row({ input }: { input: Input }) {`,
+            `  const value = useMemo(() => ${symbol}(input), [input]);`,
+            "  return (",
+            "    <View style={{ height: value }}>",
+            "      <Text numberOfLines={2}>{input.title}</Text>",
+            "    </View>",
+            "  );",
+            "}",
+            "```",
+            "",
+            promptCount % 3 === 0
+              ? "| Case | Before | After |\n| --- | --- | --- |\n| Cold open | 180 ms | 95 ms |\n| Streaming | 14 ms/chunk | 3 ms/chunk |\n"
+              : `The tests pass. Next I'd look at \`${files[(promptCount + 1) % files.length]}\`, which has the same pattern.`,
+          ].join("\n"),
+        );
+        // Context occupancy grows each turn, so the chat details panel has a meter to show.
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "usage_update",
+            used: Math.min(40_000 + promptCount * 36_000, 260_000),
+            size: 272_000,
+          },
+        });
+        return yield* finishPrompt(requestedSessionId, "end_turn");
+      }
+
       // QA: "qa:long" fills one turn with 300 finished tool calls and text between them, so
       // a profile can measure a long chat's timeline.
       if (qaFixture && promptMentions(request.prompt, "qa:long")) {
@@ -1895,7 +2152,7 @@ const program = Effect.gen(function* () {
           yield* agent.client.sessionUpdate({
             sessionId: requestedSessionId,
             update: {
-              sessionUpdate: "tool_call",
+              sessionUpdate: "tool_call_update",
               toolCallId,
               title: `Read src/module${step}.ts`,
               kind: "read",
@@ -2739,6 +2996,13 @@ const program = Effect.gen(function* () {
       }
 
       if (qaFixture) {
+        if (promptMentions(request.prompt, "qa:mode-smart")) {
+          currentModeId = "smart";
+          yield* agent.client.sessionUpdate({
+            sessionId: requestedSessionId,
+            update: { sessionUpdate: "config_option_update", configOptions: configOptions() },
+          });
+        }
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {

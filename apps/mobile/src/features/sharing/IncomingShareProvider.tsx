@@ -9,7 +9,8 @@ import {
   type SharePayload,
 } from "expo-sharing";
 import React, { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
-import { Alert, AppState, Platform } from "react-native";
+import { Alert, AppState, Platform, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import {
   buildIncomingShareDraft,
@@ -19,7 +20,15 @@ import {
 } from "./incoming-share-model";
 import { createIncomingSharePayloadReader } from "./incoming-share-native";
 import { IncomingShareInbox } from "./incoming-share-inbox";
-import { persistComposerAttachmentFile } from "../../lib/composerImages";
+import {
+  createComposerVideoAttachment,
+  persistComposerAttachmentFile,
+} from "../../lib/composerImages";
+import { ComposerVideoCompressionChip } from "../../components/ComposerVideoCompressionChip";
+import {
+  useCompressingComposerVideo,
+  withComposerVideoPreparation,
+} from "../../state/composer-video-preparation";
 import {
   loadIncomingShareDrafts,
   removeIncomingShareDraft,
@@ -41,6 +50,7 @@ type IncomingShareContextValue = {
 };
 
 const IncomingShareContext = React.createContext<IncomingShareContextValue | null>(null);
+const SHARE_PREPARATION_KEY = "incoming-share";
 
 function receiveSharingEnabled(): boolean {
   if (Platform.OS === "android") {
@@ -166,6 +176,14 @@ const incomingShareInbox = new IncomingShareInbox({
       resolvedPayloads,
       fileReader: {
         readBase64,
+        persistVideo: async (input) => {
+          const attachment = await withComposerVideoPreparation(
+            SHARE_PREPARATION_KEY,
+            (onCompressing) => createComposerVideoAttachment({ ...input, onCompressing }),
+          );
+          persistedUris.add(attachment.fileUri);
+          return attachment;
+        },
         persistFile: async (uri, name) => {
           const persistedUri = await persistComposerAttachmentFile(
             uri,
@@ -203,6 +221,16 @@ const incomingShareInbox = new IncomingShareInbox({
     console.warn("[incoming-share] could not remove temporary shared file", error);
   },
 });
+
+function IncomingShareCompressionStatus() {
+  const compressingVideo = useCompressingComposerVideo(SHARE_PREPARATION_KEY);
+  const { top } = useSafeAreaInsets();
+  return compressingVideo ? (
+    <View pointerEvents="none" className="absolute right-4 z-10" style={{ top: top + 60 }}>
+      <ComposerVideoCompressionChip name={compressingVideo} />
+    </View>
+  ) : null;
+}
 
 export function IncomingShareProvider(props: React.PropsWithChildren) {
   const enabled = receiveSharingEnabled();
@@ -343,7 +371,10 @@ export function IncomingShareProvider(props: React.PropsWithChildren) {
   );
 
   return (
-    <IncomingShareContext.Provider value={value}>{props.children}</IncomingShareContext.Provider>
+    <IncomingShareContext.Provider value={value}>
+      {props.children}
+      <IncomingShareCompressionStatus />
+    </IncomingShareContext.Provider>
   );
 }
 

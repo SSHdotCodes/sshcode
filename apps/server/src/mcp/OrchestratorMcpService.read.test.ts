@@ -1,3 +1,4 @@
+import * as LocalFiles from "../assets/LocalFileAttachments.ts";
 import {
   handoffMessage,
   historicalMessage,
@@ -225,6 +226,7 @@ const makeHarness = Effect.fn("makeReadHarness")(function* (
       ),
   });
   const layer = OrchestratorMcpService.layer.pipe(
+    Layer.provide(Layer.mock(LocalFiles.LocalFileAttachments)({})),
     Layer.provide(
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
     ),
@@ -435,9 +437,11 @@ it.effect.each(stores)(
         maxCharsPerItem: 32,
       });
       expect(older.items.map((row) => row.position)).toEqual([3, 0]);
-      expect(older.items[0]?.text).toBe("x".repeat(32));
       expect(older.items[0]?.snippet).toContain("developer MODE uses the Horizon phone app");
       expect(older.items[0]?.snippet?.length).toBeLessThanOrEqual(242);
+      expect(older.items[0]?.text).toBeUndefined();
+      const fullMatch = yield* read({ itemId: older.items[0]!.itemId });
+      expect(fullMatch.items[0]?.text).toContain("developer MODE uses the Horizon phone app");
       expect(older).toMatchObject({
         prevPosition: null,
         hasMore: false,

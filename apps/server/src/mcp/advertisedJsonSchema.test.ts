@@ -58,6 +58,35 @@ it("removes duplicated allOf annotations while retaining constraints and distinc
   expect(source.allOf).toHaveLength(2);
 });
 
+it("combines literal branches and simple bounds without changing accepted inputs", () => {
+  const source = {
+    type: "object",
+    properties: {
+      mode: {
+        anyOf: [
+          { type: "string", enum: ["fast", "safe"] },
+          { type: "string", const: "auto" },
+          { type: "null" },
+        ],
+      },
+      count: { type: "integer", allOf: [{ minimum: 1 }, { maximum: 5 }] },
+    },
+  };
+  const compact = advertisedOutputSchema(source);
+  expect(compact.properties.mode).toEqual({
+    type: ["string", "null"],
+    enum: ["fast", "safe", "auto", null],
+  });
+  expect(compact.properties.count).toEqual({ type: "integer", minimum: 1, maximum: 5 });
+  const validator = new AjvJsonSchemaValidator();
+  const original = validator.getValidator(source as JsonSchemaType);
+  const advertised = validator.getValidator(compact as JsonSchemaType);
+  for (const mode of ["fast", "auto", "unknown", null, 1]) {
+    for (const count of [0, 1, 5, 6, 3.5])
+      expect(advertised({ mode, count }).valid).toBe(original({ mode, count }).valid);
+  }
+});
+
 it("drops JSON noise, merges tagged unions, and keeps explicit nulls, including optional clear operations", () => {
   const Every = Schema.Struct({ ms: Schema.Int });
   const tool = Tool.make("example", {
@@ -225,4 +254,18 @@ it("compacts output noise while preserving discriminated branch requirements and
   ])
     expect(validate({ result }).valid).toBe(false);
   expect(source.additionalProperties).toBe(true);
+});
+
+it("advertises an object root for a union of object results", () => {
+  const schema = advertisedOutputSchema({
+    anyOf: [
+      { type: "object", properties: { count: { type: "number" } }, required: ["count"] },
+      { type: "object", properties: { error: { type: "string" } }, required: ["error"] },
+    ],
+  });
+  expect(schema).toHaveProperty("type", "object");
+  const validate = new AjvJsonSchemaValidator().getValidator(schema as JsonSchemaType);
+  expect(validate({ count: 0 }).valid).toBe(true);
+  expect(validate({ error: "unknown" }).valid).toBe(true);
+  expect(validate({}).valid).toBe(false);
 });

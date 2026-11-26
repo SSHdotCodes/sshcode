@@ -1559,13 +1559,11 @@ export const layer: Layer.Layer<
                       }),
                     ).pipe(
                       Effect.timeout("25 seconds"),
-                      Effect.catchCauseIf(
-                        (stopCause) => !Cause.hasInterruptsOnly(stopCause),
-                        (stopCause) =>
-                          Effect.logWarning("Could not interrupt the unrecorded provider turn", {
-                            runId: input.run.id,
-                            cause: stopCause,
-                          }),
+                      // A released adapter can interrupt its own stop request. The run still needs a terminal event.
+                      Effect.catchCause(() =>
+                        Effect.logWarning("Could not interrupt the unrecorded provider turn", {
+                          runId: input.run.id,
+                        }),
                       ),
                     );
                   }

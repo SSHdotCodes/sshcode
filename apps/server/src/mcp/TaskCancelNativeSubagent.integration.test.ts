@@ -1,3 +1,4 @@
+import * as LocalFiles from "../assets/LocalFileAttachments.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -52,6 +53,7 @@ import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
 const layerOrchestratorService = OrchestratorMcpService.layer.pipe(
+  Layer.provide(Layer.mock(LocalFiles.LocalFileAttachments)({})),
   Layer.provide(
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
   ),

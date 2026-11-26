@@ -9,6 +9,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
+import { unavailableGoogleLimits } from "./usageLimits.ts";
 import { betterPlanTip } from "./planTip.ts";
 
 import {
@@ -132,6 +133,36 @@ describe("pickAccountForNewSession", () => {
   // The two plans as they stood on 2026-11-17: one near the end of its week, one new.
   const first = account("one", [weekly(75, 27), weeklyFable(94, 27)]);
   const second = account("two", [weekly(7, 53), weeklyFable(7, 53), session(14)]);
+
+  it("keeps the selected Google plan until agy reports it has hit a limit", () => {
+    const plan = (id: string) =>
+      account(id, null, {
+        driver: ProviderDriverKind.make("antigravity"),
+        continuation: { groupKey: "antigravity" },
+        auth: { status: "authenticated", type: "oauth-personal" },
+        usageLimits: unavailableGoogleLimits(inHours(0)),
+      });
+    const ultra = plan("ultra");
+    const pro = plan("pro");
+    expect(pick([ultra, pro], "pro")?.instanceId).toBe("pro");
+    const limited = {
+      ...pro,
+      recentFailure: {
+        kind: "usage_limit" as const,
+        message: "Individual quota reached.",
+        occurredAt: inHours(0),
+        resetAt: inHours(1),
+      },
+    };
+    expect(pick([ultra, limited], "pro")?.instanceId).toBe("ultra");
+    expect(
+      pickAccountForNewSession(
+        [ultra, limited],
+        { instanceId: "pro", model: fable },
+        { now: NOW + HOUR },
+      )?.instanceId,
+    ).toBe("pro");
+  });
 
   it("starts on the account with the most left to use before its reset", () => {
     expect(pick([first, second], "one")?.instanceId).toBe("two");
@@ -396,7 +427,9 @@ describe("pickAccountForNewSession", () => {
     expect(summary([second, out], "two")).toBe("Max 1 reached its Weekly · Fable limit");
     const left = account("one", [weekly(50, 80)]);
     const right = account("two", [weekly(48, 80)]);
-    expect(summary([left, right], "one")).toBe("the accounts have about the same left");
+    expect(summary([left, right], "one")).toBe(
+      "both have about the same to use per hour until their resets",
+    );
     expect(summary([first], "one")).toBeNull();
   });
 

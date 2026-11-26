@@ -1398,7 +1398,7 @@ export default function FilePreviewPanel({
           Preview limited to the first 1 MB of a {file.data.byteLength.toLocaleString()} byte file.
         </div>
       ) : null}
-      <div className="flex min-h-0 flex-1 overflow-hidden">
+      <div className="@container/file-preview relative flex min-h-0 flex-1 overflow-hidden">
         <div
           className={cn("min-w-0 flex-1 flex-col overflow-hidden", previewPath ? "flex" : "hidden")}
         >
@@ -1539,7 +1539,7 @@ export default function FilePreviewPanel({
             className={cn(
               "flex min-h-0 shrink-0 bg-background",
               previewPath
-                ? "w-[min(22rem,46%)] min-w-64 border-l border-border/60"
+                ? "w-[min(20rem,44%)] min-w-52 border-l border-border/60 @max-[34rem]/file-preview:absolute @max-[34rem]/file-preview:inset-y-0 @max-[34rem]/file-preview:right-0 @max-[34rem]/file-preview:z-20 @max-[34rem]/file-preview:w-64 @max-[34rem]/file-preview:max-w-[85%] @max-[34rem]/file-preview:shadow-lg"
                 : "min-w-0 flex-1",
             )}
           >

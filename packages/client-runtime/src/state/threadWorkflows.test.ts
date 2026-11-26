@@ -113,6 +113,26 @@ describe("thread workflows", () => {
   });
 
   it.each([
+    { runId: "active", forAccountMove: false, canSteer: false },
+    { runId: "older", forAccountMove: false, canSteer: true },
+    { runId: "active", forAccountMove: true, canSteer: true },
+  ])(
+    "queues a send only when Stop reached this run ($runId, moving=$forAccountMove)",
+    ({ runId, forAccountMove, canSteer }) => {
+      const state = deriveThreadQueueWorkflowState({
+        thread: { id: "thread", activeProviderThreadId: null },
+        runs: [{ id: "active", status: "running", activeAttemptId: null }],
+        messages: [],
+        providerThreads: [],
+        providerTurns: [],
+        providerSessions: [],
+        turnItems: [{ type: "run_interrupt_request", runId, forAccountMove }],
+      } as unknown as OrchestrationV2ThreadProjection);
+      expect(state.canSendSteer).toBe(canSteer);
+    },
+  );
+
+  it.each([
     { driver: "acpRegistry", steer: false, interrupt: true, canPromote: false, canSendNow: true },
     { driver: "acpRegistry", steer: true, interrupt: true, canPromote: true, canSendNow: false },
     { driver: "antigravity", steer: false, interrupt: true, canPromote: true, canSendNow: false },

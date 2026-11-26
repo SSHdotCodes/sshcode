@@ -37,6 +37,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -277,6 +278,18 @@ export class ServerSettingsService extends Context.Service<
   static readonly layerTest = (overrides: DeepPartial<ServerSettings> = {}) => layerTest(overrides);
 }
 
+/** Stamp explicit choices under the settings write lock, including a reset to the default. */
+function applySettingsPatch(current: ServerSettings, patch: ServerSettingsPatch) {
+  const next = applyServerSettingsPatch(current, patch);
+  if (patch.chatListTabsEnabled === undefined) return Effect.succeed(next);
+  return Clock.currentTimeMillis.pipe(
+    Effect.map((now) => ({
+      ...next,
+      chatListTabsChangedAt: Math.max(now, (current.chatListTabsChangedAt ?? 0) + 1),
+    })),
+  );
+}
+
 const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
   Effect.gen(function* () {
     const { automaticGitFetchInterval, providerHealthRefreshInterval, ...overridesForMerge } =
@@ -315,12 +328,12 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
       updateSettings: (patch, guard) =>
         updateTestSettings((currentSettings) =>
           ensureModelRankingsBase(currentSettings, patch, guard).pipe(
-            Effect.as(applyServerSettingsPatch(currentSettings, patch)),
+            Effect.andThen(() => applySettingsPatch(currentSettings, patch)),
           ),
         ),
       modifySettings: (update) =>
         updateTestSettings((current) =>
-          update(current).pipe(Effect.map((patch) => applyServerSettingsPatch(current, patch))),
+          update(current).pipe(Effect.flatMap((patch) => applySettingsPatch(current, patch))),
         ),
       updateProviderInstance: (mutation, patch = {}, guard) =>
         updateTestSettings((currentSettings) =>
@@ -331,7 +344,7 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
               mutation,
               "test settings",
             );
-            const patched = applyServerSettingsPatch(currentSettings, patch);
+            const patched = yield* applySettingsPatch(currentSettings, patch);
             return applyProviderInstanceMutation(patched, mutation);
           }),
         ),
@@ -1082,7 +1095,12 @@ const make = Effect.gen(function* () {
         const old = previous.get(secret.secretName);
         const inlineValue =
           old?.sensitive && !old.redacted && old.value.length > 0 ? old.value : undefined;
-        const value = secret.redacted ? inlineValue : secret.value;
+        // A redacted echo keeps the saved credential for its original endpoint only.
+        const value = secret.redacted
+          ? old?.destination === secret.destination
+            ? inlineValue
+            : ""
+          : secret.value;
         if (value === undefined) {
           nextSecretNames.add(secret.secretName);
           return { value: "", redacted: true };
@@ -1366,14 +1384,14 @@ const make = Effect.gen(function* () {
     updateSettings: (patch, guard) =>
       updateAndPersistSettings((current) =>
         ensureModelRankingsBase(current, patch, guard).pipe(
-          Effect.as(applyServerSettingsPatch(current, patch)),
+          Effect.andThen(() => applySettingsPatch(current, patch)),
         ),
       ),
     modifySettings: (update) =>
       updateAndPersistSettings((current) =>
         materializeSettingsSecrets(current).pipe(
           Effect.flatMap(update),
-          Effect.map((patch) => applyServerSettingsPatch(current, patch)),
+          Effect.flatMap((patch) => applySettingsPatch(current, patch)),
         ),
       ),
     updateProviderInstance: (mutation, patch = {}, guard) =>
@@ -1381,7 +1399,7 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           yield* ensureModelRankingsBase(current, patch, guard);
           yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);
-          const patched = applyServerSettingsPatch(current, patch);
+          const patched = yield* applySettingsPatch(current, patch);
           return applyProviderInstanceMutation(patched, mutation);
         }),
       ),

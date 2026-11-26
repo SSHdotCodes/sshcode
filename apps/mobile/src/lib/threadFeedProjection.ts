@@ -4,6 +4,7 @@ import {
   visibleTurnItemsRevision,
 } from "@t3tools/client-runtime/state/orchestration-v2-projection";
 import { turnItemIsWorkspacePreparation } from "@t3tools/client-runtime/state/turn-item-presentation";
+import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 import { isNewerRunningTool } from "@t3tools/client-runtime/work-log/presentation";
 import { resolveT3McpToolDefinition } from "@t3tools/shared/t3McpToolPresentation";
 import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
@@ -418,8 +419,23 @@ function patchActiveTailGroupPresentation(
   return [...previous.feed.slice(0, meta.tailRowsStart), ...continuedTailRows];
 }
 
+/** A user-role message drawn as the user's bubble, not folded like a tool row. */
+function messageIsUserBubble({ message }: MessageEntry) {
+  return (
+    message.role === "user" &&
+    message.questionAnswer === undefined &&
+    !message.id.startsWith("async-answer:") &&
+    resolveUserMessagePresentation(message).attribution !== "agent"
+  );
+}
+
 function summarizeFeed(feed: ReadonlyArray<ThreadFeedEntry>) {
-  const terminalIdsByTurn = new Map<string, string>();
+  // A reply ends with its run, or where a message reaches an agent that only
+  // waits on background work (`agentWasWaiting`): that message starts a new reply.
+  const replyCountByRun = new Map<string, number>();
+  const terminalIdsByReply = new Map<string, string>();
+  const openReplyIdByRun = new Map<string, string>();
+  const assistantIdsBeforeUserBubble = new Set<string>();
   const messageIds = new Set<string>();
   let firstUserIndex = -1;
   let hasContent = false;
@@ -428,17 +444,39 @@ function summarizeFeed(feed: ReadonlyArray<ThreadFeedEntry>) {
     hasContent ||= entry.type !== "thinking";
     hasHtmlRenders ||= entry.type === "html-render";
     if (entry.type !== "message") continue;
-    messageIds.add(entry.message.id);
-    if (firstUserIndex < 0 && entry.message.role === "user") firstUserIndex = index;
-    if (entry.message.role === "assistant" && entry.message.runId)
-      terminalIdsByTurn.set(entry.message.runId, entry.id);
+    const { message } = entry;
+    messageIds.add(message.id);
+    if (message.role === "user") {
+      if (firstUserIndex < 0) firstUserIndex = index;
+      if (message.agentWasWaiting === true && message.runId) {
+        replyCountByRun.set(message.runId, (replyCountByRun.get(message.runId) ?? 0) + 1);
+        openReplyIdByRun.delete(message.runId);
+      }
+      const previous = feed[index - 1];
+      if (
+        previous?.type === "message" &&
+        previous.message.role === "assistant" &&
+        messageIsUserBubble(entry)
+      ) {
+        assistantIdsBeforeUserBubble.add(previous.id);
+      }
+      continue;
+    }
+    if (!message.runId) continue;
+    terminalIdsByReply.set(`${message.runId}:${replyCountByRun.get(message.runId) ?? 0}`, entry.id);
+    openReplyIdByRun.set(message.runId, entry.id);
   }
   return {
     firstUserIndex,
     messageIds,
     hasContent,
     hasHtmlRenders,
-    terminalAssistantMessageIds: new Set(terminalIdsByTurn.values()),
+    /** The last agent message of each reply. */
+    terminalAssistantMessageIds: new Set(terminalIdsByReply.values()),
+    /** Per run, the last agent message of its latest reply. */
+    openReplyIdByRun,
+    /** Agent messages directly above a user bubble, which spaces itself off them. */
+    assistantIdsBeforeUserBubble,
     failedRunIds: failedFeedRunIds(feed, null),
   };
 }
@@ -465,6 +503,23 @@ export function threadFeedFailedRunIds(
   return latestRun?.status === "failed" && !summary.failedRunIds.has(latestRun.runId)
     ? new Set([...summary.failedRunIds, latestRun.runId])
     : summary.failedRunIds;
+}
+
+/**
+ * Agent messages that end a finished reply, which show copy, fork and pin. Only
+ * the reply the agent is still working on waits; a run held open by background
+ * work alone (a timer, a monitor) has finished its reply.
+ */
+export function threadFeedFinalAssistantMessageIds(
+  summary: ReturnType<typeof threadFeedSummary>,
+  workingRunId: string | null,
+): ReadonlySet<string> {
+  const openReplyId =
+    workingRunId === null ? undefined : summary.openReplyIdByRun.get(workingRunId);
+  if (openReplyId === undefined) return summary.terminalAssistantMessageIds;
+  const ids = new Set(summary.terminalAssistantMessageIds);
+  ids.delete(openReplyId);
+  return ids;
 }
 
 /** Filters and tail appends leave existing messages intact, so a chunk keeps its revision. */
@@ -579,7 +634,8 @@ function sameFeedEntry(a: StabilizableThreadFeedEntry, b: StabilizableThreadFeed
         a.message.attachments === right.message.attachments &&
         a.message.context === right.message.context &&
         a.message.questionAnswer === right.message.questionAnswer &&
-        a.message.inputIntent === right.message.inputIntent
+        a.message.inputIntent === right.message.inputIntent &&
+        a.message.agentWasWaiting === right.message.agentWasWaiting
       );
     }
     case "activity-group": {

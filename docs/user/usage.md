@@ -52,6 +52,18 @@ saved totals first, then updates them when Cursor's API responds.
 If recent work is missing or a new model shows no cost, refresh to rescan session history and
 update model pricing.
 
+## Compare model recommendations
+
+**Best models for you** uses the last 30 days of recorded usage. Quality combines public benchmarks
+and rated subagent tasks. Its headline shows one benchmark. The percentages compare the overall
+quality score. Value compares models within 15% of the top quality score by quality per
+estimated task dollar. Speed estimates how long it takes to generate benchmark output. Budget pick
+favors quality among routes costing up to $0.10 per million output tokens, including input and cache.
+
+For a subscription, the model estimate allocates the monthly fee by its share of the account’s
+API-priced work. Missing usage or prices can move the estimate. On web or desktop, open the extra
+details on a card to see the pricing basis. The plan panel shows capacity separately.
+
 ## Set custom model prices
 
 On web or desktop, open the environment dropdown on **Usage**, then choose **Model prices** to add,
@@ -131,6 +143,9 @@ a custom Cursor endpoint, use an explicit token or file-based CLI login for limi
 Grok reports the remaining subscription allowance and reset time for its current billing period
 after signing in with `grok login`. Explicit `XAI_API_KEY` connections and custom authentication
 or endpoint configurations do not report subscription limits.
+
+Google doesn't share limits with apps yet. Google plans appear without bars. When Antigravity
+reports a limit in a chat, the chat shows any reset time it provides.
 
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.

@@ -101,10 +101,13 @@ instead of disappearing.
 
 ## Permissions and terminals
 
-Registry agents read files, edit, and run commands themselves, under their own sandbox and
-approval rules. They start in their own default mode, and their mode picker in the model options
-menu switches it. How far an agent is confined depends on that mode and the agent's own settings,
-so use its sandbox and permission controls when that matters.
+Registry agents follow their own sandbox and approval rules. When an agent advertises compatible
+approval levels, use the composer's lock to change them. The lock also reflects changes the agent
+reports. Use **Work mode** for choices such as **Ask** and **Plan**. On Devin, those work modes
+apply while selected and the approval level takes effect in **Code**.
+
+For agents with two speed choices, click the bolt in the composer to switch speeds. The lit bolt
+indicates a faster speed. Agents with more choices open a speed menu.
 
 When a registry agent asks for approval, SSHCode answers by the thread's
 [permission mode](./permission-modes.md): **Supervised** shows the request in the conversation,

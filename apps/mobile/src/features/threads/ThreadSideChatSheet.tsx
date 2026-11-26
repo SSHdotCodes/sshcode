@@ -406,6 +406,7 @@ function SideChatAssistantMessage(props: { readonly message: SideChatMessage }) 
       {message.text.trim().length > 0 ? (
         <SelectableMarkdownText
           markdown={message.text}
+          plainValues
           textStyle={{ ...styles.nativeTextStyle, ...proseStyle }}
           onLinkPress={(href) => void openLink(href)}
         />

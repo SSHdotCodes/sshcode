@@ -121,6 +121,34 @@ it("a Fable-only weekly refusal does not mark Opus out or route it off its roomi
   expect(accountUnavailable(after, Date.parse(at), "claude-fable-5-2")?.recheckAt).toBe(reset);
 });
 
+it("keeps independent OpenCode routes usable after a free-tier refusal", () => {
+  const provider = { ...account(primary, 0), driver: ProviderDriverKind.make("opencode") };
+  const model = "opencode/deepseek-flash-free";
+  const event = {
+    type: "turn-item.updated",
+    providerInstanceId: primary,
+    occurredAt: DateTime.makeUnsafe(at),
+    payload: {
+      type: "error",
+      status: "failed",
+      failure: {
+        class: "usage_limit",
+        code: "provider.free-limit",
+        message: "Free usage limit reached.",
+      },
+    },
+  } as OrchestrationV2DomainEvent;
+  const failure = providerHealthUpdate(event, { provider, model })?.failure;
+  expect(failure?.modelIds).toEqual([model]);
+  const limited = { ...provider, recentFailure: failure! };
+  expect(accountUnavailable(limited, Date.parse(at), model)).toBeDefined();
+  expect(
+    accountUnavailable(limited, Date.parse(at), "openrouter/recursive/flint:free"),
+  ).toBeUndefined();
+  expect(accountUnavailable(limited, Date.parse(at))).toBeUndefined();
+  expect(providerHealthUpdate(event, { provider })).toBeNull();
+});
+
 it("keeps an Antigravity family refusal scoped in health, routing and Runs in", () => {
   const instanceId = ProviderInstanceId.make("antigravity");
   const now = Date.parse(at);

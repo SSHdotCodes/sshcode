@@ -4,11 +4,30 @@
  * different machines are one tab here. A tab shows once it holds two chats, or one the user
  * put there, so a stray one-chat tab never clutters the strip.
  */
-import type { ChatTab, ChatTabIcon } from "@t3tools/contracts";
+import type { ChatTab, ChatTabIcon, ServerSettings } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "./models.ts";
 
 /** The strip's first tab: every chat. */
 export const ALL_CHATS_TAB = "";
+
+/** The most recent server choice wins even when one device knows a subset of the machines. */
+export function syncedChatListTabsEnabled(
+  configs: ReadonlyMap<
+    string,
+    { readonly settings: Pick<ServerSettings, "chatListTabsEnabled" | "chatListTabsChangedAt"> }
+  >,
+): boolean | null {
+  let enabled: boolean | null = null;
+  let latest = -1;
+  for (const { settings } of configs.values()) {
+    const changedAt = settings.chatListTabsChangedAt ?? 0;
+    if (changedAt > latest || (changedAt === latest && !settings.chatListTabsEnabled)) {
+      latest = changedAt;
+      enabled = settings.chatListTabsEnabled;
+    }
+  }
+  return enabled;
+}
 
 export type ChatTabStatus = "attention" | "working" | null;
 

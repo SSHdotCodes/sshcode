@@ -55,6 +55,10 @@ export class McpSessionRegistry extends Context.Service<
   McpSessionRegistryShape
 >()("t3/mcp/McpSessionRegistry") {}
 
+export const ToolDiscoveryCatalog = Context.Reference<
+  (scope: McpInvocationContext.McpThreadInvocationScope) => Effect.Effect<string> | undefined
+>("t3/mcp/ToolDiscoveryCatalog", { defaultValue: () => () => undefined });
+
 /** Registry credentials always belong to a provider session, so their scope has a thread. */
 interface CredentialRecord {
   readonly tokenHash: string;
@@ -103,6 +107,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   options: McpSessionRegistryOptions = {},
 ) {
   const crypto = yield* Crypto.Crypto;
+  const toolDiscoveryCatalog = yield* ToolDiscoveryCatalog;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const environmentId = yield* environment.getEnvironmentId;
   const httpServer = yield* HttpServer.HttpServer;
@@ -156,6 +161,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         next.set(tokenHash, { tokenHash, scope, lastAliveAt: issuedAt });
         return { records: next };
       });
+      const catalog = toolDiscoveryCatalog(scope);
       return {
         config: {
           environmentId,
@@ -167,6 +173,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           browserToolsAvailable:
             AGENT_MCP_SERVES_PREVIEW_TOOLS && scope.capabilities.has("preview"),
           capabilities: scope.capabilities,
+          ...(catalog === undefined ? {} : { toolDiscoveryCatalog: catalog }),
         },
       };
     },

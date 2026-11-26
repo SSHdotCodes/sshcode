@@ -11,7 +11,7 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import { ModelPickerReasoningColumn } from "./ModelPickerReasoningColumn";
-import { TraitsPicker } from "./TraitsPicker";
+import { describeReasoningLevel, TraitsPicker } from "./TraitsPicker";
 
 const updateModel = vi.hoisted(() => vi.fn());
 
@@ -159,4 +159,73 @@ it("flips Fast mode with one click on its bolt when speed is the only option lef
   expect(updateModel).toHaveBeenLastCalledWith(
     expect.arrayContaining([{ id: "fastMode", value: false }]),
   );
+});
+
+it("keeps the OpenRouter trigger and reasoning choices in sync as a default or selection arrives", () => {
+  const model = "openrouter/inkling-2-mini";
+  const route = {
+    provider: ProviderDriverKind.make("opencode"),
+    instanceId: ProviderInstanceId.make("opencode"),
+    model,
+  };
+  const options = [
+    { id: "none", label: "None" },
+    { id: "low", label: "Low" },
+    { id: "high", label: "High" },
+  ];
+  function show(currentValue?: string, selected?: string) {
+    const input = {
+      ...route,
+      models: [
+        {
+          slug: model,
+          name: "Inkling 2 Mini",
+          isCustom: false,
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "variant",
+                label: "Reasoning",
+                type: "select" as const,
+                options,
+                ...(currentValue ? { currentValue } : {}),
+              },
+            ],
+          },
+        },
+      ],
+      modelOptions: selected ? [{ id: "variant", value: selected }] : [],
+      planModeEnabled: false,
+      prompt: "",
+    };
+    act(() =>
+      root.render(
+        <ModelPickerReasoningColumn
+          {...input}
+          modelLabel="Inkling 2 Mini"
+          onPromptChange={() => {}}
+          onModelOptionsChange={updateModel}
+        />,
+      ),
+    );
+    return describeReasoningLevel(input)?.label;
+  }
+  const checked = () => host.querySelector("[role=radio][aria-checked=true]")?.textContent;
+  const slider = () => host.querySelector<HTMLInputElement>("input[type=range]");
+  expect(show()).toBeUndefined();
+  expect(slider()).toBeNull();
+  expect(checked()).toBeUndefined();
+  const rows = [...host.querySelectorAll<HTMLButtonElement>("[role=radio]")];
+  expect(rows.map((row) => row.textContent)).toEqual(["Low", "High", "None"]);
+  act(() => rows[0]!.click());
+  expect(updateModel).toHaveBeenLastCalledWith([{ id: "variant", value: "low" }]);
+
+  expect(show("high")).toBe("High");
+  expect(slider()?.value).toBe("1");
+  expect(slider()?.getAttribute("aria-valuetext")).toBe("High");
+  expect(checked()).toBeUndefined();
+
+  expect(show("high", "none")).toBe("None");
+  expect(slider()).toBeNull();
+  expect(checked()).toBe("None");
 });

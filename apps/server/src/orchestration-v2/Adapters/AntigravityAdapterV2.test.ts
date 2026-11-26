@@ -29,7 +29,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
-import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 import * as TestClock from "effect/testing/TestClock";
@@ -135,6 +134,29 @@ describe("AntigravityAdapterV2 flavor", () => {
       model: null,
       status: "running",
     });
+  });
+
+  it("projects failed swarm launches with their error and leaves swarm status calls alone", () => {
+    const launch = {
+      toolCallId: "swarm-add",
+      title: "Run swarm",
+      kind: "other",
+      status: "failed",
+      detail: "Worker could not start.",
+      data: { rawInput: { action: "add", name: "worker", brief: "Count lines" } },
+    } as const;
+    assert.deepInclude(flavor.extractSubagentUpdate?.(launch), {
+      nativeTaskId: launch.toolCallId,
+      title: "worker",
+      status: "failed",
+      result: launch.detail,
+    });
+    assert.isUndefined(
+      flavor.extractSubagentUpdate?.({
+        ...launch,
+        data: { rawInput: { action: "status" } },
+      }),
+    );
   });
 
   it("maps runtime modes to the agent's native permission modes", () => {
@@ -1024,6 +1046,7 @@ const openSessionWithRunningCommand = Effect.fn("openSessionWithRunningCommand")
     readonly holdsFirstPrompt: boolean;
     readonly failSteerBeforeDispatch?: boolean;
     readonly wakeSteerOnWire?: boolean;
+    readonly cancelUpdates?: ReadonlyArray<EffectAcpSchema.SessionUpdate>;
   },
   childWorkDirectory?: string,
 ) {
@@ -1105,9 +1128,14 @@ const openSessionWithRunningCommand = Effect.fn("openSessionWithRunningCommand")
         ),
         Effect.map((runtime): RuntimeService => ({
           ...runtime,
-          cancel: Effect.sync(() => {
+          cancel: Effect.gen(function* () {
             cancels += 1;
-          }).pipe(Effect.andThen(steering?.wakeSteerOnWire ? runtime.cancel : Effect.void)),
+            if (steering?.cancelUpdates !== undefined) {
+              yield* Effect.forEach(steering.cancelUpdates, send, { discard: true });
+              yield* Deferred.succeed(steered, undefined);
+            }
+            if (steering?.wakeSteerOnWire) yield* runtime.cancel;
+          }),
           handleSessionUpdate: (handler) =>
             Effect.sync(() => {
               sessionUpdate = handler;
@@ -2637,7 +2665,6 @@ describe("AntigravityAdapterV2 quota stops", () => {
     );
     type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
     let sessionUpdate: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
-    const lookups: Array<string> = [];
     const instanceId = ProviderInstanceId.make("antigravity-quota-test");
     const threadId = ThreadId.make("thread-antigravity-quota");
     const adapter = yield* makeAntigravityAdapterV2({
@@ -2681,11 +2708,6 @@ describe("AntigravityAdapterV2 quota stops", () => {
       withProcess: (_stop, task) => task,
       // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
       defaultModel: Effect.succeed(undefined),
-      quotaWindowIds: (model) =>
-        Effect.sync(() => {
-          lookups.push(model);
-          return model === "gemini-test-low" ? ["gemini-5h", "gemini-weekly"] : [];
-        }),
     });
     const modelSelection = { instanceId, model: "gemini-test-low" } as const;
     const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
@@ -2711,7 +2733,7 @@ describe("AntigravityAdapterV2 quota stops", () => {
     );
     const terminal = events.at(-1);
     if (terminal?.type !== "turn.terminal") return yield* Effect.die("the turn must end");
-    return { terminal, now, lookups };
+    return { terminal, now };
   });
 
   it.effect.each([
@@ -2737,10 +2759,10 @@ describe("AntigravityAdapterV2 quota stops", () => {
       wait: { hours: 1, minutes: 24, seconds: 31 },
     },
   ] as const)(
-    "fails $name as a usage limit on the model's own windows",
+    "fails $name as a usage limit with the reported reset time",
     ({ text, stopReason, wait }) =>
       Effect.gen(function* () {
-        const { terminal, now, lookups } = yield* runTurn([read, chunk(text), usage], stopReason);
+        const { terminal, now } = yield* runTurn([read, chunk(text), usage], stopReason);
         assert.equal(terminal.status, "failed");
         assert.deepEqual(terminal.failure, {
           class: "usage_limit",
@@ -2748,9 +2770,7 @@ describe("AntigravityAdapterV2 quota stops", () => {
           code: "antigravity_quota",
           retryable: false,
           resetAt: DateTime.formatIso(DateTime.add(now, wait)),
-          usageLimitWindowIds: ["gemini-5h", "gemini-weekly"],
         });
-        assert.deepEqual(lookups, ["gemini-test-low"]);
       }).pipe(Effect.provide(layerSession), Effect.scoped),
   );
 
@@ -2769,12 +2789,11 @@ describe("AntigravityAdapterV2 quota stops", () => {
     },
   ])("completes a turn whose agent $name", ({ updates }) =>
     Effect.gen(function* () {
-      const { terminal, lookups } = yield* runTurn([...updates, usage]);
+      const { terminal } = yield* runTurn([...updates, usage]);
       assert.equal(terminal.status, "completed");
       assert.isNull(terminal.failure);
       // It ended on its prompt's response, so nothing more follows by itself.
       assert.notProperty(terminal, "continuationExpected");
-      assert.deepEqual(lookups, []);
     }).pipe(Effect.provide(layerSession), Effect.scoped),
   );
 });
@@ -4036,6 +4055,59 @@ describe("AntigravityAdapterV2 per-turn usage and read-repair across steer", () 
 });
 
 describe("AntigravityAdapterV2 agy >= 1.5.15 open-prompt background waiting", () => {
+  it.effect("shows the command and timer cancelled by Stop as interrupted", () =>
+    Effect.gen(function* () {
+      const opened = yield* openSessionWithRunningCommand({ WaitMsBeforeAsync: 1 }, undefined, {
+        agentVersion: "1.5.16",
+        holdsFirstPrompt: true,
+        // agy closes its command as failed and its timer as completed before acknowledging cancel.
+        cancelUpdates: [
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "call_fetch",
+            status: "failed",
+            rawOutput: { combinedOutput: "Partial output" },
+          },
+          { sessionUpdate: "tool_call_update", toolCallId: "timer", status: "completed" },
+        ],
+      });
+      yield* opened.startTurn(1, false);
+      const started = yield* opened.throughPromptSettled;
+      const turn = started.find((event) => event.type === "provider_turn.updated");
+      if (turn === undefined) return assert.fail("expected a running turn");
+      yield* opened.send({
+        sessionUpdate: "tool_call",
+        toolCallId: "timer",
+        kind: "other",
+        title: "Run schedule",
+        rawInput: { DurationSeconds: 100, Prompt: "Check progress" },
+        status: "in_progress",
+      });
+      yield* opened.session.interruptTurn({
+        providerThread: opened.providerThread,
+        providerTurnId: turn.providerTurn.id,
+        requestRuntimeRestart: true,
+      });
+      const events = yield* opened.throughTerminal;
+      const finalTools = events.flatMap((event) =>
+        event.type === "turn_item.updated" ? [event.turnItem] : [],
+      );
+      assert.deepInclude(
+        finalTools.findLast((item) => item.type === "command_execution"),
+        {
+          status: "interrupted",
+          output: "Partial output",
+        },
+      );
+      assert.equal(
+        finalTools.findLast((item) => item.type === "dynamic_tool")?.status,
+        "interrupted",
+      );
+      assert.deepInclude(events.at(-1), { type: "turn.terminal", status: "interrupted" });
+      assert.lengthOf(opened.offers, 0);
+    }).pipe(Effect.provide(layerSession), Effect.scoped),
+  );
+
   it.effect("keeps the timer wait through native tool updates and a steer", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse("2026-11-25T05:30:52.935Z"));
@@ -4066,6 +4138,11 @@ describe("AntigravityAdapterV2 agy >= 1.5.15 open-prompt background waiting", ()
       yield* startTurn(1, false);
       const started = yield* waitRoster(1);
       const waiting = started.at(-1);
+      const waitStart = (event: typeof waiting) =>
+        event?.type === "provider_thread.updated"
+          ? event.providerThread.backgroundWaitStartedAt
+          : undefined;
+      assert.equal(waitStart(waiting), "2026-11-25T05:30:52.935Z");
       assert.deepEqual(
         waiting?.type === "provider_thread.updated" &&
           waiting.providerThread.pendingBackgroundTasks,
@@ -4078,8 +4155,9 @@ describe("AntigravityAdapterV2 agy >= 1.5.15 open-prompt background waiting", ()
           },
         ],
       );
+      yield* TestClock.adjust("2 seconds");
       yield* send({ sessionUpdate: "tool_call", ...command, status: "in_progress" });
-      yield* waitRoster(2);
+      assert.equal(waitStart((yield* waitRoster(2)).at(-1)), waitStart(waiting));
       yield* send(usage);
       const providerTurnId = started.flatMap((event) =>
         event.type === "provider_turn.updated" ? [event.providerTurn.id] : [],
@@ -4098,6 +4176,11 @@ describe("AntigravityAdapterV2 agy >= 1.5.15 open-prompt background waiting", ()
         },
       });
       assert.equal(opened.cancels(), 0);
+      const resumed = yield* until(
+        (event) =>
+          event.type === "provider_thread.updated" && !event.providerThread.waitingOnBackgroundWork,
+      );
+      assert.isUndefined(waitStart(resumed.at(-1)));
       yield* send({
         sessionUpdate: "agent_message_chunk",
         content: { type: "text", text: "I will check the rollouts." },
@@ -4108,8 +4191,9 @@ describe("AntigravityAdapterV2 agy >= 1.5.15 open-prompt background waiting", ()
         toolCallId: command.toolCallId,
         status: "in_progress",
       });
+      yield* TestClock.adjust("3 seconds");
       yield* send(usage);
-      yield* waitRoster(2);
+      assert.equal(waitStart((yield* waitRoster(2)).at(-1)), "2026-11-25T05:30:57.935Z");
       yield* send({
         sessionUpdate: "tool_call_update",
         toolCallId: command.toolCallId,
@@ -4131,13 +4215,14 @@ describe("AntigravityAdapterV2 agy >= 1.5.15 open-prompt background waiting", ()
       const terminal = yield* opened.throughTerminal;
       const cleared = terminal.findLast((event) => event.type === "provider_thread.updated");
       assert.deepEqual(cleared?.providerThread.pendingBackgroundTasks, []);
+      assert.isUndefined(cleared?.providerThread.backgroundWaitStartedAt);
       assert.equal(terminal.at(-1)?.type, "turn.terminal");
       assert.equal(opened.cancels(), 0);
     }).pipe(Effect.provide(layerSession), Effect.scoped),
   );
 
   it.effect(
-    "publishes waitingOnBackgroundWork while an open 1.5.16 prompt waits on background tasks/subagents, clears on wake, and finalizes immediately on prompt return",
+    "projects named swarm workers, waits on an open ACP prompt, and idles the workers on end_turn",
     () =>
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -4169,7 +4254,7 @@ describe("AntigravityAdapterV2 agy >= 1.5.15 open-prompt background waiting", ()
                 command: process.execPath,
                 args: [mockAgentPath],
                 cwd: input.cwd,
-                env: { T3_ACP_ANTIGRAVITY: "1", T3_ACP_AGENT_VERSION: "1.5.16" },
+                env: { T3_ACP_ANTIGRAVITY: "1", T3_ACP_AGENT_VERSION: "1.5.17" },
               },
             }).pipe(
               Effect.provideService(Crypto.Crypto, crypto),
@@ -4191,7 +4276,7 @@ describe("AntigravityAdapterV2 agy >= 1.5.15 open-prompt background waiting", ()
                           update,
                         }),
                       ) ?? Effect.void;
-                    // Launch a non-daemon command and a subagent.
+                    // Launch a non-daemon command and two named workers.
                     yield* send({
                       sessionUpdate: "tool_call",
                       toolCallId: "bg_bench",
@@ -4205,19 +4290,27 @@ describe("AntigravityAdapterV2 agy >= 1.5.15 open-prompt background waiting", ()
                         toolSummary: "Run full benchmark",
                       },
                     });
-                    yield* send({
-                      sessionUpdate: "tool_call",
-                      toolCallId: "sub_research",
-                      title: "Run invoke_subagent",
-                      kind: "other",
-                      status: "completed",
-                      rawInput: {
-                        Role: "Codebase Researcher",
-                        TypeName: "research",
-                        Prompt: "Inspect server logs",
-                      },
-                    });
-                    // Initial reply closes with usage_update, but prompt stays open on 1.5.16.
+                    for (const name of ["colors", "fruits"]) {
+                      yield* send({
+                        sessionUpdate: "tool_call",
+                        toolCallId: name,
+                        title: "Running swarm",
+                        kind: "other",
+                        status: "in_progress",
+                        rawInput: {
+                          action: "add",
+                          name,
+                          brief: `Count distinct lines in ${name}.txt`,
+                          ...(name === "colors" ? { model: "gemini-3.8-flash" } : {}),
+                        },
+                      });
+                      yield* send({
+                        sessionUpdate: "tool_call_update",
+                        toolCallId: name,
+                        status: "completed",
+                      });
+                    }
+                    // Initial reply closes with usage_update while the ACP prompt stays open.
                     yield* send({
                       sessionUpdate: "agent_message_chunk",
                       content: { type: "text", text: "Running benchmark and researcher." },
@@ -4299,22 +4392,24 @@ describe("AntigravityAdapterV2 agy >= 1.5.15 open-prompt background waiting", ()
           }),
         );
 
+        const seen: Array<ProviderAdapter.ProviderAdapterV2Event> = [];
         const waitFor = <A>(
           match: (event: ProviderAdapter.ProviderAdapterV2Event) => A | undefined,
         ) =>
           Effect.gen(function* () {
             while (true) {
               const event = yield* Queue.take(events);
+              seen.push(event);
               const matched = match(event);
               if (matched !== undefined) return matched;
             }
           });
 
-        // Wait for both tasks so an update from midway through the launch cannot satisfy this check.
+        // Wait for all tasks so an update from midway through the launch cannot satisfy this check.
         const waitingThread = yield* waitFor((event) =>
           event.type === "provider_thread.updated" &&
           event.providerThread.waitingOnBackgroundWork === true &&
-          event.providerThread.pendingBackgroundTasks?.length === 2
+          event.providerThread.pendingBackgroundTasks?.length === 3
             ? event.providerThread
             : undefined,
         );
@@ -4327,9 +4422,15 @@ describe("AntigravityAdapterV2 agy >= 1.5.15 open-prompt background waiting", ()
           })),
           [
             {
-              taskId: "sub_research",
+              taskId: "colors",
               kind: "subagent",
-              description: "Codebase Researcher",
+              description: "colors",
+              wakesAgent: undefined,
+            },
+            {
+              taskId: "fruits",
+              kind: "subagent",
+              description: "fruits",
               wakesAgent: undefined,
             },
             {
@@ -4352,7 +4453,7 @@ describe("AntigravityAdapterV2 agy >= 1.5.15 open-prompt background waiting", ()
         );
         assert.isUndefined(resumedThread.waitingOnBackgroundWork);
 
-        // 3. When prompt returns on 1.5.16, finalize happens immediately without deferring/double-handling.
+        // The prompt response closes the run; the worker launch ACK alone cannot close it.
         yield* Deferred.succeed(wakeGate, undefined);
         yield* Deferred.succeed(finishPromptGate, undefined);
         const terminal = yield* waitFor((event) =>
@@ -4360,6 +4461,27 @@ describe("AntigravityAdapterV2 agy >= 1.5.15 open-prompt background waiting", ()
         );
         assert.equal(terminal.status, "completed");
         assert.notProperty(terminal, "continuationExpected");
+        for (const name of ["colors", "fruits"]) {
+          const updates = seen.flatMap((event) =>
+            event.type === "subagent.updated" && event.subagent.title === name
+              ? [event.subagent]
+              : [],
+          );
+          assert.deepEqual(
+            updates.map((task) => task.status),
+            ["pending", "running", "idle"],
+          );
+          const workerModel = name === "colors" ? "gemini-3.8-flash" : modelSelection.model;
+          assert.isTrue(updates.every((task) => task.model === workerModel));
+        }
+        assert.isFalse(
+          seen.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "dynamic_tool" &&
+              event.turnItem.title === "Running swarm",
+          ),
+        );
       }).pipe(Effect.provide(layerSession), Effect.scoped),
   );
 

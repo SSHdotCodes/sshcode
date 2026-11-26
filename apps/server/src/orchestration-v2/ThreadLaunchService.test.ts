@@ -1,3 +1,4 @@
+import * as LocalFiles from "../assets/LocalFileAttachments.ts";
 import * as ScheduledTaskStateTest from "../scheduledTasks/ScheduledTaskState.testkit.ts";
 import { expandDebugCommand } from "@t3tools/shared/debugCommand";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -55,6 +56,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as WarmWorktreePool from "../project/WarmWorktreePool.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ProviderRegistryMock from "../provider/testUtils/providerRegistryMock.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -120,6 +122,7 @@ interface HarnessOptions {
   readonly hasCommit?: GitWorkflow.GitWorkflowService["Service"]["hasCommit"];
   readonly renameBranch?: GitWorkflow.GitWorkflowService["Service"]["renameBranch"];
   readonly runSetup?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"];
+  readonly claimWarm?: WarmWorktreePool.WarmWorktreePool["Service"]["claim"];
   readonly generateTitle?: TextGeneration.TextGeneration["Service"]["generateThreadTitle"];
   readonly generateBranchName?: TextGeneration.TextGeneration["Service"]["generateBranchName"];
   readonly serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
@@ -223,6 +226,12 @@ function makeHarness(options: HarnessOptions = {}) {
     }),
     Layer.succeed(ProjectSetupScriptRunner.ProjectSetupScriptRunner, {
       runForThread: runSetup,
+      whenIdle: () => Effect.void,
+    }),
+    Layer.succeed(WarmWorktreePool.WarmWorktreePool, {
+      claim: options.claimWarm ?? (() => Effect.succeed(null)),
+      recordSetup: () => Effect.void,
+      recycle: () => Effect.succeed("unavailable"),
     }),
     Layer.mock(TextGeneration.TextGeneration)({
       generateThreadTitle,
@@ -3910,6 +3919,7 @@ it.effect.each(
               ),
       });
       const layerService = OrchestratorMcpService.layer.pipe(
+        Layer.provide(Layer.mock(LocalFiles.LocalFileAttachments)({})),
         Layer.provide(
           Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
         ),
@@ -4142,6 +4152,53 @@ it.effect(
 );
 
 const pickedModel = { instanceId: modelSelection.instanceId, model: "gpt-5.1-codex-mini" } as const;
+
+it.effect("binds a warm worktree before a delegated run starts and skips terminal setup", () => {
+  const worktreePath = "/repo-worktrees/.warm-worktrees/prepared";
+  let published = false;
+  const harness = makeHarness({
+    hasCommit: (input) => Effect.succeed(input.refName === "HEAD"),
+    claimWarm: (input) =>
+      Effect.sync(() => {
+        const lease = {
+          path: worktreePath,
+          publish: Effect.sync(() => {
+            published = true;
+          }),
+          abandon: Effect.die("an accepted claim should be published"),
+        };
+        input.onClaimed(lease);
+        return lease;
+      }),
+  });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+    const lead = yield* launches.launch(
+      launchInput({ command: "warm-lead", thread: "warm-lead", message: "Lead work" }),
+    );
+    const delegated = yield* launches.startUserSubagent({
+      commandId: CommandId.make("warm-child"),
+      threadId: lead.threadId,
+      task: "Run the checks",
+      modelSelection: pickedModel,
+    });
+    yield* tracker.stream(delegated.childThreadId).pipe(
+      Stream.filter((snapshot) => snapshot?.phase === "done"),
+      Stream.runHead,
+    );
+    const child = yield* threads.getThreadProjection(delegated.childThreadId);
+    assert.equal(child.thread.worktreePath, worktreePath);
+    assert.equal(child.checkpointScopes[0]?.cwd, worktreePath);
+    assert.equal(child.runs[0]?.status, "starting");
+    assert.isTrue(published);
+    assert.equal(harness.createWorktree.mock.calls.length, 0);
+    assert.isFalse(
+      harness.runSetup.mock.calls.some(([input]) => input.threadId === delegated.childThreadId),
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
 
 it.effect("the user starts a subagent in a chat whose lead is mid-turn", () => {
   const harness = makeHarness();

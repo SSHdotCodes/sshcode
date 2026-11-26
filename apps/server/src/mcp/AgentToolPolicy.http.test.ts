@@ -175,7 +175,12 @@ it.effect("filters and refuses tools on the same MCP session as settings change"
             hasOpenWork: () => false,
           }),
         ),
-        Layer.provide(McpSessionRegistry.layer),
+        Layer.provide(
+          McpSessionRegistry.layer.pipe(
+            Layer.provide(AgentToolPolicy.layerDiscovery),
+            Layer.provide(Layer.succeed(ServerSettings.ServerSettingsService, guardedSettings)),
+          ),
+        ),
       );
       yield* HttpRouter.serve(layerRoutes, {
         disableListenLog: true,
@@ -206,7 +211,7 @@ it.effect("filters and refuses tools on the same MCP session as settings change"
             capabilities,
           });
           expect(credential).toBeDefined();
-          return credential!.config.authorizationHeader;
+          return credential!.config;
         });
       const post = (authorization: string, sessionId: string | undefined, body: string) =>
         httpClient.post("/mcp", {
@@ -263,10 +268,18 @@ it.effect("filters and refuses tools on the same MCP session as settings change"
           return decodeRpc(yield* response.text);
         });
 
-      const providerA = yield* issue("thread-a", "claudeAgent", new Set(["device"]));
+      const configA = yield* issue("thread-a", "claudeAgent", new Set(["device"]));
+      const providerA = configA.authorizationHeader;
       const opened = yield* openSession(providerA);
       expect(opened.init.result?.capabilities?.tools?.listChanged).toBe(true);
       const initial = yield* list(providerA, opened.sessionId, 2);
+      const discovery = configA.toolDiscoveryCatalog!;
+      expect(
+        (yield* discovery)
+          .split("\n")
+          .map((line) => line.split(" — ")[0])
+          .toSorted(),
+      ).toEqual(initial.toSorted());
       expect(initial).toContain("delegate_task");
       expect(initial).toContain("device_screenshot");
       expect(initial).toContain("computer_status");
@@ -282,6 +295,8 @@ it.effect("filters and refuses tools on the same MCP session as settings change"
         },
       });
       const hidden = yield* list(providerA, opened.sessionId, 3);
+      expect(yield* discovery).not.toContain("device_screenshot —");
+      expect(yield* discovery).toContain("device_list —");
       expect(hidden).not.toContain("device_screenshot");
       expect(hidden).toContain("device_list");
       yield* Ref.set(screenshotRan, false);
@@ -330,7 +345,8 @@ it.effect("filters and refuses tools on the same MCP session as settings change"
           },
         },
       });
-      const providerB = yield* issue("thread-b", "codex", new Set(["device"]));
+      const providerB = (yield* issue("thread-b", "codex", new Set(["device"])))
+        .authorizationHeader;
       const openedB = yield* openSession(providerB);
       expect(yield* list(providerB, openedB.sessionId, 2)).toContain("device_screenshot");
       expect(yield* list(providerA, opened.sessionId, 5)).not.toContain("device_screenshot");
@@ -365,7 +381,8 @@ it.effect("filters and refuses tools on the same MCP session as settings change"
       expect(yield* list(providerA, reconnected.sessionId, 2)).toContain("device_screenshot");
       expect(yield* list(providerA, opened.sessionId, 9)).toContain("delegate_task");
 
-      const noDevice = yield* issue("thread-plain", "claudeAgent", new Set(["orchestration"]));
+      const noDevice = (yield* issue("thread-plain", "claudeAgent", new Set(["orchestration"])))
+        .authorizationHeader;
       const openedPlain = yield* openSession(noDevice);
       const plainTools = yield* list(noDevice, openedPlain.sessionId, 2);
       expect(plainTools.some((name) => name.startsWith("device_"))).toBe(false);

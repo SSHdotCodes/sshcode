@@ -27,6 +27,8 @@ export const SelectProviderOptionDescriptor = Schema.Struct({
   options: Schema.Array(ProviderOptionChoice),
   currentValue: Schema.optional(TrimmedNonEmptyString),
   nativeValue: Schema.optional(TrimmedNonEmptyString),
+  /** ACP agents may use an opaque id for the session mode config option. */
+  acpSessionMode: Schema.optional(Schema.Boolean),
   promptInjectedValues: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   /** Marks the reasoning control when its id is an agent's own, such as an ACP `thought_level`. */
   role: Schema.optional(Schema.Literal("reasoning")),

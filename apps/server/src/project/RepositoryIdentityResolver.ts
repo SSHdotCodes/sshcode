@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 
+import { parseConfiguredRemoteUrls } from "../git/remoteRefs.ts";
 import * as ProcessRunner from "../processRunner.ts";
 
 const DEFAULT_REPOSITORY_IDENTITY_CACHE_CAPACITY = 512;
@@ -144,18 +145,28 @@ const resolveRepositoryIdentityFromCacheKey = Effect.fn(
   cacheKey: string,
 ): Effect.fn.Return<RepositoryIdentity | null, never, ProcessRunner.ProcessRunner> {
   const processRunner = yield* ProcessRunner.ProcessRunner;
-  const remoteResult = yield* processRunner
-    .run({
-      command: "git",
-      args: ["-C", cacheKey, "remote", "-v"],
-      timeoutBehavior: "timedOutResult",
-    })
-    .pipe(Effect.option);
-  if (remoteResult._tag === "None" || remoteResult.value.code !== 0) {
-    return null;
-  }
+  const readGit = (args: ReadonlyArray<string>) =>
+    processRunner
+      .run({ command: "git", args: ["-C", cacheKey, ...args], timeoutBehavior: "timedOutResult" })
+      .pipe(Effect.option);
+  const config = yield* readGit(["config", "--null", "--get-regexp", "^remote\\..*\\.url$"]);
+  const remotes = parseConfiguredRemoteUrls(config._tag === "Some" ? config.value.stdout : "");
 
-  const remotes = parseRemoteFetchUrls(remoteResult.value.stdout);
+  // Keep an explicit forge URL stable across transport mirrors. Let git expand
+  // aliases when the configured URL has no recognizable forge of its own.
+  const needsExpandedUrl = (url: string) => {
+    const provider = detectSourceControlProviderFromGitRemoteUrl(url);
+    return !provider || provider.kind === "unknown";
+  };
+  if (remotes.size === 0 || [...remotes.values()].some(needsExpandedUrl)) {
+    const expanded = yield* readGit(["remote", "-v"]);
+    if (expanded._tag === "Some" && expanded.value.code === 0) {
+      for (const [name, url] of parseRemoteFetchUrls(expanded.value.stdout)) {
+        const configured = remotes.get(name);
+        if (!configured || needsExpandedUrl(configured)) remotes.set(name, url);
+      }
+    }
+  }
   const remote = pickPrimaryRemote(remotes);
   return remote
     ? buildRepositoryIdentity({ ...remote, originUrl: remotes.get("origin"), rootPath: cacheKey })

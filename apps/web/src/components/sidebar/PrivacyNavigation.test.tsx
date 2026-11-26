@@ -60,6 +60,7 @@ it("masks saved names before hydration, persists the toggle, and keeps navigatio
   await act(() =>
     root.render(
       <SidebarChatTabs
+        enabled
         ref={createRef()}
         tabs={tabs}
         selected=""

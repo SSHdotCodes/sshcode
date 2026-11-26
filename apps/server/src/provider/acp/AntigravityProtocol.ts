@@ -44,6 +44,7 @@ const decodeSingleAnswer = Schema.decodeUnknownOption(
   Schema.Union([Schema.String, Schema.Tuple([Schema.String])]),
 );
 const decodeToolCallContent = Schema.decodeUnknownOption(AcpWireSchema.ToolCallContent);
+const isToolCallMeta = Schema.is(Schema.Record(Schema.String, Schema.Json));
 
 /**
  * The agent goes on running a command after its prompt ends, and replies by itself when the
@@ -486,9 +487,7 @@ export function normalizeAntigravitySessionUpdate(
         ? { rawOutput: sanitizeAntigravityToolPayload(update.rawOutput) }
         : {}),
       ...(update.content !== undefined ? { content: content ?? [] } : {}),
-      ...(update._meta !== undefined
-        ? { _meta: Schema.is(Schema.Record(Schema.String, Schema.Json))(meta) ? meta : null }
-        : {}),
+      ...(update._meta !== undefined ? { _meta: isToolCallMeta(meta) ? meta : null } : {}),
     },
   };
 }
@@ -724,6 +723,27 @@ export function isAntigravitySubagentReplayStart(rawPayload: unknown): boolean {
 export function antigravitySubagentOutput(toolCall: AcpToolCallState): string | undefined {
   const output = toolCall.data.rawOutput;
   return typeof output === "string" && output.trim() ? boundText(output.trim()) : undefined;
+}
+
+/** agy reports each named Swarm launch as a separate tool call. A completed add is a launch ACK. */
+export function antigravitySwarmWorker(toolCall: AcpToolCallState) {
+  if (
+    toolCall.kind !== "other" ||
+    !/^Run(?:ning)? swarm\??$/u.test(toolCall.title ?? "") ||
+    (Predicate.isObject(toolCall.data.meta) && toolCall.data.meta.is_mcp_tool_call === true)
+  ) {
+    return undefined;
+  }
+  const input = toolCall.data.rawInput;
+  if (!Predicate.isObject(input) || input.action !== "add") return undefined;
+  const title = nonEmptyRawField(input, ["name"]);
+  if (title === undefined) return undefined;
+  const model = nonEmptyRawField(input, ["model"]);
+  return {
+    title,
+    prompt: nonEmptyRawField(input, ["brief"]) ?? title,
+    model: model?.toLowerCase() === "inherit" ? undefined : model,
+  };
 }
 
 function nonEmptyRawField(

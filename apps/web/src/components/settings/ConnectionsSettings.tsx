@@ -4092,25 +4092,18 @@ export function ConnectionsSettings() {
                 }
               }}
             >
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <DialogTrigger
-                      render={
-                        <Button size="xs" variant="ghost-muted" aria-label="Add environment">
-                          <PlusIcon className="size-3" />
-                          <span>Add environment</span>
-                        </Button>
-                      }
-                    />
-                  }
-                />
-                <TooltipPopup side="top">Add environment</TooltipPopup>
-              </Tooltip>
+              <DialogTrigger
+                render={
+                  <Button size="xs" variant="outline">
+                    <PlusIcon className="size-3" />
+                    Add environment
+                  </Button>
+                }
+              />
               <DialogPopup className="max-h-[80dvh] sm:max-w-3xl">
                 <DialogHeader>
                   <DialogTitle>
-                    {routeTarget ? `Add a route to ${routeTarget.label}` : "Add Environment"}
+                    {routeTarget ? `Add a route to ${routeTarget.label}` : "Add environment"}
                   </DialogTitle>
                   <DialogDescription>
                     {routeTarget
@@ -4120,23 +4113,23 @@ export function ConnectionsSettings() {
                 </DialogHeader>
                 <DialogPanel>
                   <div className="space-y-4">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      {renderConnectionModeCard({
-                        mode: "remote",
-                        title: "Remote link",
-                        description: "Enter a backend host and pairing code.",
-                        icon: <ChevronsLeftRightEllipsisIcon aria-hidden className="size-4" />,
-                      })}
-                      {desktopBridge
-                        ? renderConnectionModeCard({
-                            mode: "ssh",
-                            title: "SSH",
-                            description:
-                              "Use local SSH config, agent, and tunnels for the backend.",
-                            icon: <TerminalIcon aria-hidden className="size-4" />,
-                          })
-                        : null}
-                    </div>
+                    {/* The browser only pairs by link; a lone choice card is noise. */}
+                    {desktopBridge ? (
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {renderConnectionModeCard({
+                          mode: "remote",
+                          title: "Remote link",
+                          description: "Enter a backend host and pairing code.",
+                          icon: <ChevronsLeftRightEllipsisIcon aria-hidden className="size-4" />,
+                        })}
+                        {renderConnectionModeCard({
+                          mode: "ssh",
+                          title: "SSH",
+                          description: "Use local SSH config, agent, and tunnels for the backend.",
+                          icon: <TerminalIcon aria-hidden className="size-4" />,
+                        })}
+                      </div>
+                    ) : null}
                     <AnimatedHeight>
                       {savedBackendMode === "ssh" ? renderSshFields() : renderRemoteModeBody()}
                     </AnimatedHeight>

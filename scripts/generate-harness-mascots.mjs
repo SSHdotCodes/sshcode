@@ -724,23 +724,28 @@ for (const [mascotIndex, id] of mascotIds.entries()) {
         });
       }
       const rows = Math.ceil(buffers.length / columns);
-      const compose = (frames) =>
-        sharp({
+      const compose = async (frames) => {
+        const composite = sharp({
           create: {
             width: columns * cell,
             height: rows * cell,
             channels: 4,
             background: "#00000000",
           },
-        })
-          .composite(
-            frames.map((input, i) => ({
-              input,
-              left: (i % columns) * cell,
-              top: Math.floor(i / columns) * cell,
-            })),
-          )
-          // Pixel-art and flat-colour sheets stay lossless so their hard edges don't ring.
+        }).composite(
+          frames.map((input, i) => ({
+            input,
+            left: (i % columns) * cell,
+            top: Math.floor(i / columns) * cell,
+          })),
+        );
+        if (id === "gemini") {
+          // A shared palette keeps the Twins' repeated transparent glows inside the sheet budget.
+          const indexed = await composite.png({ palette: true, dither: 0 }).toBuffer();
+          return sharp(indexed).webp({ lossless: true, effort: 6 }).toBuffer();
+        }
+        // Pixel-art and flat-colour sheets stay lossless so their hard edges don't ring.
+        return composite
           .webp(
             id === "claude" || (sheets[id] && id !== "codex") || id === "grok" || id === "mistral"
               ? { lossless: true, effort: 6 }
@@ -751,6 +756,7 @@ for (const [mascotIndex, id] of mascotIds.entries()) {
                 : { quality: 85, alphaQuality: 95, effort: 6 },
           )
           .toBuffer();
+      };
       const sheet = await compose(buffers);
       const darkSheet = darkBuffers ? await compose(darkBuffers) : null;
       let file = `${id}-${state}${variantIndex === 0 ? "" : `-${variant.toLowerCase()}`}.webp`;

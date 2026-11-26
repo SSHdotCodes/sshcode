@@ -52,9 +52,14 @@ import { forkParked, forkParkedChore } from "./serverActivation.ts";
 import * as Settings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as ExecutionResources from "./execution/ExecutionResources.ts";
-import { isFilesystemRoot, managedWorktreesDirectories } from "./worktreesDirectory.ts";
+import {
+  isFilesystemRoot,
+  isPrivateWorktree,
+  managedWorktreesDirectories,
+} from "./worktreesDirectory.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import { withWorkspaceLease } from "./workspace/workspaceLease.ts";
+import * as WarmWorktreePool from "./project/WarmWorktreePool.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { databaseStoragePreview, reclaimDatabaseSpace } from "./storageDatabase.ts";
@@ -272,6 +277,7 @@ export const readStaleQueuedRuns = Effect.gen(function* () {
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const chatTemp = yield* Effect.serviceOption(ChatTemp.ChatTemp);
+  const warmWorktrees = yield* Effect.serviceOption(WarmWorktreePool.WarmWorktreePool);
   const settingsService = yield* Settings.ServerSettingsService;
   const projectStore = yield* ProjectStore.ProjectStoreV2;
   const engine = yield* Orchestrator.OrchestratorV2;
@@ -303,6 +309,11 @@ const make = Effect.gen(function* () {
       .pipe(Effect.map((resources) => resources.length > 0));
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const defaultWorktreesDir = yield* fs
+    .realPath(config.worktreesDir)
+    .pipe(Effect.orElseSucceed(() => path.resolve(config.worktreesDir)));
+  const privateWorktree = (worktreePath: string) =>
+    isPrivateWorktree(worktreePath, path, fs, defaultWorktreesDir);
   const liveTerminals = new Map<string, Map<string, TerminalSummary>>();
   const orphanSizes = new Map<string, number | null>();
   const noteTerminal = (terminal: TerminalSummary) => {
@@ -460,6 +471,7 @@ const make = Effect.gen(function* () {
       for (const name of yield* fs.readDirectory(parent).pipe(Effect.orElseSucceed(() => []))) {
         const target = path.join(parent, name);
         if (!inside(parent, target) || inProject(target, managedRoot)) continue;
+        if (yield* privateWorktree(target)) continue;
         const directory = yield* Effect.gen(function* () {
           if (pathKey(yield* fs.realPath(target)) !== pathKey(target)) return false;
           return (yield* fs.stat(target)).type === "Directory";
@@ -725,6 +737,7 @@ const make = Effect.gen(function* () {
       const keep = (reason: string) => entries.push({ ...entry, reason: sentence(reason) });
       yield* Effect.gen(function* () {
         if (!(yield* fs.exists(worktreePath))) return;
+        if (yield* privateWorktree(worktreePath)) return;
         if (deleted && !settings.worktreeOnDelete) return keep("no rules apply");
         if (group.length > 1 && worktreeOwner(group) === undefined)
           return keep(`shared by ${group.length} threads`);
@@ -918,6 +931,23 @@ const make = Effect.gen(function* () {
         // Most cancelled removals are caught here, before the worktree is walked.
         const blocked = yield* blockedSinceCheck();
         if (blocked !== null) return keep(blocked);
+        // A deleted chat has released its path. Saved chats keep their path
+        // so the next turn can recreate the checkout from their branch.
+        if (deleted && Option.isSome(warmWorktrees)) {
+          const changes = yield* localChangesReason(worktreePath, settings);
+          if (changes !== null) return keep(changes);
+          const outcome = yield* warmWorktrees.value.recycle({
+            cwd: project.workspaceRoot,
+            path: worktreePath,
+            expectedHead: head.commitSha,
+          });
+          if (outcome === "in-use") return keep("worktree is still in use or changed since check");
+          if (outcome === "recycled") {
+            entries.push({ ...entry, outcome: "removed", reason: sentence(removalReason) });
+            yield* gitManager.invalidateStatus(project.workspaceRoot);
+            return;
+          }
+        }
         const bytes = yield* measureWorktree(worktreePath);
         // The walk can take a while; ask again for anything that started during it.
         const blockedWhileMeasuring = yield* blockedSinceCheck();
@@ -1051,6 +1081,7 @@ const make = Effect.gen(function* () {
     const projects = yield* projectStore.list({ includeDeleted: true });
     const keep = (reason: string) => ({ reason, identity: null });
     const canonical = yield* fs.realPath(target);
+    if (yield* privateWorktree(canonical)) return keep("Checkout belongs to the warm pool");
     if (canonical !== target)
       return keep(
         "Path uses a symbolic link or filesystem alias; inspect the canonical checkout path first",

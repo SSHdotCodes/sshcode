@@ -2178,6 +2178,25 @@ describe("MessagesTimeline", () => {
     expect(markup.indexOf("Steer")).toBeLessThan(markup.indexOf("Adjust the current turn"));
   });
 
+  it("shows a steer that reached a waiting agent as a plain message", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const entry = buildUserTimelineEntry("How's it going");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            ...entry,
+            message: { ...entry.message, inputIntent: "steer" as const, agentWasWaiting: true },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("How&#x27;s it going");
+    expect(markup).not.toContain("data-user-message-intent");
+  });
+
   it("keeps compact spacing below a collapsed turn divider", () => {
     const runId = RunId.make("run-collapsed-spacing");
     const markup = renderToStaticMarkup(

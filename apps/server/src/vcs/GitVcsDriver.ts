@@ -45,6 +45,7 @@ export interface ExecuteGitInput {
   readonly operation: string;
   readonly cwd: string;
   readonly args: ReadonlyArray<string>;
+  readonly priority?: "background";
   readonly stdin?: string;
   readonly env?: NodeJS.ProcessEnv;
   readonly allowNonZeroExit?: boolean;
@@ -360,6 +361,7 @@ export class GitVcsDriver extends Context.Service<
       input: VcsCreateWorktreeInput,
       options?: CreateWorktreeOptions,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
+    readonly invalidateWorktreeCreationCaches: (cwd: string) => Effect.Effect<void>;
     readonly fetchPullRequestBranch: (
       input: GitFetchPullRequestBranchInput,
     ) => Effect.Effect<void, GitCommandError>;

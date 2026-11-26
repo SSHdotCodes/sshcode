@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Standalone Node benchmark.
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Standalone bundle report measures and prints compressed asset sizes.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeZlib from "node:zlib";

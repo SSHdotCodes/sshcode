@@ -2,6 +2,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it, vi } from "@effect/vitest";
 import { ProjectId } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -110,7 +111,28 @@ it.effect("resolves setup scripts through the standalone project service", () =>
       NO_COLOR: "1",
       FORCE_COLOR: "0",
     });
-    assert.equal(write.mock.calls[0]?.[0].data, "vp install\r");
+    assert.include(write.mock.calls[0]?.[0].data, "vp install\r");
+    let refillRan = false;
+    const refill = Effect.sync(() => {
+      refillRan = true;
+    });
+    yield* runner.whenIdle(refill);
+    assert.isFalse(refillRan, "an unobserved setup still has priority");
+    yield* listeners[0]!({ type: "closed", threadId: "thread-1", terminalId: "setup-setup" });
+    yield* Effect.yieldNow;
+    yield* runner.whenIdle(refill);
+    assert.isTrue(refillRan);
+    const refillStarted = yield* Deferred.make<void>();
+    const refillInterrupted = yield* Deferred.make<void>();
+    yield* Effect.forkChild(
+      runner.whenIdle(
+        Deferred.succeed(refillStarted, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.onInterrupt(() => Deferred.succeed(refillInterrupted, undefined)),
+        ),
+      ),
+    );
+    yield* Deferred.await(refillStarted);
     const lines: string[] = [];
     const observed = yield* runner.runForThread({
       threadId: "thread-1",
@@ -124,7 +146,8 @@ it.effect("resolves setup scripts through the standalone project service", () =>
       },
     });
     assert.equal(observed.status, "started");
-    const listener = listeners[0]!;
+    yield* Deferred.await(refillInterrupted);
+    const listener = listeners.at(-1)!;
     yield* listener({
       type: "output",
       threadId: "thread-1",
@@ -182,6 +205,55 @@ it.effect("resolves setup scripts through the standalone project service", () =>
       threadId: "thread-1",
       terminalId: observedTerminalId,
     });
+
+    const closing = yield* Deferred.make<void>();
+    const allowClose = yield* Deferred.make<void>();
+    const closed = yield* Deferred.make<void>();
+    closeIdle.mockImplementationOnce(() =>
+      Deferred.succeed(closing, undefined).pipe(
+        Effect.andThen(Deferred.await(allowClose)),
+        Effect.andThen(Deferred.succeed(closed, undefined)),
+        Effect.asVoid,
+      ),
+    );
+    const subagentSetup = yield* runner.runForThread({
+      threadId: "thread-child",
+      projectId,
+      worktreePath: "/repo-worktree",
+      subagentWorktree: true,
+      observeCompletion: {},
+    });
+    if (subagentSetup.status !== "started" || !subagentSetup.completion)
+      return assert.fail("expected an observed setup shell");
+    const subagentListener = listeners.at(-1)!;
+    const subagentSentinel = /__T3_SETUP_DONE___(\w+):/.exec(
+      write.mock.calls.at(-1)?.[0].data ?? "",
+    )?.[1];
+    const subagentCompletion = yield* Effect.forkChild(subagentSetup.completion);
+    yield* subagentListener({
+      type: "output",
+      threadId: "thread-child",
+      terminalId: subagentSetup.terminalId,
+      data: `\r\n__T3_SETUP_DONE___${subagentSentinel}:0\r\n`,
+    });
+    yield* Effect.yieldNow;
+    assert.isDefined(
+      subagentCompletion.pollUnsafe(),
+      "the subagent can start before prompt redraw",
+    );
+    assert.equal((yield* Fiber.join(subagentCompletion)).exitCode, 0);
+    assert.isFalse(yield* Deferred.isDone(closing));
+
+    yield* subagentListener({
+      type: "output",
+      threadId: "thread-child",
+      terminalId: subagentSetup.terminalId,
+      data: "$ ",
+    });
+    yield* Deferred.await(closing);
+    assert.isFalse(yield* Deferred.isDone(closed));
+    yield* Deferred.succeed(allowClose, undefined);
+    yield* Deferred.await(closed);
   }).pipe(Effect.provide(layer));
 });
 
@@ -226,7 +298,11 @@ it.effect("runs a new worktree's t3.json setup script when the project inherits 
             Layer.provide(
               Layer.mergeAll(
                 Layer.mock(ProjectService.ProjectService)({}),
-                Layer.mock(TerminalManager.TerminalManager)({ open, write }),
+                Layer.mock(TerminalManager.TerminalManager)({
+                  open,
+                  write,
+                  subscribe: () => Effect.succeed(() => {}),
+                }),
                 ServerSettings.layerTest({
                   projectSettingsFolded: true,
                   defaultProjectScripts: [],
@@ -253,6 +329,6 @@ it.effect("runs a new worktree's t3.json setup script when the project inherits 
     assert.equal(started.status === "started" ? started.scriptName : null, "Setup Worktree");
     assert.equal(open.mock.calls[0]?.[0].cwd, worktreePath);
     assert.equal(open.mock.calls[0]?.[0].env?.T3CODE_PROJECT_ROOT, "/repo");
-    assert.equal(write.mock.calls[0]?.[0].data, "node scripts/setup.ts\r");
+    assert.include(write.mock.calls[0]?.[0].data, "node scripts/setup.ts\r");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

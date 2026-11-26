@@ -59,6 +59,14 @@ describe("held parent messages", () => {
   it("holds a subagent's auto message only while its parent has no turn to steer into", () => {
     assert.isTrue(shouldHoldForParent({ mode: undefined, caller: child(), target: parent }));
     assert.isTrue(shouldHoldForParent({ mode: "auto", caller: child(), target: parent }));
+    assert.isFalse(
+      shouldHoldForParent({
+        mode: "auto",
+        caller: child(),
+        target: parent,
+        attachmentPaths: ["result.mov"],
+      }),
+    );
     assert.isFalse(shouldHoldForParent({ mode: "auto", caller: child(), target: steerable }));
   });
 

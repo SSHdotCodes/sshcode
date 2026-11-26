@@ -7,6 +7,7 @@ import {
 } from "@t3tools/shared/modelRankings";
 import { modelGeneration } from "@t3tools/shared/modelGenerations";
 import { parseModelRef } from "@t3tools/shared/modelRefs";
+import { isGoogleSubscription } from "@t3tools/shared/usageLimits";
 
 import {
   canonicalModelId,
@@ -329,10 +330,7 @@ export function createModelPickerCatalog<T extends ModelRouteSource>(
     if (provider === undefined) return false;
     if (provider.driver === "antigravity") {
       // Its Gemini routes are the native ones.
-      return (
-        !isOwnHarness(source) &&
-        (provider.auth.type === "oauth-personal" || provider.auth.type === "oauth-business")
-      );
+      return !isOwnHarness(source) && isGoogleSubscription(provider);
     }
     return registryAgentId(provider, configs.get(source.instanceId) ?? {}) === DEVIN_ACP_AGENT_ID;
   };

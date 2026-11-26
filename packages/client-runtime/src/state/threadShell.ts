@@ -16,7 +16,11 @@ import {
 import { Atom } from "effect/reactivity";
 
 import type { EnvironmentThreadShell, PendingSubagentRequest } from "./models.ts";
-import { deriveLatestThreadRun, deriveThreadRuntime } from "./threadExecution.ts";
+import {
+  deriveLatestThreadRun,
+  deriveThreadPendingBackgroundTasks,
+  deriveThreadRuntime,
+} from "./threadExecution.ts";
 import { presentThreadShell } from "./models.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
 import {
@@ -462,10 +466,14 @@ export function threadDetailToShell(
 ): EnvironmentThreadShell {
   const thread = projection.thread;
   const latestRun = deriveLatestThreadRun(projection);
-  const runtime = deriveThreadRuntime(projection);
+  const pendingBackgroundTasks = deriveThreadPendingBackgroundTasks(projection);
+  const runtime = deriveThreadRuntime(projection, pendingBackgroundTasks);
+  const waitingProvider = runtime?.waitingOnBackgroundWork
+    ? projection.providerThreads.find((provider) => provider.id === thread.activeProviderThreadId)
+    : undefined;
   const pendingRequest =
     projection.runtimeRequests.find((request) => request.status === "pending") ?? null;
-  return presentThreadShell(environmentId, {
+  const shell = presentThreadShell(environmentId, {
     id: thread.id,
     projectId: thread.projectId,
     title: thread.title,
@@ -488,7 +496,11 @@ export function threadDetailToShell(
     creationSource: thread.creationSource,
     latestRunId: latestRun?.runId ?? null,
     activeRunId: runtime?.activeRunId ?? null,
-    status: runtime?.status ?? "idle",
+    status: latestRun?.status ?? "idle",
+    pendingBackgroundTasks,
+    ...(waitingProvider?.backgroundWaitStartedAt
+      ? { backgroundWaitStartedAt: waitingProvider.backgroundWaitStartedAt }
+      : {}),
     pendingRuntimeRequest:
       pendingRequest === null
         ? null
@@ -512,4 +524,5 @@ export function threadDetailToShell(
     snoozedAt: thread.snoozedAt ?? null,
     deletedAt: thread.deletedAt,
   });
+  return { ...shell, latestRun, runtime };
 }

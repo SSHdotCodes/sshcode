@@ -847,6 +847,25 @@ export function orderMakerModelsByUse<T extends ModelRouteSource>(
   const bySourceRoute = new Map(
     sources.map((source) => [`${source.instanceId}\u0000${source.slug}`, source]),
   );
+  // A retired model's chats count for its line's one current model (GPT-6.1 Sol → GPT-6.2 Sol).
+  const lineOf = (slug: string) =>
+    (slug.split("/").at(-1) ?? slug)
+      .toLowerCase()
+      .replace(/[\d.]+/g, "")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+  const currentKeysByLine = new Map<string, Set<string>>();
+  for (const group of groups) {
+    for (const model of group.models) {
+      if (model.isLegacy) continue;
+      for (const route of model.routes) {
+        for (const source of route.sources) {
+          const line = lineOf(source.slug);
+          currentKeysByLine.set(line, (currentKeysByLine.get(line) ?? new Set()).add(model.key));
+        }
+      }
+    }
+  }
   const scores = new Map<string, number>();
   for (const use of uses) {
     const age = Math.max(0, now - use.at) / DAY_MS;
@@ -865,6 +884,10 @@ export function orderMakerModelsByUse<T extends ModelRouteSource>(
       const maker = modelMakerForFamily(family);
       const candidate = `${maker.id}:${canonicalModelId(source, family)}`;
       if (keySet.has(candidate)) modelKey = candidate;
+      else {
+        const current = currentKeysByLine.get(lineOf(use.slug));
+        if (current?.size === 1) modelKey = [...current][0];
+      }
     }
     if (modelKey === undefined) continue;
     scores.set(modelKey, (scores.get(modelKey) ?? 0) + 0.5 ** (age / USE_HALF_LIFE_DAYS));

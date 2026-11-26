@@ -127,7 +127,6 @@ const question = Schema.Struct({
   required: Schema.optional(Schema.Boolean),
 });
 const pendingRequest = Schema.Struct({
-  requestId: RuntimeRequestId,
   questions: Schema.Array(question),
 });
 const PendingRequestListTool = Tool.make("t3_pending_request_list", {

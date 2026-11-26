@@ -5,6 +5,7 @@ import {
   buildChatTabs,
   chatTabShowsThread,
   resolveSelectedChatTab,
+  syncedChatListTabsEnabled,
 } from "./chatTabs.ts";
 
 type Row = {
@@ -65,4 +66,35 @@ it("keeps explicit empty servers in tab order and merges their metadata across m
   expect([...tabs[1]!.environmentIds!]).toEqual(["mac", "studio"]);
   expect(chatTabShowsThread(ALL_CHATS_TAB, tabs, "mac:any-chat")).toBe(true);
   expect(chatTabShowsThread("build", tabs, "mac:any-chat")).toBe(false);
+});
+
+it("keeps the latest tab choice when another device or a stale server reconnects", () => {
+  const old = { settings: { chatListTabsEnabled: false, chatListTabsChangedAt: 1 } };
+  const reverted = { settings: { chatListTabsEnabled: true, chatListTabsChangedAt: 2 } };
+  const untouched = { settings: { chatListTabsEnabled: true } };
+  expect(syncedChatListTabsEnabled(new Map())).toBeNull();
+  expect(
+    syncedChatListTabsEnabled(
+      new Map([
+        ["mac", old],
+        ["other", untouched],
+      ]),
+    ),
+  ).toBe(false);
+  expect(
+    syncedChatListTabsEnabled(
+      new Map([
+        ["mac", reverted],
+        ["other", old],
+      ]),
+    ),
+  ).toBe(true);
+  expect(
+    syncedChatListTabsEnabled(
+      new Map([
+        ["other", old],
+        ["mac", reverted],
+      ]),
+    ),
+  ).toBe(true);
 });

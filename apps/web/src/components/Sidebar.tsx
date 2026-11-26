@@ -20,6 +20,8 @@ import {
   ThreadHoverCardPopup,
 } from "./ThreadHoverCard";
 import { resolveRenameCommit } from "./chat/ChatHeader";
+import { Collapsible, CollapsiblePanel } from "./ui/collapsible";
+import { useSidebarChatTabSelection } from "./sidebar/useSidebarChatTabSelection";
 import { CollapsibleSectionHeader } from "./ui/collapsible-section-header";
 import {
   setThreadChangeRequestSnapshot,
@@ -349,7 +351,8 @@ import {
 import { SidebarDragLifecycle, SidebarPointerSensor } from "./Sidebar.pointer";
 import { createSidebarPrefetch } from "./Sidebar.prefetch";
 import { createSidebarPendingActions, type SidebarPendingAction } from "./Sidebar.optimistic";
-import { createSidebarListMotion } from "./Sidebar.motion";
+import { createSidebarListMotion, STATIC_ROW_ATTRIBUTE } from "./Sidebar.motion";
+import { observeResize } from "~/lib/observeResize";
 import {
   ThreadPullRequestBadgeControl,
   ThreadPullRequestsMiniList,
@@ -386,6 +389,8 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 import { InlineButton } from "./ui/button";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { SidebarStatusDock } from "./sidebar/SidebarStatusDock";
+import { SidebarDayCard, DAY_CARD_MIN_ROOM, DAY_CARD_MIN_WIDTH } from "./sidebar/SidebarDayCard";
 import { SidebarNotesLink } from "./sidebar/SidebarNotesLink";
 import { SidebarWorkflowsLink } from "./sidebar/SidebarWorkflowsLink";
 import {
@@ -1147,8 +1152,6 @@ function SidebarSectionPlaceholder(props: {
 // Pointer travel before a press on a row starts a drag, or a press on its
 // action button starts a sweep. Shorter presses stay clicks.
 const SIDEBAR_DRAG_DISTANCE = 6;
-/** The chat tab this device has open in the sidebar ("" for All). */
-const CHAT_TAB_SELECTION_KEY = "t3code:sidebar-chat-tab:v1";
 
 type SidebarSweepAction = "settle" | "unsettle" | "unsnooze";
 
@@ -1794,7 +1797,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   // The same words as the filter above, the phone and the menu bar.
                   label: "Needs you",
                   icon: "input" as const,
-                  className: "text-indigo-600 dark:text-indigo-300",
+                  className: "text-attention-foreground",
                 }
               : status === "limited"
                 ? {
@@ -2178,6 +2181,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     prBadgeShape?.kind !== "stack" &&
     !pr &&
     !currentLinkedPr;
+  const settleFitsStatusSlot =
+    topStatus !== null && !props.isPinned && !hasUnsentDraft && !showSnoozeButton;
   const title =
     isRenaming && canOperateThread && !privacy ? (
       <input
@@ -2201,9 +2206,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             ? "text-foreground/78 group-hover/sidebar-row:text-foreground group-focus-visible/sidebar-row:text-foreground"
             : "text-foreground",
           wrapsTitle ? "line-clamp-2 leading-4.75 break-words" : "truncate",
-          // The hover actions lie over the end of the title; it fades out under them.
+          // The hover actions lie over the end of the title; it fades out under them. A lone
+          // Settle fits inside a status label's slot, so the title stays whole there.
           hasRowActions &&
             !isWokeStatus &&
+            !settleFitsStatusSlot &&
             (snoozeMenuOpen
               ? "[mask-image:linear-gradient(to_left,transparent_0.75rem,black_2.25rem)]"
               : "group-any-hover/sidebar-row:[mask-image:linear-gradient(to_left,transparent_0.75rem,black_2.25rem)] group-has-[[data-sidebar-row-actions]_:focus-visible]/sidebar-row:[mask-image:linear-gradient(to_left,transparent_0.75rem,black_2.25rem)]"),
@@ -3097,7 +3104,14 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   const { thread } = props;
   const privateLabel = usePrivacyLabel();
   const privacy = usePrivacyMode();
+  const attentionStatus = resolveSidebarThreadStatus(thread);
   const attentionLabel = sidebarThreadAttentionLabel(thread);
+  const attentionToneClassName =
+    attentionStatus === "input"
+      ? "text-attention-foreground"
+      : attentionStatus === "failed"
+        ? "text-error-foreground"
+        : "text-warning-foreground";
   const accessibility = resolveSidebarRowAccessibility({
     title: privateLabel("Chat", thread.id, thread.title),
     statusLabel: attentionLabel,
@@ -3261,7 +3275,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
               <span
                 className={cn(
                   "text-2xs",
-                  attentionAsks ? "text-warning-foreground" : "text-muted-foreground",
+                  attentionAsks ? attentionToneClassName : "text-muted-foreground",
                 )}
               >
                 {attentionLabel}
@@ -3685,11 +3699,11 @@ export default memo(function Sidebar() {
   );
   // Chat tabs: the strip above the list shows one tab's chats at a time, like browser tab
   // groups. Which tab is open is this device's choice.
-  const [chatTabSelection, setChatTabSelection] = useLocalStorage(
-    CHAT_TAB_SELECTION_KEY,
-    ALL_CHATS_TAB,
-    Schema.String,
-  );
+  const {
+    enabled: chatListTabsEnabled,
+    selected: chatTabSelection,
+    select: setChatTabSelection,
+  } = useSidebarChatTabSelection();
   const runChatTabsCommand = useAtomCommand(serverEnvironment.chatTabsCommand, {
     reportFailure: false,
   });
@@ -3731,10 +3745,16 @@ export default memo(function Sidebar() {
     select: (params) => ({ sessionId: params.sessionId, environmentId: params.environmentId }),
   });
   useEffect(() => {
-    if (!terminalRouteActive) return;
+    if (!terminalRouteActive || !chatListTabsEnabled) return;
     setChatTabSelection(CLAUDE_RC_TAB);
     if (terminalRoute.environmentId) setMachineSelection(terminalRoute.environmentId);
-  }, [terminalRouteActive, terminalRoute.environmentId, setChatTabSelection, setMachineSelection]);
+  }, [
+    terminalRouteActive,
+    terminalRoute.environmentId,
+    chatListTabsEnabled,
+    setChatTabSelection,
+    setMachineSelection,
+  ]);
   const selectedChatTab =
     chatTabSelection === CLAUDE_RC_TAB
       ? CLAUDE_RC_TAB
@@ -4161,6 +4181,11 @@ export default memo(function Sidebar() {
   const [activeSearchResultKey, setActiveSearchResultKey] = useState<string | null>(null);
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
   const isShowingThreadResults = isSearchingThreads || quickFilter !== "all";
+  const toggleNeedsYouFilter = useCallback(() => {
+    setQuickFilter((filter) => (filter === "needs-you" ? "all" : "needs-you"));
+    setActiveSearchResultKey(null);
+    setSearchVisibleCount(SESSION_LIST_INITIAL_COUNT);
+  }, []);
   const searchableThreads = useMemo(() => {
     return [
       ...pinnedThreads,
@@ -4342,6 +4367,24 @@ export default memo(function Sidebar() {
     () => setSettledShelfExpanded((value) => !value),
     [setSettledShelfExpanded],
   );
+  // The day card lives in the free height under a short list. `room` shows it; once
+  // shown it stays mounted so it can fade out when the list grows into its space.
+  const [dayCard, setDayCard] = useState({ room: false, mounted: false });
+  const observeListSpare = useCallback((spare: HTMLLIElement) => {
+    const stop = observeResize(spare, ([entry]) => {
+      if (!entry) return;
+      const room =
+        entry.contentRect.height >= DAY_CARD_MIN_ROOM &&
+        entry.contentRect.width >= DAY_CARD_MIN_WIDTH;
+      setDayCard((current) =>
+        current.room === room ? current : { room, mounted: current.mounted || room },
+      );
+    });
+    return () => {
+      stop();
+      setDayCard((current) => (current.room ? { ...current, room: false } : current));
+    };
+  }, []);
   const renderedSettledThreads = useMemo(() => {
     if (settledShelfExpanded) return visibleSettledThreads;
     if (routeThreadKey === null) return EMPTY_THREADS;
@@ -6361,7 +6404,7 @@ export default memo(function Sidebar() {
               isSplittableChat(routeThreadRef) &&
               isSplittableChat(threadRef) &&
               scopedThreadKey(routeThreadRef) !== threadKey
-                ? [{ id: "open-beside" as const, label: "Open beside" }]
+                ? [{ id: "open-beside" as const, label: "Open beside", icon: "columns-2" }]
                 : []),
               ...menuItems,
             ],
@@ -6763,7 +6806,7 @@ export default memo(function Sidebar() {
   const shellsBootstrapped = useAllEnvironmentShellsBootstrapped();
   return (
     <div className={discordMode ? "dc-shell" : "contents"} data-electron={isElectron}>
-      {discordMode ? (
+      {discordMode && chatListTabsEnabled ? (
         <DiscordServerRail
           servers={discordServerViews}
           selected={selectedChatTab}
@@ -6907,7 +6950,7 @@ export default memo(function Sidebar() {
                   aria-label="Filter chats"
                   // On the chat rows' own inset, like the tabs below. The machine menu
                   // ends the row, so the two filters read as one control.
-                  className="@container flex min-w-0 items-center gap-1 pt-1 pb-0.5"
+                  className="@container flex min-w-0 items-center gap-1 py-1"
                 >
                   {(showingTerminalSessions
                     ? []
@@ -6946,7 +6989,8 @@ export default memo(function Sidebar() {
                       )}
                     >
                       {filter.label}
-                      {filter.count !== null ? (
+                      {/* A zero count is noise on every screen; the label alone says "none". */}
+                      {filter.count !== null && filter.count > 0 ? (
                         <span className="text-2xs tabular-nums opacity-70">{filter.count}</span>
                       ) : null}
                     </button>
@@ -6966,17 +7010,26 @@ export default memo(function Sidebar() {
               <SidebarNotesLink />
               <SidebarWorkflowsLink />
               {!discordMode ? (
-                <SidebarChatTabs
-                  ref={chatTabStripRef}
-                  tabs={chatTabViews}
-                  selected={selectedChatTab}
-                  dropTarget={chatTabDropTarget}
-                  renaming={renamingChatTab}
-                  onSelect={setChatTabSelection}
-                  onContextMenu={(tab, position) => void handleChatTabContextMenu(tab, position)}
-                  onRename={renameChatTab}
-                  onRenameEnd={() => setRenamingChatTab(null)}
-                />
+                <Collapsible open={chatListTabsEnabled}>
+                  <CollapsiblePanel inert={!chatListTabsEnabled}>
+                    <div className="mt-1.5 border-t border-sidebar-border/60 pt-1">
+                      <SidebarChatTabs
+                        ref={chatTabStripRef}
+                        enabled={chatListTabsEnabled}
+                        tabs={chatTabViews}
+                        selected={selectedChatTab}
+                        dropTarget={chatTabDropTarget}
+                        renaming={renamingChatTab}
+                        onSelect={setChatTabSelection}
+                        onContextMenu={(tab, position) =>
+                          void handleChatTabContextMenu(tab, position)
+                        }
+                        onRename={renameChatTab}
+                        onRenameEnd={() => setRenamingChatTab(null)}
+                      />
+                    </div>
+                  </CollapsiblePanel>
+                </Collapsible>
               ) : null}
             </SidebarGroup>
           }
@@ -7125,22 +7178,35 @@ export default memo(function Sidebar() {
                   ) : null}
                 </TooltipProvider>
               ) : (
-                <p
-                  role="status"
-                  className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
-                >
-                  {threadSearch.isPending
-                    ? "Searching chat messages…"
-                    : threadSearch.failed
-                      ? "Couldn't search thread messages"
-                      : threadSearch.pagination
-                        ? "No matching chats yet"
-                        : quickFilter === "unread" && !isSearchingThreads
-                          ? "You're all caught up"
-                          : quickFilter === "needs-you" && !isSearchingThreads
-                            ? "No chats need you right now"
-                            : "No chats found"}
-                </p>
+                <div className="flex flex-col items-center gap-2 px-2 py-6">
+                  <p role="status" className="text-center text-xs text-sidebar-muted-foreground">
+                    {threadSearch.isPending
+                      ? "Searching chat messages…"
+                      : threadSearch.failed
+                        ? "Couldn't search thread messages"
+                        : threadSearch.pagination
+                          ? "No matching chats yet"
+                          : quickFilter === "unread" && !isSearchingThreads
+                            ? "You're all caught up"
+                            : quickFilter === "needs-you" && !isSearchingThreads
+                              ? "No chats need you right now"
+                              : "No chats found"}
+                  </p>
+                  {/* An empty filter is a dead end for the mouse; offer the way back. */}
+                  {quickFilter !== "all" && !isSearchingThreads ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQuickFilter("all");
+                        setActiveSearchResultKey(null);
+                        setSearchVisibleCount(SESSION_LIST_INITIAL_COUNT);
+                      }}
+                      className="cursor-pointer rounded-md px-2 py-1 text-xs font-medium text-sidebar-foreground outline-none transition-colors hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none"
+                    >
+                      Show all chats
+                    </button>
+                  ) : null}
+                </div>
               )
             ) : null}
             {!showingTerminalSessions &&
@@ -7587,6 +7653,35 @@ export default memo(function Sidebar() {
                                 scopeThreadRef(lastActiveThread.environmentId, lastActiveThread.id),
                               )
                             : null;
+                        // The list's free height sits above its bottom shelves, in one
+                        // spacer that never takes room from a row.
+                        let spareAdded = sessionBoxes !== null || discordMode;
+                        const addSpare = () => {
+                          if (spareAdded) return;
+                          spareAdded = true;
+                          items.push(
+                            <li
+                              key="list-spare"
+                              ref={observeListSpare}
+                              {...{ [STATIC_ROW_ATTRIBUTE]: "" }}
+                              className="relative min-h-0 flex-1 list-none"
+                            >
+                              {dayCard.mounted ? (
+                                <div
+                                  className={cn(
+                                    "absolute inset-x-0 bottom-1 transition-[opacity,visibility] ease-out motion-reduce:transition-none",
+                                    // Out faster than in: rows are arriving where it stood.
+                                    dayCard.room && from === null
+                                      ? "visible opacity-100 duration-200"
+                                      : "invisible opacity-0 duration-100",
+                                  )}
+                                >
+                                  <SidebarDayCard />
+                                </div>
+                              ) : null}
+                            </li>,
+                          );
+                        };
                         for (const item of sidebarListItems) {
                           if (item.kind === "thread") {
                             items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
@@ -7652,6 +7747,7 @@ export default memo(function Sidebar() {
                               );
                               break;
                             case "working-header":
+                              addSpare();
                               items.push(
                                 <SidebarSectionHeader
                                   key="working-shelf-header"
@@ -7667,6 +7763,7 @@ export default memo(function Sidebar() {
                               );
                               break;
                             case "snoozed-header":
+                              addSpare();
                               items.push(
                                 <SidebarSectionHeader
                                   key="snoozed-shelf-header"
@@ -7682,6 +7779,7 @@ export default memo(function Sidebar() {
                               );
                               break;
                             case "settled-header":
+                              addSpare();
                               items.push(
                                 <SidebarSectionHeader
                                   key="settled-shelf-header"
@@ -7721,6 +7819,7 @@ export default memo(function Sidebar() {
                               break;
                           }
                         }
+                        addSpare();
                         return items;
                       })()}
                       {settledShelfExpanded && hiddenSettledCount > 0 ? (
@@ -7756,6 +7855,13 @@ export default memo(function Sidebar() {
             ) : null}
           </SidebarGroup>
         </SidebarContent>
+        {discordMode ? null : (
+          <SidebarStatusDock
+            needsYouCount={quickFilterResult.needsYouCount}
+            needsYouActive={quickFilter === "needs-you"}
+            onToggleNeedsYou={toggleNeedsYouFilter}
+          />
+        )}
         <SidebarChromeFooter />
         {discordMode ? <DiscordUserPanel machine={selectedMachine} /> : null}
       </div>

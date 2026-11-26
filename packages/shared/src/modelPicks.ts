@@ -13,7 +13,7 @@
  *   models apart, blended with the user's own grades once there are enough.
  * - Value: the most quality per dollar the user really pays, among models
  *   within 15% of the best. On a flat-price plan that is the plan's price
- *   spread over the work its limits allow, not the API price. Cost is for
+ *   allocated over that account's priced work in the evidence window. Cost is for
  *   the same work: a model that spends more tokens on the same public tasks
  *   costs that much more, whatever its price per token.
  * - Speed: the model that finishes the same work soonest, among models at
@@ -22,7 +22,7 @@
  *   own responses when there are enough.
  * - Low cost: the best model among those close to free: the user's own GPU
  *   and anything whose real cost per million output tokens is a few cents,
- *   which on a plan is also what barely touches its limit. Better quality
+ *   including input and cache costs. Better quality
  *   first, then faster. When nothing is that cheap, the cheapest.
  *
  * @module modelPicks
@@ -44,7 +44,7 @@ export const PICK_QUALITY_FLOOR: Readonly<Record<ModelPickKind, number>> = {
 /**
  * Real cost per million output tokens at or under which work is close to
  * free: the user's own GPU, and a plan's cheap models once its price is spread
- * over the work its limits allow.
+ * over its recorded work.
  */
 export const NEAR_FREE_PER_M_OUTPUT_USD = 0.1;
 
@@ -146,6 +146,7 @@ export interface PickRoute {
   readonly costUsd: number;
   /** False when the tokens had no known rates, so `costUsd` is not a price. */
   readonly costKnown: boolean;
+  readonly unpricedTokens?: number;
   readonly tokens: UsageTokenTotals;
   readonly responses: number;
   readonly timing?: PickTiming;
@@ -193,16 +194,19 @@ export interface PickPlan {
   readonly monthlyUsd: number;
   /** A month's work at API rates the plan itself promises, when it states one. */
   readonly includedMonthlyUsd?: number;
-  /** How much it allows next to its provider's smallest plan, where its name says ("20x"). */
-  readonly allowance?: number;
+  readonly providerIds?: readonly string[];
 }
 
 export interface ModelPicksInput {
   readonly routes: ReadonlyArray<PickRoute>;
+  /** All usage before candidate eligibility and version substitutions. */
+  readonly usage?: ReadonlyArray<PickRoute>;
   readonly grades: ReadonlyArray<PickGrades>;
   readonly limits: ReadonlyArray<PickLimitWindow>;
   /** Plans with a known price. A limited instance without one has an unknown real cost. */
   readonly plans?: ReadonlyArray<PickPlan>;
+  /** Subscriptions identified by sign-in even when their price and limits are unknown. */
+  readonly subscriptionAccounts?: ReadonlySet<string>;
   readonly benchmarks: PickBenchmarks;
   /**
    * Usage since an instant, for working out what one percent of a limit is
@@ -247,12 +251,11 @@ export interface PickCandidate {
 
   /** API-equivalent dollars per million output tokens, context included. */
   readonly costPerMOutput?: number;
-  readonly costBasis?: "yours" | "list" | "local";
+  readonly costBasis?: "yours" | "other" | "list" | "local";
   /**
    * Dollars per million output tokens the user really pays: the API price on a
    * pay-per-token route, nothing on their own hardware, and on a plan its price
-   * spread over the work its limits allow. Absent when a plan's price or what it
-   * allows is not known.
+   * allocated by the API value of its recorded work. Absent without priced usage.
    */
   readonly paidPerMOutput?: number;
   /** Output tokens the model spends on one task of the public task set, at the effort the user runs. */
@@ -290,21 +293,11 @@ export interface PickCandidate {
   readonly billing: "subscription" | "metered" | "local";
 }
 
-/** What a plan is worth for one model, or for all of its models. */
+/** The account and priced work used to allocate its monthly fee. */
 export interface PickPlanValue {
   readonly label: string;
   readonly monthlyUsd: number;
-  /** A month of work at API rates the plan covers. */
-  readonly monthlyCapacityUsd?: number;
-  /** Worked out from a limit's burn, the plan's own promise, or what was used. */
-  readonly capacityBasis?: "limit" | "stated" | "used";
-  /** `monthlyCapacityUsd / monthlyUsd`: how many times cheaper than API rates. */
-  readonly leverage?: number;
-  /**
-   * The user's other account of this provider, when this one has too little
-   * use to measure and its worth was read from that account's limits instead.
-   */
-  readonly judgedFrom?: string;
+  readonly usedUsd: number;
 }
 
 /** One provider instance the user pays a flat price for, or that has limits. */
@@ -316,6 +309,8 @@ export interface PlanSummary {
   readonly monthlyUsd?: number;
   /** Work done through it over the evidence window, at API rates. */
   readonly usedUsd: number;
+  /** Only records explicitly identifying a covered gateway provider count. */
+  readonly scopedUsage?: boolean;
   /** Tokens it used on models with no API price, which `usedUsd` cannot count. */
   readonly unpricedTokens?: number;
   /**
@@ -429,12 +424,15 @@ export function benchmarksAtEffort<
         (name) => efforts[name]!.outputTokensPerTask !== undefined,
       );
       const taskEffort = closestEffort(counted, wanted);
+      // Mixing throughput at one effort with token use at another invents a task time.
       const perTask =
-        taskEffort !== undefined
-          ? efforts[taskEffort]!.outputTokensPerTask
-          : counted.length === 0
-            ? base.outputTokensPerTask
-            : undefined;
+        speedEffort !== undefined && taskEffort !== undefined && speedEffort !== taskEffort
+          ? undefined
+          : taskEffort !== undefined
+            ? efforts[taskEffort]!.outputTokensPerTask
+            : counted.length === 0
+              ? base.outputTokensPerTask
+              : undefined;
       const {
         outputTokensPerSecond: _headlineSpeed,
         outputTokensPerTask: _headlineTask,
@@ -838,15 +836,11 @@ function limitOf(
   if (burns.length === 0) return undefined;
   let tightest = burns[0]!;
   let remainingUsd: number | undefined;
-  let usdPerPercent: number | undefined;
   for (const burn of burns) {
     if (burn.remainingPercent < tightest.remainingPercent) tightest = burn;
     if (burn.usdPerPercent === undefined) continue;
     const left = burn.usdPerPercent * burn.remainingPercent;
-    if (remainingUsd === undefined || left < remainingUsd) {
-      remainingUsd = left;
-      usdPerPercent = burn.usdPerPercent;
-    }
+    if (remainingUsd === undefined || left < remainingUsd) remainingUsd = left;
   }
   return {
     label: tightest.window.label,
@@ -856,8 +850,8 @@ function limitOf(
     ...(remainingUsd !== undefined && costPerMOutput !== undefined && costPerMOutput > 0
       ? { remainingMOutput: remainingUsd / costPerMOutput }
       : {}),
-    ...(usdPerPercent !== undefined && costPerMOutput !== undefined
-      ? { percentPerMOutput: costPerMOutput / usdPerPercent }
+    ...(tightest.usdPerPercent !== undefined && costPerMOutput !== undefined
+      ? { percentPerMOutput: costPerMOutput / tightest.usdPerPercent }
       : {}),
   };
 }
@@ -898,80 +892,15 @@ function monthlyCapacityOf(burns: ReadonlyArray<WindowBurn>): MonthlyCapacity | 
   return capacity;
 }
 
-/**
- * What an account too little used to measure is worth, read from the user's
- * other account of the same provider: that plan's room, scaled by how much
- * more or less this one allows (by the allowance their names state, else by
- * price). An account without a known price is taken for the same plan.
- */
-function pooledPlanValue(
-  label: string,
-  own: PickPlan | undefined,
-  other: PickPlan,
-  measured: PickPlanValue,
-): PickPlanValue | undefined {
-  if (measured.monthlyCapacityUsd === undefined || measured.capacityBasis === "stated") {
-    return undefined;
-  }
-  if (other.monthlyUsd <= 0 || (own !== undefined && own.monthlyUsd <= 0)) return undefined;
-  const size =
-    own === undefined
-      ? 1
-      : own.allowance !== undefined && other.allowance !== undefined && other.allowance > 0
-        ? own.allowance / other.allowance
-        : own.monthlyUsd / other.monthlyUsd;
-  const monthlyUsd = own?.monthlyUsd ?? other.monthlyUsd;
-  const monthlyCapacityUsd = measured.monthlyCapacityUsd * size;
-  return {
-    label: own?.label ?? label,
-    monthlyUsd,
-    monthlyCapacityUsd,
-    ...(measured.capacityBasis === undefined ? {} : { capacityBasis: measured.capacityBasis }),
-    leverage: monthlyCapacityUsd / monthlyUsd,
-    judgedFrom: other.label,
-  };
-}
-
-/** What a plan is worth for the model behind `burns`, from the best evidence there is. */
-function planValueOf(
-  plan: PickPlan,
-  burns: ReadonlyArray<WindowBurn>,
-  usedUsd: number,
-): PickPlanValue {
-  const base = { label: plan.label, monthlyUsd: plan.monthlyUsd };
-  const fromLimit = monthlyCapacityOf(burns);
-  const capacity =
-    fromLimit !== undefined
-      ? ({ monthlyCapacityUsd: fromLimit.monthlyUsd, capacityBasis: fromLimit.basis } as const)
-      : plan.includedMonthlyUsd !== undefined
-        ? ({ monthlyCapacityUsd: plan.includedMonthlyUsd, capacityBasis: "stated" } as const)
-        : // No limit to measure: the plan has covered at least what was done on it.
-          usedUsd > plan.monthlyUsd
-          ? ({ monthlyCapacityUsd: usedUsd, capacityBasis: "used" } as const)
-          : undefined;
-  if (capacity === undefined) return base;
-  return {
-    ...base,
-    ...capacity,
-    ...(plan.monthlyUsd > 0 ? { leverage: capacity.monthlyCapacityUsd / plan.monthlyUsd } : {}),
-  };
-}
-
 interface Draft {
   readonly group: Group;
   /** Where a new session on the model starts. */
   readonly route: PickRoute;
   /**
-   * The route with the most use, hidden ones included: the model's cost and speed
+   * The route with the most use, hidden ones included: its recorded token costs
    * are the model's, so this record stands in where `route` has little of its own.
    */
   readonly record: PickRoute;
-  /**
-   * The user's other account of the provider that `route` took a new session
-   * over from. Only its plan may stand in for `route`'s: `record` can be any
-   * provider's route.
-   */
-  readonly sibling?: PickRoute;
   readonly benchmarkQuality: number | undefined;
   readonly headlineBenchmark: PickCandidate["headlineBenchmark"];
   readonly grade:
@@ -1029,10 +958,15 @@ function benchmarkQualities(groups: ReadonlyArray<Group>, benchmarks: PickBenchm
     let weight = 0;
     let headline: PickCandidate["headlineBenchmark"];
     let headlineCoverage = 0;
+    let unweighted = 0;
+    let count = 0;
     for (const [metric, value] of Object.entries(group.benchmark?.scores ?? {})) {
       const scale = scales.get(metric);
       if (!(value > 0) || scale === undefined) continue;
-      total += (value / scale.top) * 100 * scale.weight;
+      const normalized = (value / scale.top) * 100;
+      unweighted += normalized;
+      count++;
+      total += normalized * scale.weight;
       weight += scale.weight;
       const covered = coverage.get(metric) ?? 0;
       if (covered > headlineCoverage) {
@@ -1045,7 +979,10 @@ function benchmarkQualities(groups: ReadonlyArray<Group>, benchmarks: PickBenchm
         };
       }
     }
-    return { quality: weight === 0 ? undefined : total / weight, headline };
+    return {
+      quality: weight > 0 ? total / weight : count > 0 ? unweighted / count : undefined,
+      headline,
+    };
   };
 }
 
@@ -1112,8 +1049,11 @@ function shrunkGrade(grade: { average: number; rated: number }, prior: number): 
   );
 }
 
-function byDescending<T>(items: ReadonlyArray<T>, score: (item: T) => number): T[] {
-  return items.slice().sort((a, b) => score(b) - score(a));
+/** Quality per dollar of comparable work. Free routes share first place by quality. */
+export function valueScore(candidate: PickCandidate): number {
+  const cost = realCostForSameWork(candidate);
+  if (candidate.quality === undefined || cost === undefined) return 0;
+  return cost === 0 ? Infinity : candidate.quality / cost;
 }
 
 /**
@@ -1124,8 +1064,8 @@ function byDescending<T>(items: ReadonlyArray<T>, score: (item: T) => number): T
 function frugalOrder(a: PickCandidate, b: PickCandidate): number {
   const costA = realCostForSameWork(a) ?? Infinity;
   const costB = realCostForSameWork(b) ?? Infinity;
-  const nearA = costA <= NEAR_FREE_PER_M_OUTPUT_USD;
-  const nearB = costB <= NEAR_FREE_PER_M_OUTPUT_USD;
+  const nearA = realCostPerMOutput(a)! <= NEAR_FREE_PER_M_OUTPUT_USD;
+  const nearB = realCostPerMOutput(b)! <= NEAR_FREE_PER_M_OUTPUT_USD;
   if (nearA !== nearB) return nearA ? -1 : 1;
   const quality = (b.quality ?? -1) - (a.quality ?? -1);
   if (nearA) {
@@ -1141,9 +1081,13 @@ function frugalOrder(a: PickCandidate, b: PickCandidate): number {
  * most, which may be a paid one for a model their own GPU also serves; for
  * low cost that model is free.
  */
-function onLocalRoute(candidate: PickCandidate, group: Group): PickCandidate {
+function onLocalRoute(
+  candidate: PickCandidate,
+  group: Group,
+  canStart: ModelPicksInput["canStart"],
+): PickCandidate {
   if (candidate.route.local) return candidate;
-  const locals = group.routes.filter((route) => route.local);
+  const locals = group.routes.filter((route) => route.local && (canStart?.(route) ?? true));
   if (locals.length === 0) return candidate;
   const route = primaryRoute(locals);
   const speed = speedOf(route, group.benchmark);
@@ -1172,8 +1116,8 @@ function onLocalRoute(candidate: PickCandidate, group: Group): PickCandidate {
 }
 
 /**
- * What a million output tokens costs the user for ranking: the real figure where
- * it is known, else the API price, which a plan never costs more than for long.
+ * Estimated cost per million output tokens including context. Where the plan rate
+ * is unknown, the API rate is shown explicitly as a proxy.
  */
 export function realCostPerMOutput(candidate: PickCandidate): number | undefined {
   return candidate.paidPerMOutput ?? candidate.costPerMOutput;
@@ -1233,6 +1177,7 @@ function planSummaries(
       label: plan?.label ?? labels.get(key) ?? instanceId,
       ...(plan ? { monthlyUsd: plan.monthlyUsd } : {}),
       usedUsd,
+      ...(plan?.providerIds ? { scopedUsage: true } : {}),
       ...(unpricedTokens > 0 ? { unpricedTokens } : {}),
       ...capacity,
       hasLimits: input.limits.some((window) => accountOf(window) === key),
@@ -1243,24 +1188,35 @@ function planSummaries(
 
 export function pickBestModels(input: ModelPicksInput): ModelPicks {
   const groups = groupByModel(input);
-  const mix = tokenMix(input.routes);
+  const usage = input.usage ?? input.routes;
+  const mix = tokenMix(usage);
   const plans = new Map<string, PickPlan>();
   for (const plan of input.plans ?? []) plans.set(accountOf(plan)!, plan);
   const usedByInstance = new Map<string, number>();
+  const modelUsage = new Map<string, { usd: number; output: number }>();
+  const usageKey = (route: PickRoute) =>
+    JSON.stringify([accountOf(route), normalizeModelId(route.model)]);
   const unpricedTokensByInstance = new Map<string, number>();
-  for (const route of input.routes) {
-    if (route.instanceId === undefined) continue;
-    if (!route.costKnown) {
+  for (const route of usage) {
+    const account = accountOf(route);
+    if (account === undefined) continue;
+    const plan = plans.get(account);
+    if (plan?.providerIds && !limitWindowApplies("", route.model, plan)) continue;
+    // A partially priced route still contributes its known dollars to the account total.
+    usedByInstance.set(account, (usedByInstance.get(account) ?? 0) + route.costUsd);
+    const unpriced = route.unpricedTokens ?? (route.costKnown ? 0 : totalTokens(route));
+    if (unpriced > 0) {
       unpricedTokensByInstance.set(
-        accountOf(route)!,
-        (unpricedTokensByInstance.get(accountOf(route)!) ?? 0) + totalTokens(route),
+        account,
+        (unpricedTokensByInstance.get(account) ?? 0) + unpriced,
       );
-      continue;
     }
-    usedByInstance.set(
-      accountOf(route)!,
-      (usedByInstance.get(accountOf(route)!) ?? 0) + route.costUsd,
-    );
+    if (!route.costKnown) continue;
+    const key = usageKey(route);
+    const observed = modelUsage.get(key) ?? { usd: 0, output: 0 };
+    observed.usd += route.costUsd;
+    observed.output += outputTokens(route);
+    modelUsage.set(key, observed);
   }
   const benchmarkQuality = benchmarkQualities(groups, input.benchmarks);
 
@@ -1293,7 +1249,6 @@ export function pickBestModels(input: ModelPicksInput): ModelPicks {
         group,
         route: moved ?? base,
         record,
-        ...(moved && moved !== base ? { sibling: base } : {}),
         benchmarkQuality: quality,
         headlineBenchmark: headline,
         grade: mergedGrade(group.grades),
@@ -1303,7 +1258,13 @@ export function pickBestModels(input: ModelPicksInput): ModelPicks {
   const toQuality = gradeScale(drafts, priorGrade);
 
   const candidates: PickCandidate[] = drafts.map((draft) => {
-    const { group, route, record, sibling } = draft;
+    const { group, route, record } = draft;
+    const accountPlan = route.local ? undefined : plans.get(accountOf(route) ?? "");
+    const paidFor =
+      accountPlan?.providerIds && !limitWindowApplies("", route.model, accountPlan)
+        ? undefined
+        : accountPlan;
+    const observed = paidFor && modelUsage.get(usageKey(route));
     const costed =
       route.costKnown && outputTokens(route) >= MIN_COSTED_OUTPUT_TOKENS ? route : record;
     let quality = draft.benchmarkQuality;
@@ -1324,9 +1285,16 @@ export function pickBestModels(input: ModelPicksInput): ModelPicks {
     if (route.local) {
       costPerMOutput = 0;
       costBasis = "local";
-    } else if (costed.costKnown && outputTokens(costed) >= MIN_COSTED_OUTPUT_TOKENS) {
-      costPerMOutput = (costed.costUsd / outputTokens(costed)) * 1_000_000;
+    } else if (observed && observed.usd > 0 && observed.output > 0) {
+      costPerMOutput = (observed.usd / observed.output) * 1_000_000;
       costBasis = "yours";
+    } else if (
+      costed.costKnown &&
+      outputTokens(costed) >= MIN_COSTED_OUTPUT_TOKENS &&
+      (!paidFor || costed.costUsd > 0)
+    ) {
+      costPerMOutput = (costed.costUsd / outputTokens(costed)) * 1_000_000;
+      costBasis = !paidFor && costed === route ? "yours" : "other";
     } else if (group.benchmark?.price) {
       costPerMOutput = listCostPerMOutput(group.benchmark.price, mix);
       costBasis = "list";
@@ -1337,45 +1305,25 @@ export function pickBestModels(input: ModelPicksInput): ModelPicks {
         ? []
         : windowBurns(accountOf(route)!, route.model, input);
     const limit = limitOf(burns, costPerMOutput);
-    const paidFor = route.local ? undefined : plans.get(accountOf(route) ?? "");
-    let plan = paidFor
-      ? planValueOf(paidFor, burns, usedByInstance.get(accountOf(paidFor)!) ?? 0)
-      : undefined;
-    // Without a limit to measure or a stated allowance, a plan counts for the work done on
-    // it: "at least this much". After a few days that says little, while the user's other
-    // account of the provider has weeks behind it, so the larger of the two stands: this
-    // account's own work, or the other's worth scaled to what this plan allows.
-    const measured =
-      paidFor !== undefined &&
-      (monthlyCapacityOf(burns) !== undefined || paidFor.includedMonthlyUsd !== undefined);
-    const other = sibling ? plans.get(accountOf(sibling) ?? "") : undefined;
-    if (other && !measured && plan?.monthlyUsd !== 0) {
-      const pooled = pooledPlanValue(
-        route.routeLabel,
-        paidFor,
-        other,
-        planValueOf(
-          other,
-          windowBurns(accountOf(sibling!)!, sibling!.model, input),
-          usedByInstance.get(accountOf(other)!) ?? 0,
-        ),
-      );
-      if (pooled && (plan?.monthlyCapacityUsd ?? 0) < pooled.monthlyCapacityUsd!) plan = pooled;
-    }
+    const plan = paidFor && {
+      label: paidFor.label,
+      monthlyUsd: paidFor.monthlyUsd,
+      usedUsd: usedByInstance.get(accountOf(paidFor)!) ?? 0,
+    };
+    const subscription =
+      plan !== undefined ||
+      limit !== undefined ||
+      (accountPlan?.providerIds !== undefined && !route.model.includes("/")) ||
+      input.subscriptionAccounts?.has(accountOf(route) ?? "");
     let paidPerMOutput: number | undefined;
     if (route.local) paidPerMOutput = 0;
     else if (plan?.monthlyUsd === 0) paidPerMOutput = 0;
     else if (plan) {
-      if (plan.leverage !== undefined && costPerMOutput !== undefined) {
-        paidPerMOutput = costPerMOutput / plan.leverage;
+      if (plan.usedUsd > 0 && costPerMOutput !== undefined) {
+        paidPerMOutput = (costPerMOutput * plan.monthlyUsd) / plan.usedUsd;
       }
-    } else if (!limit) paidPerMOutput = costPerMOutput;
-    const speed = speedOf(
-      measuredSpeed(route.timing) !== undefined || measuredSpeed(route.fastTiming) !== undefined
-        ? route
-        : record,
-      group.benchmark,
-    );
+    } else if (!subscription) paidPerMOutput = costPerMOutput;
+    const speed = speedOf(route, group.benchmark);
     return {
       key: group.key,
       label: group.label,
@@ -1399,7 +1347,7 @@ export function pickBestModels(input: ModelPicksInput): ModelPicks {
       ...(plan ? { plan } : {}),
       ...(speed ? { speed } : {}),
       ...(limit ? { limit } : {}),
-      billing: route.local ? "local" : limit || plan ? "subscription" : "metered",
+      billing: route.local ? "local" : subscription ? "subscription" : "metered",
     };
   });
 
@@ -1425,21 +1373,25 @@ export function pickBestModels(input: ModelPicksInput): ModelPicks {
   const clears = (kind: ModelPickKind) => (candidate: PickCandidate) =>
     candidate.quality !== undefined && candidate.quality >= PICK_QUALITY_FLOOR[kind] * 100;
 
-  const quality = byDescending(scaled.filter(clears("quality")), (c) => c.quality!);
-  const value = byDescending(
-    scaled.filter(clears("value")).filter((c) => realCostForSameWork(c) !== undefined),
-    // A free model would divide by zero; a cent keeps it first without infinity.
-    (c) => c.quality! / Math.max(realCostForSameWork(c)!, 0.01),
-  );
+  const quality = scaled
+    .filter(clears("quality"))
+    .sort((a, b) => b.quality! - a.quality! || a.key.localeCompare(b.key));
+  const value = quality
+    .filter(clears("value"))
+    .filter((c) => realCostForSameWork(c) !== undefined)
+    .sort(
+      (a, b) =>
+        valueScore(b) - valueScore(a) || b.quality! - a.quality! || a.key.localeCompare(b.key),
+    );
   const speed = scaled
     .filter(clears("speed"))
     .filter((c) => c.speed !== undefined)
-    .sort(speedOrder);
+    .sort((a, b) => speedOrder(a, b) || a.key.localeCompare(b.key));
   const groupByKey = new Map(drafts.map((draft) => [draft.group.key, draft.group]));
   const frugal = scaled
     .map((candidate) => {
       const group = groupByKey.get(candidate.key);
-      return group ? onLocalRoute(candidate, group) : candidate;
+      return group ? onLocalRoute(candidate, group, input.canStart) : candidate;
     })
     .filter(
       (c) =>
@@ -1450,7 +1402,7 @@ export function pickBestModels(input: ModelPicksInput): ModelPicks {
         // A subscription about to run out is no place to send work.
         (c.limit === undefined || c.limit.remainingPercent >= MIN_REMAINING_PERCENT),
     )
-    .sort(frugalOrder);
+    .sort((a, b) => frugalOrder(a, b) || a.key.localeCompare(b.key));
 
   const pick = (kind: ModelPickKind, ranked: ReadonlyArray<PickCandidate>): ModelPick => ({
     kind,

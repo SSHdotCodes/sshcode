@@ -1,6 +1,5 @@
 import * as ParentEditsSnapshot from "../git/ParentEditsSnapshot.ts";
 import * as Cache from "effect/Cache";
-import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -39,14 +38,14 @@ import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import { resolveProjectFileBackedSetting } from "@t3tools/shared/projectSettings";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
-import { resolveWorktreesDirectory } from "../worktreesDirectory.ts";
+import { isPrivateWorktree, resolveWorktreesDirectory } from "../worktreesDirectory.ts";
 import {
+  parseConfiguredRemoteUrls,
   parseRemoteNames,
   parseRemoteNamesInGitOrder,
   parseRemoteRefWithRemoteNames,
 } from "../git/remoteRefs.ts";
 import * as ServerConfig from "../config.ts";
-import { freeDiskBytes } from "../phoneAlerts/diskSpace.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const gitProcesses = Semaphore.makeUnsafe(8);
@@ -55,18 +54,6 @@ const gitProcesses = Semaphore.makeUnsafe(8);
 // machine). Give it generous headroom while still bounding a genuinely hung git.
 const WORKTREE_ADD_TIMEOUT_MS = 300_000;
 const WORKTREE_REMOVE_TIMEOUT_MS = Duration.toMillis(Duration.minutes(5));
-/**
- * Finished app-made worktrees wait in this folder, beside the live ones, for the next new
- * worktree of the same repo to take over. A fresh worktree checks out every file and installs
- * every package, and deleting one removes them all again; macOS's fseventsd keeps memory for
- * each of those file events until it restarts (measured: ~0.23 KB per file, ~150 MB a
- * worktree). A reused one changes only what differs and keeps its installed packages.
- */
-export const PARKED_WORKTREES_DIRECTORY = ".parked";
-const PARKED_WORKTREES_PER_REPO = 2;
-const PARKED_WORKTREE_MAX_AGE_MS = Duration.toMillis(Duration.days(7));
-/** Below this much free disk a finished worktree is deleted, not parked. */
-export const PARKED_WORKTREE_MIN_FREE_BYTES = 10 * 1024 ** 3;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 const OUTPUT_TRUNCATED_MARKER = "\n\n[truncated]";
 const PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES = 49_000;
@@ -993,6 +980,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const { worktreesDir } = yield* ServerConfig.ServerConfig;
+  const managedWorktreesDir = yield* fileSystem
+    .realPath(worktreesDir)
+    .pipe(Effect.orElseSucceed(() => path.resolve(worktreesDir)));
   const crypto = yield* Crypto.Crypto;
   const hostPlatform = yield* HostProcess.Platform;
   const parentEdits = yield* ParentEditsSnapshot.make;
@@ -1033,12 +1023,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         // A git.cmd wrapper would need cmd.exe, which cuts multi-line commit
         // messages at the first newline; leave that case to Node's lookup.
         const executable = resolved.shell ? "git" : resolved.command;
+        const background = input.priority === "background" && hostPlatform !== "win32";
         const child = yield* commandSpawner
           .spawn(
-            ChildProcess.make(executable, commandInput.args, {
-              cwd: commandInput.cwd,
-              env: spawnEnv,
-            }),
+            ChildProcess.make(
+              background ? "nice" : executable,
+              background ? ["-n", "15", executable, ...commandInput.args] : commandInput.args,
+              {
+                cwd: commandInput.cwd,
+                env: spawnEnv,
+                ...(background ? { forceKillAfter: "2 seconds" } : {}),
+              },
+            ),
           )
           .pipe(
             Effect.mapError(
@@ -1671,15 +1667,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return parsedRemoteRef?.branchName ?? branchName;
   });
 
+  const findPrimaryRemoteName = (cwd: string) =>
+    listRemoteNames(cwd).pipe(
+      Effect.map((remotes) => (remotes.includes("origin") ? "origin" : (remotes[0] ?? null))),
+    );
+
   const resolvePrimaryRemoteName = Effect.fn("resolvePrimaryRemoteName")(function* (cwd: string) {
-    if (yield* originRemoteExists(cwd)) {
-      return "origin";
-    }
-    const remotes = yield* listRemoteNames(cwd);
-    const [firstRemote] = remotes;
-    if (firstRemote) {
-      return firstRemote;
-    }
+    const remote = yield* findPrimaryRemoteName(cwd);
+    if (remote !== null) return remote;
     return yield* new GitCommandError({
       ...gitCommandContext({
         operation: "GitVcsDriver.resolvePrimaryRemoteName",
@@ -1714,7 +1709,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       return pushDefaultRemote;
     }
 
-    return yield* resolvePrimaryRemoteName(cwd).pipe(Effect.orElseSucceed(() => null));
+    return yield* findPrimaryRemoteName(cwd).pipe(Effect.orElseSucceed(() => null));
   });
 
   const ensureRemote: GitVcsDriver.GitVcsDriver["Service"]["ensureRemote"] = Effect.fn(
@@ -1731,6 +1726,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     for (const [remoteName, remoteUrl] of remoteFetchUrls.entries()) {
       if (normalizeGitRemoteUrl(remoteUrl) === normalizedTargetUrl) {
         return remoteName;
+      }
+    }
+
+    // Git expands url.*.insteadOf in "remote -v". The configured fetch URL
+    // still identifies the repository when the caller uses another transport.
+    if (remoteFetchUrls.size > 0) {
+      const configured = yield* runGitStdout(
+        "GitVcsDriver.ensureRemote.configuredUrls",
+        input.cwd,
+        ["config", "--null", "--get-regexp", "^remote\\..*\\.url$"],
+        true,
+      );
+      for (const [name, url] of parseConfiguredRemoteUrls(configured)) {
+        if (normalizeGitRemoteUrl(url) === normalizedTargetUrl) return name;
       }
     }
 
@@ -1763,7 +1772,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       true,
     ).pipe(Effect.map((stdout) => stdout.trim()));
 
-    const primaryRemoteName = yield* resolvePrimaryRemoteName(cwd).pipe(
+    const primaryRemoteName = yield* findPrimaryRemoteName(cwd).pipe(
       Effect.orElseSucceed(() => null),
     );
     const defaultBranch =
@@ -3262,9 +3271,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     );
     if (result.exitCode !== 0) {
       // Remote-only bases are often recorded by their unqualified branch name.
-      const remoteName = yield* resolvePrimaryRemoteName(cwd).pipe(
-        Effect.orElseSucceed(() => null),
-      );
+      const remoteName = yield* findPrimaryRemoteName(cwd).pipe(Effect.orElseSucceed(() => null));
       return remoteName && (yield* remoteBranchExists({ cwd, remoteName, refName }))
         ? refName
         : null;
@@ -3346,8 +3353,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const existingWorktreeEntries = yield* Effect.filter(
       parsedWorktreeEntries,
       ([, worktreePath]) =>
-        fileSystem.stat(worktreePath).pipe(
-          Effect.as(true),
+        isPrivateWorktree(worktreePath, path, fileSystem, managedWorktreesDir).pipe(
+          Effect.flatMap((hidden) =>
+            hidden ? Effect.succeed(false) : fileSystem.exists(worktreePath),
+          ),
           Effect.orElseSucceed(() => false),
         ),
       { concurrency: 16 },
@@ -3580,39 +3589,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
-  const isInsideDirectory = (root: string, candidate: string) => {
-    const relative = path.relative(root, candidate);
-    return relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative);
-  };
-  const canonicalizeExistingPath = (target: string) =>
-    fileSystem.realPath(target).pipe(Effect.orElseSucceed(() => path.resolve(target)));
-  const canonicalizePath = (target: string) =>
-    Effect.gen(function* () {
-      const resolved = path.resolve(target);
-      const direct = yield* fileSystem.realPath(resolved).pipe(Effect.option);
-      if (Option.isSome(direct)) return direct.value;
-      const parent = path.dirname(resolved);
-      if (parent === resolved) return resolved;
-      return path.join(yield* canonicalizeExistingPath(parent), path.basename(resolved));
-    });
-
-  /** Whether `candidate` lies inside the app's own worktrees folder; others are never parked. */
-  const insideManagedWorktrees = (candidate: string) =>
-    Effect.gen(function* () {
-      const resolvedRoot = path.resolve(worktreesDir);
-      const resolvedCandidate = path.resolve(candidate);
-      if (isInsideDirectory(resolvedRoot, resolvedCandidate)) return true;
-      const [canonicalRoot, canonicalCandidate] = yield* Effect.all([
-        canonicalizeExistingPath(resolvedRoot),
-        canonicalizePath(resolvedCandidate),
-      ]);
-      return isInsideDirectory(canonicalRoot, canonicalCandidate);
-    });
-  const parkedDirectoryFor = (worktreePath: string) =>
-    path.join(path.dirname(path.resolve(worktreePath)), PARKED_WORKTREES_DIRECTORY);
-  const isParkedWorktreePath = (worktreePath: string) =>
-    path.basename(path.dirname(path.resolve(worktreePath))) === PARKED_WORKTREES_DIRECTORY;
-
   /** Every registered worktree of the repo at `cwd` whose folder still exists. */
   const registeredWorktreePaths = (operation: string, cwd: string) =>
     executeWorktreeList(operation, cwd, []).pipe(
@@ -3628,177 +3604,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         }),
       ),
     );
-
-  /** The repo's worktrees parked in `parkDir`, newest first, with when each was parked. */
-  const parkedWorktrees = Effect.fn("GitVcsDriver.parkedWorktrees")(function* (
-    cwd: string,
-    parkDir: string,
-  ) {
-    const resolvedParkDir = path.resolve(parkDir);
-    const canonicalParkDir = yield* canonicalizeExistingPath(resolvedParkDir);
-    const paths = (yield* registeredWorktreePaths("GitVcsDriver.parkedWorktrees", cwd)).filter(
-      (candidate) => {
-        const parent = path.dirname(candidate);
-        return parent === canonicalParkDir || parent === resolvedParkDir;
-      },
-    );
-    const entries = yield* Effect.forEach(paths, (candidate) =>
-      fileSystem.stat(candidate).pipe(
-        Effect.map((info) => ({
-          path: candidate,
-          parkedAtMs: Option.match(info.mtime, { onNone: () => 0, onSome: (at) => at.getTime() }),
-        })),
-        Effect.orElseSucceed(() => ({ path: candidate, parkedAtMs: 0 })),
-      ),
-    );
-    return entries.toSorted((left, right) => right.parkedAtMs - left.parkedAtMs);
-  });
-
-  /** Worktrees whose t3.json reinstalls packages on creation keep them while parked. */
-  const keepsInstalledPackages = (worktreePath: string) =>
-    fileSystem.readFileString(path.join(worktreePath, T3_PROJECT_FILE_NAME)).pipe(
-      Effect.map(
-        (contents) =>
-          parseT3ProjectFile(contents)?.scripts?.some((script) => script.runOnWorktreeCreate) ??
-          false,
-      ),
-      Effect.orElseSucceed(() => false),
-    );
-  const cleanForReuse = (operation: string, worktreePath: string) =>
-    keepsInstalledPackages(worktreePath).pipe(
-      Effect.flatMap((keepPackages) =>
-        runGit(operation, worktreePath, [
-          "clean",
-          "-q",
-          "-ffdx",
-          ...(keepPackages ? ["-e", "node_modules"] : []),
-        ]),
-      ),
-    );
-  const removeQuietly = (cwd: string, worktreePath: string) =>
-    executeGit(
-      "GitVcsDriver.removeParkedWorktree",
-      cwd,
-      ["-c", "status.showUntrackedFiles=normal", "worktree", "remove", "--force", worktreePath],
-      { allowNonZeroExit: true, timeoutMs: WORKTREE_REMOVE_TIMEOUT_MS },
-    ).pipe(Effect.ignore);
-
-  /**
-   * Parks a finished app-made worktree instead of deleting it: detached, cleaned of everything
-   * but installed packages, and moved into `.parked`. Older and surplus parked worktrees of the
-   * repo are deleted. False when it was not parked, so the caller deletes it as before.
-   */
-  const parkWorktree = Effect.fn("GitVcsDriver.parkWorktree")(
-    function* (input: { readonly cwd: string; readonly path: string }) {
-      const worktreePath = path.resolve(input.path);
-      if (!(yield* insideManagedWorktrees(worktreePath)) || isParkedWorktreePath(worktreePath)) {
-        return false;
-      }
-      if (!(yield* fileSystem.exists(path.join(worktreePath, ".git")))) return false;
-      const parkDir = parkedDirectoryFor(worktreePath);
-      const free = yield* freeDiskBytes(path.dirname(worktreePath));
-      if (free !== null && free < PARKED_WORKTREE_MIN_FREE_BYTES) return false;
-      const now = yield* Clock.currentTimeMillis;
-      const parked = yield* parkedWorktrees(input.cwd, parkDir);
-      const fresh = parked.filter((entry) => now - entry.parkedAtMs <= PARKED_WORKTREE_MAX_AGE_MS);
-      const evicted = [
-        ...parked.filter((entry) => !fresh.includes(entry)),
-        ...fresh.slice(PARKED_WORKTREES_PER_REPO - 1),
-      ];
-      yield* Effect.forEach(evicted, (entry) => removeQuietly(input.cwd, entry.path), {
-        discard: true,
-      });
-      // Detached first, so the caller can still delete the branch it held.
-      yield* runGit("GitVcsDriver.parkWorktree.detach", worktreePath, [
-        "checkout",
-        "-q",
-        "-f",
-        "--detach",
-      ]);
-      yield* cleanForReuse("GitVcsDriver.parkWorktree.clean", worktreePath);
-      yield* fileSystem.makeDirectory(parkDir, { recursive: true });
-      const target = path.join(parkDir, `${path.basename(worktreePath)}-${now.toString(36)}`);
-      // `worktree move` refuses a locked worktree or one with submodules; it is deleted instead.
-      yield* runGit("GitVcsDriver.parkWorktree.move", input.cwd, [
-        "worktree",
-        "move",
-        worktreePath,
-        target,
-      ]);
-      // A rename keeps the folder's old time; the time it was parked decides its age.
-      // Node `fs.utimes` expects numeric timestamps in epoch seconds, not milliseconds.
-      const parkedAtSeconds = Math.max(0, now / 1000);
-      yield* fileSystem.utimes(target, parkedAtSeconds, parkedAtSeconds).pipe(Effect.ignore);
-      yield* Effect.logInfo("GitVcsDriver: parked a finished worktree for reuse", {
-        parkedPath: target,
-      });
-      return true;
-    },
-    Effect.orElseSucceed(() => false),
-  );
-
-  /**
-   * Moves a parked worktree of the repo to `worktreePath` and checks the ref out there, as
-   * `git worktree add` would. False when none could be used; `worktreePath` is then free.
-   */
-  const adoptParkedWorktree = Effect.fn("GitVcsDriver.adoptParkedWorktree")(
-    function* (input: {
-      readonly cwd: string;
-      readonly worktreePath: string;
-      readonly refName: string;
-      readonly newRefName: string | undefined;
-      readonly checkoutWorkers: string;
-    }) {
-      if (!(yield* insideManagedWorktrees(input.worktreePath))) return false;
-      if (yield* fileSystem.exists(input.worktreePath)) return false;
-      const now = yield* Clock.currentTimeMillis;
-      const candidates = (yield* parkedWorktrees(
-        input.cwd,
-        parkedDirectoryFor(input.worktreePath),
-      )).filter((entry) => now - entry.parkedAtMs <= PARKED_WORKTREE_MAX_AGE_MS);
-      for (const candidate of candidates) {
-        // Two new worktrees can reach for the same one; the move that loses tries the next.
-        const moved = yield* executeGit(
-          "GitVcsDriver.adoptParkedWorktree.move",
-          input.cwd,
-          ["worktree", "move", candidate.path, input.worktreePath],
-          { allowNonZeroExit: true },
-        );
-        if (moved.exitCode !== 0) continue;
-        const checkout = input.newRefName
-          ? ["checkout", "-q", "-f", "-b", input.newRefName, input.refName]
-          : ["checkout", "-q", "-f", input.refName];
-        const checkedOut = yield* executeGit(
-          "GitVcsDriver.adoptParkedWorktree.checkout",
-          input.worktreePath,
-          ["-c", `checkout.workers=${input.checkoutWorkers}`, ...checkout],
-          { allowNonZeroExit: true, timeoutMs: WORKTREE_ADD_TIMEOUT_MS },
-        );
-        if (checkedOut.exitCode !== 0) {
-          // `worktree add` reports the same ref problem in its own words; let it.
-          yield* removeQuietly(input.cwd, input.worktreePath);
-          return false;
-        }
-        const cleaned = yield* cleanForReuse(
-          "GitVcsDriver.adoptParkedWorktree.clean",
-          input.worktreePath,
-        ).pipe(
-          Effect.as(true),
-          Effect.orElseSucceed(() => false),
-        );
-        if (!cleaned) {
-          yield* removeQuietly(input.cwd, input.worktreePath);
-          return false;
-        }
-        yield* Effect.logInfo("GitVcsDriver: reused a parked worktree", {
-          worktreePath: input.worktreePath,
-        });
-        return true;
-      }
-      return false;
-    },
-    Effect.orElseSucceed(() => false),
-  );
 
   const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
     "createWorktree",
@@ -3831,36 +3636,28 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const onCheckoutProgress = progress?.onCheckoutProgress;
 
     const checkoutWorkers = (yield* readConfigValue(input.cwd, "checkout.workers")) ?? "0";
-    const adopted = yield* adoptParkedWorktree({
-      cwd: input.cwd,
-      worktreePath,
-      refName: input.refName,
-      newRefName: input.newRefName ?? undefined,
-      checkoutWorkers,
-    });
-    if (!adopted)
-      yield* executeGit(
-        "GitVcsDriver.createWorktree",
-        input.cwd,
-        ["-c", `checkout.workers=${checkoutWorkers}`, ...args],
-        {
-          fallbackErrorDetail: "git worktree add failed",
-          timeoutMs: WORKTREE_ADD_TIMEOUT_MS,
-          ...(onCheckoutProgress
-            ? {
-                // Git only prints checkout progress when stderr is a tty or the
-                // delay elapsed. GIT_PROGRESS_DELAY=0 forces it through the pipe.
-                env: { GIT_PROGRESS_DELAY: "0", LC_ALL: "C" },
-                progress: {
-                  onStderrLine: (line) => {
-                    const parsed = parseGitCheckoutProgressLine(line);
-                    return parsed ? onCheckoutProgress(parsed) : Effect.void;
-                  },
+    yield* executeGit(
+      "GitVcsDriver.createWorktree",
+      input.cwd,
+      ["-c", `checkout.workers=${checkoutWorkers}`, ...args],
+      {
+        fallbackErrorDetail: "git worktree add failed",
+        timeoutMs: WORKTREE_ADD_TIMEOUT_MS,
+        ...(onCheckoutProgress
+          ? {
+              // Git only prints checkout progress when stderr is a tty or the
+              // delay elapsed. GIT_PROGRESS_DELAY=0 forces it through the pipe.
+              env: { GIT_PROGRESS_DELAY: "0", LC_ALL: "C" },
+              progress: {
+                onStderrLine: (line) => {
+                  const parsed = parseGitCheckoutProgressLine(line);
+                  return parsed ? onCheckoutProgress(parsed) : Effect.void;
                 },
-              }
-            : {}),
-        },
-      );
+              },
+            }
+          : {}),
+      },
+    );
 
     if (progress?.onWorktreeClaimed) {
       yield* progress.onWorktreeClaimed(worktreePath);
@@ -4206,8 +4003,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const removeWorktree: GitVcsDriver.GitVcsDriver["Service"]["removeWorktree"] = Effect.fn(
     "removeWorktree",
   )(function* (input) {
-    // The app's own finished worktrees wait to be reused rather than being deleted.
-    if (input.force && (yield* parkWorktree({ cwd: input.cwd, path: input.path }))) return;
     // Git refuses to remove a worktree with untracked files unless forced, but
     // its check honors `status.showUntrackedFiles=no` and would delete them.
     const args = ["-c", "status.showUntrackedFiles=normal", "worktree", "remove"];
@@ -4426,10 +4221,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }),
     );
 
-  // Parked worktrees are the app's spares, not the project's checkouts.
   const listWorktreePaths: GitVcsDriver.GitVcsDriver["Service"]["listWorktreePaths"] = (cwd) =>
     registeredWorktreePaths("GitVcsDriver.listWorktreePaths", cwd).pipe(
-      Effect.map((paths) => paths.filter((candidate) => !isParkedWorktreePath(candidate))),
+      Effect.flatMap((paths) =>
+        Effect.filter(paths, (candidate) =>
+          isPrivateWorktree(candidate, path, fileSystem, managedWorktreesDir).pipe(
+            Effect.map((hidden) => !hidden),
+          ),
+        ),
+      ),
     );
 
   const withListRefsInvalidation = <A, E>(
@@ -4504,6 +4304,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       createWorktree(input, options).pipe(
         Effect.ensuring(invalidateWorktreeCreationCaches(input.cwd)),
       ),
+    invalidateWorktreeCreationCaches,
     fetchPullRequestBranch: (input) =>
       withListRefsInvalidation(input.cwd, fetchPullRequestBranch(input)),
     fetchPullRequestHeadCommit,

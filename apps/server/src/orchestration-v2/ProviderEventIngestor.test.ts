@@ -172,7 +172,7 @@ const CODEX_DRIVER = ProviderDriverKind.make("codex");
 function threadCreatedEvent(
   now: DateTime.Utc,
 ): Effect.Effect<
-  OrchestrationV2DomainEvent,
+  Extract<OrchestrationV2DomainEvent, { type: "thread.created" }>,
   IdAllocator.IdAllocatorV2Error,
   IdAllocator.IdAllocatorV2
 > {
@@ -410,6 +410,74 @@ layer("ProviderEventIngestorV2", (it) => {
         ["provider-thread.updated"],
       );
       assert.equal(latestThreadSequence, 2);
+    }),
+  );
+
+  it.effect("mirrors an attached provider's approval change and ignores stale reports", () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const created = yield* threadCreatedEvent(now);
+      const threadId = created.threadId;
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      const providerThreadId = ProviderThreadId.make("active-provider-thread");
+      const providerThread: OrchestrationV2ProviderThread = {
+        id: providerThreadId,
+        driver: CODEX_DRIVER,
+        providerInstanceId: modelSelection.instanceId,
+        providerSessionId,
+        appThreadId: threadId,
+        ownerNodeId: null,
+        nativeThreadRef: null,
+        nativeConversationHeadRef: null,
+        status: "idle",
+        firstRunOrdinal: null,
+        lastRunOrdinal: null,
+        handoffIds: [],
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      yield* eventSink.write({
+        events: [
+          {
+            ...created,
+            payload: {
+              ...created.payload,
+              activeProviderThreadId: providerThreadId,
+              runtimeMode: "full-access",
+            },
+          },
+        ],
+      });
+      const report = (previous: "full-access" | "auto", candidate = providerThread) =>
+        ingestor.ingestNormalized({
+          providerSessionId,
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+          event: {
+            type: "provider_thread.updated",
+            driver: CODEX_DRIVER,
+            providerThread: candidate,
+            sessionScoped: true,
+            reportedRuntimeMode: { previous, current: "approval-required" },
+          },
+        });
+
+      assert.lengthOf(
+        yield* report("full-access", { ...providerThread, id: ProviderThreadId.make("other") }),
+        0,
+      );
+      assert.lengthOf(yield* report("auto"), 0);
+      assert.lengthOf(yield* report("full-access"), 1);
+      assert.equal((yield* projectionStore.getThread(threadId)).runtimeMode, "approval-required");
+      assert.lengthOf(yield* report("full-access"), 0);
     }),
   );
 

@@ -94,6 +94,8 @@ const CONNECTOR_READINESS_INTERVAL = Duration.seconds(30);
 const CONNECTOR_READINESS_REQUEST_TIMEOUT = Duration.seconds(5);
 const CONNECTOR_NOT_READY_CHECKS_BEFORE_RESTART = 6;
 const CONNECTOR_NOT_READY_CHECKS_MAX = 60;
+// A relay client on a dead HTTP/2 socket can ignore SIGTERM.
+const RELAY_CLIENT_FORCE_KILL_AFTER = Duration.seconds(5);
 // The connector binds its metrics server to a random loopback port and logs it.
 const RELAY_CLIENT_METRICS_LINE = /\bStarting metrics server on (127\.0\.0\.1:\d+)\/metrics\b/u;
 // A failed background install of the pinned relay client is retried no sooner
@@ -449,7 +451,9 @@ export const make = Effect.gen(function* () {
           tunnelId: connector.config.tunnelId,
           tunnelName: connector.config.tunnelName,
         });
-        yield* connector.child.kill().pipe(Effect.ignore);
+        yield* connector.child
+          .kill({ forceKillAfter: RELAY_CLIENT_FORCE_KILL_AFTER })
+          .pipe(Effect.ignore);
       }
     });
 
@@ -586,6 +590,7 @@ export const make = Effect.gen(function* () {
           ],
           {
             detached: false,
+            forceKillAfter: RELAY_CLIENT_FORCE_KILL_AFTER,
             env: {
               ...process.env,
               TUNNEL_TOKEN: config.connectorToken,

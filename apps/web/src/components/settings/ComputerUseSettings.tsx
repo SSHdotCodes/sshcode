@@ -315,7 +315,11 @@ function ComputerUseEnvironmentSettings({
             <SettingsRow
               title="Driver"
               description={`${platform} · ${status.driver.installed ? "Installed" : "Not installed"}`}
-              status={computerUseAvailabilityLabel(status)}
+              control={
+                <span className="text-xs text-muted-foreground">
+                  {computerUseAvailabilityLabel(status)}
+                </span>
+              }
             />
             <SettingsRow
               title="OS permissions"
@@ -338,8 +342,10 @@ function ComputerUseEnvironmentSettings({
             <SettingsRow
               title="Active controller"
               description={computerUseControllerSummary(status)}
-              status={
-                status.paused ? "You have control" : status.owner ? "Agent has control" : "Idle"
+              control={
+                <span className="text-xs text-muted-foreground">
+                  {status.paused ? "You have control" : status.owner ? "Agent has control" : "Idle"}
+                </span>
               }
             />
             <SettingsRow

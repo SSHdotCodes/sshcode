@@ -341,13 +341,13 @@ export function SourceControlWritingSettingsSection() {
         description="Model for source control text and branch or bookmark names. Off uses the environment's text generation model."
         control={
           !hasServerTargets ? (
-            <span className="text-sm text-muted-foreground">
+            <span className="text-xs text-muted-foreground">
               Connect an environment to choose its source control writer model.
             </span>
           ) : (
             <div className="flex flex-wrap items-center justify-end gap-2">
               {usesDedicatedModel && !canEnableDedicatedModel ? (
-                <span className="text-sm text-muted-foreground">
+                <span className="text-xs text-muted-foreground">
                   No text generation providers available.
                 </span>
               ) : null}
@@ -467,7 +467,7 @@ export function SourceControlWritingSettingsSection() {
             description="Model that reads a pull request to write its review guide. It reads the change itself over many steps, so a stronger model helps. Off uses the source control writer model."
             control={
               !hasServerTargets ? (
-                <span className="text-sm text-muted-foreground">
+                <span className="text-xs text-muted-foreground">
                   Connect an environment to choose its review guide model.
                 </span>
               ) : (

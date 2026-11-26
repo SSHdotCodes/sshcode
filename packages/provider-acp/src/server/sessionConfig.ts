@@ -1,4 +1,5 @@
 import type { ProviderOptionChoice, ProviderOptionDescriptor } from "@t3tools/contracts";
+import { ACP_SESSION_MODE_OPTION_ID } from "@t3tools/shared/acpComposer";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
 import type { AcpSessionModeState } from "./runtimeModel.ts";
@@ -15,7 +16,7 @@ import type { AcpSessionModeState } from "./runtimeModel.ts";
  */
 
 /** Synthetic descriptor ID for agents that expose modes outside config options. */
-export const ACP_SESSION_MODE_OPTION_ID = "_t3/session-mode";
+export { ACP_SESSION_MODE_OPTION_ID };
 
 /**
  * Choice ID for a select value that is exactly `""`. Agents use it for a real
@@ -120,6 +121,7 @@ export function acpProviderOptionDescriptors(input: {
         ? { currentValue }
         : {}),
       ...(option.category === "thought_level" ? { role: "reasoning" as const } : {}),
+      ...(option.category === "mode" && id !== "mode" ? { acpSessionMode: true } : {}),
     });
     if (descriptors.length === MAX_OPTION_DESCRIPTORS) return descriptors;
   }

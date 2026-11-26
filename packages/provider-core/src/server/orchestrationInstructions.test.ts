@@ -14,6 +14,22 @@ import {
 } from "./orchestrationInstructions.ts";
 
 describe("T3 orchestration provider instructions", () => {
+  it("teaches Antigravity its native media viewer once per session", () => {
+    const state = t3AcpInstructionState({
+      interactionMode: "default",
+      hasT3Mcp: false,
+      runtimeHarness: "Antigravity",
+    });
+    assert.include(
+      t3AcpPromptWithInstructions({ prompt: "Inspect this path.", state }),
+      "use read_file for video and audio",
+    );
+    assert.equal(
+      t3AcpPromptWithInstructions({ prompt: "Continue.", state, previousState: state }),
+      "Continue.",
+    );
+  });
+
   it("leaves review to judgment: neither forced nor skipped out of trust in its own code", () => {
     // No mandatory trigger; simple deletions and small changes stay the lead's call (2026-11-03).
     assert.notInclude(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "risky");
@@ -78,12 +94,15 @@ describe("T3 orchestration provider instructions", () => {
       "exact returned id",
       "`monitor_start`",
       "or the files they write",
-      "print only useful, line-buffered lines, then end your turn if waiting is all that's left",
-      "Waits under an hour can use a native Monitor or background command",
-      "longer ones use `monitor_start`",
-      "`restartable:true` for read-only waits and checks",
-      "with `durable:true` so restarts don't kill it",
-      "after a restart check `monitor_list` before relaunching",
+      "Batch independent reads and searches in one tool round",
+      "preserve the exit status",
+      "line-buffered milestones",
+      "wakeOn:false",
+      "Waits under an hour can use a native Monitor or a background command",
+      "For longer waits use `monitor_start`",
+      "`restartable:true` for read-only checks",
+      "Run jobs over 10 minutes there with `durable:true`",
+      "After a restart check `monitor_list` before relaunching",
       "Before ending a turn while your own long work still runs",
     ])
       assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, guidance);
@@ -255,6 +274,29 @@ describe("T3 orchestration provider instructions", () => {
     }
   });
 
+  it("delivers the native ACP tool catalog when it changes", () => {
+    const prompt = "Continue.";
+    const initial = t3AcpInstructionState({
+      interactionMode: "default",
+      hasT3Mcp: true,
+      toolDiscoveryInstructions: "request_api_key — Request a reusable key privately.",
+    });
+    assert.include(t3AcpPromptWithInstructions({ prompt, state: initial }), "request_api_key —");
+    assert.equal(
+      t3AcpPromptWithInstructions({ prompt, state: initial, previousState: initial }),
+      prompt,
+    );
+
+    const updated = t3AcpInstructionState({
+      ...initial,
+      toolDiscoveryInstructions: "schedule_task — Schedule work.",
+    });
+    const next = t3AcpPromptWithInstructions({ prompt, state: updated, previousState: initial });
+    assert.include(next, "schedule_task —");
+    assert.notInclude(next, "request_api_key");
+    assert.notInclude(next, "## T3 Code orchestration");
+  });
+
   it("reinjects ACP guidance only when mode or tool availability changes", () => {
     const prompt = "Continue.";
     const defaultState = { interactionMode: "default", hasT3Mcp: true } as const;
@@ -294,7 +336,7 @@ describe("T3 orchestration provider instructions", () => {
     } finally {
       registerGradingEnabled(() => true);
     }
-    assert.include(orchestrationInstructionsFor(undefined), "rate each checked one via `grades`");
+    assert.include(orchestrationInstructionsFor(undefined), "flag one that fell short");
   });
 
   it("keeps the default rules byte-identical and drops subagent paragraphs when off", () => {
@@ -316,7 +358,7 @@ describe("T3 orchestration provider instructions", () => {
       "`delegate_task` starts",
       "Worktree isolation",
       "While subagents run",
-      "rate each checked one",
+      "flag one that fell short",
       "Answer child question cards",
     ]) {
       assert.notInclude(solo, dropped);

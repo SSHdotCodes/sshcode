@@ -16,6 +16,7 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
   const requests = useRef(new Map<string, Promise<void>>());
   const followUpRefreshes = useRef(new Map<string, Promise<void>>());
   const loaded = useRef(new Set<string>());
+  const stale = useRef(new Set<string>());
   const requested = useRef(new Set<string>());
   const active = useRef(true);
   const running = useRef(0);
@@ -39,6 +40,7 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
       if (!refresh && loaded.current.has(directoryPath)) return Promise.resolve();
       loaded.current.add(directoryPath);
       requested.current.add(directoryPath);
+      stale.current.delete(directoryPath);
       const atom = projectEnvironment.listEntries({ environmentId, input: { cwd, directoryPath } });
       setPending((count) => count + 1);
       if (!refresh) setLoadingDirectories((previous) => new Set(previous).add(directoryPath));
@@ -62,16 +64,28 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
         .then((result) => {
           if (!active.current || !result) return;
           if (result._tag === "Success") {
-            setDirectories((previous) =>
-              new Map(previous).set(
-                directoryPath,
-                result.value.entries.filter(
-                  (entry) =>
-                    entry.path.slice(0, Math.max(0, entry.path.lastIndexOf("/"))) === directoryPath,
-                ),
-              ),
+            const children = result.value.entries.filter(
+              (entry) =>
+                entry.path.slice(0, Math.max(0, entry.path.lastIndexOf("/"))) === directoryPath,
             );
+            setDirectories((previous) => {
+              const known = previous.get(directoryPath);
+              if (
+                known?.length === children.length &&
+                children.every((entry, index) => {
+                  const current = known[index]!;
+                  return (
+                    entry.path === current.path &&
+                    entry.kind === current.kind &&
+                    entry.ignored === current.ignored
+                  );
+                })
+              )
+                return previous;
+              return new Map(previous).set(directoryPath, children);
+            });
             setErrors((previous) => {
+              if (!previous.has(directoryPath)) return previous;
               const next = new Map(previous);
               next.delete(directoryPath);
               return next;
@@ -134,18 +148,32 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
   );
 
   const refresh = useCallback(() => {
-    // Refresh folders already visited, preserving the current expansion state.
-    const paths = [...requested.current].filter((path) => reachableDirectories.has(path));
-    for (const path of paths) {
-      if (!active.current) break;
-      void load(path, true);
-    }
-  }, [load, reachableDirectories]);
+    if (!active.current) return;
+    for (const path of requested.current) if (path !== "") stale.current.add(path);
+    void load("", true);
+  }, [load]);
+
+  // The tree reports rendered rows. Re-read each stale ancestor only once per refresh.
+  const revalidate = useCallback(
+    (directoryPath: string) => {
+      if (!active.current) return;
+      for (
+        let end = directoryPath.length;
+        end > 0 && stale.current.size > 0;
+        end = directoryPath.lastIndexOf("/", end - 1)
+      ) {
+        const path = directoryPath.slice(0, end);
+        if (stale.current.delete(path)) void load(path, true);
+      }
+    },
+    [load],
+  );
 
   return {
     entries,
     load,
     refresh,
+    revalidate,
     isPending: pending > 0,
     loadingDirectories,
     ready: directories.has(""),

@@ -300,6 +300,9 @@ const startProbe = Effect.fn("startProbe")(function* (
   return {
     fiber,
     requested,
+    replyRateLimits: requested("account/rateLimits/read").pipe(
+      Effect.flatMap((id) => reply(id, rateLimits)),
+    ),
     authenticate: requested("account/read").pipe(Effect.flatMap((id) => reply(id, account))),
   };
 });
@@ -369,6 +372,20 @@ it.layer(NodeServices.layer)("Codex provider probe", (it) => {
         ["custom-model"],
       );
     }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "keeps a native quota reply received after three seconds inside the overall budget",
+    () =>
+      Effect.gen(function* () {
+        const probe = yield* startProbe(["account/rateLimits/read"]);
+        yield* probe.authenticate;
+        yield* probe.requested("account/rateLimits/read");
+        yield* TestClock.adjust("4 seconds");
+        yield* probe.replyRateLimits;
+        const provider = yield* Fiber.join(probe.fiber);
+        assert.strictEqual(provider.auth.label, "ChatGPT Pro 20x Subscription");
+      }).pipe(Effect.scoped),
   );
 
   it.effect("bounds stalled skills and usage discovery by the remaining account probe budget", () =>

@@ -5,6 +5,7 @@ import {
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
+import { unavailableGoogleLimits } from "@t3tools/shared/usageLimits";
 import { describe, expect, it } from "vite-plus/test";
 
 import { createModelPickerCatalog, resolveModelPickerFavorites } from "./modelPickerCatalog.ts";
@@ -612,7 +613,8 @@ describe("model picker catalog", () => {
         .groups.flatMap((group) => group.models)
         .find((entry) => entry.routes.some((route) => route.source.slug === slug))
         ?.routes.map((route) => route.source.instanceId);
-    const plan = [claude, google("antigravity", "oauth-personal")];
+    const ultra = google("antigravity", "oauth-personal");
+    const plan = [claude, { ...ultra, usageLimits: unavailableGoogleLimits(ultra.checkedAt) }];
     expect(routesOf(plan, "claude-opus-5-5")).toEqual(["claudeAgent", "antigravity"]);
     // Its own Gemini models are native routes, not plan routes an older major would hide.
     expect(routesOf(plan, "gemini-3.8-flash")).toEqual(["antigravity"]);

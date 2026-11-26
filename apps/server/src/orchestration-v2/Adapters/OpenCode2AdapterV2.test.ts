@@ -3,6 +3,8 @@
  * driven through the real adapter and `@opencode/client` against a replayed
  * HTTP server. Frames reuse the shapes recorded against 2.0.18.
  */
+import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
+import { T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT } from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import {
@@ -3451,6 +3453,53 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("shows a failed shell command inside a successful OpenCode turn", () =>
+    Effect.gen(function* () {
+      const tool = { sessionID: SESSION, assistantMessageID: "msg_assistant", id: "call-shell" };
+      const { runtime, thread } = yield* resumed([
+        out("session.prompt", { sessionID: SESSION, id: PROMPT_ID, text: "<any>" }),
+        promptAccepted,
+        event("session.execution.started", { sessionID: SESSION }),
+        event("session.tool.input.started", { ...tool, name: "shell" }),
+        event("session.tool.called", {
+          ...tool,
+          name: "shell",
+          input: { command: "exit 7" },
+          executed: false,
+        }),
+        event(
+          "session.tool.success",
+          {
+            ...tool,
+            content: [{ type: "text", text: "Exit code: 7" }],
+            metadata: { exit: 7, truncated: false },
+            executed: true,
+          },
+          undefined,
+          2,
+        ),
+        event("session.execution.succeeded", { sessionID: SESSION }),
+      ]);
+      const events = yield* runtime.events.pipe(
+        Stream.takeUntil((e) => e.type === "turn.terminal"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* runtime.startTurn(turnInput(thread));
+      const collected = yield* Fiber.join(events);
+      assert.isTrue(
+        collected.some(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.type === "command_execution" &&
+            event.turnItem.status === "failed" &&
+            event.turnItem.exitCode === 7,
+        ),
+      );
+      assert.deepInclude(collected.at(-1), { type: "turn.terminal", status: "completed" });
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("ends a turn that finished while the stream was down with the server's outcome", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([
@@ -3471,6 +3520,35 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         "command_execution:completed",
       ]);
       assert.deepInclude(collected.at(-1), { type: "turn.terminal", status: "completed" });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("shows OpenCode's goal length limit when it rejects a /goal objective", () =>
+    Effect.gen(function* () {
+      const objective = "a".repeat(4001);
+      const { runtime, thread } = yield* resumed([
+        out("command.list", "<any>"),
+        reply("command.list", { location: { directory: WORK }, data: [{ name: "goal" }] }),
+        out("message.list", { sessionID: SESSION, order: "desc", limit: "1" }),
+        reply("message.list", { data: [], cursor: {} }),
+        out("session.command", { sessionID: SESSION, name: "goal", text: objective }),
+        reply("session.command", {
+          status: 500,
+          body: {
+            _tag: "CommandExecutionError",
+            command: "goal",
+            message: "A goal objective is limited to 4000 characters (got 4001).",
+          },
+        }),
+      ]);
+      const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+      const input = turnInput(thread);
+      yield* runtime
+        .startTurn({ ...input, message: { ...input.message, text: `/goal ${objective}` } })
+        .pipe(Effect.ignore);
+      const ended = yield* Fiber.join(terminal);
+      assert.equal(ended?.status, "failed");
+      assert.include(ended?.failure?.message ?? "", "4000 characters (got 4001)");
     }).pipe(Effect.scoped),
   );
 
@@ -3829,7 +3907,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         browserToolsAvailable: false,
       });
       yield* Effect.addFinalizer(() => mcpSessions.clear(child));
-      const runtime = yield* openCode2ReplayRuntimeWithInstructions([
+      const runtime = yield* openCode2ReplayRuntime([
         ...opening,
         out("session.get", { sessionID: SESSION }),
         // The session already has this thread's rules, so they are not rewritten.
@@ -3855,6 +3933,15 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
           },
         }),
         reply("mcp.add", null),
+        out("session.instructions.entry.put", {
+          sessionID: SESSION,
+          key: "t3-code",
+          value: [
+            buildRuntimeInstructions({ harness: "OpenCode" }),
+            T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT,
+          ].join("\n\n"),
+        }),
+        reply("session.instructions.entry.put", null),
         out("session.prompt", { sessionID: SESSION, text: "<any>" }),
         promptAccepted,
         event("session.execution.succeeded", { sessionID: SESSION }),
@@ -3868,7 +3955,20 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         runtimePolicy: policy(),
       });
       const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
-      yield* runtime.startTurn({ ...turnInput(thread), threadId: child });
+      const input = turnInput(thread);
+      yield* runtime.startTurn({
+        ...input,
+        threadId: child,
+        appThread: {
+          ...input.appThread,
+          id: child,
+          lineage: {
+            parentThreadId: threadId,
+            rootThreadId: threadId,
+            relationshipToParent: "subagent",
+          },
+        },
+      });
       assert.equal((yield* Fiber.join(terminal))?.status, "completed");
       yield* runtime.unloadThread!({ providerThread: thread });
     }).pipe(Effect.scoped),
@@ -4289,6 +4389,70 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       const statuses = [...(yield* Fiber.join(ended))].map((terminal) => terminal.status);
       assert.deepEqual(statuses, ["completed", "completed"]);
     }).pipe(Effect.scoped, Effect.provide(IdAllocator.layer)),
+  );
+
+  it.effect("reports the shared session's status only when it changes", () =>
+    Effect.gen(function* () {
+      const OTHER = "ses_f148ca2deffeOtherSession000";
+      const promptInto = (
+        session: string,
+        recorded: string,
+      ): ReadonlyArray<ProviderReplayEntry> => [
+        out("session.prompt", { sessionID: session, id: recorded, text: "<any>" }),
+        replyData("session.prompt", {
+          id: recorded,
+          sessionID: session,
+          time: { created: 1790656601410 },
+          type: "user",
+          payload: { text: "hi" },
+          delivery: "steer",
+        }),
+      ];
+      const { runtime, thread } = yield* resumed([
+        out("session.get", { sessionID: OTHER }),
+        replyData("session.get", sessionInfo({ id: OTHER })),
+        out("permission.list", { sessionID: OTHER }),
+        replyData("permission.list", []),
+        out("session.form.list", { sessionID: OTHER }),
+        replyData("session.form.list", []),
+        ...promptInto(SESSION, "msg_recorded_turn_a"),
+        out("session.instructions.entry.put", { sessionID: OTHER, key: "t3-code", value: "<any>" }),
+        reply("session.instructions.entry.put", null),
+        ...promptInto(OTHER, "msg_recorded_turn_b"),
+        event("session.execution.succeeded", { sessionID: SESSION }),
+        event("session.execution.succeeded", { sessionID: OTHER }),
+      ]);
+      const other = {
+        ...thread,
+        id: ProviderThreadId.make("provider-thread:opencode2-adapter:other"),
+        nativeThreadRef: {
+          driver: OPENCODE_PROVIDER,
+          nativeId: OTHER,
+          strength: "strong" as const,
+        },
+      };
+      yield* runtime.resumeThread({
+        providerThread: other,
+        threadId,
+        modelSelection: bigPickle,
+        runtimePolicy: policy(),
+      });
+      let ended = 0;
+      const collected = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal" && ++ended === 2),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* runtime.startTurn(turnInput(thread));
+      yield* runtime.startTurn(turnInput(other));
+      // The second turn starts and the first ends while the session stays running.
+      assert.deepEqual(
+        [...(yield* Fiber.join(collected))].flatMap((event) =>
+          event.type === "provider_session.updated" ? [event.providerSession.status] : [],
+        ),
+        ["running", "ready"],
+      );
+    }).pipe(Effect.scoped),
   );
 
   it.effect.each([

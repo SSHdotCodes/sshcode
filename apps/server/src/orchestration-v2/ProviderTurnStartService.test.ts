@@ -588,15 +588,11 @@ function makeLocalCommandHarness(input: {
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getThreadRecords,
           getTurnStartContext,
-          getRuntimeRecoveryProjection: () =>
-            Effect.as(failReadIfRunning, {
-              ...projection,
-              hasConversation: projection.messages.some(
-                (m) =>
-                  m.role === "user" &&
-                  (m.text.trim().toLowerCase() !== "/compact" || m.attachments.length > 0),
-              ),
-            }),
+          getRuntimeRecoveryProjection: () => Effect.succeed(projection),
+          getRunAttemptState: (_threadId, runId) =>
+            failReadIfRunning.pipe(
+              Effect.map(() => projection.runs.find((run) => run.id === runId)),
+            ),
           getTurnStartHistory: () =>
             Effect.fail(
               new ProjectionStore.ProjectionStoreReadError({

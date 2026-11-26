@@ -164,6 +164,16 @@ describe("verifyPersistedAttachmentUpload", () => {
 });
 
 describe("file attachment limits", () => {
+  it("reports a measured size, including files just past the displayed limit", () => {
+    const maxBytes = PROVIDER_SEND_TURN_MAX_FILE_BYTES;
+    expect(fileAttachmentTooLargeMessage("IMG_2434.mov", maxBytes, 63 * 1024 * 1024)).toBe(
+      "'IMG_2434.mov' is 63 MB; the limit is 50 MB.",
+    );
+    expect(fileAttachmentTooLargeMessage("IMG_2434.mov", maxBytes, maxBytes + 1)).toBe(
+      "'IMG_2434.mov' is 52428801 bytes; the limit is 50 MB.",
+    );
+  });
+
   it("clamps the advertised limit to the turn contract cap", () => {
     expect(clampFileAttachmentUploadBytes(1024)).toBe(1024);
     expect(clampFileAttachmentUploadBytes(PROVIDER_SEND_TURN_MAX_FILE_BYTES * 2)).toBe(
@@ -173,7 +183,10 @@ describe("file attachment limits", () => {
 
   it("formats attachment row sizes", () => {
     expect(formatAttachmentSize(3 * 1024 * 1024)).toBe("3.0 MB");
+    expect(formatAttachmentSize(0)).toBe("0 bytes");
     expect(formatAttachmentSize(1)).toBe("1 KB");
+    expect(formatAttachmentSize(1_047_552)).toBe("1023 KB");
+    expect(formatAttachmentSize(1_047_553)).toBe("1.0 MB");
   });
 
   it("formats small upload limits without rounding them to zero MB", () => {

@@ -14,6 +14,7 @@ import {
   getDesktopUpdateInstallConfirmationMessage,
   getDesktopUpdateReleaseHistoryUrl,
   getDesktopUpdateReleaseUrl,
+  installDesktopUpdate,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
@@ -447,5 +448,47 @@ describe("getDesktopUpdateCheckError", () => {
         state: { ...baseState, status: "available", availableVersion: "1.1.0" },
       }),
     ).toBeNull();
+  });
+});
+
+describe("installing when chats are idle", () => {
+  const downloaded: DesktopUpdateState = {
+    ...baseState,
+    status: "downloaded",
+    availableVersion: "1.1.0",
+    downloadedVersion: "1.1.0",
+  };
+  const waiting: DesktopUpdateState = { ...downloaded, installWhenIdle: { working: 2 } };
+
+  it("says the install waits for working agents when the shell can wait", () => {
+    expect(getDesktopUpdateInstallConfirmationMessage(downloaded, { waitsForIdle: true })).toBe(
+      "Install update 1.1.0 and restart SSHCode?\n\nIf agents are working, SSHCode waits for them to finish, up to 30 minutes.",
+    );
+    expect(getDesktopUpdateInstallConfirmationMessage(downloaded)).toContain(
+      "Any running tasks will be interrupted",
+    );
+  });
+
+  it("offers a restart now while the install waits", () => {
+    expect(getDesktopUpdateInstallConfirmationMessage(waiting, { waitsForIdle: true })).toBe(
+      "Restart SSHCode now to install 1.1.0?\n\n2 working chats will be interrupted.",
+    );
+    expect(getDesktopUpdateButtonTooltip(waiting)).toBe(
+      "Update 1.1.0 installs when chats finish (2 working). Click to restart now.",
+    );
+    expect(resolveDesktopUpdateButtonAction(waiting)).toBe("install");
+  });
+
+  it("waits when it can, and installs at once once waiting or on an older shell", async () => {
+    const calls: string[] = [];
+    const result = { accepted: true, completed: false, state: downloaded };
+    const bridge = {
+      installUpdate: async () => (calls.push("now"), result),
+      installUpdateWhenIdle: async () => (calls.push("idle"), result),
+    };
+    await installDesktopUpdate(bridge, downloaded);
+    await installDesktopUpdate(bridge, waiting);
+    await installDesktopUpdate({ installUpdate: bridge.installUpdate }, downloaded);
+    expect(calls).toEqual(["idle", "now", "now"]);
   });
 });

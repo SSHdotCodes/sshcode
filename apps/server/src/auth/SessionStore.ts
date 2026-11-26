@@ -110,6 +110,7 @@ export class InvalidSessionTokenPayloadError extends Schema.TaggedError<InvalidS
 export class SessionTokenExpiredError extends Schema.TaggedError<SessionTokenExpiredError>()(
   "SessionTokenExpiredError",
   {
+    pairedBearer: Schema.optionalKey(Schema.Boolean),
     sessionId: AuthSessionId,
     expiresAt: Schema.DateTimeUtc,
     observedAt: Schema.DateTimeUtc,
@@ -840,14 +841,6 @@ export const make = Effect.gen(function* () {
           expirationClaim: claims.exp,
         });
       }
-      if (claims.exp <= observedAt.epochMilliseconds) {
-        return yield* new SessionTokenExpiredError({
-          sessionId: claims.sid,
-          expiresAt: expiresAt.value,
-          observedAt,
-        });
-      }
-
       const row = yield* authSessions
         .getById({ sessionId: claims.sid })
         .pipe(
@@ -862,6 +855,18 @@ export const make = Effect.gen(function* () {
         return yield* new SessionTokenRevokedError({
           sessionId: claims.sid,
           revokedAt: row.value.revokedAt,
+        });
+      }
+
+      // Revocation takes precedence even after a paired session reaches its expiry.
+      if (claims.exp <= observedAt.epochMilliseconds) {
+        return yield* new SessionTokenExpiredError({
+          sessionId: claims.sid,
+          ...(claims.method === "bearer-access-token" && claims.sub === "one-time-token"
+            ? { pairedBearer: true }
+            : {}),
+          expiresAt: expiresAt.value,
+          observedAt,
         });
       }
 

@@ -79,15 +79,15 @@ describe("applyBenchmarkFeed", () => {
     expect(next.asOf).toBe("2026-11-12");
     expect(next.liveSource).toBe("Artificial Analysis");
     const sol = next.models[0]!;
-    expect(sol.scores).toEqual({ aaIntelligenceIndex: 57, terminalBench: 71 });
-    expect(sol.outputTokensPerSecond).toBe(61.3);
+    expect(sol.scores).toEqual({ aaIntelligenceIndex: 57.4, terminalBench: 71 });
+    expect(sol.outputTokensPerSecond).toBe(61.26);
     expect(sol.outputTokensPerTask).toBe(9000);
     // The table's own price stands: it comes from the maker's list and knows about discounts.
     expect(sol.price).toEqual(table.models[0]!.price);
-    expect(sol.efforts?.max).toMatchObject({ scores: { aaIntelligenceIndex: 57 } });
+    expect(sol.efforts?.max).toMatchObject({ scores: { aaIntelligenceIndex: 57.4 } });
     expect(sol.efforts?.high).toEqual({
       aaSlug: "gpt-6-1-sol-high",
-      scores: { aaIntelligenceIndex: 52 },
+      scores: { aaIntelligenceIndex: 51.6 },
       outputTokensPerSecond: 58,
     });
     expect(next.models[1]).toEqual(table.models[1]);
@@ -138,7 +138,7 @@ describe("applyBenchmarkFeed", () => {
     const next = applyBenchmarkFeed(unlisted, feed(rows));
     const matches = next.models.filter((model) => /nanbeige/i.test(model.id));
     expect(matches).toHaveLength(1);
-    expect(matches[0]!.scores).toEqual({ aaIntelligenceIndex: 20 });
+    expect(matches[0]!.scores).toEqual({ aaIntelligenceIndex: 20.4 });
   });
 
   it("adds a model the table has never heard of, with its efforts under it", () => {
@@ -171,12 +171,12 @@ describe("applyBenchmarkFeed", () => {
     const added = next.models.find((model) => model.id === "gpt-6-2-sol")!;
     expect(added).toMatchObject({
       label: "GPT-6.2 Sol",
-      scores: { aaIntelligenceIndex: 61 },
+      scores: { aaIntelligenceIndex: 61.2 },
       outputTokensPerSecond: 70,
       price: { inputPerMTok: 2, outputPerMTok: 10, cachedInputPerMTok: 0.1 },
     });
     expect(Object.keys(added.efforts ?? {}).sort()).toEqual(["low", "max"]);
-    expect(added.efforts?.low?.scores).toEqual({ aaIntelligenceIndex: 40 });
+    expect(added.efforts?.low?.scores).toEqual({ aaIntelligenceIndex: 40.2 });
     expect(next.models.some((model) => model.id === "priced-only")).toBe(false);
     // "-high" ends this model's own name: no plain id beside it, so it is no effort.
     expect(next.models.find((model) => model.id === "made-for-high")?.efforts).toHaveProperty(
@@ -184,7 +184,7 @@ describe("applyBenchmarkFeed", () => {
     );
     // The picks find the new row from the id a provider uses, at the effort someone runs.
     expect(benchmarkFor("codex/gpt-6.2-sol", benchmarksAtEffort(next, "low"))?.scores).toEqual({
-      aaIntelligenceIndex: 40,
+      aaIntelligenceIndex: 40.2,
     });
   });
 });

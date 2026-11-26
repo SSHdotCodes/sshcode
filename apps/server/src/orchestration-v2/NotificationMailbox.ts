@@ -37,7 +37,26 @@ export function resultsForNextTurn(
   );
 }
 
-const USER_TASK_PREVIEW_CHARS = 300;
+/** Keep the wake on the message when a queued input or declined steer moves to another run. */
+export function threadSendFields(
+  input: Pick<OrchestrationV2ConversationMessage, "senderThreadId" | "notifySenderOnCompletion">,
+) {
+  return {
+    ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
+    ...(input.notifySenderOnCompletion && { notifySenderOnCompletion: true }),
+  };
+}
+
+const USER_TASK_PREVIEW_CHARS = 180;
+const MAX_WAKE_BYTES = 6144;
+
+/** Clips the entire provider-facing wake at a UTF-8 code point boundary, including its read hint. */
+export function clipCompletionWake(text: string, suffix: (end: number) => string): string {
+  if (text.length <= MAX_WAKE_BYTES && Buffer.byteLength(text) <= MAX_WAKE_BYTES) return text;
+  const room = Math.max(0, MAX_WAKE_BYTES - Buffer.byteLength(suffix(MAX_WAKE_BYTES)));
+  const { read } = new TextEncoder().encodeInto(text, new Uint8Array(room));
+  return text.slice(0, read) + suffix(read);
+}
 
 /**
  * The lead did not write this brief, so the result names who did and what was asked.
@@ -58,28 +77,23 @@ export function delegatedCompletionWakeDetail(
   taskIds: ReadonlyArray<string>,
   tasks: ReadonlyArray<OrchestrationV2Subagent>,
 ): string {
-  const encoder = new TextEncoder();
   return taskIds
     .map((id) => {
       const task = tasks.find((candidate) => candidate.id === id);
       const reference = taskReference(id);
       // A chat can have subagents off, and task_status with them, while the user starts one
       // there: its own chat is readable either way.
-      const read =
-        task?.createdBy === "user" && task.childThreadId !== null
-          ? `t3_thread_read({threadId:"${task.childThreadId}"})`
-          : `task_status({taskId:"${reference}"})`;
-      const text =
-        task === undefined
-          ? `Subagent ${reference}: finished. Read ${read}.`
-          : `Subagent ${reference}${startedByUserNote(task)}: ${task.status} (${task.providerInstanceId}/${task.model ?? "default"})${task.seen === undefined ? "" : `\n${seenLineForLead(task.seen)}`}\n${task.result ?? `No result text. Read ${read}.`}`;
-      const bytes = encoder.encode(text);
-      if (bytes.length <= 4096) return text;
-      const rest = `\n… rest: ${read}`;
-      return (
-        new TextDecoder().decode(bytes.subarray(0, 4096 - encoder.encode(rest).length), {
-          stream: true,
-        }) + rest
+      const childChat = task?.createdBy === "user" ? task.childThreadId : null;
+      const taskRead = (offset?: number) =>
+        `task_status({taskId:"${reference}"${offset === undefined ? "" : `,summaryOffset:${offset}`}})`;
+      const read = childChat == null ? taskRead() : `t3_thread_read({threadId:"${childChat}"})`;
+      if (task === undefined) return `Subagent ${reference}: finished. Read ${read}.`;
+      const header = `Subagent ${reference}${startedByUserNote(task)}: ${task.status} (${task.providerInstanceId}/${task.model ?? "default"})${task.seen === undefined ? "" : `\n${seenLineForLead(task.seen)}`}\n`;
+      const text = header + (task.result ?? `No result text. Read ${read}.`);
+      return clipCompletionWake(
+        text,
+        (end) =>
+          `\n… rest: ${childChat == null && task.result != null ? taskRead(Math.max(0, end - header.length)) : read}`,
       );
     })
     .join("\n\n");

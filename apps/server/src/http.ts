@@ -1,3 +1,4 @@
+import { hostPreviewMimeTypeFromExtension } from "@t3tools/shared/filePreview";
 import { ROUTE_PREFIX as DEBUG_LOG_ROUTE_PREFIX } from "./debug/DebugLog.ts";
 import * as Mime from "effect/http/Mime";
 import {
@@ -73,16 +74,23 @@ const HTML_CONTENT_SECURITY_POLICY =
 const WORKSPACE_HTML_CONTENT_SECURITY_POLICY =
   "sandbox allow-forms allow-popups allow-downloads; script-src 'none'";
 
-// Types a browser may render as a document if a proxy strips the disposition
-// header. Downloads of these fall back to octet-stream.
+const XML_DOCUMENT_MIME_TYPE_PATTERN = /(?:\/xml(?:$|-)|\+xml$)/i;
+// Proxies may strip disposition; force document-capable downloads to octet-stream.
 const DOWNLOAD_MIME_TYPE_PATTERN = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
 const isSafeDownloadMimeType = (mimeType: string): boolean =>
   DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) &&
-  !/(?:^text\/html$|\/xml(?:$|-)|\+xml$)/i.test(mimeType.trim().toLowerCase());
-const isSafeInlineMediaMimeType = (mimeType: string): boolean =>
-  DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) && /^(?:audio|video)\//i.test(mimeType);
-const isSafeInlineDocumentMimeType = (mimeType: string): boolean =>
-  mimeType.toLowerCase() === "application/pdf" || mimeType.toLowerCase() === "text/html";
+  !/^text\/html$/i.test(mimeType.trim()) &&
+  !XML_DOCUMENT_MIME_TYPE_PATTERN.test(mimeType.trim());
+
+// The served type and its sandbox policy come from this one answer, so they cannot disagree.
+const inlineAssetMimeType = (filePath: string, claimed: string | undefined): string => {
+  const claimedType = claimed?.split(";", 1)[0]?.trim().toLowerCase();
+  if (claimedType !== undefined && DOWNLOAD_MIME_TYPE_PATTERN.test(claimedType)) return claimedType;
+  return (
+    hostPreviewMimeTypeFromExtension(/\.[^./\\]+$/.exec(filePath)?.[0] ?? "") ??
+    Option.getOrElse(Mime.getType(filePath), () => "application/octet-stream")
+  );
+};
 
 /** RFC 6266 disposition with an ASCII fallback name plus a UTF-8 `filename*`. */
 export function downloadContentDisposition(fileName?: string): string {
@@ -111,42 +119,34 @@ export function assetResponseHeaders(
     readonly workspaceHtmlScriptsAllowed?: boolean;
   },
 ): Record<string, string> {
-  const lowerPath = filePath.toLowerCase();
-  const inlineMimeType = options?.mimeType?.split(";", 1)[0]?.trim();
+  const base = { "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff" };
+  if (options?.download) {
+    return {
+      ...base,
+      "Content-Disposition": downloadContentDisposition(options.fileName),
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+      "Content-Type":
+        options.mimeType !== undefined && isSafeDownloadMimeType(options.mimeType)
+          ? options.mimeType
+          : "application/octet-stream",
+    };
+  }
+  const mimeType = inlineAssetMimeType(filePath, options?.mimeType);
+  if (mimeType === "text/html") {
+    return {
+      ...base,
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy":
+        options?.workspaceHtmlScriptsAllowed === false
+          ? WORKSPACE_HTML_CONTENT_SECURITY_POLICY
+          : HTML_CONTENT_SECURITY_POLICY,
+    };
+  }
   return {
-    "Cache-Control": "private, max-age=3600",
-    "X-Content-Type-Options": "nosniff",
-    ...(options?.download
-      ? {
-          "Content-Disposition": downloadContentDisposition(options.fileName),
-          "Content-Security-Policy": "default-src 'none'; sandbox",
-          "Content-Type":
-            options.mimeType !== undefined && isSafeDownloadMimeType(options.mimeType)
-              ? options.mimeType
-              : "application/octet-stream",
-        }
-      : inlineMimeType !== undefined && isSafeInlineMediaMimeType(inlineMimeType)
-        ? { "Content-Type": inlineMimeType }
-        : inlineMimeType !== undefined && isSafeInlineDocumentMimeType(inlineMimeType)
-          ? {
-              "Content-Type":
-                inlineMimeType.toLowerCase() === "text/html"
-                  ? "text/html; charset=utf-8"
-                  : "application/pdf",
-              ...(inlineMimeType.toLowerCase() === "text/html"
-                ? { "Content-Security-Policy": HTML_CONTENT_SECURITY_POLICY }
-                : {}),
-            }
-          : lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
-            ? {
-                "Content-Type": "text/html; charset=utf-8",
-                "Content-Security-Policy":
-                  options?.workspaceHtmlScriptsAllowed === false
-                    ? WORKSPACE_HTML_CONTENT_SECURITY_POLICY
-                    : HTML_CONTENT_SECURITY_POLICY,
-              }
-            : {}),
-    ...(!options?.download && lowerPath.endsWith(".svg")
+    ...base,
+    "Content-Type": mimeType,
+    // XML types render as documents, so they get the same policy as SVG.
+    ...(XML_DOCUMENT_MIME_TYPE_PATTERN.test(mimeType)
       ? { "Content-Security-Policy": SVG_CONTENT_SECURITY_POLICY }
       : {}),
   };
@@ -209,7 +209,7 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   }
   const mediaFile = asset.file;
   const mediaInfo = mediaFile ? yield* statMediaFile(asset.path, mediaFile) : undefined;
-  const isMedia = /^(?:audio|video)\//i.test(headers["Content-Type"] ?? "");
+  const isMedia = /^(?:audio|video)\//i.test(asset.mimeType ?? "");
   if (isMedia) {
     // Host media can change in place. Do not invite conditional range requests
     // with validators that cannot establish byte-for-byte identity. Attachment media
@@ -242,10 +242,6 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   }
   if (mediaFile && mediaInfo) {
     const size = bytesToRead ?? mediaInfo.size;
-    headers["Content-Type"] ??= Option.getOrElse(
-      Mime.getType(asset.path),
-      () => "application/octet-stream",
-    );
     headers["Content-Length"] = String(size);
     if (!isMedia) {
       headers["Last-Modified"] = mediaInfo.mtime.toUTCString();

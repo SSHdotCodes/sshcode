@@ -129,6 +129,15 @@ describe("thread header preferences", () => {
 });
 
 describe("chat list layout preference", () => {
+  it.effect("ignores retired device-local tab visibility while keeping the selected folder", () =>
+    Effect.gen(function* () {
+      const store = yield* preferencesStorage(
+        '{"chatListTabsEnabled":false,"threadListChatTab":"work"}',
+      );
+      expect(yield* store.load).toEqual({ threadListChatTab: "work" });
+    }),
+  );
+
   it.effect("ignores the old boxes-by-default layout and keeps an explicit boxes choice", () =>
     Effect.gen(function* () {
       const storage = preferencesStorage(

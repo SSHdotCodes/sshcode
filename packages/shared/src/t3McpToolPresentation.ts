@@ -150,6 +150,7 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   delegate_task: tool(["Delegate", "Delegating", "Delegated", "a child task"], "delegate"),
   council: tool(["Consult", "Consulting", "Consulted", "other models"], "council"),
   task_status: tool(["Get", "Getting", "Got", "delegated task status"], "task-status"),
+  t3_tool: tool(["Look up", "Looking up", "Looked up", "a T3 tool"], "task-status"),
   task_cancel: tool(
     ["Cancel", "Canceling", "Requested cancellation of", "delegated task"],
     "task-cancel",
@@ -475,6 +476,31 @@ function resolveT3McpToolName(value: string): string | null {
 export function resolveT3McpToolId(toolName: string | null | undefined): string | null {
   const name = toolName == null ? null : resolveT3McpToolName(toolName);
   return name !== null && Object.hasOwn(T3_MCP_TOOLS, name) ? name : null;
+}
+
+export const T3_MCP_DISPATCH_TOOL = "t3_tool";
+
+/** Recover a deferred call's canonical identity for provider timeline events. */
+export function resolveT3McpDispatch(toolName: string | undefined, value: unknown) {
+  if (resolveT3McpToolId(toolName) !== T3_MCP_DISPATCH_TOOL) return undefined;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  const args =
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  const tool = args?.name;
+  if (typeof tool !== "string" || tool === T3_MCP_DISPATCH_TOOL || !T3_MCP_TOOL_NAMES.has(tool))
+    return undefined;
+  const input = args?.input;
+  if (input !== undefined && (typeof input !== "object" || input === null || Array.isArray(input)))
+    return undefined;
+  return { tool, input: (input ?? {}) as Record<string, unknown>, lookup: input === undefined };
 }
 
 type SummaryInput = Readonly<Record<string, unknown>>;

@@ -415,6 +415,12 @@ export const serverAuthCredentialReason = (
 ): "missing_credential" | "invalid_credential" =>
   error._tag === "ServerAuthMissingCredentialError" ? "missing_credential" : "invalid_credential";
 
+const isExpiredSession = Schema.is(SessionStore.SessionTokenExpiredError);
+export const isExpiredClientPairing = (error: ServerAuthCredentialError): boolean =>
+  error._tag === "ServerAuthInvalidCredentialError" &&
+  isExpiredSession(error.cause) &&
+  error.cause.pairedBearer === true;
+
 export const serverAuthDpopFailureReason = (
   error: ServerAuthCredentialError,
 ): DpopFailureReasonType | undefined =>

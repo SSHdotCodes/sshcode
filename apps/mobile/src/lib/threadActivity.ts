@@ -7,6 +7,10 @@ import type {
 import { turnItemIsWorkspacePreparation } from "@t3tools/client-runtime/state/turn-item-presentation";
 import { formatSubagentDisplayTitle } from "@t3tools/client-runtime/state/subagent-display";
 import { isLiveSubagentTurnItem } from "@t3tools/client-runtime/state/subagentRuntime";
+import {
+  delegationCallsShownAsCards,
+  type DelegationTimelineItem,
+} from "@t3tools/client-runtime/t3ToolSummary";
 import { extractToolActivityPresentation } from "@t3tools/client-runtime/work-log/tool-presentation";
 import {
   mergeMonitorUpdates,
@@ -78,7 +82,6 @@ import {
   htmlRenderFromToolItem,
   mcpAppFromToolItem,
 } from "@t3tools/shared/toolOutput";
-import { delegatedTaskHandle } from "@t3tools/shared/delegatedTaskHandle";
 import * as DateTime from "effect/DateTime";
 
 export type PendingApproval = ThreadPendingApproval;
@@ -141,6 +144,8 @@ export interface ThreadFeedMessage {
   readonly runId: RunId | null;
   readonly streaming: boolean;
   readonly inputIntent?: OrchestrationV2UserMessageInputIntent;
+  /** A steer that reached a waiting agent: shown as a new message. */
+  readonly agentWasWaiting?: true;
   readonly createdBy?: OrchestrationV2Actor;
   readonly creationSource?: OrchestrationV2CreationSource;
   readonly scheduledTaskId?: ScheduledTaskId;
@@ -1018,18 +1023,40 @@ function mergeMonitorUpdateEntries(
 
 function groupAdjacentActivities(rawEntries: ReadonlyArray<RawThreadFeedEntry>): ThreadFeedEntry[] {
   const entries = mergeMonitorUpdateEntries(rawEntries);
-  const childrenByRun = new Map<RunId, Set<string>>();
-  for (const entry of entries) {
-    if (entry.type !== "activity") continue;
-    const item = entry.activity.projectedItem.item;
-    if (item.type !== "subagent" || item.origin !== "app_owned" || item.runId === null) continue;
-    const children = childrenByRun.get(item.runId) ?? new Set<string>();
-    children.add(item.subagentId);
-    // delegate_task answers with the short handle of the subagent's id.
-    children.add(delegatedTaskHandle(item.subagentId));
-    if (item.childThreadId !== null) children.add(item.childThreadId);
-    childrenByRun.set(item.runId, children);
-  }
+  // A delegation whose subagent card is in the feed shows as the card alone.
+  const delegationsShownAsCards = delegationCallsShownAsCards(
+    entries.map((entry): DelegationTimelineItem | null => {
+      if (entry.type !== "activity") return null;
+      const item = entry.activity.projectedItem.item;
+      if (item.runId === null) return null;
+      if (item.type === "subagent") {
+        return item.origin === "app_owned"
+          ? {
+              kind: "card",
+              runId: item.runId,
+              subagentId: item.subagentId,
+              childThreadId: item.childThreadId,
+            }
+          : null;
+      }
+      if (
+        item.type !== "dynamic_tool" ||
+        resolveT3McpToolDefinition(item.toolName)?.summaryAction !== "delegate"
+      )
+        return null;
+      const output = compactDynamicToolOutput(item.output);
+      return {
+        kind: "call",
+        runId: item.runId,
+        failed:
+          (item.status !== "running" && item.status !== "completed") ||
+          output?.isError === true ||
+          workEntryDisplayIndicatesToolFailure(entry.activity.workEntry),
+        taskId: output?.taskId,
+        childThreadId: output?.childThreadId,
+      };
+    }),
+  );
   const grouped: ThreadFeedEntry[] = [];
   let firstActivityEntry: Extract<RawThreadFeedEntry, { readonly type: "activity" }> | null = null;
   let openGroupActivities: ThreadFeedActivity[] = [];
@@ -1057,28 +1084,8 @@ function groupAdjacentActivities(rawEntries: ReadonlyArray<RawThreadFeedEntry>):
     openGroupActivities = [];
   };
 
-  for (const entry of entries) {
-    // A successful delegation is already represented by its durable child card.
-    // Pending, failed and unmatched calls remain visible, even with identical prompts.
-    if (entry.type === "activity") {
-      const item = entry.activity.projectedItem.item;
-      if (
-        item.type === "dynamic_tool" &&
-        item.runId !== null &&
-        (item.status === "running" || item.status === "completed") &&
-        resolveT3McpToolDefinition(item.toolName)?.summaryAction === "delegate" &&
-        !workEntryDisplayIndicatesToolFailure(entry.activity.workEntry)
-      ) {
-        const output = compactDynamicToolOutput(item.output);
-        if (
-          !output?.isError &&
-          ((output?.taskId !== undefined && childrenByRun.get(item.runId)?.has(output.taskId)) ||
-            (output?.childThreadId !== undefined &&
-              childrenByRun.get(item.runId)?.has(output.childThreadId)))
-        )
-          continue;
-      }
-    }
+  for (const [index, entry] of entries.entries()) {
+    if (delegationsShownAsCards.has(index)) continue;
     // Skip empty messages so they don't break activity grouping.
     if (isEmptyMessage(entry)) {
       continue;
@@ -2175,6 +2182,7 @@ export function buildThreadFeed(
           ...(item.type === "user_message"
             ? {
                 inputIntent: item.inputIntent,
+                ...(item.agentWasWaiting === true ? { agentWasWaiting: true as const } : {}),
                 createdBy: item.createdBy,
                 creationSource: item.creationSource,
                 ...(item.scheduledTaskId ? { scheduledTaskId: item.scheduledTaskId } : {}),

@@ -325,13 +325,12 @@ export function projectTurnItemForWire(item: OrchestrationV2TurnItem): Orchestra
       };
     }
     case "file_change": {
-      // File identity and counts are enough for activity. Full diffs come from
-      // checkpoint diffs; storage keeps only a bounded copy of this text.
       const { diffStr, oldStr: _old, newStr: _new, ...projected } = item;
       // A failed edit stores the provider's error where the diff would be.
-      return item.status === "failed" && diffStr?.trim()
+      if (!diffStr?.trim()) return projected;
+      return item.status === "failed"
         ? { ...projected, diffStr: truncateDetail(diffStr) }
-        : projected;
+        : { ...projected, diffOmitted: true };
     }
     case "subagent":
       return {
@@ -445,8 +444,11 @@ export function projectTurnItemForDetail(item: OrchestrationV2TurnItem): Orchest
         result:
           item.result === null ? null : (truncateDetail(item.result, MAX_ON_DEMAND_BYTES) ?? null),
       };
+    case "file_change": {
+      const { diffOmitted: _omitted, oldStr: _old, newStr: _new, ...detail } = item;
+      return boundFileChangeForStorage(detail);
+    }
     case "handoff":
-    case "file_change":
     case "todo_list":
       return projectTurnItemForWire(item);
     default:

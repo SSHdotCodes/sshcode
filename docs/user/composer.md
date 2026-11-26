@@ -110,8 +110,14 @@ Attach up to 100 files per message. Each image can be up to 10 MiB, with at most
 80 MiB of images in one message. Other files, including videos, can be up to
 50 MiB each, subject to the environment's upload support and limit. The agent
 receives them on the environment's machine. Provider and model limits still
-apply, including images already in the conversation. A video attachment gives
-the agent a file path; it does not enable native video input.
+apply, including images already in the conversation. In Antigravity, Gemini can
+open attached videos and hear their sound. It can also listen to WAV, M4A,
+MP3, Ogg, and Opus recordings. For AAC and FLAC up to 20 MiB, SSHCode uses
+FFmpeg when installed on the environment machine to repackage the audio
+without re-encoding it.
+
+You can ask an agent to send workspace files to another chat or a subagent in
+the same environment, up to 50 MiB total per handoff.
 
 Uploads begin when you add an attachment. On web and desktop, you can send while
 uploads finish; the message appears as sending until its attachments are ready.
@@ -124,6 +130,10 @@ You can drag or paste images into the web or desktop composer. HEIC and HEIF
 photos are converted to JPEG there and when selected from the mobile photo
 library; photos over the image limit are also resized to fit. On mobile, you can
 also send files to SSHCode through another app's system share sheet.
+
+On iPhone and iPad, videos that exceed the upload limit are compressed on the
+device with their audio. If a video still cannot fit, trim it to the suggested
+duration and attach it again.
 
 See [images and videos](#images-and-videos-in-messages) for previewing and saving media.
 
@@ -141,6 +151,10 @@ On Antigravity 1.5 and later, if a background update is already streaming, the
 agent finishes that update before replying to your steer. When an active turn
 cannot accept steering, the message queues. Choose **Send now** on its queued
 row to stop the current reply and send that message next.
+
+When the agent has finished replying and is only waiting on a timer or background
+work, your message reaches it at once and shows as a normal message, not a steer.
+The working timer starts again from it.
 
 Use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on Windows and Linux to send
 the oldest queued message as a steer. This leaves the current draft intact and
@@ -437,8 +451,13 @@ or share them.
 
 To circle or point out something in a picture, open its preview and choose **Markup**
 (the pen button on web and desktop). Drag to draw a circle, rectangle, arrow, or pen
-stroke, then choose **Done**. **Add to chat** attaches the marked picture to your
-current draft so the agent can see it; you can also save it or copy it on web.
+stroke. If a pen stroke snaps to a shape, choose **Keep freehand** or **Undo** to
+restore your stroke. Choose **Text** and click or tap the picture to add a label.
+Press Enter or click or tap away to apply it. Drag a label to move it, or double-click
+or double-tap it to edit. Select a label and press Delete or Backspace to remove it.
+On iPhone, select the label and choose **Delete**. Choose **Done** when you're
+finished. **Add to chat** attaches the marked picture to your current draft so
+the agent can see it. You can also save it or copy it on web.
 Marking a picture already in your draft replaces that attachment when you choose
 **Done**. **Cancel** leaves the original alone. On iPhone, swiping and zooming pause
 while you draw.

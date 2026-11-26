@@ -57,6 +57,7 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
       const sessionResult = get(environmentSession.sessionStateAtom(environmentId));
       const access = resolveUsageAccess({
         connectionPhase: presentation.connection.phase,
+        connectionError: presentation.connection.error,
         session: Option.getOrNull(AsyncResult.value(sessionResult)),
         hasSessionError: sessionResult._tag === "Failure",
       });

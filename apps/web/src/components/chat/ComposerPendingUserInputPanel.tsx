@@ -8,6 +8,7 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../../pendingUserInput";
 import { CheckIcon } from "lucide-react";
+import { Badge } from "../ui/badge";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { cn } from "~/lib/utils";
 import { ComposerBanner } from "./ComposerBanner";
@@ -332,9 +333,9 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                       <span className="flex flex-wrap items-center gap-1.5 text-sm font-medium leading-snug">
                         <span>{parsedLabel.text}</span>
                         {parsedLabel.recommended ? (
-                          <span className="inline-flex items-center rounded-full border border-primary/25 bg-primary/10 px-1.5 py-px text-3xs font-medium leading-tight text-primary">
+                          <Badge variant="info" size="sm">
                             Recommended
-                          </span>
+                          </Badge>
                         ) : null}
                       </span>
                       {option.description && option.description !== option.label ? (

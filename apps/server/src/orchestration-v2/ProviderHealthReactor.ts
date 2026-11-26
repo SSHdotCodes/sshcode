@@ -140,15 +140,22 @@ export function providerHealthUpdate(
         : occurredAt + recheckMs,
     ),
   );
-  const modelIds =
-    kind === "usage_limit" && context
-      ? usageLimitModelIds(
-          context.provider,
-          context.model,
-          occurredAt,
-          item.failure.usageLimitWindowIds,
-        )
-      : undefined;
+  let modelIds: ReadonlyArray<string> | undefined;
+  if (kind === "usage_limit" && context) {
+    // OpenCode's free allowance can run out while other routes on the instance still work.
+    // Its error identifies the selected model, but does not enumerate the rest of the tier.
+    if (context.provider.driver === "opencode" && item.failure.code === "provider.free-limit") {
+      if (context.model === undefined) return null;
+      modelIds = [context.model];
+    } else {
+      modelIds = usageLimitModelIds(
+        context.provider,
+        context.model,
+        occurredAt,
+        item.failure.usageLimitWindowIds,
+      );
+    }
+  }
   return {
     instanceId,
     failure: {
@@ -261,11 +268,7 @@ export const layer = Layer.effectDiscard(
               if (run !== undefined) model = modelAvailability.remember(run).model;
               else modelAvailability.rememberMissing(runId);
             }
-            if (
-              provider &&
-              (model !== undefined || runId == null) &&
-              update.failure?.kind === "usage_limit"
-            ) {
+            if (provider && update.failure?.kind === "usage_limit") {
               update = providerHealthUpdate(event, { provider, model });
             }
             // Output on an unrelated model does not clear a scoped limit.

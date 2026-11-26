@@ -34,7 +34,7 @@ export const layer = McpToolAccess.toLayer(XPostToolkit, {
       };
     }),
   ),
-  search_x: McpToolAccess.reads(({ query }) =>
+  search_x: McpToolAccess.reads(({ query, deep }) =>
     Effect.gen(function* () {
       const text = query.trim();
       if (text.length === 0) {
@@ -45,7 +45,7 @@ export const layer = McpToolAccess.toLayer(XPostToolkit, {
       }
       const search = yield* XSearch.XSearch;
       const posts = yield* search
-        .search(text)
+        .search(text, deep)
         .pipe(
           Effect.mapError(
             (error) =>

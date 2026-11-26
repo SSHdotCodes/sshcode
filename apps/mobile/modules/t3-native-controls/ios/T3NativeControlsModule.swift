@@ -110,6 +110,17 @@ public final class T3NativeControlsModule: Module {
         }
       }
     }
+
+    AsyncFunction("exportAttachmentVideo") { (url: URL, preset: String, promise: Promise) in
+      Task {
+        do {
+          let result = try await exportAttachmentVideo(from: url, preset: preset)
+          promise.resolve(result)
+        } catch {
+          promise.reject(error)
+        }
+      }
+    }
   }
 
   // Bedside screen: charging or full counts. The simulator reports .unknown,
@@ -315,4 +326,54 @@ public final class T3NativeControlsModule: Module {
       promise: promise
     )
   }
+}
+
+private func exportAttachmentVideo(from source: URL, preset: String) async throws -> [String: Any] {
+  let presetName: String
+  switch preset {
+  case "hevc1080": presetName = AVAssetExportPresetHEVC1920x1080
+  case "h264720": presetName = AVAssetExportPreset1280x720
+  case "h264480": presetName = AVAssetExportPreset640x480
+  default: throw CocoaError(.featureUnsupported)
+  }
+  guard source.isFileURL else { throw URLError(.badURL) }
+  let scopedAccess = source.startAccessingSecurityScopedResource()
+  defer { if scopedAccess { source.stopAccessingSecurityScopedResource() } }
+
+  let asset = AVURLAsset(url: source)
+  guard let session = AVAssetExportSession(asset: asset, presetName: presetName),
+    session.supportedFileTypes.contains(.mp4)
+  else { throw CocoaError(.featureUnsupported) }
+  let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+  let duration = (try await asset.load(.duration)).seconds
+  let files = FileManager.default
+  let cache = try files.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+    .appendingPathComponent("t3-composer-video-exports", isDirectory: true)
+  try files.createDirectory(at: cache, withIntermediateDirectories: true)
+  let output = cache.appendingPathComponent("\(UUID().uuidString).mp4")
+  var keepOutput = false
+  defer { if !keepOutput { try? files.removeItem(at: output) } }
+
+  // Export the full asset with AAC audio. A file-length limit can end an export
+  // early, so the caller measures each complete result before accepting it.
+  session.outputURL = output
+  session.outputFileType = .mp4
+  await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+    session.exportAsynchronously { continuation.resume() }
+  }
+  guard session.status == .completed else { throw session.error ?? CocoaError(.fileWriteUnknown) }
+
+  let exportedAsset = AVURLAsset(url: output)
+  if !audioTracks.isEmpty, (try await exportedAsset.loadTracks(withMediaType: .audio)).isEmpty {
+    throw CocoaError(.fileReadCorruptFile)
+  }
+  guard let size = try output.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0 else {
+    throw CocoaError(.fileReadCorruptFile)
+  }
+  keepOutput = true
+  return [
+    "uri": output.absoluteString,
+    "sizeBytes": size,
+    "durationSeconds": duration.isFinite ? duration : 0,
+  ]
 }

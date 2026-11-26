@@ -276,6 +276,7 @@ export function QueuedRunsControl({
   return (
     <ComposerBanner.Attachment>
       <ComposerBanner.Root
+        density="comfortable"
         role="region"
         aria-label={`${items.length} queued message${items.length === 1 ? "" : "s"}`}
         aria-live="polite"
@@ -326,7 +327,7 @@ export function QueuedRunsControl({
           </ComposerBanner.Row>
         ) : expanded && workflow?.steeringUnavailableReason ? (
           <ComposerBanner.Row>
-            <ComposerBanner.Content className="text-muted-foreground">
+            <ComposerBanner.Content className="text-2xs text-muted-foreground/80">
               {workflow.steeringUnavailableReason}
             </ComposerBanner.Content>
           </ComposerBanner.Row>

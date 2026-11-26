@@ -15,6 +15,7 @@ import {
   extractMarkdownLinkHrefs,
   inlineCodeFilePathCandidate,
 } from "@t3tools/shared/markdownLinks";
+import { isMarkdownPlainValue } from "@t3tools/shared/markdownPlainValues";
 import { isAbsolutePath } from "@t3tools/shared/path";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
 import { AuthFilesystemReadScope, AuthOrchestrationOperateScope } from "@t3tools/contracts";
@@ -242,6 +243,8 @@ interface ChatMarkdownProps {
   className?: string;
   /** Treat single newlines as hard breaks — chat-style user input. */
   lineBreaks?: boolean;
+  /** Render inline values as prose in assistant messages. */
+  plainValues?: boolean;
   /** Parse sanitized raw HTML instead of displaying its source text. */
   parseRawHtml?: boolean;
   /** Append a prompt that invokes a newly created artifact-template skill. */
@@ -675,13 +678,17 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
   );
 
   return (
-    <div className="chat-markdown-table-container" data-expanded={expanded ? "true" : "false"}>
+    <div
+      className="group/table chat-markdown-table-container"
+      data-expanded={expanded ? "true" : "false"}
+    >
       <ScrollArea radius="none" chainVerticalScroll scrollFade className="w-full max-w-full">
         <table ref={tableRef} {...props}>
           {children}
         </table>
       </ScrollArea>
-      <div className="mt-0.5 flex items-center justify-between select-none">
+      {/* Like a code block's, the actions wait for hover or focus; the row keeps its height. */}
+      <div className="mt-0.5 flex items-center justify-between opacity-0 transition-opacity select-none group-hover/table:opacity-100 group-focus-within/table:opacity-100 pointer-coarse:opacity-100">
         <Tooltip>
           <TooltipTrigger
             render={
@@ -845,9 +852,9 @@ export function MarkdownCodeBlockFrame({
 }
 
 /**
- * Filename titles render icon + text; language-only titles render just the
- * icon (redundant next to its own name) and fall back to the language text
- * when no specific icon exists or it fails to load.
+ * Titles render icon + text: the fence's filename, else the language name, so
+ * the header never holds a lone glyph. A language with no specific icon shows
+ * its name alone.
  */
 function MarkdownCodeBlockTitleContent({
   fenceTitle,
@@ -868,20 +875,13 @@ function MarkdownCodeBlockTitleContent({
   }
 
   const fileName = syntheticFileNameForLanguageId(language);
-  if (!hasSpecificPierreIconForFileName(fileName)) {
-    return <span className="truncate">{language}</span>;
-  }
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span className="inline-flex shrink-0 rounded-sm" aria-label={`Language: ${language}`} />
-        }
-      >
+    <>
+      {hasSpecificPierreIconForFileName(fileName) ? (
         <PierreEntryIcon pathValue={fileName} kind="file" theme={theme} className="size-3.5" />
-      </TooltipTrigger>
-      <TooltipPopup side="top">{language}</TooltipPopup>
-    </Tooltip>
+      ) : null}
+      <span className="truncate">{language}</span>
+    </>
   );
 }
 
@@ -2425,6 +2425,7 @@ function useChatMarkdownState({
   environmentId: explicitEnvironmentId,
   onTaskListChange,
   isStreaming = false,
+  plainValues = false,
   skills = EMPTY_MARKDOWN_SKILLS,
   onUseArtifactTemplate,
   onRunShellCommand,
@@ -2818,6 +2819,7 @@ function useChatMarkdownState({
       onTaskListChange,
       onUseArtifactTemplate,
       onRunShellCommand,
+      plainValues,
       openChangeRequestLink,
       openDeferredMarkdownLink,
       openExternalLinkInPreview,
@@ -2851,6 +2853,7 @@ function useChatMarkdownState({
       onTaskListChange,
       onUseArtifactTemplate,
       onRunShellCommand,
+      plainValues,
       openChangeRequestLink,
       openDeferredMarkdownLink,
       openExternalLinkInPreview,
@@ -3291,7 +3294,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
   },
   code: function MarkdownCode({ node, children, className, ...props }) {
     const text = use(ChatMarkdownTextContext);
-    const { cwd, imageBaseDir, inlineCodeFileLinkMetaByText, fileLinkChip } = use(
+    const { cwd, imageBaseDir, inlineCodeFileLinkMetaByText, fileLinkChip, plainValues } = use(
       ChatMarkdownRendererContext,
     );
     if (
@@ -3312,17 +3315,32 @@ const CHAT_MARKDOWN_COMPONENTS = {
         />
       );
     }
-    if (node?.properties?.dataInlineCode != null) {
+    const start = node?.position?.start.offset;
+    const end = node?.position?.end.offset;
+    // The source starts with a backtick for inline Markdown, including inside links.
+    const valueSource =
+      plainValues && start !== undefined && end !== undefined && text[start] === "`";
+    const fileLinkEligible = node?.properties?.dataInlineCode != null;
+    if (valueSource || fileLinkEligible) {
       const codeText = nodeToPlainText(children);
-      const fileLinkMeta =
-        inlineCodeFileLinkMetaByText.get(codeText.trim()) ??
-        resolveInlineCodeFileLinkMeta(codeText, cwd, imageBaseDir ?? cwd);
-      if (fileLinkMeta) {
-        return fileLinkChip(
-          fileLinkMeta,
-          `\`${codeText}\``,
-          inlineCodeFilePathCandidate(codeText) ?? codeText.trim(),
+      if (valueSource && isMarkdownPlainValue(codeText)) {
+        return (
+          <span className="tabular-nums" data-markdown-copy={text.slice(start, end)}>
+            {codeText}
+          </span>
         );
+      }
+      if (fileLinkEligible) {
+        const fileLinkMeta =
+          inlineCodeFileLinkMetaByText.get(codeText.trim()) ??
+          resolveInlineCodeFileLinkMeta(codeText, cwd, imageBaseDir ?? cwd);
+        if (fileLinkMeta) {
+          return fileLinkChip(
+            fileLinkMeta,
+            `\`${codeText}\``,
+            inlineCodeFilePathCandidate(codeText) ?? codeText.trim(),
+          );
+        }
       }
     }
     return (

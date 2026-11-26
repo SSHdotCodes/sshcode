@@ -225,8 +225,71 @@ describe("incoming native shares", () => {
       }),
     ).toEqual({
       attachments: [],
-      warnings: [`'${video.originalName}' exceeds the 10 MB attachment limit.`],
+      warnings: [`'${video.originalName}' is 20 MB; the limit is 10 MB.`],
     });
+  });
+
+  it.each(["video", "file"] as const)(
+    "prepares an oversized MOV shared as %s before writing the draft",
+    async (shareType) => {
+      const source = "file:///shared/Screen%20Recording.mov";
+      const compressed = {
+        id: "local-id",
+        type: "file" as const,
+        name: "Screen Recording.mp4",
+        mimeType: "video/mp4",
+        sizeBytes: 27 * 1024 * 1024,
+        fileUri: "file:///documents/compressed.mp4",
+      };
+      const persistVideo = vi.fn(async () => compressed);
+      const persistFile = vi.fn(async () => "file:///documents/uncompressed.mov");
+      const readBase64 = vi.fn(async () => "unused");
+      const removeOwnedFile = vi.fn();
+
+      const result = await buildIncomingShareDraft({
+        id: "share-video",
+        createdAt: "2026-08-30T10:00:00.000Z",
+        payloads: [{ shareType, value: source, mimeType: "application/octet-stream" }],
+        resolvedPayloads: [],
+        fileReader: { persistVideo, persistFile, readBase64, removeOwnedFile },
+      });
+
+      expect(persistVideo).toHaveBeenCalledWith({
+        uri: source,
+        name: "Screen Recording.mov",
+        mimeType: "video/quicktime",
+        sizeBytes: null,
+        maxBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+      });
+      expect(result.attachments).toEqual([{ ...compressed, id: "share-video-file-0" }]);
+      expect(result.warnings).toEqual([]);
+      expect(persistFile).not.toHaveBeenCalled();
+      expect(readBase64).not.toHaveBeenCalled();
+      expect(removeOwnedFile).toHaveBeenCalledExactlyOnceWith(source);
+    },
+  );
+
+  it("reports a failed shared-video export and releases the source", async () => {
+    const source = "file:///shared/long.mov";
+    const warning = "'long.mov' is 200 MB; the limit is 50 MB. Keep it under about 2 minutes.";
+    const removeOwnedFile = vi.fn();
+    const result = await buildIncomingShareDraft({
+      id: "share-video",
+      createdAt: "2026-08-30T10:00:00.000Z",
+      payloads: [{ shareType: "video", value: source }],
+      resolvedPayloads: [],
+      fileReader: {
+        persistVideo: async () => {
+          throw new Error(warning);
+        },
+        readBase64: async () => "unused",
+        removeOwnedFile,
+      },
+    });
+
+    expect(result.attachments).toEqual([]);
+    expect(result.warnings).toEqual([warning]);
+    expect(removeOwnedFile).toHaveBeenCalledExactlyOnceWith(source);
   });
 
   it("reports an unreadable shared file without calling it oversized", async () => {

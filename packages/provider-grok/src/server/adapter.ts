@@ -1,3 +1,4 @@
+import { sessionModelStateFromInitialize } from "@t3tools/provider-acp/server/runtimeModel";
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import {
   XAiPromptFailureText,
@@ -388,6 +389,7 @@ export function makeGrokAcpAdapterFlavor(
           return yield* unsupported;
         }
       }),
+    reportsPerTurnPromptUsage: true,
     interruptPromptOnCancel: false,
     // User Stop (requestRuntimeRestart) still hard-kills the process group and
     // respawns so existing background tasks stop too. Older 0.2.x builds could
@@ -405,8 +407,24 @@ export function makeGrokAcpAdapterFlavor(
     preserveRuntimeOnSettledInterrupt: true,
     // Grok ACP initialize reports promptCapabilities.image:false but the agent
     // still accepts image content blocks (verified with real screenshots).
+    extractContextUsage(notification, session) {
+      const used = notification._meta?.totalTokens;
+      if (typeof used !== "number" || !Number.isSafeInteger(used) || used < 0) return undefined;
+      const models =
+        session?.sessionSetupResult.models ??
+        (session && sessionModelStateFromInitialize(session.initializeResult));
+      const selected = models?.availableModels.find(
+        (model) => model.modelId === models.currentModelId,
+      );
+      const limit = selected?._meta?.totalContextTokens;
+      return typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0
+        ? { usedTokens: used, maxTokens: limit }
+        : { usedTokens: used };
+    },
     supportsImagePrompts: true,
     supportsCompaction: true,
+    mcpDiscoveryInstructions: (catalog) =>
+      `Available t3-code MCP tools. Load a deferred schema with search_tool using its exact name and limit 1. Pass the returned name to use_tool.\n${catalog}`,
     resolveModelId: (selection) => resolveGrokAcpBaseModelId(selection.model),
     applyModelSelection: applyGrokSessionModelSelection,
     ownedModelOptionIds: [GROK_REASONING_EFFORT_OPTION_ID],

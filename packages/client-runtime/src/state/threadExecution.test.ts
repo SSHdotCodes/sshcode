@@ -1,4 +1,5 @@
 import {
+  EnvironmentId,
   TurnItemId,
   NodeId,
   MessageId,
@@ -16,6 +17,7 @@ import { usageLimitBlockedRun } from "@t3tools/shared/orchestrationV2ThreadError
 import { describe, expect, it } from "vite-plus/test";
 
 import { v2Projection } from "./orchestrationV2TestFixtures.ts";
+import { threadDetailToShell } from "./threadShell.ts";
 import {
   notificationSubagent,
   decodeRelayedSubagentMessages,
@@ -323,9 +325,10 @@ describe("thread execution presentation", () => {
 
   it("parks runtime at idle with null activityStartedAt while an open-prompt provider thread waits on background work", () => {
     const running = run("run-open-wait", 1, "running");
-    const providerThreadId = v2Projection.thread.activeProviderThreadId!;
+    const providerThreadId = ProviderThreadId.make("native-open-wait");
     const projection = {
       ...v2Projection,
+      thread: { ...v2Projection.thread, activeProviderThreadId: providerThreadId },
       runs: [running],
       providerThreads: [
         {
@@ -351,6 +354,7 @@ describe("thread execution presentation", () => {
             },
           ],
           waitingOnBackgroundWork: true as const,
+          backgroundWaitStartedAt: DateTime.formatIso(now),
           createdAt: now,
           updatedAt: now,
         },
@@ -358,6 +362,13 @@ describe("thread execution presentation", () => {
     };
 
     const runtime = deriveThreadRuntime(projection);
+    const openedFromLink = threadDetailToShell(EnvironmentId.make("env"), projection);
+    expect(openedFromLink.runtime).toEqual(runtime);
+    expect(openedFromLink.latestRun?.completedAt).toBeNull();
+    expect(openedFromLink.pendingBackgroundTasks).toEqual(
+      projection.providerThreads[0]!.pendingBackgroundTasks,
+    );
+    expect(openedFromLink.backgroundWaitStartedAt).toBe(DateTime.formatIso(now));
     expect(runtime).toMatchObject({
       status: "idle",
       activeRunId: running.id,
@@ -885,7 +896,7 @@ describe("provider-reported model selection", () => {
     ).toBeNull();
   });
 
-  it("shows the reported default in a subagent's effort label", () => {
+  it("omits a subagent's effort until the route identifies its level", () => {
     const models = [
       {
         slug: selected.model,
@@ -904,8 +915,14 @@ describe("provider-reported model selection", () => {
       },
     ];
     const variantReport = { ...selected, options: [{ id: "variant", value: "default" }] };
-    expect(formatModelSelectionEffort(selected, models, variantReport)).toBe("Default");
-    expect(formatModelSelectionEffort(selected, models)).toBe("Unknown");
+    expect(formatModelSelectionEffort(selected, models, variantReport)).toBeNull();
+    expect(
+      formatModelSelectionEffort(selected, models, {
+        ...selected,
+        options: [{ id: "variant", value: "high" }],
+      }),
+    ).toBe("High");
+    expect(formatModelSelectionEffort(selected, models)).toBeNull();
   });
 });
 

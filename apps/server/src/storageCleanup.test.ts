@@ -21,10 +21,12 @@ import {
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as ServerConfig from "./config.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import { WARM_WORKTREES_DIRECTORY, warmWorktreeRecordName } from "./worktreesDirectory.ts";
 import * as ExecutionResources from "./execution/ExecutionResources.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Settings from "./serverSettings.ts";
+import * as WarmWorktreePool from "./project/WarmWorktreePool.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
@@ -271,6 +273,7 @@ const cleanupFixture = (
       storageCleanup,
     };
     let threads = [shell({ branch: "feature", worktreePath: worktree })];
+    let deletedThreads: typeof threads = [];
     let storedWorktreePaths: string[] = [worktree];
     let projectRoots = [repo];
     let editBeforeRemoval = false;
@@ -430,7 +433,13 @@ const cleanupFixture = (
                             ...threads.flatMap((thread) => thread.worktreePath ?? []),
                             ...storedWorktreePaths,
                           ].map((worktreePath) => ({ worktreePath }))
-                      : [],
+                      : strings.join("").includes('AS "workspaceRoot"') &&
+                          strings.join("").includes("t.deleted_at IS NOT NULL")
+                        ? deletedThreads.map((thread) => ({
+                            payload_json: JSON.stringify(thread),
+                            workspaceRoot: repo,
+                          }))
+                        : [],
         )) as unknown as SqlClient.SqlClient),
       Effect.provideService(GitManager.GitManager, {
         invalidateStatus: () => Effect.void,
@@ -481,6 +490,9 @@ const cleanupFixture = (
       },
       setThreads: (next: typeof threads) => {
         threads = next;
+      },
+      setDeletedThreads: (next: typeof threads) => {
+        deletedThreads = next;
       },
       setStoredWorktreePaths: (paths: string[]) => {
         storedWorktreePaths = paths;
@@ -711,6 +723,36 @@ describe("owner-selected storage maintenance", () => {
 });
 
 describe("subagent worktree ownership", () => {
+  it.live(
+    "releases a deleted chat's checkout to the pool without claiming the retained bytes",
+    () =>
+      runCleanupTest(
+        Effect.gen(function* () {
+          const received: string[] = [];
+          const fixture = yield* cleanupFixture().pipe(
+            Effect.provideService(WarmWorktreePool.WarmWorktreePool, {
+              claim: () => Effect.succeed(null),
+              recordSetup: () => Effect.void,
+              recycle: (input) =>
+                Effect.sync(() => {
+                  received.push(input.path);
+                  expect(input.expectedHead).toMatch(/^[0-9a-f]{40}$/);
+                  return "recycled" as const;
+                }),
+            }),
+          );
+          fixture.setThreads([]);
+          fixture.setDeletedThreads([
+            shell({ worktreePath: fixture.worktree, branch: "feature", deletedAt: at(0) }),
+          ]);
+          const report = yield* fixture.service.runNow;
+          expect(received).toEqual([fixture.worktree]);
+          expect(report.entries[0]).toMatchObject({ outcome: "removed", bytes: null });
+          expect(report.bytesFreed).toBe(0);
+          expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
+        }),
+      ),
+  );
   it.effect.each([
     "idle",
     "grandchild",
@@ -928,6 +970,27 @@ describe("subagent worktree ownership", () => {
 });
 
 describe("orphan worktree reports", () => {
+  it.live("keeps spares out of storage review until the pool publishes them", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const fixture = yield* cleanupFixture();
+        fixture.setThreads([]);
+        const directory = `${fixture.config.worktreesDir}/${WARM_WORKTREES_DIRECTORY}`;
+        const checkout = `${directory}/spare`;
+        const marker = `${directory}/${warmWorktreeRecordName("spare")}`;
+        yield* fixture.fs.makeDirectory(directory, { recursive: true });
+        yield* fixture.fs.writeFileString(marker, "{}");
+        yield* fixture.command(fixture.repo, ["worktree", "add", "--detach", checkout]);
+        yield* fixture.fs.utimes(checkout, 1, 1);
+        expect((yield* fixture.service.runNow).entries).toEqual([]);
+        yield* fixture.fs.remove(marker);
+        expect((yield* fixture.service.runNow).entries).toEqual([
+          expect.objectContaining({ path: checkout, reason: "No thread uses this worktree" }),
+        ]);
+      }),
+    ),
+  );
+
   it.live("keeps orphan results visible when thread results fill the report", () =>
     runCleanupTest(
       Effect.gen(function* () {

@@ -1,3 +1,4 @@
+import * as LocalFiles from "../assets/LocalFileAttachments.ts";
 import { accountAcceptsModel } from "@t3tools/shared/accountBalance";
 import { derive } from "@t3tools/provider-core/server/IdAllocator";
 import { accountUnavailable } from "../provider/accountAvailability.ts";
@@ -33,6 +34,7 @@ import {
   activeProviderFailure,
   rememberedAccountFailure,
   CommandId,
+  type ChatAttachment,
   type RunId,
   isProviderAvailable,
   MessageId,
@@ -54,6 +56,7 @@ import {
   type OrchestrationV2TurnItem,
   OrchestratorMcpFailure,
   type OrchestratorMcpCapabilitiesResult,
+  type OrchestratorMcpProviderCapability,
   type OrchestratorMcpCapabilitiesInput,
   type OrchestratorMcpCreateThreadsInput,
   type OrchestratorMcpCreateThreadsResult,
@@ -229,8 +232,7 @@ const TASK_WAKE_EVENTS = [
   { thread: "child", eventType: "provider-thread.updated" },
   { thread: "child", eventType: "runtime-request.updated" },
 ] as const;
-/** A person answers the card, so a slower poll is plenty. */
-const DEFAULT_THREAD_LIST_LIMIT = 50;
+const DEFAULT_THREAD_LIST_LIMIT = 20;
 // An omitted read is the page agents pay for. Callers can still request the
 // previous 50 items, 10 runs, and 20_000 characters, up to the input caps.
 const DEFAULT_THREAD_READ_LIMIT = 15;
@@ -409,11 +411,15 @@ const WEBHOOK_SETUP_NOTE =
  * run it: a webhook's URL carries the secret that starts the task's runs, so
  * only such a caller sees it.
  */
-function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): OrchestratorMcpScheduledTask {
+function scheduledTaskSummary(
+  task: ScheduledTask,
+  mayRun: boolean,
+  view: "saved" | "list" | "detail" = "saved",
+): OrchestratorMcpScheduledTask {
   return {
     scheduledTaskId: task.id,
     title: task.title,
-    prompt: task.prompt,
+    ...(view === "detail" ? { prompt: task.prompt } : {}),
     enabled: task.enabled,
     projectId: task.projectId,
     boundThreadId: task.threadId,
@@ -425,7 +431,9 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     ...(task.webhook === undefined
       ? {}
       : { webhookSignature: task.webhook.hasSecret ? "set" : "none" }),
-    ...(task.schedule.type === "webhook" ? { webhookSetup: WEBHOOK_SETUP_NOTE } : {}),
+    ...(view !== "list" && task.schedule.type === "webhook"
+      ? { webhookSetup: WEBHOOK_SETUP_NOTE }
+      : {}),
   };
 }
 
@@ -639,18 +647,20 @@ function isTerminalTaskStatus(
   );
 }
 
+function isLocalSubagentOf(thread: OrchestrationV2ThreadProjection["thread"], parentId: ThreadId) {
+  return (
+    thread.lineage.relationshipToParent === "subagent" &&
+    thread.lineage.parentEnvironmentId === undefined &&
+    thread.lineage.parentThreadId === parentId
+  );
+}
+
 function directAppOwnedChildTasks(
   parent: Pick<OrchestrationV2ThreadProjection, "thread" | "subagents">,
   target: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "messages">,
   returnedRunIds: ReadonlySet<RunId | null>,
 ): ReadonlyArray<OrchestrationV2Subagent> {
-  if (
-    target.thread.lineage.parentEnvironmentId !== undefined ||
-    target.thread.lineage.parentThreadId !== parent.thread.id ||
-    target.thread.lineage.relationshipToParent !== "subagent"
-  ) {
-    return [];
-  }
+  if (!isLocalSubagentOf(target.thread, parent.thread.id)) return [];
   return parent.subagents.filter(
     (task) =>
       task.origin === "app_owned" &&
@@ -933,21 +943,28 @@ function threadBackgroundWork(
 function listItemFromShell(
   shell: OrchestrationV2ThreadShell,
   nowMs: number,
+  includeDetails: boolean,
 ): OrchestratorMcpThreadListItem {
   const { settled, settledAt } = threadSettlement(shell);
   const { snoozed, snoozedUntil } = threadSnooze(shell, nowMs);
-  // Rows leave out fields with no value: a list of 50 chats repeated them all.
+  // Rows leave out fields with no value.
   return {
     ...threadBackgroundWork(shell),
     threadId: shell.id,
     title: shell.title,
     createdBy: shell.createdBy,
-    creationSource: shell.creationSource === "workflows" ? "server" : shell.creationSource,
     status: shell.activityRunStatus ?? shell.status,
     providerInstanceId: shell.modelSelection.instanceId,
     model: shell.modelSelection.model,
-    runtimeMode: shell.runtimeMode,
-    interactionMode: shell.interactionMode,
+    ...(includeDetails
+      ? {
+          creationSource: shell.creationSource === "workflows" ? "server" : shell.creationSource,
+          runtimeMode: shell.runtimeMode,
+          interactionMode: shell.interactionMode,
+          itemCount: shell.visibleItemCount,
+          createdAt: DateTime.formatIso(shell.createdAt),
+        }
+      : {}),
     ...(shell.linkedPullRequest ? { linkedPullRequest: shell.linkedPullRequest } : {}),
     settled,
     ...(settledAt === null ? {} : { settledAt }),
@@ -960,8 +977,6 @@ function listItemFromShell(
     ...(shell.lineage.relationshipToParent === null
       ? {}
       : { relationshipToParent: shell.lineage.relationshipToParent }),
-    itemCount: shell.visibleItemCount,
-    createdAt: DateTime.formatIso(shell.createdAt),
     updatedAt: DateTime.formatIso(shell.updatedAt),
   };
 }
@@ -1133,9 +1148,10 @@ function timelineItem(input: {
   readonly threadId: ThreadId;
   readonly maxChars: number;
   readonly textOffset?: number;
+  readonly snippet?: string;
   readonly messagesByThreadId: ReadonlyMap<ThreadId, OrchestrationV2ThreadProjection["messages"]>;
 }): OrchestratorMcpThreadTimelineItem {
-  const text = turnItemText(input.row.item);
+  const text = input.snippet === undefined ? turnItemText(input.row.item) : null;
   const offset = input.textOffset ?? 0;
   const end = offset + input.maxChars;
   const textTruncated = text !== null && text.length > end;
@@ -1171,6 +1187,7 @@ function timelineItem(input: {
     status: input.row.item.status,
     ...(input.row.item.title === null ? {} : { title: input.row.item.title }),
     ...(text === null ? {} : { text: text.slice(offset, end) }),
+    ...(input.snippet === undefined ? {} : { snippet: input.snippet }),
     ...(textTruncated ? { textTruncated: true as const, nextTextOffset: end } : {}),
     updatedAt: DateTime.formatIso(input.row.item.updatedAt),
   };
@@ -1191,6 +1208,7 @@ const make = Effect.gen(function* () {
   const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
   const gitDriver = yield* GitVcsDriver.GitVcsDriver;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const localFiles = yield* LocalFiles.LocalFileAttachments;
   const layerScope = yield* Effect.scope;
   const createThreadLock = yield* KeyedLock.make<CommandId>();
 
@@ -1358,6 +1376,57 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
+
+  /** Copy once under the recipient's id; an accepted retry needs no source file. */
+  const withLocalAttachments = <A, R>(
+    paths: ReadonlyArray<string> | undefined,
+    sender: Pick<OrchestrationV2ThreadProjection, "thread"> | undefined,
+    recipient: ThreadId,
+    receipt: {
+      commandId: CommandId;
+      threadId: ThreadId;
+      type: "message.dispatch" | "delegated_task.request";
+    },
+    send: (
+      attachments: ReadonlyArray<ChatAttachment>,
+      keepForRecovery: () => void,
+    ) => Effect.Effect<A, OrchestratorMcpFailure, R>,
+  ) =>
+    Effect.gen(function* () {
+      if (!paths?.length) return yield* send([], () => {});
+      if (sender === undefined)
+        return yield* failure("invalid_request", "Local attachment paths require a sender thread.");
+      return yield* threadManagement
+        .withIntakeReceipt(receipt, (accepted, checkAccepted) =>
+          Effect.gen(function* () {
+            if (accepted) return yield* send([], () => {});
+            const workspaceRoot =
+              sender.thread.worktreePath ??
+              (yield* requireProject(sender.thread.projectId)).workspaceRoot;
+            const copies = yield* localFiles
+              .copyToThread({ paths, threadId: recipient, workspaceRoot })
+              .pipe(Effect.mapError((error) => failure("invalid_request", error.message)));
+            let discard = copies.discard;
+            return yield* send(copies.attachments, () => {
+              discard = Effect.void;
+            }).pipe(
+              // Dispatch may commit before reporting failure. Check under the same
+              // lock, before another retry can take ownership of different files.
+              Effect.onError(() =>
+                checkAccepted.pipe(
+                  Effect.flatMap((committed) => (committed ? Effect.void : discard)),
+                  Effect.ignore,
+                ),
+              ),
+            );
+          }),
+        )
+        .pipe(
+          Effect.catchTags({
+            OrchestratorDispatchError: (error) => Effect.fail(threadManagementFailure(error)),
+          }),
+        );
+    });
 
   /** A client has no thread to inherit a model from, so it falls back to the project default. */
   // Resolved like the app does: the project's own choice, else the environment default,
@@ -2762,7 +2831,13 @@ const make = Effect.gen(function* () {
                 (projectId === undefined || task.projectId === projectId) &&
                 (input.scheduledTaskId === undefined || task.id === input.scheduledTaskId),
             )
-            .map((task) => scheduledTaskSummary(task, false)),
+            .map((task) =>
+              scheduledTaskSummary(
+                task,
+                false,
+                input.scheduledTaskId === undefined ? "list" : "detail",
+              ),
+            ),
         };
       }),
     updateScheduledTask: (scope, input) =>
@@ -3003,13 +3078,37 @@ const make = Effect.gen(function* () {
         );
         // A search lists only the providers with a matching model: most have none, and
         // their empty entries made up most of a search's result.
-        const providerEntries = listed.flatMap((provider) => {
+        const overview = input.providerInstanceId === undefined && input.modelSearch === undefined;
+        const providerEntries = listed.flatMap<OrchestratorMcpProviderCapability>((provider) => {
           const account = accountUnavailable(provider, now);
-          const dataUse = providerDataUse(provider);
           const constraints = providerConstraints(
             provider,
             orchestrationCapableInstanceIds.has(provider.instanceId),
           );
+          const identity = {
+            providerInstanceId: provider.instanceId,
+            driverKind: provider.driver,
+            ...(provider.displayName && provider.displayName !== provider.instanceId
+              ? { displayName: provider.displayName }
+              : {}),
+          };
+          if (overview && (constraints.length > 0 || account !== undefined)) {
+            return [
+              {
+                ...identity,
+                models: [],
+                canRunChildTask: false as const,
+                ...(constraints.length > 0
+                  ? {
+                      constraints: [
+                        !provider.enabled ? "Provider instance is disabled." : constraints[0]!,
+                      ],
+                    }
+                  : { accountUnavailable: account }),
+              },
+            ];
+          }
+          const dataUse = providerDataUse(provider);
           const models = orderModelsForListing(
             provider,
             selectableModels(provider, modelPreferences),
@@ -3042,12 +3141,10 @@ const make = Effect.gen(function* () {
           )
             return [];
           const cursor = input.cursor ?? 0;
-          const limit = input.limit ?? 20;
+          const limit = input.limit ?? (overview ? 6 : 20);
           return [
             {
-              providerInstanceId: provider.instanceId,
-              driverKind: provider.driver,
-              displayName: provider?.displayName ?? null,
+              ...identity,
               models: filtered.slice(cursor, cursor + limit).map((model) => {
                 const scopedAccount =
                   provider.recentFailure?.modelIds === undefined
@@ -3058,7 +3155,10 @@ const make = Effect.gen(function* () {
                     ? {}
                     : recentFailureNote(provider, now, model.slug);
                 const modelFailure = modelFailures.get(
-                  modelRankingSelectionKey({ instanceId: provider.instanceId, model: model.slug }),
+                  modelRankingSelectionKey({
+                    instanceId: provider.instanceId,
+                    model: model.slug,
+                  }),
                 );
                 const newer = superseded.get(
                   modelRankingSelectionKey({
@@ -3074,6 +3174,7 @@ const make = Effect.gen(function* () {
                 );
                 const readsImages = model.capabilities?.imageInput;
                 const unavailable = model.unavailableReason ?? scopedAccount?.reason;
+                const family = modelRankingFamily(model, provider);
                 return {
                   id: model.slug,
                   ...(yourRuns === undefined ? {} : { yourRuns }),
@@ -3081,9 +3182,9 @@ const make = Effect.gen(function* () {
                     ? scopedNote
                     : { recentFailure: modelFailureNote(modelFailure, now) }),
                   ...(readsImages === false ? { images: false as const } : {}),
-                  family: modelRankingFamily(model, provider),
+                  ...(family === model.slug ? {} : { family }),
                   ...(model.isLegacy ? { isLegacy: true } : {}),
-                  label: model.name ?? null,
+                  ...(model.name && model.name !== model.slug ? { label: model.name } : {}),
                   ...(input.includeOptions && model.capabilities?.optionDescriptors !== undefined
                     ? { options: model.capabilities.optionDescriptors }
                     : {}),
@@ -3120,16 +3221,20 @@ const make = Effect.gen(function* () {
           runtimeMode: limits.runtimeMode,
           interactionMode: limits.interactionMode,
           providers: providerEntries,
-          features: {
-            appOwnedSubagents: true,
-            asyncPolling: true,
-            cancellation: true,
-            batchThreadCreation: true,
-            threadManagement: true,
-            incrementalThreadRead: true,
-            scheduledTasks: true,
-            maxBatchThreads: 20,
-          },
+          ...(scope.thread === undefined
+            ? {
+                features: {
+                  appOwnedSubagents: true,
+                  asyncPolling: true,
+                  cancellation: true,
+                  batchThreadCreation: true,
+                  threadManagement: true,
+                  incrementalThreadRead: true,
+                  scheduledTasks: true,
+                  maxBatchThreads: 20,
+                },
+              }
+            : {}),
         };
       }),
     delegateTask: (callerScope, input, callerSteer?: Effect.Effect<void, OrchestratorMcpFailure>) =>
@@ -3173,6 +3278,7 @@ const make = Effect.gen(function* () {
           admit?: (
             command: Extract<OrchestrationV2ServerCommand, { type: "delegated_task.request" }>,
           ) => Effect.Effect<void, WorkflowsError>,
+          admittedAttachments?: ReadonlyArray<ChatAttachment>,
         ) =>
           Effect.gen(function* () {
             let committedSnapshot: string | undefined;
@@ -3325,32 +3431,49 @@ const make = Effect.gen(function* () {
               // only needed if the parent settled first (timeout, disconnect).
               completionWake: input.mode === "wait" ? "settled_only" : "always",
             } satisfies Extract<OrchestrationV2ServerCommand, { type: "delegated_task.request" }>;
-            if (admit)
-              yield* admit(command).pipe(
-                Effect.mapError((e) => failure("invalid_request", e.message)),
-              );
-            const result = yield* threadManagement.dispatch(command).pipe(
-              Effect.tap(({ storedEvents }) =>
-                Effect.sync(() => {
-                  // Concurrent retries can capture different snapshots before either commits.
-                  const run = storedEvents.find(({ event }) => event.type === "run.created");
-                  const preparation =
-                    run?.event.type === "run.created"
-                      ? run.event.payload.workspacePreparation
-                      : undefined;
-                  if (preparation?.type === "worktree")
-                    committedSnapshot = preparation.parentSnapshot;
-                }),
-              ),
-              Effect.uninterruptible,
-              Effect.mapError((error) =>
-                error._tag === "ThreadManagementProviderInstanceDisabledError"
-                  ? threadManagementFailure(error)
-                  : failure(
-                      "orchestration_error",
-                      `Unable to create delegated task: ${userFacingDispatchErrorMessage(error) ?? errorMessage(error)}`,
+            const result = yield* withLocalAttachments(
+              admittedAttachments ? undefined : input.attachmentPaths,
+              parent,
+              derive.delegatedTaskThread({ commandId }),
+              {
+                commandId,
+                threadId: scope.thread.threadId,
+                type: "delegated_task.request",
+              },
+              (attachments, keepForRecovery) =>
+                Effect.gen(function* () {
+                  const files = admittedAttachments ?? attachments;
+                  const prepared = files.length ? { ...command, attachments: files } : command;
+                  if (admit) {
+                    yield* admit(prepared).pipe(
+                      Effect.mapError((e) => failure("invalid_request", e.message)),
+                    );
+                    keepForRecovery();
+                  }
+                  return yield* threadManagement.dispatch(prepared).pipe(
+                    Effect.tap(({ storedEvents }) =>
+                      Effect.sync(() => {
+                        // Concurrent retries can capture different snapshots before either commits.
+                        const run = storedEvents.find(({ event }) => event.type === "run.created");
+                        const preparation =
+                          run?.event.type === "run.created"
+                            ? run.event.payload.workspacePreparation
+                            : undefined;
+                        if (preparation?.type === "worktree")
+                          committedSnapshot = preparation.parentSnapshot;
+                      }),
                     ),
-              ),
+                    Effect.uninterruptible,
+                    Effect.mapError((error) =>
+                      error._tag === "ThreadManagementProviderInstanceDisabledError"
+                        ? threadManagementFailure(error)
+                        : failure(
+                            "orchestration_error",
+                            `Unable to create delegated task: ${userFacingDispatchErrorMessage(error) ?? errorMessage(error)}`,
+                          ),
+                    ),
+                  );
+                }),
             );
             const taskEvent = result.storedEvents.find(
               (stored) =>
@@ -4095,7 +4218,9 @@ const make = Effect.gen(function* () {
         return {
           projectId,
           currentThreadId: parent?.thread.id ?? null,
-          threads: page.map((shell) => listItemFromShell(shell, nowMs)),
+          threads: page.map((shell) =>
+            listItemFromShell(shell, nowMs, input.includeDetails ?? scope.thread === undefined),
+          ),
           nextCursor,
           total: filtered.length,
         } satisfies OrchestratorMcpThreadListResult;
@@ -4237,16 +4362,16 @@ const make = Effect.gen(function* () {
           .toSorted((left, right) => right.ordinal - left.ordinal)
           .slice(0, input.runLimit ?? DEFAULT_THREAD_RUN_LIMIT)
           .map(threadRun);
-        const allItems = timeline.items.map((row) => ({
-          ...timelineItem({
+        const allItems = timeline.items.map((row) =>
+          timelineItem({
             row,
             threadId: target.thread.id,
             maxChars,
             messagesByThreadId,
             ...(input.itemId === undefined ? {} : { textOffset: input.textOffset ?? 0 }),
+            ...(snippets.has(row.position) ? { snippet: snippets.get(row.position)! } : {}),
           }),
-          ...(snippets.has(row.position) ? { snippet: snippets.get(row.position)! } : {}),
-        }));
+        );
         // Keep the end of the page the caller reads toward, and at least one item. Search
         // matches are already newest first; a backward page is in position order.
         const keepEnd = backwards && words === undefined;
@@ -4286,6 +4411,7 @@ const make = Effect.gen(function* () {
           parent !== undefined &&
           scope.thread !== undefined &&
           tasks.length > 0 &&
+          words === undefined &&
           (input.textOffset ?? 0) === 0
         ) {
           for (const task of tasks) {
@@ -4351,6 +4477,12 @@ const make = Effect.gen(function* () {
           delivery: "held",
         } satisfies OrchestratorMcpThreadSendResult;
         const targetId = target.thread.id;
+        const notifySenderOnCompletion =
+          parent !== undefined &&
+          parent.thread.id !== targetId &&
+          (parent.thread.lineage.parentEnvironmentId !== undefined ||
+            parent.thread.lineage.parentThreadId !== targetId) &&
+          !isLocalSubagentOf(target.thread, parent.thread.id);
         if (
           acceptedHeldByScope.get(scope)?.get(messageId) === targetId ||
           sendingHeldByParent.get(targetId)?.has(messageId) ||
@@ -4358,7 +4490,15 @@ const make = Effect.gen(function* () {
         ) {
           return heldResult;
         }
-        if (parent !== undefined && shouldHoldForParent({ mode, caller: parent, target })) {
+        if (
+          parent !== undefined &&
+          shouldHoldForParent({
+            mode,
+            caller: parent,
+            target,
+            attachmentPaths: input.attachmentPaths,
+          })
+        ) {
           yield* holdForParent(targetId, {
             projectId: target.thread.projectId,
             senderThreadId: parent.thread.id,
@@ -4379,45 +4519,58 @@ const make = Effect.gen(function* () {
           });
           return heldResult;
         }
-        const send = (sendMode: typeof mode) =>
-          threadManagement.sendToThread({
-            projectId: target.thread.projectId,
-            commandId: stableCommandId({
-              scope,
-              requestKey: key,
-              operation: "thread-send",
-            }),
-            threadId: target.thread.id,
-            ...(parent === undefined ? {} : { senderThreadId: parent.thread.id }),
-            messageId,
-            text: input.message,
-            attachments: [],
-            mode: sendMode,
-            createdBy: "agent",
-            creationSource: "mcp",
-          });
-        const result = yield* send(mode)
-          .pipe(
-            // A turn that ended before the steer arrived still gets the message,
-            // as a new turn; `delivery: "started"` tells the caller.
-            Effect.catchTags({
-              ThreadManagementNoSteerableRunError: (error) =>
-                error.mode === "steer" ? send("auto") : Effect.fail(error),
-            }),
-          )
-          .pipe(
-            Effect.mapError((error) =>
-              isThreadManagementError(error)
-                ? threadManagementFailure(error)
-                : failure(
-                    "orchestration_error",
-                    `Unable to send to thread ${target.thread.id}: ${userFacingDispatchErrorMessage(error) ?? errorMessage(error)}`,
-                  ),
-            ),
-          );
+        const commandId = stableCommandId({ scope, requestKey: key, operation: "thread-send" });
+        const result = yield* withLocalAttachments(
+          input.attachmentPaths,
+          parent,
+          targetId,
+          {
+            commandId,
+            threadId: targetId,
+            type: "message.dispatch",
+          },
+          (attachments) => {
+            const send = (sendMode: typeof mode) =>
+              threadManagement.sendToThread({
+                projectId: target.thread.projectId,
+                commandId,
+                threadId: target.thread.id,
+                ...(parent === undefined ? {} : { senderThreadId: parent.thread.id }),
+                ...(notifySenderOnCompletion && { notifySenderOnCompletion: true }),
+                messageId,
+                text: input.message,
+                attachments,
+                mode: sendMode,
+                createdBy: "agent",
+                creationSource: "mcp",
+              });
+            return send(mode)
+              .pipe(
+                // A turn that ended before the steer arrived still gets the message,
+                // as a new turn; `delivery: "started"` tells the caller.
+                Effect.catchTags({
+                  ThreadManagementNoSteerableRunError: (error) =>
+                    error.mode === "steer" ? send("auto") : Effect.fail(error),
+                }),
+              )
+              .pipe(
+                Effect.mapError((error) =>
+                  isThreadManagementError(error)
+                    ? threadManagementFailure(error)
+                    : failure(
+                        "orchestration_error",
+                        `Unable to send to thread ${target.thread.id}: ${userFacingDispatchErrorMessage(error) ?? errorMessage(error)}`,
+                      ),
+                ),
+              );
+          },
+        );
         return {
           threadId: target.thread.id,
           messageId,
+          ...(result.message.notifySenderOnCompletion && {
+            notice: "You’ll wake when this run ends.",
+          }),
           ...(result.run.delegatedTaskId === undefined
             ? { runId: result.run.id }
             : { taskId: taskReference(result.run.delegatedTaskId) }),
@@ -4688,6 +4841,7 @@ export const layer: Layer.Layer<
   OrchestratorMcpService,
   never,
   | Crypto.Crypto
+  | LocalFiles.LocalFileAttachments
   | ThreadManagementService.ThreadManagementService
   | ThreadLaunchService.ThreadLaunchService
   | ManagedProjectFolders.ManagedProjectFolders

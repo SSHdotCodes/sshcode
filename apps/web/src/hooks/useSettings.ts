@@ -612,7 +612,9 @@ export function usePrimarySettingsAvailable(): boolean {
 }
 
 /** Connected sync targets, excluding grants already known to forbid settings writes. */
-function useSharedSettingsSyncTargetIds(includePending = false): ReadonlyArray<EnvironmentId> {
+export function useSharedSettingsSyncTargetIds(
+  includePending = false,
+): ReadonlyArray<EnvironmentId> {
   const { environments } = useEnvironments();
   const writableTargetsAtom = useMemo(
     () =>

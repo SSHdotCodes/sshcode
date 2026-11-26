@@ -1,3 +1,4 @@
+import { findAcpApprovalModes } from "@t3tools/shared/acpComposer";
 import { useModelMentionCatalog } from "./use-model-mention-catalog";
 import { resolveNewChatLayout } from "./new-chat-layout";
 import { useChatBackdropEnabled, useNewChatDashboardEnabled } from "./useNewChatDashboard";
@@ -197,6 +198,11 @@ import {
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
 import { selectIncomingShareAttachmentsForServer } from "../sharing/incoming-share-model";
 import { appAtomRegistry } from "../../state/atom-registry";
+import {
+  isCompressingComposerVideo,
+  useCompressingComposerVideo,
+  withComposerVideoPreparation,
+} from "../../state/composer-video-preparation";
 import { serverEnvironment } from "../../state/server";
 import { fileRoutePathSegments } from "../files/filePath";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
@@ -686,6 +692,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
     !isIncomingShareAwaitingServerConfig,
   );
   const contextImports = useAtomValue(composerContextImportsAtom);
+  const compressingVideo = useCompressingComposerVideo(flow.draftKey);
   const isImportingContext = flow.draftKey ? contextImports[flow.draftKey] === true : false;
   const isComposerInteractionLocked =
     isIncomingShareTransferPending || flow.submitting || isImportingContext;
@@ -1486,66 +1493,56 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
   });
   const showBranchLoading = flow.branchesLoading && flow.availableBranches.length === 0;
 
-  async function handlePickMedia(source: "library" | "camera" = "library"): Promise<void> {
-    if (isComposerInteractionLocked || voiceInput.isBusy) {
+  async function handlePickAttachments(
+    source: "library" | "camera" | "files" = "library",
+  ): Promise<void> {
+    const draftKey = flow.draftKey;
+    if (!draftKey || isComposerInteractionLocked || voiceInput.isBusy) {
       return;
     }
     const capabilities = selectedEnvironmentServerConfig?.environment.capabilities;
-    const insertion = flow.draftKey ? captureComposerDraftInsertion(flow.draftKey) : undefined;
-    const result = await pickComposerMedia({
-      source,
-      existingCount:
-        flow.draftKey && insertion
-          ? countComposerDraftAttachmentsAfterSelection(flow.draftKey, insertion)
-          : flow.attachments.length,
-      maxVideoBytes:
-        capabilities?.attachmentUploads === true
-          ? capabilities.fileAttachments?.maxUploadBytes
-          : undefined,
-    });
-    const rejectedCount =
-      result.attachments.length > 0 ? flow.appendAttachments(result.attachments, insertion) : 0;
-    const problems = [
-      ...(result.error ? [result.error] : []),
-      ...(rejectedCount > 0
-        ? [`You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} attachments per message.`]
-        : []),
-    ];
-    if (problems.length > 0) {
-      Alert.alert("Could not attach photo or video", problems.join("\n\n"));
-    }
-  }
-
-  async function handlePickFiles(): Promise<void> {
-    if (isComposerInteractionLocked || voiceInput.isBusy) {
-      return;
-    }
-    const maxBytes =
-      selectedEnvironmentServerConfig?.environment.capabilities.fileAttachments?.maxUploadBytes;
-    if (maxBytes === undefined) {
+    const maxBytes = capabilities?.fileAttachments?.maxUploadBytes;
+    if (source === "files" && maxBytes === undefined) {
       Alert.alert("File attachments are not available on this server.");
       return;
     }
-    const insertion = flow.draftKey ? captureComposerDraftInsertion(flow.draftKey) : undefined;
-    const result = await pickComposerFiles({
-      existingCount:
-        flow.draftKey && insertion
-          ? countComposerDraftAttachmentsAfterSelection(flow.draftKey, insertion)
-          : flow.attachments.length,
-      maxBytes,
-    });
-    const rejectedCount =
-      result.files.length > 0 ? flow.appendAttachments(result.files, insertion) : 0;
-    // The picker error and the live-cap rejection can both happen in one
-    // pick; report both in a single alert.
+    const insertion = captureComposerDraftInsertion(draftKey);
+    const existingCount = countComposerDraftAttachmentsAfterSelection(draftKey, insertion);
+    const { error, rejectedCount } = await withComposerVideoPreparation(
+      draftKey,
+      async (onCompressing) => {
+        const result =
+          source === "files"
+            ? await pickComposerFiles({ existingCount, maxBytes, onCompressing })
+            : await pickComposerMedia({
+                source,
+                existingCount,
+                maxVideoBytes: capabilities?.attachmentUploads === true ? maxBytes : undefined,
+                onCompressing,
+              });
+        const attachments = "files" in result ? result.files : result.attachments;
+        if (!shareImportMountedRef.current || latestDraftKeyRef.current !== draftKey) {
+          scheduleUnusedComposerAttachmentCleanup(attachments);
+          return { error: null, rejectedCount: 0 };
+        }
+        return {
+          error: result.error,
+          rejectedCount:
+            attachments.length > 0 ? flow.appendAttachments(attachments, insertion) : 0,
+        };
+      },
+    );
     const problems = [
-      ...(result.error ? [result.error] : []),
+      ...(error ? [error] : []),
       ...(rejectedCount > 0
         ? [`You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`]
         : []),
     ];
     if (problems.length > 0) {
-      Alert.alert("Could not attach file", problems.join("\n\n"));
+      Alert.alert(
+        source === "files" ? "Could not attach file" : "Could not attach photo or video",
+        problems.join("\n\n"),
+      );
     }
   }
 
@@ -1683,6 +1680,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
       throw new Error("Connect to the environment before scheduling.");
     const readPendingWork = () => ({
       pastedTextAttachments: pendingPastedTextAttachmentCountRef.current,
+      compressingVideo: isCompressingComposerVideo(draftKey),
       importingContext: appAtomRegistry.get(composerContextImportsAtom)[draftKey] === true,
     });
     const draft = getComposerDraftSnapshot(draftKey);
@@ -1801,7 +1799,8 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
       return;
     }
     if (!(await flushComposerEditorInput(promptInputRef.current, flushingInputRef))) return;
-    if (pendingPastedTextAttachmentCountRef.current > 0) return;
+    if (pendingPastedTextAttachmentCountRef.current > 0 || isCompressingComposerVideo(draftKey))
+      return;
     const draft = getComposerDraftSnapshot(draftKey);
     if (appAtomRegistry.get(composerContextImportsAtom)[draftKey]) return;
     const workspaceMode = draft.workspaceSelection?.mode ?? flow.workspaceMode;
@@ -2004,6 +2003,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
   const isAndroid = Platform.OS === "android";
   const canStart =
     !isImportingContext &&
+    !compressingVideo &&
     !cloneBlocksStart &&
     taskPermissionReason === null &&
     attachmentBlockReason === null &&
@@ -2428,11 +2428,12 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
           paddingTop: layout.composerPaddingTop,
         }}
       >
-        {stripAttachments.length > 0 ? (
+        {stripAttachments.length > 0 || compressingVideo ? (
           <View className="px-[14px] pb-2.5">
             <ComposerAttachmentStrip
               environmentId={selectedProject.environmentId}
               attachments={stripAttachments}
+              compressingVideo={compressingVideo}
               imageBorderRadius={12}
               imageSize={56}
               onRemove={
@@ -2517,9 +2518,9 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
                     supportsFiles={Boolean(
                       selectedEnvironmentServerConfig?.environment.capabilities.fileAttachments,
                     )}
-                    onPickMedia={handlePickMedia}
-                    onPickCamera={() => handlePickMedia("camera")}
-                    onPickFiles={handlePickFiles}
+                    onPickMedia={handlePickAttachments}
+                    onPickCamera={() => handlePickAttachments("camera")}
+                    onPickFiles={() => handlePickAttachments("files")}
                   />
                   <View
                     className="min-w-0 flex-1 flex-row items-center justify-end gap-2"
@@ -2529,6 +2530,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
                       <ComposerModelControl
                         capabilities={flow.selectedModelOption?.capabilities}
                         selection={flow.selectedModel}
+                        onAcpSpeedChange={flow.setSelectedModelOptions}
                         disabled={isComposerInteractionLocked}
                         emphasized
                         renderIcon={(size) => (
@@ -2546,7 +2548,10 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
                         onPress={settingsSheetPresentation.open}
                       />
                     </View>
-                    {flow.planModeEnabled ? (
+                    {flow.planModeEnabled &&
+                    !findAcpApprovalModes(
+                      flow.selectedModelOption?.capabilities?.optionDescriptors ?? [],
+                    )?.plan ? (
                       <ComposerInlineControl
                         accessibilityHint={`Switches to ${flow.interactionMode === "plan" ? "Build" : "Plan"} mode`}
                         accessibilityLabel={`Interaction mode: ${flow.interactionMode === "plan" ? "Plan" : "Build"}`}
@@ -2583,6 +2588,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
                   accessibilityLabel={
                     taskPermissionReason ??
                     attachmentBlockReason ??
+                    (compressingVideo ? "Compressing video" : null) ??
                     (cloneBlocksStart
                       ? projectClone === null || projectClone.phase === "running"
                         ? "Cloning repository"
@@ -2629,6 +2635,7 @@ function NewTaskDraftContent(props: NewTaskDraftScreenProps) {
                         : { text: flow.prompt, attachments: flow.attachments },
                       {
                         pastedTextAttachments: pendingPastedTextAttachmentCount,
+                        compressingVideo: compressingVideo !== undefined,
                         importingContext: isImportingContext,
                       },
                     ))

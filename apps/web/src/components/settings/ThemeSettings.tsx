@@ -154,7 +154,7 @@ function ThemeLibraryCard({
         render={
           <div
             className={cn(
-              "cursor-pointer overflow-hidden rounded-xl border border-border/70 bg-card/60 transition-colors hover:bg-accent/10",
+              "group/theme-card cursor-pointer overflow-hidden rounded-xl border border-border/70 bg-card/60 transition-colors hover:bg-accent/10",
               isActive && "bg-accent/30",
             )}
             data-theme-library-card={theme.id}
@@ -317,7 +317,7 @@ function ThemeLibraryCard({
                 </div>
               </div>
               {onEdit || onDuplicate || onDownload || onRemove ? (
-                <div className="flex shrink-0 items-center gap-1">
+                <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity duration-120 group-hover/theme-card:opacity-100 group-focus-within/theme-card:opacity-100 pointer-coarse:opacity-100 motion-reduce:transition-none">
                   {onDuplicate ? (
                     <Tooltip>
                       <TooltipTrigger
@@ -885,13 +885,13 @@ export function ThemeLibrary({
   );
 
   return (
-    <div className="space-y-3">
-      <h3 className="px-3 text-sm font-normal text-foreground/70 sm:px-4">
+    <div className="space-y-2">
+      <h3 className="flex min-h-7 items-center px-3 text-xs font-medium text-muted-foreground sm:px-4">
         {searchableSetting("color-scheme").title}
       </h3>
       {renderModeTiles()}
-      <div className="flex min-h-8 flex-wrap items-center justify-between gap-3 px-3 pt-2 sm:px-4">
-        <h3 className="text-sm font-normal text-foreground/70">
+      <div className="flex min-h-7 flex-wrap items-center justify-between gap-3 px-3 pt-4 sm:px-4">
+        <h3 className="text-xs font-medium text-muted-foreground">
           {searchableSetting("theme").title}
         </h3>
         <div className="flex flex-wrap items-center justify-end gap-2">

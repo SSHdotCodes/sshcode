@@ -87,6 +87,7 @@ import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrid
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as MonitorDelivery from "./monitors/MonitorDelivery.ts";
 import * as ApiKeyHttp from "./secrets/ApiKeyHttp.ts";
+import * as WorkingThreadsHttp from "./orchestration-v2/WorkingThreadsHttp.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as AgentToolPolicy from "./mcp/AgentToolPolicy.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
@@ -407,6 +408,7 @@ const layerGit = Layer.empty.pipe(
 );
 
 const layerGitWorkflow = GitWorkflowService.layer.pipe(
+  Layer.provide(RuntimeLayer.layerWarmWorktreePool),
   Layer.provideMerge(layerVcsDriverRegistry),
   Layer.provideMerge(layerGit),
 );
@@ -599,7 +601,10 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   // Asks T3 Connect to deliver webhooks it held while this environment was offline.
   HeldHooksWaker.layer,
   layerThreadSettlementWorker,
-  StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+  StorageCleanup.layer.pipe(
+    Layer.provide(ProjectionStoreV2.layer),
+    Layer.provide(RuntimeLayer.layerWarmWorktreePool),
+  ),
   layerThreadPullRequestWorker,
   KeepAwake.layer,
   Layer.effectDiscard(
@@ -821,6 +826,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerAttachmentUploadRoute,
     DeviceHubProxy.layer,
     ApiKeyHttp.layer,
+    WorkingThreadsHttp.layer,
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer.pipe(
@@ -1221,6 +1227,11 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(
         McpSessionRegistry.layer.pipe(
           Layer.provide(ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+          Layer.provide(
+            AgentToolPolicy.layerDiscovery.pipe(
+              Layer.provide(Layer.merge(layerServerSettings, ChatControls.layer)),
+            ),
+          ),
         ),
       ),
       Layer.provide(layerActivation),

@@ -69,14 +69,12 @@ function effortInName(name: string): string {
 }
 
 function score(value: number | null): number | undefined {
-  return value !== null && Number.isFinite(value) && value > 0 && value <= 100
-    ? Math.round(value)
-    : undefined;
+  return value !== null && Number.isFinite(value) && value > 0 && value <= 100 ? value : undefined;
 }
 
 function speed(value: number | null): number | undefined {
   return value !== null && Number.isFinite(value) && value > 0 && value < 100_000
-    ? Math.round(value * 10) / 10
+    ? value
     : undefined;
 }
 

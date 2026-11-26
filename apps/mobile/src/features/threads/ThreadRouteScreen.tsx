@@ -71,7 +71,7 @@ import {
 } from "@t3tools/shared/projectScripts";
 import { ActionSheetIOS, Alert, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useConnectionsReady } from "../../state/workspace";
+import { useConnectionsReady, useWorkspaceEnvironments } from "../../state/workspace";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { useEnvironmentShellReadiness } from "../../state/shell";
 import { restoredNewTaskDraftKey } from "../../state/new-task-draft-key";
@@ -739,9 +739,13 @@ function ThreadRouteContent(
     )
       ? selectedThreadProject.title
       : null;
+  // With one machine, every chat is on it; its name would only repeat under each title.
+  const hasOtherMachines = useWorkspaceEnvironments().length > 1;
   const headerSubtitle = [
     headerProjectTitle,
-    selectedEnvironmentConnection?.environmentLabel ?? null,
+    hasOtherMachines || !headerProjectTitle
+      ? (selectedEnvironmentConnection?.environmentLabel ?? null)
+      : null,
   ]
     .filter(Boolean)
     .join(" · ");

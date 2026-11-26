@@ -117,10 +117,11 @@ const iosBundleIdentifier =
     : variant.iosBundleIdentifier;
 
 const dmSansFonts = {
-  regular: "@expo-google-fonts/dm-sans/400Regular/DMSans_400Regular.ttf",
+  // The prose faces add tabular alternates to the Expo DM Sans glyphs and metrics.
+  regular: "./assets/fonts/DMSans-Regular.ttf",
   medium: "@expo-google-fonts/dm-sans/500Medium/DMSans_500Medium.ttf",
   semibold: "@expo-google-fonts/dm-sans/600SemiBold/DMSans_600SemiBold.ttf",
-  bold: "@expo-google-fonts/dm-sans/700Bold/DMSans_700Bold.ttf",
+  bold: "./assets/fonts/DMSans-Bold.ttf",
 } as const;
 
 const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [

@@ -11,6 +11,7 @@ import {
   T3_PI_RUNTIME_MODE_ENV,
   T3_PI_MCP_EXTENSION_PATH_ENV,
   T3_SUBAGENTS_OFF_ENV,
+  T3_PI_SUBAGENT_ENV,
 } from "./mcpExtensionSource.ts";
 
 const RESERVED_PI_LAUNCH_ARGUMENTS = new Set([
@@ -260,6 +261,7 @@ export function buildPiRpcLaunch(input: {
   readonly runtimeMode?: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
   /** Shortens the baked orchestration rules for this chat. */
   readonly subagentsOff?: boolean;
+  readonly isSubagent?: boolean;
 }): {
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
@@ -297,6 +299,7 @@ export function buildPiRpcLaunch(input: {
   delete environment[T3_MCP_BEARER_ENV];
   delete environment[T3_PI_MCP_EXTENSION_PATH_ENV];
   delete environment[T3_SUBAGENTS_OFF_ENV];
+  delete environment[T3_PI_SUBAGENT_ENV];
 
   return {
     args,
@@ -319,6 +322,7 @@ export function buildPiRpcLaunch(input: {
             ),
           }
         : {}),
+      ...(hasT3Mcp && input.isSubagent ? { [T3_PI_SUBAGENT_ENV]: "1" } : {}),
       ...(input.subagentsOff === true ? { [T3_SUBAGENTS_OFF_ENV]: "1" } : {}),
     },
     hasT3Mcp,

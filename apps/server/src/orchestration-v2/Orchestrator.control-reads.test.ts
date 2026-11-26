@@ -1911,19 +1911,22 @@ it.effect.each(["child wake", "parent follow-up", "restart continuation"] as con
 
 const traceStatements = () => {
   const statements: Array<string> = [];
+  const failedTransactions: Array<string> = [];
   const tracer = Tracer.make({
     span(options) {
       const span = new Tracer.NativeSpan(options);
       const end = span.end.bind(span);
       span.end = (time, exit) => {
         end(time, exit);
+        if (span.name === "sql.transaction" && exit._tag === "Failure")
+          failedTransactions.push(span.name);
         const query = span.attributes.get("db.query.text");
         if (typeof query === "string") statements.push(query);
       };
       return span;
     },
   });
-  return { statements, tracer };
+  return { statements, tracer, failedTransactions };
 };
 
 // Record reads whose plan walks every node or turn item the thread holds, and message
@@ -1988,20 +1991,24 @@ it.effect("delegated task controls read the task's records, not the parent's his
       creationSource: "web",
     });
     const parentRun = (yield* projections.getThreadProjection(parentThreadId)).runs[0]!;
-    yield* orchestrator.dispatch({
-      type: "delegated_task.request",
-      commandId: CommandId.make("delegate-bounded-task-controls"),
-      parentThreadId,
-      parentRunId: parentRun.id,
-      parentNodeId: parentRun.rootNodeId!,
-      task: "Research the sources",
-      completionWake: "settled_only",
-      modelSelection,
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      createdBy: "agent",
-      creationSource: "mcp",
-    });
+    const creation = traceStatements();
+    yield* orchestrator
+      .dispatch({
+        type: "delegated_task.request",
+        commandId: CommandId.make("delegate-bounded-task-controls"),
+        parentThreadId,
+        parentRunId: parentRun.id,
+        parentNodeId: parentRun.rootNodeId!,
+        task: "Research the sources",
+        completionWake: "settled_only",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdBy: "agent",
+        creationSource: "mcp",
+      })
+      .pipe(Effect.withTracer(creation.tracer));
+    assert.deepEqual(creation.failedTransactions, []);
     const task = (yield* projections.getThreadRecords(parentThreadId, ["subagents"])).subagents[0]!;
     // A finished task whose result nobody read yet, under a settled parent turn that
     // has more than one message to order.

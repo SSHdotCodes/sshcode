@@ -44,7 +44,8 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
 
   return (
     <div
-      className="@container/changed-files mt-4 rounded-lg bg-secondary dark:bg-input/20"
+      // Framed like a code block, so the card holds its edge on the light canvas.
+      className="@container/changed-files mt-4 rounded-lg border border-border/70 bg-secondary dark:border-transparent dark:bg-input/20"
       data-changed-files-state="tree"
     >
       <div

@@ -307,10 +307,24 @@ export function formatRelayedSentAt(sentAt: number, now: number): string {
       });
 }
 
+export function deriveThreadPendingBackgroundTasks(
+  projection: OrchestrationV2ThreadProjection,
+  latestRun = presentedLatestRun(projection),
+) {
+  return derivePendingBackgroundWork({
+    latestRun,
+    providerThreads: projection.providerThreads,
+    turnItems: projection.turnItems,
+    activeProviderThreadId: projection.thread.activeProviderThreadId,
+    runs: projection.runs,
+    pullRequests: projection.thread.pullRequests,
+  });
+}
+
 export function deriveThreadRuntime(
   projection: OrchestrationV2ThreadProjection,
+  pendingBackgroundTasks?: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
 ): ThreadRuntimeSummary | null {
-  const latestRun = deriveLatestThreadRun(projection);
   const providerSession = projection.providerSessions.findLast(
     (session) => session.providerInstanceId === projection.thread.providerInstanceId,
   );
@@ -323,18 +337,11 @@ export function deriveThreadRuntime(
   // Same rule as the shell runtime: only background work that holds the
   // completion parks the thread at idle; a dev server left running does not.
   const backgroundWorkHoldsRun = backgroundWorkHoldsCompletion(
-    derivePendingBackgroundWork({
-      latestRun: latestRunProjection,
-      providerThreads: projection.providerThreads,
-      turnItems: projection.turnItems,
-      activeProviderThreadId: projection.thread.activeProviderThreadId,
-      runs: projection.runs,
-      pullRequests: projection.thread.pullRequests,
-    }),
+    pendingBackgroundTasks ?? deriveThreadPendingBackgroundTasks(projection, latestRunProjection),
   );
   // A pull request watch can hold a thread that never ran.
   if (
-    latestRun === null &&
+    latestRunProjection === null &&
     projection.thread.activeProviderThreadId === null &&
     !backgroundWorkHoldsRun
   ) {

@@ -1,4 +1,4 @@
-// @effect-diagnostics globalDate:off - Calendar calculations on explicit timestamps, not the current clock.
+// @effect-diagnostics globalDate:off - Standalone report uses native UTC date parsing and ISO output.
 // Pure computation of the usage report from thread and run rows. No I/O.
 
 export interface ThreadRow {

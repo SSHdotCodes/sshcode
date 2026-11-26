@@ -17041,95 +17041,130 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.effect("restarts the ACP child process before the next prompt after interrupt", () =>
-    Effect.gen(function* () {
-      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
-      const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
-      const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
-      const instanceId = ProviderInstanceId.make("acp-test");
-      const adapter = yield* makeAcpAdapterV2({
-        instanceId,
-        flavor: {
-          driver: ACP_TEST_DRIVER,
-          capabilities: AcpProviderCapabilitiesV2,
-          restartRuntimeAfterInterrupt: true,
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner,
-            mockAgentPath,
-            protocolEvents,
-          }),
-        },
-        selfInvocation,
-      });
-      const threadId = ThreadId.make("thread-acp-restart-after-interrupt");
-      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: process.cwd(),
-      });
-      const modelSelection = { instanceId, model: "default" } as const;
-      const runtime = yield* adapter.openSession({
-        threadId,
-        providerSessionId: ProviderSessionId.make("provider-session-acp-restart-after-interrupt"),
-        modelSelection,
-        runtimePolicy,
-      });
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-      });
-      const now = yield* DateTime.now;
-      yield* runtime.startTurn(
-        makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 1 }),
-      );
-      yield* Stream.fromQueue(protocolEvents).pipe(
-        Stream.filter(
-          (event) =>
-            event.direction === "outgoing" && rawProtocolMethod(event) === "session/prompt",
-        ),
-        Stream.runHead,
-      );
-      const providerTurnId = idAllocator.derive.providerTurn({
-        driver: ACP_TEST_DRIVER,
-        nativeTurnId: acpScopedNativeId(
+  it.effect.each([
+    { label: "configured restart", configuredRestart: true, steer: false, resumes: true },
+    { label: "native steer then Stop", configuredRestart: false, steer: true, resumes: true },
+    { label: "Stop alone", configuredRestart: false, steer: false, resumes: false },
+  ])(
+    "dispatches through the correct ACP session after $label",
+    ({ configuredRestart, steer, resumes }) =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const path = yield* Path.Path;
+        const selfInvocation = yield* resolveSelfInvocation();
+        const mockAgentPath = yield* path.fromFileUrl(
+          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+        );
+        const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
+        const instanceId = ProviderInstanceId.make("acp-test");
+        const adapter = yield* makeAcpAdapterV2({
           instanceId,
-          `${providerThread.nativeThreadRef?.nativeId}:turn:1`,
-        ),
-      });
-      yield* runtime.interruptTurn({
-        providerThread,
-        providerTurnId,
-        requestRuntimeRestart: true,
-      });
-      yield* Stream.fromQueue(protocolEvents).pipe(
-        Stream.filter(
-          (event) =>
-            event.direction === "outgoing" && rawProtocolMethod(event) === "session/cancel",
-        ),
-        Stream.runHead,
-      );
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            restartRuntimeAfterInterrupt: configuredRestart,
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              protocolEvents,
+              cancelBehavior: "wait-for-prompt",
+              wrapRuntime: (peer) => ({
+                ...peer,
+                start: () =>
+                  peer.start().pipe(
+                    Effect.map((started) => ({
+                      ...started,
+                      initializeResult: {
+                        ...started.initializeResult,
+                        _meta: { ...started.initializeResult._meta, steering: { supported: true } },
+                      },
+                    })),
+                  ),
+                request: (method, payload) =>
+                  method === "_session/steering"
+                    ? Effect.succeed({ outcome: "injected" })
+                    : peer.request(method, payload),
+              }),
+            }),
+          },
+          selfInvocation,
+        });
+        const threadId = ThreadId.make("thread-acp-restart-after-interrupt");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-acp-restart-after-interrupt"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        const first = makeTurnInput({
+          threadId,
+          providerThread,
+          instanceId,
+          runtimePolicy,
+          now,
+          ordinal: 1,
+        });
+        yield* runtime.startTurn(first);
+        yield* Stream.fromQueue(protocolEvents).pipe(
+          Stream.filter(
+            (event) =>
+              event.direction === "outgoing" && rawProtocolMethod(event) === "session/prompt",
+          ),
+          Stream.runHead,
+        );
+        const providerTurnId = idAllocator.derive.providerTurn({
+          driver: ACP_TEST_DRIVER,
+          nativeTurnId: acpScopedNativeId(
+            instanceId,
+            `${providerThread.nativeThreadRef?.nativeId}:turn:1`,
+          ),
+        });
+        if (steer) {
+          yield* runtime.steerTurn!({
+            threadId,
+            runId: first.runId,
+            providerThread,
+            providerTurnId,
+            message: { ...first.message, text: "Steer the running turn." },
+          });
+        }
+        yield* runtime.interruptTurn({
+          providerThread,
+          providerTurnId,
+          requestRuntimeRestart: true,
+        });
+        yield* Stream.fromQueue(protocolEvents).pipe(
+          Stream.filter(
+            (event) =>
+              event.direction === "outgoing" && rawProtocolMethod(event) === "session/cancel",
+          ),
+          Stream.runHead,
+        );
 
-      yield* runtime.startTurn(
-        makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 2 }),
-      );
-      const loadAfterRestart = yield* Stream.fromQueue(protocolEvents).pipe(
-        Stream.filter(
-          (event) =>
-            event.direction === "outgoing" && rawProtocolMethod(event) === "session/resume",
-        ),
-        Stream.runHead,
-      );
-      assert.isTrue(
-        Option.isSome(loadAfterRestart),
-        "post-interrupt startTurn should respawn the runtime and replay session/resume",
-      );
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
+        yield* runtime.startTurn(
+          makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now, ordinal: 2 }),
+        );
+        const nextPrompt = yield* Stream.fromQueue(protocolEvents).pipe(
+          Stream.filter((event) => event.direction === "outgoing"),
+          Stream.map(rawProtocolMethod),
+          Stream.takeUntil((method) => method === "session/prompt"),
+          Stream.runCollect,
+        );
+        assert.equal(nextPrompt.includes("session/resume"), resumes);
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.effect("Windows teardown is one-shot explicitly with independent finalizer cleanup", () =>

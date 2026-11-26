@@ -24,6 +24,7 @@ class TestAnimation {
 }
 
 class TestRow {
+  hasAttribute = () => false;
   offsetTop = 0;
   offsetLeft = 4;
   offsetWidth = 260;

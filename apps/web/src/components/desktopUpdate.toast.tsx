@@ -2,6 +2,7 @@ import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
 import { ArrowRightIcon } from "lucide-react";
 
 import {
+  formatWorkingChats,
   getDesktopUpdateDownloadedVersion,
   getDesktopUpdateReleaseUrl,
 } from "./desktopUpdate.logic";
@@ -60,5 +61,30 @@ export function showDesktopUpdateDownloadedToast(
         {releaseUrl ? <ReleaseNotesLink releaseUrl={releaseUrl} shell={shell} /> : null}
       </>
     ),
+  });
+}
+
+/** After an install chose to wait for working chats: says so, with the way out. */
+export function showDesktopUpdateWaitingToast(
+  bridge: Pick<DesktopBridge, "cancelUpdateWhenIdle">,
+  state: DesktopUpdateState,
+): void {
+  const { installWhenIdle } = state;
+  if (installWhenIdle === undefined) return;
+  const id = toastManager.add({
+    type: "info",
+    title: "Restarts when chats finish",
+    description: `${formatWorkingChats(installWhenIdle.working)} working, at most 30 minutes.`,
+    ...(bridge.cancelUpdateWhenIdle
+      ? {
+          actionProps: {
+            children: "Cancel",
+            onClick: () => {
+              toastManager.close(id);
+              void bridge.cancelUpdateWhenIdle?.().catch(() => undefined);
+            },
+          },
+        }
+      : {}),
   });
 }

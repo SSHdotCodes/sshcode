@@ -62,6 +62,23 @@ describe("HTML in native Markdown", () => {
     );
   });
 
+  it("still converts HTML next to code that only looks like it hides the tag", () => {
+    const cases = [
+      // A tilde fence holding backticks closes before the tag.
+      "~~~\n```\n~~~\n<br>\n```",
+      // An unpaired double backtick is literal, so the tag is not in a code span.
+      "`` <br> `x`",
+      // The escaped backtick opens nothing.
+      "\\` <br> `x`",
+      // A longer closing fence ends the block before the tag.
+      "```js\nconst a = 1;\n````\n<br>\n```",
+    ];
+    for (const markdown of cases) expect(markdownWithHtml(markdown)).not.toContain("<br>");
+    expect(markdownWithHtml("```tsx\n<View />\n```\n\nUse `Array<string>` and <br> here.")).toBe(
+      "```tsx\n<View />\n```\n\nUse `Array<string>` and   \n here.",
+    );
+  });
+
   it("collects HTML and Markdown screenshots while leaving inline and fenced code literal", () => {
     const markdown =
       '```html\n<img src="literal.png">\n```\n\nUse `<img src="inline.png">` here.\n\n<img src="one.png">\n\n![Two](two.png)\n\n<img src="one.png">';

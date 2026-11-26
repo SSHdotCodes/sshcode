@@ -35,6 +35,14 @@ describe("normalizeGitRemoteUrl", () => {
     expect(normalizeGitRemoteUrl(remote)).toBe(key);
   });
 
+  it.each([
+    ["ssh://git@altssh.gitlab.com:443/Group/Sub/Repo.git", "gitlab.com/group/sub/repo"],
+    ["git@altssh.gitlab.com:Group/Sub/Repo.git", "gitlab.com/group/sub/repo"],
+    ["git@altssh.gitlab.example.com:Group/Repo.git", "altssh.gitlab.example.com/group/repo"],
+  ])("uses the web identity for %s", (remote, expected) => {
+    expect(normalizeGitRemoteUrl(remote)).toBe(expected);
+  });
+
   it("canonicalizes equivalent GitHub remotes across protocol variants", () => {
     expect(normalizeGitRemoteUrl("git@github.com:T3Tools/T3Code.git")).toBe(
       "github.com/t3tools/t3code",

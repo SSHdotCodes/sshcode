@@ -1487,8 +1487,6 @@ function ScheduledTaskEditorDialog({
                   </div>
                   <ToggleGroup
                     multiple
-                    variant="outline"
-                    size="sm"
                     aria-label="Days to run"
                     value={[...draft.weekdays].map(String)}
                     onValueChange={(values) => {

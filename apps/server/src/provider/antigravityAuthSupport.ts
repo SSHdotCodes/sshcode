@@ -87,7 +87,6 @@ export interface AntigravityProfile {
   readonly platform: NodeJS.Platform;
   readonly geminiHome: string;
   readonly acpDirectory: string;
-  readonly tokenPath: string;
   /** Parent of the per-process temp directories PyInstaller unpacks into. */
   readonly tempDirectory: string;
   readonly browserCommand: string;
@@ -251,7 +250,8 @@ function antigravityEnvironment(
       : {}),
     GEMINI_HOME: profile.geminiHome,
     AGY_ACP_FORCE_FILE_STORAGE: "1",
-    AGY_CLI_DISABLE_AUTO_UPDATE: "true",
+    // Unlike upstream, the CLI keeps updating itself: Google ships Neon caching and harness gains
+    // through it every few days, and SSHCode has no other way to update a CLI it didn't install.
     BROWSER: profile.browserCommand,
     PYTHONUNBUFFERED: "1",
     ELECTRON_RUN_AS_NODE: "1",
@@ -603,7 +603,6 @@ export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(
     platform,
     geminiHome,
     acpDirectory,
-    tokenPath: path.join(acpDirectory, "acp_token.json"),
     tempDirectory,
     browserCommand,
     ...(caBundlePath === undefined ? {} : { caBundlePath }),

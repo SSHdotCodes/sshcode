@@ -92,7 +92,8 @@ export function deriveSteerWait(
       steer = item;
     }
   }
-  if (steer === null || steer.runId === null) return null;
+  // An agent that was only waiting reads the message at once; its timers run in the background.
+  if (steer === null || steer.runId === null || steer.agentWasWaiting === true) return null;
   const waitedOn: OrchestrationV2TurnItem[] = [];
   const sendNowToolItemIds: TurnItemId[] = [];
   let startedAtMs: number | null = null;

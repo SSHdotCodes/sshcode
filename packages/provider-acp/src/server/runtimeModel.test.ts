@@ -6,6 +6,7 @@ import {
   decideToolCallUpdateEmission,
   applyAcpAgentTerminalUpdate,
   acpContentBlockDisplayText,
+  acpMcpDispatch,
   acpViewedImage,
   embeddedTerminalIdsFromSessionUpdate,
   extractMcpToolCallIdentity,
@@ -68,6 +69,39 @@ describe("AcpRuntimeModel", () => {
       toolCall: { status: "failed" },
     });
   });
+
+  it("keeps the command from a shell preview after the agent replaces it with output", () => {
+    const parse = (update: EffectAcpSchema.SessionNotification["update"]) =>
+      parseSessionUpdateEvent({ sessionId: "session", update }).events.find(
+        (event) => event._tag === "ToolCallUpdated",
+      )?.toolCall;
+    const start = parse({
+      sessionUpdate: "tool_call",
+      toolCallId: "shell-1",
+      title: "Run tests",
+      kind: "execute",
+      status: "pending",
+      content: [{ type: "content", content: { type: "text", text: "$ python3 -m unittest -q" } }],
+    });
+    const output = [
+      { type: "content", content: { type: "text", text: "$ example output" } },
+    ] as const;
+    const complete = parse({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "shell-1",
+      kind: "execute",
+      status: "completed",
+      content: output,
+    });
+
+    expect(complete?.command).toBeUndefined();
+    expect(mergeToolCallState(start, complete!)).toMatchObject({
+      command: "python3 -m unittest -q",
+      status: "completed",
+      data: { content: output },
+    });
+  });
+
   it("parses session mode state from typed ACP session setup responses", () => {
     const modeState = parseSessionModeState({
       sessionId: "session-1",
@@ -1768,6 +1802,25 @@ describe("extractMcpToolCallIdentity", () => {
     if (event === undefined) throw new Error("expected a tool call event");
     return event.toolCall;
   }
+
+  it("recognizes a namespaced dispatcher in a Devin tool event", () => {
+    const call = toolCallFromUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "devin-mcp-dispatch",
+      kind: "other",
+      title: "Execute MCP tool",
+      _meta: { "cognition.ai/inferenceToolName": "mcp__t3_code__t3_tool" },
+      status: "completed",
+      rawInput: { arguments: { name: "list_scheduled_tasks", input: {} } },
+    });
+    const identity = extractMcpToolCallIdentity(call);
+    expect(identity).toEqual({ server: "t3-code", tool: "t3_tool" });
+    expect(acpMcpDispatch(identity!, call.data.rawInput)).toEqual({
+      tool: "list_scheduled_tasks",
+      input: {},
+      lookup: false,
+    });
+  });
 
   it("recovers T3 identity from Hermes editor-renamed MCP tool titles", () => {
     const identityFor = (title: string) =>

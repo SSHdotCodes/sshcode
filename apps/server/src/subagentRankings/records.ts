@@ -76,6 +76,23 @@ export function inferTaskKind(title: string, isolated: boolean): SubagentTaskKin
   return "other";
 }
 
+/**
+ * Leads flag only work that fell short since 11-25: 88% of earlier grades
+ * were 8-10. A run that finished on its own after it and nobody graded counts as fine.
+ */
+export const FLAG_ONLY_GRADING_SINCE = Date.UTC(2026, 10, 25, 19);
+/** About the mean of the earlier grades that weren't low (8.65), so averages stay comparable. */
+const UNFLAGGED_SCORE = 8.5;
+
+function countsAsUnflagged(run: RunRecord): boolean {
+  return (
+    run.grade === undefined &&
+    run.thumb === undefined &&
+    run.outcome === "completed" &&
+    run.finishedAt >= FLAG_ONLY_GRADING_SINCE
+  );
+}
+
 /** Weighted score: one user thumb has four times the weight of a parent grade. */
 function score(runs: ReadonlyArray<RunRecord>): {
   readonly average: number;
@@ -88,6 +105,10 @@ function score(runs: ReadonlyArray<RunRecord>): {
     if (run.grade) {
       total += run.grade.score;
       weight++;
+    } else if (countsAsUnflagged(run)) {
+      total += UNFLAGGED_SCORE;
+      weight++;
+      rated++;
     }
     if (run.thumb) {
       total += (run.thumb === "up" ? SUBAGENT_GRADE_MAX : 1) * 4;
@@ -110,8 +131,8 @@ function summary(runs: ReadonlyArray<RunRecord>): string {
   const mid = Math.floor(n / 2);
   const median = n % 2 ? durations[mid]! : (durations[mid - 1]! + durations[mid]!) / 2;
   const { average, rated } = score(runs);
-  const graded = runs.filter((run) => run.grade !== undefined);
-  const low = graded.filter((run) => run.grade!.score <= 6).length;
+  const graded = runs.filter((run) => run.grade !== undefined || countsAsUnflagged(run));
+  const low = graded.filter((run) => run.grade !== undefined && run.grade.score <= 6).length;
   return `${n} ${n === 1 ? "run" : "runs"}, ${rated} rated${done}${Number.isNaN(average) ? "" : ` · ${average.toFixed(1)}/${SUBAGENT_GRADE_MAX}`}${low ? ` · low grades ${low}/${graded.length}` : ""} · ${median < 30_000 ? `${Math.max(1, Math.round(median / 1000))}s` : `${Math.round(median / 60000)}m`} median${rated < 3 ? " · few runs" : ""}`;
 }
 

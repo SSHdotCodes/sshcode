@@ -35,6 +35,8 @@ import { orchestrationProtocolCompatibilityError } from "./compatibility.ts";
 import { connectionRoutes, routeEntry, sshTargetKey } from "./routes.ts";
 
 export interface PairingConnectionInput {
+  /** Background renewal may replace only the saved entry which requested it. */
+  readonly renewingEntry?: ConnectionCatalogEntry;
   readonly pairingUrl?: string;
   readonly host?: string;
   readonly pairingCode?: string;
@@ -160,7 +162,8 @@ const registerPairingConnection = Effect.fn(
   const registration = yield* preparePairingRegistration(input);
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   // A platform-managed environment belongs to the host, so pairing leaves it alone.
-  if (!(yield* registry.register(registration))) return registration.target.environmentId;
+  const registered = yield* registry.register(registration, input.renewingEntry);
+  if (!registered || input.renewingEntry) return registration.target.environmentId;
   // Registering keeps a previous entry's switched-off flag and unsupported
   // reason, which is right for label or URL edits. A pairing is an explicit
   // request to connect, so the stale reason is cleared and the environment

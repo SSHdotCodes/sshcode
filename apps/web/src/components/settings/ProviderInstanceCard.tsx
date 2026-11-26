@@ -1304,7 +1304,12 @@ export function ProviderInstanceCard({
 
   return (
     <>
-      <SettingsSection title={displayName} icon={titleIconNode} headerAction={editorHeaderAction}>
+      <SettingsSection
+        variant="plain"
+        title={displayName}
+        icon={titleIconNode}
+        headerAction={editorHeaderAction}
+      >
         <SettingsRow
           title="Display name"
           status={
@@ -1386,7 +1391,7 @@ export function ProviderInstanceCard({
       </SettingsSection>
 
       {setup || environmentFields.length > 0 ? (
-        <SettingsSection title="Setup">
+        <SettingsSection variant="plain" title="Setup">
           {setup}
           {environmentFields.length > 0 ? (
             <div
@@ -1426,6 +1431,7 @@ export function ProviderInstanceCard({
         </div>
       ) : !driverOption || deriveProviderSettingsFields(driverOption).length > 0 ? (
         <SettingsSection
+          variant="plain"
           title="Runtime"
           inert={readOnly}
           aria-disabled={readOnly || undefined}
@@ -1436,6 +1442,7 @@ export function ProviderInstanceCard({
       ) : null}
 
       <SettingsSection
+        variant="plain"
         title="Environment"
         inert={readOnly}
         aria-disabled={readOnly || undefined}
@@ -1458,7 +1465,7 @@ export function ProviderInstanceCard({
       ) : null}
 
       {driverOption !== undefined ? (
-        <SettingsSection title="Models">
+        <SettingsSection variant="plain" title="Models">
           <div className="px-3 py-3 sm:px-4">
             <p className="mb-3 text-xs text-muted-foreground">
               Model preferences and custom models are saved on the selected environment and shared

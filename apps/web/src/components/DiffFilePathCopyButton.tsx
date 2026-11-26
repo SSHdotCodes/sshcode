@@ -20,26 +20,33 @@ export function DiffFilePathCopyButton({ filePath }: { filePath: string }) {
   });
 
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            ref={ref}
-            size="icon-micro"
-            variant="ghost-muted"
-            aria-label="Copy file path"
-            onClick={() => copyToClipboard(filePath, undefined)}
+    <span
+      className={cn(
+        "inline-flex opacity-(--diff-header-copy-opacity,1) transition-opacity duration-120 hover:opacity-100 focus-within:opacity-100 motion-reduce:transition-none",
+        isCopied && "opacity-100",
+      )}
+    >
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              ref={ref}
+              size="icon-micro"
+              variant="ghost-muted"
+              aria-label="Copy file path"
+              onClick={() => copyToClipboard(filePath, undefined)}
+            />
+          }
+        >
+          <MorphIcon
+            className={cn("size-3", isCopied && "text-success")}
+            icon={isCopied ? Check : Copy}
           />
-        }
-      >
-        <MorphIcon
-          className={cn("size-3", isCopied && "text-success")}
-          icon={isCopied ? Check : Copy}
-        />
-      </TooltipTrigger>
-      <TooltipPopup>
-        <p>{isCopied ? "Copied" : "Copy path"}</p>
-      </TooltipPopup>
-    </Tooltip>
+        </TooltipTrigger>
+        <TooltipPopup>
+          <p>{isCopied ? "Copied" : "Copy path"}</p>
+        </TooltipPopup>
+      </Tooltip>
+    </span>
   );
 }

@@ -85,7 +85,7 @@ describe("buildTraitsTriggerDisplay", () => {
     expect(display([EFFORT, speed("standard")])).toMatchObject({ label: "High", speedIcon: null });
     expect(display([EFFORT, speed("fast")])).toMatchObject({
       label: "High Lightning",
-      speedIcon: "fast",
+      speedIcon: "ultrafast",
       beforeSpeed: "High",
     });
   });
@@ -457,10 +457,10 @@ describe("buildUnavailableModelOptionDescriptors", () => {
   });
 });
 
-it("shows Unknown until a matching provider report provides Default", () => {
+it("labels OpenCode effort only when the selected route identifies a choice", () => {
   const selection = {
     instanceId: ProviderInstanceId.make("opencode"),
-    model: "ling",
+    model: "openrouter/inkling-2-mini",
     options: [],
   };
   const input = {
@@ -479,13 +479,25 @@ it("shows Unknown until a matching provider report provides Default", () => {
     ultrathinkPromptControlled: false,
     modelSelection: selection,
   };
-  expect(buildTraitsTriggerDisplay(input).label).toBe("Unknown");
+  expect(buildTraitsTriggerDisplay(input).label).toBe("");
+  expect(
+    buildTraitsTriggerDisplay({
+      ...input,
+      reportedModelSelection: { ...selection, options: [{ id: "variant", value: "retired" }] },
+    }).label,
+  ).toBe("");
   expect(
     buildTraitsTriggerDisplay({
       ...input,
       reportedModelSelection: { ...selection, options: [{ id: "variant", value: "default" }] },
     }).label,
-  ).toBe("Default");
+  ).toBe("");
+  expect(
+    buildTraitsTriggerDisplay({
+      ...input,
+      descriptors: [selectDescriptor("variant", [{ id: "high", label: "High" }], "high")],
+    }).label,
+  ).toBe("High");
 });
 
 describe("speedToggleChoice", () => {

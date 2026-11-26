@@ -45,6 +45,10 @@ const realpathLikeFileSystem = (filePath: string) =>
     NodeFS.realpath(filePath, (error, resolved) => (error ? reject(error) : resolve(resolved)));
   });
 
+/** Resolve readable files on drives where the native Windows resolver reports ENOENT. */
+export const realPathWithoutNativeResolver = (filePath: string) =>
+  Effect.promise(() => realpathLikeFileSystem(filePath).catch(() => null));
+
 const MAX_IMAGE_SEARCH_DEPTH = 4;
 const MAX_IMAGE_SEARCH_ENTRIES = 3_000;
 const IGNORED_IMAGE_SEARCH_FOLDERS = new Set([

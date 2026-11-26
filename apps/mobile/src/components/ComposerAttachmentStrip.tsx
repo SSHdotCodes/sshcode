@@ -4,10 +4,12 @@ import { cn } from "../lib/cn";
 import { SymbolView } from "../components/AppSymbol";
 import { imageMimeType } from "@t3tools/shared/image";
 import { videoMimeType } from "@t3tools/shared/video";
+import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { useEffect, useMemo, useState } from "react";
 import { Image, Pressable, ScrollView, View } from "react-native";
 
 import { AppText as Text } from "./AppText";
+import { ComposerVideoCompressionChip } from "./ComposerVideoCompressionChip";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import {
   isFileBackedComposerAttachment,
@@ -31,6 +33,7 @@ export interface ComposerAttachmentStripProps {
   readonly environmentId?: EnvironmentId;
   /** Attachments to display. */
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
+  readonly compressingVideo?: string | undefined;
   /** Called when the user removes an attachment. Omit while editing is locked. */
   readonly onRemove?: ((imageId: string) => void) | undefined;
   /** Called when the user taps an image or PDF to preview it. */
@@ -65,6 +68,10 @@ type ComposerAttachmentThumbnailProps = {
 
 export function ComposerAttachmentThumbnail(props: ComposerAttachmentThumbnailProps) {
   const upload = useComposerAttachmentUploadState(props.environmentId, props.attachment.id);
+  const videoSize =
+    !props.compact && props.attachment.type === "file" && videoMimeType(props.attachment)
+      ? formatAttachmentSize(props.attachment.sizeBytes)
+      : null;
   return (
     <View style={{ width: props.size, height: props.size }}>
       <ComposerAttachmentContent {...props} />
@@ -89,7 +96,10 @@ export function ComposerAttachmentThumbnail(props: ComposerAttachmentThumbnailPr
             props.environmentId &&
             retryComposerAttachmentUpload(props.environmentId, props.attachment.id)
           }
-          className="absolute bottom-0.5 left-0.5 flex-row items-center gap-0.5 rounded-full bg-black/70 px-1 py-0.5"
+          className={cn(
+            "absolute left-0.5 flex-row items-center gap-0.5 rounded-full bg-black/70 px-1 py-0.5",
+            videoSize ? "top-0.5" : "bottom-0.5",
+          )}
         >
           <SymbolView
             name={upload.status === "failed" ? "arrow.clockwise" : "arrow.up"}
@@ -103,6 +113,13 @@ export function ComposerAttachmentThumbnail(props: ComposerAttachmentThumbnailPr
             </Text>
           ) : null}
         </Pressable>
+      ) : videoSize ? (
+        <View
+          className="absolute left-0.5 top-0.5 rounded-full bg-black/70 px-1 py-0.5"
+          pointerEvents="none"
+        >
+          <Text className="text-2xs text-white">{videoSize}</Text>
+        </View>
       ) : null}
     </View>
   );
@@ -369,7 +386,7 @@ export function ComposerAttachmentStrip(props: ComposerAttachmentStripProps) {
   const removeButtonGutter = usesRemoveGutter ? Math.max(10, 45 - size / 2) : 0;
   const removeDisabled = props.onRemove === undefined;
 
-  if (props.attachments.length === 0) {
+  if (props.attachments.length === 0 && !props.compressingVideo) {
     return null;
   }
 
@@ -383,6 +400,11 @@ export function ComposerAttachmentStrip(props: ComposerAttachmentStripProps) {
         style={{ height: size + removeButtonGutter, flexGrow: 0, flexShrink: 0 }}
       >
         <View className="flex-row gap-1.5">
+          {props.compressingVideo ? (
+            <View style={{ paddingTop: removeButtonGutter }}>
+              <ComposerVideoCompressionChip name={props.compressingVideo} />
+            </View>
+          ) : null}
           {props.attachments.map((attachment) => (
             <View
               key={attachment.id}

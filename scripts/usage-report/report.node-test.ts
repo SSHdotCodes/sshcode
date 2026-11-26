@@ -1,4 +1,4 @@
-// @effect-diagnostics globalDate:off - Calendar fixtures construct dates at explicit timestamps.
+// @effect-diagnostics globalDate:off - Fixtures use UTC instants to verify the reporting window.
 import assert from "node:assert/strict";
 import { describe, it } from "vite-plus/test";
 import {
@@ -36,7 +36,7 @@ function run(
     minutes = 10,
     start = "2026-11-05T12:00:00.000Z",
     status = "completed",
-    requested = start,
+    requested,
     id = "",
   }: {
     model?: string;
@@ -52,7 +52,7 @@ function run(
     run_id: id || `run-${++seq}`,
     thread_id: threadId,
     status,
-    requested_at: requested,
+    requested_at: requested ?? start,
     completed_at: new Date(startMs + minutes * 60_000).toISOString(),
     payload_json: JSON.stringify({ startedAt: start, modelSelection: { model } }),
   };

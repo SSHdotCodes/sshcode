@@ -128,6 +128,7 @@ export interface EnvironmentThreadShell {
   readonly pendingBackgroundTasks: ReadonlyArray<
     NonNullable<OrchestrationV2ThreadShell["pendingBackgroundTasks"]>[number]
   >;
+  readonly backgroundWaitStartedAt?: string;
   /** Provider instances that have owned the root conversation, oldest first. */
   readonly providerInstanceHistory: ReadonlyArray<ProviderInstanceId>;
   /** Native `/goal` on the active provider thread. */
@@ -316,6 +317,9 @@ export function presentThreadShell(
     pendingSubagentRequest,
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
     pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
+    ...(thread.backgroundWaitStartedAt
+      ? { backgroundWaitStartedAt: thread.backgroundWaitStartedAt }
+      : {}),
     providerInstanceHistory: thread.providerInstanceHistory ?? [],
     goal: thread.goal ?? null,
     itemCount: thread.itemCount,
@@ -425,11 +429,13 @@ export function resolveThreadWorkingStartedAt(input: {
   return null;
 }
 
-/** Use a later start only when every holding task has a known start after the turn. */
+/** An open prompt times its current pause. Settled prompts count from completion or later work. */
 export function resolveThreadWaitingStartedAt(input: {
   readonly latestRun: Pick<ThreadRunSummary, "completedAt"> | null;
   readonly pendingBackgroundTasks: EnvironmentThreadShell["pendingBackgroundTasks"];
+  readonly backgroundWaitStartedAt?: string;
 }): string | null {
+  if (input.backgroundWaitStartedAt !== undefined) return input.backgroundWaitStartedAt;
   const completedAt = input.latestRun?.completedAt ?? null;
   if (completedAt === null) return null;
 

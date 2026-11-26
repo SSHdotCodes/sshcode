@@ -18,7 +18,6 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import { HttpClient } from "effect/http";
 import * as AcpErrors from "effect-acp/errors";
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
@@ -60,12 +59,6 @@ import { makeAntigravitySideChat } from "../../orchestration-v2/Adapters/Antigra
 import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeAntigravityProvider } from "../AntigravityProvider.ts";
-import {
-  AgyCliLoginSource,
-  antigravityModelWindowIds,
-  makeAntigravityUsageProbe,
-  scopeAntigravityUsageWindows,
-} from "../antigravityUsageLimits.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
 import {
@@ -102,7 +95,6 @@ export type AntigravityDriverEnv =
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
   | FileSystem.FileSystem
-  | HttpClient.HttpClient
   | IdAllocator.IdAllocatorV2
   | McpProviderSessions.McpProviderSessions
   | ModelCatalog.ModelCatalog
@@ -124,7 +116,6 @@ export const AntigravityDriver: ProviderDriver<
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const fileSystem = yield* FileSystem.FileSystem;
-      const httpClient = yield* HttpClient.HttpClient;
       const path = yield* Path.Path;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const host = yield* ProviderHost.ProviderHost;
@@ -194,11 +185,7 @@ export const AntigravityDriver: ProviderDriver<
         installation.maintenance(settings.binaryPath, processEnvironment, options);
       const classifyModels = (draft: ServerProviderDraft) =>
         currentCatalog.pipe(
-          Effect.map((catalog) =>
-            stampIdentity(
-              scopeAntigravityUsageWindows(ModelCatalog.applyModelCatalog(draft, catalog)),
-            ),
-          ),
+          Effect.map((catalog) => stampIdentity(ModelCatalog.applyModelCatalog(draft, catalog))),
           Effect.flatMap((snapshot) =>
             Effect.gen(function* () {
               if (
@@ -427,15 +414,23 @@ export const AntigravityDriver: ProviderDriver<
         Effect.gen(function* () {
           yield* provider.onSessionStarted(started);
           yield* authFlow.onSignedInElsewhere;
+          const commandsAdvertised = yield* Deferred.make<void>();
           yield* Stream.runForEach(runtime.getEvents(), (event) => {
             if (event._tag === "EventStreamBarrier") {
               return Deferred.succeed(event.acknowledge, undefined).pipe(Effect.asVoid);
             }
             if (event._tag === "ConfigOptionsUpdated") {
-              return provider.onConfigOptionsUpdated(event.configOptions);
+              return provider.onConfigOptionsUpdated(event.configOptions, {
+                fromCatalogProbe: true,
+              });
             }
             return event._tag === "AvailableCommandsUpdated"
-              ? provider.onAvailableCommands(event.availableCommands)
+              ? provider
+                  .onAvailableCommands(event.availableCommands)
+                  .pipe(
+                    Effect.andThen(Deferred.succeed(commandsAdvertised, undefined)),
+                    Effect.asVoid,
+                  )
               : Effect.void;
           }).pipe(Effect.forkScoped);
           // Thinking levels differ per model and are reported only for the selected one.
@@ -449,6 +444,7 @@ export const AntigravityDriver: ProviderDriver<
               yield* runtime.setModel(model.value).pipe(Effect.ignore);
             }
           }
+          yield* Deferred.await(commandsAdvertised).pipe(Effect.timeoutOption("2 seconds"));
           yield* runtime.drainEvents;
         }).pipe(Effect.scoped);
 
@@ -506,30 +502,10 @@ export const AntigravityDriver: ProviderDriver<
         };
       });
 
-      const readAgyCliLogin = yield* AgyCliLoginSource;
-      const usage = yield* makeAntigravityUsageProbe({
-        profileDirectory,
-        authMethod: auth.authMethod,
-        // The agy CLI keeps its sign-in in the keychain, not in the profile.
-        readCliLogin: installation.resolve(settings.binaryPath, processEnvironment).pipe(
-          Effect.flatMap((executable) =>
-            executable.harnessPath === null ? readAgyCliLogin : Effect.succeed(undefined),
-          ),
-          Effect.orElseSucceed(() => undefined),
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        ),
-      }).pipe(
-        Effect.provideService(FileSystem.FileSystem, fileSystem),
-        Effect.provideService(Path.Path, path),
-        Effect.provideService(Crypto.Crypto, crypto),
-        Effect.provideService(HttpClient.HttpClient, httpClient),
-      );
       const provider = yield* makeAntigravityProvider(settings, {
         stampIdentity: classifyModels,
         resolveMaintenance,
         probe,
-        probeUsage: usage.probe,
-        clearUsage: usage.clear,
         auth: { type: auth.authMethod, label: antigravityAuthLabel(auth.authMethod) },
         supportsTextGeneration: isAntigravityTextGenerationAvailable(profileDirectory).pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -549,19 +525,16 @@ export const AntigravityDriver: ProviderDriver<
       );
       const defaultModel = currentCatalog.pipe(Effect.map((catalog) => catalog?.defaultChatModel));
       const orchestrationAdapter = yield* makeAntigravityAdapterV2({
+        mediaSpawner: spawner,
         instanceId,
         selfInvocation,
         makeRuntime,
         withProcess: authFlow.withProcess,
         defaultModel,
         childWorkDirectories: [path.join(profileDirectory, "antigravity-acp"), cliDataDirectory],
-        quotaWindowIds: (model) =>
-          provider.snapshot.getSnapshot.pipe(
-            Effect.map((snapshot) => antigravityModelWindowIds(snapshot, model)),
-          ),
-        onSessionStarted: (started, cwd) =>
+        onSessionStarted: (started, cwd, session) =>
           provider
-            .onSessionStarted(started, cwd)
+            .onSessionStarted(started, cwd, session)
             .pipe(Effect.andThen(authFlow.onSignedInElsewhere)),
         // A thread session's commands belong to its workspace, which the composer reads first.
         onSessionEvent: (event, cwd) => {

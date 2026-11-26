@@ -3,6 +3,7 @@ import type {
   ServerConfigStreamWireEvent,
   ServerProviderWire,
 } from "@t3tools/contracts/serverConfigWire";
+import { isGoogleSubscription, unavailableGoogleLimits } from "@t3tools/shared/usageLimits";
 import * as Equal from "effect/Equal";
 import * as Option from "effect/Option";
 
@@ -33,6 +34,28 @@ export function withoutEnvironmentThemes(config: ServerConfig): ServerConfig {
     ...rest
   } = config;
   return rest;
+}
+
+/** Older clients persisted Google windows and probe failures with the model catalog. */
+export function restoreCachedServerConfig(cached: ServerConfig): ServerConfig {
+  const config = withoutEnvironmentThemes(cached);
+  if (!config.providers.some((provider) => provider.driver === "antigravity")) return config;
+  return {
+    ...config,
+    providers: config.providers.map((provider) => {
+      if (provider.driver !== "antigravity") return provider;
+      const { usageLimits: previous, ...rest } = provider;
+      if (
+        !provider.enabled ||
+        provider.auth.type === "gemini-api-key" ||
+        provider.auth.type === "agent-platform"
+      )
+        return rest;
+      return previous || isGoogleSubscription(provider)
+        ? { ...rest, usageLimits: unavailableGoogleLimits(provider.checkedAt) }
+        : rest;
+    }),
+  };
 }
 
 function expandProvider(provider: ServerProviderWire, held?: ServerProvider): ServerProvider {

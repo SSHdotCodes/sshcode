@@ -4,7 +4,7 @@ import { buildRuntimeInstructions } from "./runtimeInstructions.ts";
 
 /** The grading rule inside the lead bullet; removed when Settings turns grading off. */
 const GRADING_CLAUSE =
-  "; rate each checked one via `grades` on your next subagent tool call, or a `task_status` before your final reply if none follows (feeds model rankings)";
+  "; flag one that fell short (needed fixes, missed the brief or was wrong) via `grades` on your next subagent tool call; unflagged runs count as fine (feeds model rankings)";
 
 const MODEL_PREFERENCES_CLAUSE =
   " Otherwise consult `model_preferences` for the relevant task before delegating; family ranks follow new releases; choose a current model in the preferred family. Only the user edits preferences in Settings.";
@@ -24,8 +24,8 @@ The \`t3-code\` MCP server adds app capabilities beyond your harness:
 - Worktree isolation requires a Git commit. Run each review round as a new \`delegate_task\`, not \`t3_thread_send\` to the earlier child, with the original brief, findings, replies and open objections. Native subagents must support the chosen model.
 - While subagents run, keep doing your own share in files they are not editing; reviewing and integrating count too. Ask them to message you only when done, blocked, or with a finding that changes the plan, and to keep progress notes in a shared file. Tell the user about milestones in your own words, after checking any claim you pass on, rather than relaying each update. Their results wake you, mid-turn where supported or as a new message. When only waiting is left, end your turn; don't poll or start watchers for them or the files they write (no \`monitor_start\`, native monitors or sleeps).
 - Answer child question cards with \`t3_pending_request_respond\` on the child's taskId when the brief or the user's words settle it; otherwise ask the user with \`ask_user\`, then submit their answer to the child's card.
-- For your own commands, print only useful, line-buffered lines, then end your turn if waiting is all that's left. Waits under an hour can use a native Monitor or background command; longer ones use \`monitor_start\` (\`restartable:true\` for read-only waits and checks), and work you start that runs over 10 minutes (training, builds, uploads, servers) runs there with \`durable:true\` so restarts don't kill it; after a restart check \`monitor_list\` before relaunching.
-- Before ending a turn while your own long work still runs (training, evals, deploys, remote jobs) and you plan to act on it, make sure something will wake you: \`monitor_start\`, \`schedule_task\`, or for a short wait a background command that exits when it ends or fails.
+- Batch independent reads and searches in one tool round. Save verbose output to a log, preserve the exit status and inspect relevant lines.
+- Before ending a turn while your own long work still runs, arrange any follow-up wake you need. Waits under an hour can use a native Monitor or a background command that exits on completion or failure. For longer waits use \`monitor_start\` (\`restartable:true\` for read-only checks). Run jobs over 10 minutes there with \`durable:true\`. After a restart check \`monitor_list\` before relaunching. Stream line-buffered milestones or set \`wakeOn:false\` for exit only. Use \`schedule_task\` for scheduled follow-ups. End your turn when only waiting remains.
 - Ask only for decisions the user's authorization doesn't settle: expanded scope/spend, hard-to-undo actions or their preferences. Within an approved goal/budget, choose the next step, retry or spend yourself and say what you chose.
 - Ask with \`ask_user\`, not in your reply, and don't end replies offering more work: do what's authorized. Put the recommended choice first with '(Recommended)' in its label. Explain tradeoffs in your reply and leave the question and options to the card. Continue independent work while awaiting the answer. Prefer cards to blocking question tools.
 - Collect secrets with \`request_secret\` and reusable API keys with \`request_api_key\`; never ask for either in chat.
@@ -62,13 +62,15 @@ const T3_CODE_ACP_PLAN_MODE_INSTRUCTIONS = `## SSHCode interaction mode: Plan
 Investigate with read-only actions and do not edit files or otherwise execute the implementation. Resolve discoverable facts before asking questions. When the requirements are decision complete, return a concrete implementation plan and do not start implementing it. Treat this mode as active until SSHCode supplies a different interaction-mode instruction.`;
 
 export interface T3AcpInstructionState {
+  readonly runtimeHarness?: string | undefined;
   readonly interactionMode: ProviderInteractionMode;
   readonly hasT3Mcp: boolean;
   /** Absent means on, so older callers keep the full rules. */
   readonly subagentsEnabled?: boolean;
   readonly isSubagent?: boolean;
+  readonly toolDiscoveryInstructions?: string | undefined;
   /** Exact blocks acknowledged by the harness, including Settings-dependent policy. */
-  readonly blocks?: Readonly<Record<"mode" | "policy" | "transport" | "runtime", string>>;
+  readonly blocks?: Readonly<Record<"mode" | "policy" | "transport" | "runtime" | "tools", string>>;
 }
 
 const LEAD_BULLET_PREFIXES = [
@@ -89,7 +91,7 @@ export const T3_CODE_ORCHESTRATION_INSTRUCTIONS_SOLO = T3_CODE_ORCHESTRATION_INS
   .join("\n");
 
 const SUBAGENT_BULLET =
-  "- You are a subagent: a lead sent this brief and reads your final message. Do the task yourself; start subagents only if the brief asks. Ask via `ask_user` only when blocked. End with what you did, what you verified and open risks.";
+  "- You are a subagent: a lead sent this brief and reads your final message. Do the task yourself; start subagents only if the brief asks. Ask via `ask_user` only when blocked. Report what you did, what you verified and open risks. Point to commits or logs for detail.";
 
 /** Children keep operational guidance but take direction from their brief. */
 export const T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT =
@@ -102,7 +104,7 @@ export const T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT =
         !line.startsWith("- A `t3-model://"),
     )
     .map((line) =>
-      line.startsWith("- For your own commands") ? `${SUBAGENT_BULLET}\n${line}` : line,
+      line.startsWith("- Batch independent reads") ? `${SUBAGENT_BULLET}\n${line}` : line,
     )
     .join("\n");
 
@@ -187,6 +189,7 @@ function subagentsOn(state: T3AcpInstructionState): boolean {
 const ACP_REVOKED_BLOCKS = {
   policy: "SSHCode MCP tools are not attached. Use only the tools exposed by your harness.",
   transport: "The T3 ACP terminal fallback is unavailable.",
+  tools: "The previous t3-code tool catalog is no longer available.",
 } as const;
 
 /** Snapshot the independently delivered blocks before sending to ACP. */
@@ -208,7 +211,8 @@ export function t3AcpInstructionState(state: T3AcpInstructionState): T3AcpInstru
           ? acpFallbackInstructions(false).replace("orchestrator_capabilities", "t3_thread_list")
           : acpFallbackInstructions(subagentsOn(state))
         : "",
-      runtime: buildRuntimeInstructions({ harness: "ACP" }),
+      runtime: buildRuntimeInstructions({ harness: state.runtimeHarness ?? "ACP" }),
+      tools: state.hasT3Mcp ? (state.toolDiscoveryInstructions ?? "") : "",
     },
   };
 }

@@ -752,6 +752,7 @@ describe("assetResponseHeaders", () => {
 
   it("does not apply document policy to raster images", () => {
     expect(assetResponseHeaders("/attachments/user-image.png")).toEqual({
+      "Content-Type": "image/png",
       "Cache-Control": "private, max-age=3600",
       "X-Content-Type-Options": "nosniff",
     });
@@ -767,6 +768,27 @@ describe("assetResponseHeaders", () => {
       "Content-Type": "video/mp4",
       "X-Content-Type-Options": "nosniff",
     });
+  });
+
+  it("chooses the sandbox from the same type it serves", () => {
+    for (const name of ["page.html", "page.HTM", "page.shtml"]) {
+      expect(assetResponseHeaders(`/workspace/${name}`)).toMatchObject({
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups allow-downloads",
+      });
+    }
+    expect(assetResponseHeaders("/workspace/page.xhtml")).toMatchObject({
+      "Content-Type": "application/xhtml+xml",
+      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    });
+    expect(assetResponseHeaders("/workspace/report.pdf")).toHaveProperty(
+      "Content-Type",
+      "application/pdf",
+    );
+    expect(assetResponseHeaders("/attachments/upload.bin")).toHaveProperty(
+      "Content-Type",
+      "application/octet-stream",
+    );
   });
   it("serves inline attachment documents with their declared mime type", () => {
     expect(

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { ProviderInstanceId, type ModelSelection } from "@t3tools/contracts";
-import { act, useLayoutEffect } from "react";
+import { act, useLayoutEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 import { ComposerModelControl } from "./ComposerModelControl";
@@ -8,6 +8,20 @@ import { useModelListSelection } from "../lib/modelOptions";
 
 vi.mock("react-native", () => ({
   View: (props: { children?: React.ReactNode }) => <span>{props.children}</span>,
+  Pressable: (props: {
+    accessibilityLabel?: string;
+    accessibilityState?: { checked?: boolean };
+    children?: React.ReactNode;
+    onPress?: () => void;
+  }) => (
+    <button
+      aria-label={props.accessibilityLabel}
+      aria-pressed={props.accessibilityState?.checked}
+      onClick={props.onPress}
+    >
+      {props.children}
+    </button>
+  ),
 }));
 vi.mock("./ComposerToolbar", () => ({
   ComposerInlineControl: (props: {
@@ -21,6 +35,7 @@ vi.mock("./ComposerToolbar", () => ({
     </button>
   ),
 }));
+vi.mock("./ControlPillMenu", () => ({ ControlPillMenu: () => null }));
 vi.mock("./FastModeBolt", () => ({ FastModeBolt: () => null }));
 vi.mock("./EffortGauge", () => ({ EffortGauge: () => null }));
 
@@ -77,6 +92,70 @@ it("updates an open phone's model selector selection and composer label after a 
       "Opus 5.5, Effort: High",
     );
     expect(host.textContent).not.toContain("Fable");
+  } finally {
+    act(() => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});
+
+it("toggles the ACP composer's speed in place and preserves the selected work mode", () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  const instanceId = ProviderInstanceId.make("acpRegistry_fixture");
+  const capabilities = {
+    optionDescriptors: [
+      {
+        id: "speed",
+        label: "Speed",
+        type: "select" as const,
+        currentValue: "standard",
+        options: [
+          { id: "standard", label: "Standard" },
+          { id: "fast", label: "Ultrafast" },
+        ],
+      },
+      {
+        id: "mode",
+        label: "Work mode",
+        type: "select" as const,
+        options: [
+          { id: "code", label: "Code" },
+          { id: "ask", label: "Ask" },
+        ],
+      },
+    ],
+  };
+  const selectedWorkMode = { id: "mode", value: "ask" };
+  const saved = vi.fn();
+  function Probe() {
+    const [selection, setSelection] = useState<ModelSelection>({
+      instanceId,
+      model: "qa-balanced",
+      options: [selectedWorkMode],
+    });
+    return (
+      <ComposerModelControl
+        capabilities={capabilities}
+        selection={selection}
+        label="QA Balanced"
+        onAcpSpeedChange={(options) => {
+          saved(options);
+          setSelection({ ...selection, options });
+        }}
+      />
+    );
+  }
+  try {
+    act(() => root.render(<Probe />));
+    const toggle = () => host.querySelector<HTMLButtonElement>('button[aria-label="Ultrafast"]')!;
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+    act(() => toggle().click());
+    expect(toggle().getAttribute("aria-pressed")).toBe("true");
+    expect(saved).toHaveBeenLastCalledWith([{ id: "speed", value: "fast" }, selectedWorkMode]);
+    act(() => toggle().click());
+    expect(toggle().getAttribute("aria-pressed")).toBe("false");
+    expect(saved).toHaveBeenLastCalledWith([{ id: "speed", value: "standard" }, selectedWorkMode]);
   } finally {
     act(() => root.unmount());
     vi.unstubAllGlobals();

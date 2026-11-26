@@ -642,6 +642,30 @@ export const layer: Layer.Layer<
             ];
           case "provider_thread.updated": {
             const threadId = input.event.providerThread.appThreadId ?? input.threadId;
+            const mode = input.event.reportedRuntimeMode;
+            if (mode !== undefined) {
+              const thread = yield* projections.getThread(threadId).pipe(
+                Effect.catchTags({
+                  ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+                }),
+              );
+              if (
+                thread === null ||
+                thread.activeProviderThreadId !== input.event.providerThread.id ||
+                thread.providerInstanceId !== input.providerInstanceId ||
+                thread.runtimeMode !== mode.previous
+              )
+                return [];
+              const now = yield* DateTime.now;
+              return [
+                yield* makeDomainEvent(input, {
+                  type: "thread.runtime-mode-updated",
+                  threadId,
+                  payload: { ...thread, runtimeMode: mode.current },
+                  occurredAt: now,
+                }),
+              ];
+            }
             const updated = yield* makeDomainEvent(input, {
               type: "provider-thread.updated",
               threadId,
@@ -950,7 +974,13 @@ export const layer: Layer.Layer<
         (effect) =>
           input.event.type === "app_thread.created"
             ? threadCommands.withLock(input.event.appThread.id, effect)
-            : effect,
+            : input.event.type === "provider_thread.updated" &&
+                input.event.reportedRuntimeMode !== undefined
+              ? threadCommands.withLock(
+                  input.event.providerThread.appThreadId ?? input.threadId,
+                  effect,
+                )
+              : effect,
       );
 
     return ProviderEventIngestorV2.of({

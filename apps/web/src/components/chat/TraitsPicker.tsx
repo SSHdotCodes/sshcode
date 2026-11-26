@@ -2,6 +2,7 @@ import {
   type ModelSelection,
   type ProviderDriverKind,
   type ProviderInstanceId,
+  type ProviderInteractionMode,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
   type ScopedThreadRef,
@@ -41,8 +42,19 @@ import {
   type ComposerControlSize,
 } from "./ComposerControl";
 import { useComposerMenuProps } from "./composerEventScope";
-import { acpSpeedChoices, speedToggleChoice, TraitsSpeedBolt } from "./TraitsSpeed";
+import {
+  acpSpeedChoices,
+  acpWorkModeDescriptor,
+  findAcpApprovalModes,
+} from "@t3tools/shared/acpComposer";
+import { getTraitsSpeedDisplay, speedToggleChoice, TraitsSpeedBolt } from "./TraitsSpeed";
 import { useComposerMenuState } from "./useComposerMenuState";
+
+type AcpTraitsSection = "traits" | "speed" | "all";
+type AcpTraitsMode = {
+  interactionMode: ProviderInteractionMode;
+  onInteractionModeChange: (mode: ProviderInteractionMode) => void;
+};
 
 type ProviderOptions = ReadonlyArray<ProviderOptionSelection>;
 
@@ -145,12 +157,14 @@ function getSelectedTraits(
   modelOptions: ProviderOptions | null | undefined,
   allowPromptInjectedEffort: boolean,
   planModeEnabled: boolean,
+  acpSection?: AcpTraitsSection,
+  acpMode?: AcpTraitsMode,
 ) {
   const caps = getProviderModelCapabilities(models, model, provider, planModeEnabled);
   const modelIsUnavailable =
     keepsUnavailableModelOptions(provider, model) &&
     !models.some((candidate) => candidate.slug === normalizeModelSlug(model, provider));
-  const descriptors = modelIsUnavailable
+  const allDescriptors = modelIsUnavailable
     ? buildUnavailableModelOptionDescriptors(
         provider !== "opencode" || planModeEnabled
           ? modelOptions
@@ -160,6 +174,17 @@ function getSelectedTraits(
         caps,
         selections: modelOptions,
       });
+  const approvalModes = acpMode ? findAcpApprovalModes(allDescriptors) : null;
+  const descriptors = allDescriptors.flatMap((descriptor) => {
+    const isSpeed = acpSpeedChoices(descriptor) !== null;
+    if ((acpSection === "speed" && !isSpeed) || (acpSection === "traits" && isSpeed)) return [];
+    if (approvalModes && descriptor === approvalModes.descriptor) {
+      return approvalModes.workModes.length > 1
+        ? [acpWorkModeDescriptor(approvalModes, acpMode!.interactionMode)]
+        : [];
+    }
+    return [descriptor];
+  });
   const selectDescriptors = descriptors.filter(
     (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> =>
       descriptor.type === "select",
@@ -201,6 +226,8 @@ function getSelectedTraits(
   return {
     caps,
     descriptors,
+    allDescriptors,
+    approvalModes,
     selectDescriptors,
     booleanDescriptors,
     primarySelectDescriptor,
@@ -227,6 +254,8 @@ export function getTraitsSectionVisibility(input: {
   modelOptions: ProviderOptions | null | undefined;
   allowPromptInjectedEffort?: boolean;
   planModeEnabled: boolean;
+  acpSection?: AcpTraitsSection;
+  acpMode?: AcpTraitsMode;
 }) {
   const selected = getSelectedTraits(
     input.provider,
@@ -236,6 +265,8 @@ export function getTraitsSectionVisibility(input: {
     input.modelOptions,
     input.allowPromptInjectedEffort ?? true,
     input.planModeEnabled,
+    input.acpSection,
+    input.acpMode,
   );
 
   const showEffort = selected.primarySelectDescriptor !== null;
@@ -252,6 +283,7 @@ export function getTraitsSectionVisibility(input: {
     showContextWindow,
     showAgent,
     hasAnyControls:
+      (input.acpSection !== undefined && selected.descriptors.length > 0) ||
       showEffort ||
       showThinking ||
       showFastMode ||
@@ -286,6 +318,8 @@ export interface TraitsMenuContentProps {
   planModeEnabled: boolean;
   triggerClassName?: string;
   isComposerOwned?: boolean;
+  acpSection?: AcpTraitsSection;
+  acpMode?: AcpTraitsMode;
   /** The model picker's Reasoning column shows effort, so this control leaves it out. */
   omitReasoning?: boolean;
 }
@@ -305,6 +339,8 @@ export function useTraitsSelection({
   reportedModelSelection,
   allowPromptInjectedEffort = true,
   planModeEnabled,
+  acpSection,
+  acpMode,
   ...persistence
 }: Omit<TraitsMenuContentProps, "triggerClassName" | "isComposerOwned" | "omitReasoning"> &
   TraitsPersistence) {
@@ -338,18 +374,34 @@ export function useTraitsSelection({
     modelOptions,
     allowPromptInjectedEffort,
     planModeEnabled,
+    ...(acpSection ? { acpSection } : {}),
+    ...(acpMode ? { acpMode } : {}),
   });
-  const { descriptors, primarySelectDescriptor, ultrathinkPromptControlled, ultrathinkInBodyText } =
-    visibility;
-  // Always rebuild from every descriptor, so changing one option keeps the others.
-  const updateDescriptors = (nextDescriptors: ReadonlyArray<ProviderOptionDescriptor>) => {
-    updateModelOptions(buildProviderOptionSelectionsFromDescriptors(nextDescriptors));
-  };
+  const {
+    allDescriptors,
+    approvalModes,
+    primarySelectDescriptor,
+    ultrathinkPromptControlled,
+    ultrathinkInBodyText,
+  } = visibility;
+  const updateDescriptor = (id: string, value: string | boolean) =>
+    updateModelOptions(
+      buildProviderOptionSelectionsFromDescriptors(
+        replaceDescriptorCurrentValue(allDescriptors, id, value),
+      ),
+    );
   const handleSelectChange = (
     descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
     value: string,
   ) => {
     if (!value) return;
+    if (acpMode && approvalModes && descriptor.id === approvalModes.descriptor.id) {
+      if (planModeEnabled && value === approvalModes.plan?.id) {
+        acpMode.onInteractionModeChange("plan");
+        return;
+      }
+      if (acpMode.interactionMode === "plan") acpMode.onInteractionModeChange("default");
+    }
     if (descriptor.promptInjectedValues?.includes(value)) {
       const nextPrompt =
         prompt.trim().length === 0
@@ -363,13 +415,15 @@ export function useTraitsSelection({
       const stripped = prompt.replace(/^Ultrathink:\s*/i, "");
       onPromptChange(stripped);
     }
-    updateDescriptors(replaceDescriptorCurrentValue(descriptors, descriptor.id, value));
+    updateDescriptor(descriptor.id, value);
   };
   const selectValue = (descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>) =>
     ultrathinkPromptControlled && descriptor.id === primarySelectDescriptor?.id
       ? "ultrathink"
-      : (getDescriptorStringValue(descriptor, modelSelection, reportedModelSelection) ?? "");
-  return { ...visibility, modelSelection, updateDescriptors, handleSelectChange, selectValue };
+      : descriptor.id === approvalModes?.descriptor.id
+        ? (descriptor.currentValue ?? "")
+        : (getDescriptorStringValue(descriptor, modelSelection, reportedModelSelection) ?? "");
+  return { ...visibility, modelSelection, updateDescriptor, handleSelectChange, selectValue };
 }
 
 /** The current effort for the model picker trigger. */
@@ -431,7 +485,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     hasAnyControls,
     modelIsUnavailable,
     modelSelection,
-    updateDescriptors,
+    updateDescriptor,
     handleSelectChange,
     selectValue,
   } = useTraitsSelection(input);
@@ -548,9 +602,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
               <MenuRadioGroup
                 value={selectedValue}
                 onValueChange={(value) => {
-                  updateDescriptors(
-                    replaceDescriptorCurrentValue(descriptors, descriptor.id, value === "on"),
-                  );
+                  updateDescriptor(descriptor.id, value === "on");
                 }}
               >
                 {(["on", "off"] as const).map((value) => (
@@ -596,6 +648,7 @@ export function buildTraitsTriggerDisplay(input: {
 }): TraitsTriggerDisplay {
   let fastModeFallbackLabel: string | null = null;
   let speedLabel: string | null = null;
+  let acpIcon: "fast" | "ultrafast" | null = null;
   let reasoningLabelIndex = -1;
   const labels: Array<string> = [];
   for (const descriptor of input.descriptors) {
@@ -604,11 +657,11 @@ export function buildTraitsTriggerDisplay(input: {
       fastModeFallbackLabel = speedLabel ?? "Normal";
       continue;
     }
-    const acpSpeed = acpSpeedChoices(descriptor);
-    if (acpSpeed) {
-      const fast = getProviderOptionCurrentValue(descriptor) === acpSpeed.on.id;
-      speedLabel = fast ? acpSpeed.on.label : null;
-      fastModeFallbackLabel = fast ? acpSpeed.on.label : acpSpeed.off.label;
+    if (acpSpeedChoices(descriptor)) {
+      const display = getTraitsSpeedDisplay(input.provider, descriptor);
+      fastModeFallbackLabel = display?.label ?? null;
+      acpIcon = display?.speedIcon ?? null;
+      speedLabel = acpIcon ? fastModeFallbackLabel : null;
       continue;
     }
     if (
@@ -664,7 +717,8 @@ export function buildTraitsTriggerDisplay(input: {
   // Only fall back to text when fast mode is genuinely the sole trait. Keying
   // off an empty label list alone would also catch descriptors that resolved to
   // no label at all, printing a bogus "Normal" for a model without fast mode.
-  const speedIcon = speedLabel === "Ultrafast" ? "ultrafast" : speedLabel !== null ? "fast" : null;
+  const speedIcon =
+    acpIcon ?? (speedLabel === "Ultrafast" ? "ultrafast" : speedLabel !== null ? "fast" : null);
   if (labels.length === 0 && fastModeFallbackLabel !== null) {
     return speedIcon
       ? { label: fastModeFallbackLabel, speedIcon, beforeSpeed: "", afterSpeed: "" }
@@ -738,6 +792,8 @@ export const TraitsPicker = memo(function TraitsPicker({
   size = "sm",
   hidden = false,
   disabled = false,
+  acpSection,
+  acpMode,
   ...persistence
 }: TraitsMenuContentProps &
   TraitsPersistence & {
@@ -758,6 +814,8 @@ export const TraitsPicker = memo(function TraitsPicker({
     reportedModelSelection,
     allowPromptInjectedEffort,
     planModeEnabled,
+    ...(acpSection ? { acpSection } : {}),
+    ...(acpMode ? { acpMode } : {}),
     ...persistence,
   });
   const { descriptors, primarySelectDescriptor, ultrathinkPromptControlled } = visibility;
@@ -802,16 +860,17 @@ export const TraitsPicker = memo(function TraitsPicker({
                 "aspect-square shrink-0 px-0 aria-pressed:bg-transparent aria-pressed:hover:bg-accent",
                 triggerClassName,
               )}
-              onClick={() =>
-                visibility.updateDescriptors(
-                  replaceDescriptorCurrentValue(descriptors, onlyDescriptor.id, speedToggle.next),
-                )
-              }
+              onClick={() => visibility.updateDescriptor(onlyDescriptor.id, speedToggle.next)}
             />
           }
         >
           {speedToggle.on ? (
-            <TraitsSpeedBolt provider={provider} speedIcon="fast" size={size} spaced={false} />
+            <TraitsSpeedBolt
+              provider={provider}
+              speedIcon={getTraitsSpeedDisplay(provider, onlyDescriptor)?.speedIcon ?? "fast"}
+              size={size}
+              spaced={false}
+            />
           ) : (
             <ComposerControlIcon icon={ZapIcon} size={size} />
           )}
@@ -844,6 +903,8 @@ export const TraitsPicker = memo(function TraitsPicker({
     triggerDisplay.label || traitsEmptyTriggerLabel(triggerDescriptors)
   );
   const isCodexStyle = provider === "codex";
+  // A speed-only menu whose label is already the lit bolt doesn't need a second, grey bolt.
+  const showTriggerIcon = !(TriggerIcon === ZapIcon && triggerDisplay.speedIcon);
   // Default speed alone ("Normal") or no label at all: the icon and tooltip say enough.
   const quiet = triggerDisplay.quiet === true || triggerDisplay.label.length === 0;
 
@@ -863,7 +924,9 @@ export const TraitsPicker = memo(function TraitsPicker({
                   disabled={disabled}
                   aria-label={triggerLabel}
                   data-composer-shortcut={
-                    isComposerOwned && !omitReasoning ? "composer.effort" : undefined
+                    isComposerOwned && !omitReasoning && acpSection !== "speed"
+                      ? "composer.effort"
+                      : undefined
                   }
                   size={size}
                   className={cn(
@@ -890,7 +953,7 @@ export const TraitsPicker = memo(function TraitsPicker({
                 size === "xs" ? "gap-1" : "gap-1.5",
               )}
             >
-              <ComposerControlIcon icon={TriggerIcon} size={size} />
+              {showTriggerIcon ? <ComposerControlIcon icon={TriggerIcon} size={size} /> : null}
               <span data-composer-control-label className="min-w-0 truncate">
                 {visibleTriggerLabel}
               </span>
@@ -898,7 +961,7 @@ export const TraitsPicker = memo(function TraitsPicker({
             </span>
           ) : (
             <>
-              <ComposerControlIcon icon={TriggerIcon} size={size} />
+              {showTriggerIcon ? <ComposerControlIcon icon={TriggerIcon} size={size} /> : null}
               <span data-composer-control-label>{visibleTriggerLabel}</span>
               <ComposerControlChevron size={size} />
             </>
@@ -919,6 +982,8 @@ export const TraitsPicker = memo(function TraitsPicker({
           allowPromptInjectedEffort={allowPromptInjectedEffort}
           planModeEnabled={planModeEnabled}
           omitReasoning={omitReasoning}
+          {...(acpSection ? { acpSection } : {})}
+          {...(acpMode ? { acpMode } : {})}
           {...persistence}
         />
       </MenuPopup>

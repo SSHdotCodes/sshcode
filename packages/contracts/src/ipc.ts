@@ -290,6 +290,8 @@ export interface DesktopUpdateState {
    * not install it again; the user can retry it from the update button.
    */
   notAppliedVersion?: string;
+  /** Set while the install waits for chats to finish: how many still have an agent working. */
+  installWhenIdle?: { readonly working: number };
 }
 
 export interface DesktopUpdateReleaseNote {
@@ -322,6 +324,7 @@ export const DesktopUpdateStateSchema = Schema.Struct({
   errorContext: Schema.NullOr(Schema.Literals(["check", "download", "install"])),
   canRetry: Schema.Boolean,
   notAppliedVersion: Schema.optionalKey(Schema.String),
+  installWhenIdle: Schema.optionalKey(Schema.Struct({ working: Schema.Number })),
 });
 
 /** The desktop app's `sshcode` command on PATH, managed from Settings. */
@@ -1322,6 +1325,13 @@ export interface DesktopBridge {
   checkForUpdate: () => Promise<DesktopUpdateCheckResult>;
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
+  /**
+   * Installs once no chat has an agent working (at once when none does), or
+   * after 30 minutes. Optional: older desktop builds lack it.
+   */
+  installUpdateWhenIdle?: () => Promise<DesktopUpdateActionResult>;
+  /** Stops waiting to install; the update stays downloaded. */
+  cancelUpdateWhenIdle?: () => Promise<DesktopUpdateState>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
   /** Settings → `sshcode` command. Optional: older desktop builds lack it. */
   cliCommand?: {

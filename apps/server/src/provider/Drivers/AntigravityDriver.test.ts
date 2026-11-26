@@ -3,12 +3,21 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
+  EnvironmentId,
+  MessageId,
+  NodeId,
+  ProjectId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
+  RunAttemptId,
+  RunId,
   ThreadId,
   type AntigravitySettings,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -17,6 +26,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
+import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { HttpClient } from "effect/http";
 
@@ -59,7 +69,11 @@ function shellQuote(value: string): string {
 }
 
 const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
-  options: { readonly config?: Partial<AntigravitySettings>; readonly enabled?: boolean } = {},
+  options: {
+    readonly config?: Partial<AntigravitySettings>;
+    readonly enabled?: boolean;
+    readonly environment?: ReadonlyArray<{ readonly name: string; readonly value: string }>;
+  } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -228,6 +242,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
       { name: "GEMINI_HOME", value: "/must-not-be-used" },
       { name: "ANTIGRAVITY_HARNESS_PATH", value: "/must-not-be-used" },
       { name: "BROWSER", value: "must-not-run" },
+      ...(options.environment ?? []),
     ].map((variable) => ({ ...variable, sensitive: false })),
   }).pipe(
     Effect.provide(layerInstallation),
@@ -248,7 +263,10 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
       yield* launch.handle.exitCode.pipe(Effect.ignore);
       expect(yield* launch.handle.isRunning).toBe(false);
       if (launch.cwd) expect(yield* fs.exists(launch.cwd)).toBe(false);
-      if (launch.tempDirectory) expect(yield* fs.exists(launch.tempDirectory)).toBe(false);
+      // Sessions may inherit a caller-owned TMPDIR. Only the driver's run directories are disposable.
+      if (launch.tempDirectory && path.dirname(launch.tempDirectory) === directories.runtimeTemp) {
+        expect(yield* fs.exists(launch.tempDirectory)).toBe(false);
+      }
     }
   });
   return {
@@ -421,6 +439,47 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
         Effect.provideService(HostProcess.IsExecutable, true),
         Effect.provideService(HostProcess.Environment, { PATH: "" }),
       ),
+  );
+
+  it.effect.skipIf(windowsHost)(
+    "refreshes Google health and models without any quota request",
+    () =>
+      Effect.gen(function* () {
+        let requests = 0;
+        const h = yield* makeHarness().pipe(
+          Effect.provideService(
+            HttpClient.HttpClient,
+            HttpClient.make(() => {
+              requests++;
+              return Effect.die("Unexpected HTTP request");
+            }),
+          ),
+        );
+        // An upgraded installation can already have an agy-owned OAuth profile.
+        const acp = h.path.join(h.profileDirectory, "antigravity-acp");
+        yield* h.fs.makeDirectory(acp, { recursive: true });
+        yield* h.fs.writeFileString(
+          h.path.join(acp, "acp_token.json"),
+          JSON.stringify({
+            client_id: "fixture",
+            client_secret: "fixture",
+            refresh_token: "fixture",
+            project_id: "fixture",
+          }),
+        );
+        yield* h.instance.snapshot.refresh;
+        yield* h.refresh();
+        const snapshot = yield* h.instance.snapshot.getSnapshot;
+        expect(snapshot.models.length).toBeGreaterThan(0);
+        expect(snapshot.usageLimits).toMatchObject({
+          windows: [],
+          unavailable: {
+            reason: "unsupported",
+            message: "Google doesn't share limits with apps yet",
+          },
+        });
+        expect(requests).toBe(0);
+      }).pipe(Effect.scoped),
   );
 
   it.effect.skipIf(windowsHost)("does not launch a process for a disabled instance", () =>
@@ -683,5 +742,162 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
       expect(h.launches).toEqual([]);
       expect(h.acquisitions).toEqual([]);
     }).pipe(Effect.scoped),
+  );
+
+  it.effect.skipIf(windowsHost)(
+    "keeps catalog default thinking levels when a chat session selects another level",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness({
+          environment: [
+            { name: "T3_ACP_ANTIGRAVITY_THOUGHT_LEVEL", value: "1" },
+            { name: "T3_ACP_RESUME_THOUGHT_LEVEL", value: "xhigh" },
+          ],
+        });
+        yield* h.refresh();
+        const levelOf = (snapshot: ServerProvider, slug: string) => {
+          const option = snapshot.models
+            .find((model) => model.slug === slug)
+            ?.capabilities?.optionDescriptors?.find(
+              (descriptor) => descriptor.id === "thought_level",
+            );
+          return option?.type === "select" ? option.currentValue : undefined;
+        };
+
+        const refreshed = yield* h.instance.snapshot.getSnapshot;
+        expect(levelOf(refreshed, "gemini-test-low")).toBe("high");
+        expect(levelOf(refreshed, "gemini-test-high")).toBe("medium");
+
+        const threadId = ThreadId.make("thread-antigravity-thought-level");
+        const xhighSelection = {
+          instanceId: h.instance.instanceId,
+          model: "gemini-test-low",
+          options: [{ id: "thought_level", value: "xhigh" }],
+        };
+        const nativeSessionId = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const workspace = yield* h.fs.makeTempDirectoryScoped({ prefix: "t3-ag-thought-" });
+            const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+              runtimeMode: "approval-required",
+              interactionMode: "default",
+              cwd: workspace,
+            });
+            const session = yield* h.instance.orchestrationAdapter.openSession({
+              threadId,
+              providerSessionId: ProviderSessionId.make(
+                "provider-session-antigravity-thought-level",
+              ),
+              modelSelection: xhighSelection,
+              runtimePolicy,
+            });
+            const providerThread = yield* session.ensureThread({
+              threadId,
+              modelSelection: xhighSelection,
+              runtimePolicy,
+            });
+            const now = yield* DateTime.now;
+            yield* session.startTurn({
+              appThread: {
+                createdBy: "user",
+                creationSource: "web",
+                id: threadId,
+                projectId: ProjectId.make("project-antigravity-thought-level"),
+                title: "Antigravity thought level",
+                providerInstanceId: h.instance.instanceId,
+                modelSelection: xhighSelection,
+                runtimeMode: "approval-required",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: null,
+                activeProviderThreadId: providerThread.id,
+                lineage: {
+                  parentThreadId: null,
+                  relationshipToParent: null,
+                  rootThreadId: threadId,
+                },
+                forkedFrom: null,
+                createdAt: now,
+                updatedAt: now,
+                archivedAt: null,
+                settledOverride: null,
+                settledAt: null,
+                lastVisitedAt: null,
+                deletedAt: null,
+              },
+              threadId,
+              runId: RunId.make("run-antigravity-thought-level"),
+              runOrdinal: 1,
+              providerTurnOrdinal: 1,
+              attemptId: RunAttemptId.make("attempt-antigravity-thought-level"),
+              rootNodeId: NodeId.make("node-antigravity-thought-level"),
+              providerThread,
+              message: {
+                createdBy: "user",
+                creationSource: "web",
+                messageId: MessageId.make("message-antigravity-thought-level"),
+                text: "Say ok.",
+                attachments: [],
+              },
+              modelSelection: xhighSelection,
+              runtimePolicy,
+            });
+            yield* session.events.pipe(
+              Stream.takeUntil((event) => event.type === "turn.terminal"),
+              Stream.runDrain,
+            );
+            const nativeId = providerThread.nativeThreadRef?.nativeId;
+            if (!nativeId) {
+              return yield* Effect.die("Expected Antigravity session to have a native thread id");
+            }
+            return nativeId;
+          }),
+        );
+
+        const afterLiveSession = yield* h.instance.snapshot.getSnapshot;
+        expect(levelOf(afterLiveSession, "gemini-test-low")).toBe("high");
+        expect(levelOf(afterLiveSession, "gemini-test-high")).toBe("medium");
+        expect(
+          afterLiveSession.models.find((model) => model.slug === "gemini-test-low")?.isDefault,
+        ).toBe(true);
+        expect(
+          (yield* h.readRequests)
+            .filter(
+              (request) =>
+                request.method === "session/set_config_option" &&
+                request.params?.configId === "thought_level",
+            )
+            .map((request) => request.params?.value),
+        ).toEqual(["xhigh"]);
+
+        // Resuming a session whose saved level is xhigh must also keep the catalog default.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const workspace = yield* h.fs.makeTempDirectoryScoped({
+              prefix: "t3-ag-thought-resume-",
+            });
+            const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+              runtimeMode: "approval-required",
+              interactionMode: "default",
+              cwd: workspace,
+            });
+            const resumed = yield* h.instance.orchestrationAdapter.openSession({
+              threadId,
+              providerSessionId: ProviderSessionId.make(
+                "provider-session-antigravity-thought-level-resumed",
+              ),
+              modelSelection: xhighSelection,
+              runtimePolicy,
+              initialNativeThreadId: nativeSessionId,
+            });
+            yield* resumed.ensureThread({
+              threadId,
+              modelSelection: xhighSelection,
+              runtimePolicy,
+            });
+          }),
+        );
+        expect(levelOf(yield* h.instance.snapshot.getSnapshot, "gemini-test-low")).toBe("high");
+        yield* h.assertClosed;
+      }),
   );
 });

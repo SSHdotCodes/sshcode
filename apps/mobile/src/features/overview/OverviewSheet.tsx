@@ -260,6 +260,7 @@ function OverviewAnswer(props: {
   return (
     <SelectableMarkdownText
       markdown={props.entry.text}
+      plainValues
       textStyle={{ ...styles.nativeTextStyle, ...proseStyle }}
       onLinkPress={props.onLinkPress}
     />

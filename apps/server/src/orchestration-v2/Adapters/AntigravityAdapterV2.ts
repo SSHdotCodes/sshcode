@@ -20,10 +20,13 @@ import type { AntigravityAuth } from "../../provider/AntigravityAuth.ts";
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import {
   antigravityKeepsPromptOpenForBackgroundWork,
+  antigravityMcpDiscoveryInstructions,
   antigravityPermissionMode,
   antigravitySteersWithPrompt,
+  antigravitySupportsMcpDiscovery,
   applyAntigravityAcpModelSelection,
   buildAntigravityPrompt,
+  type AntigravityMediaSpawner,
   type AntigravityAcpRuntimeInput,
 } from "../../provider/acp/AntigravityAcpSupport.ts";
 import { readAntigravityChildrenAtWork } from "../../provider/acp/AntigravityChildWork.ts";
@@ -31,9 +34,10 @@ import { readAntigravityClientTextFile } from "../../provider/acp/AntigravityCli
 import {
   antigravityApprovalOptions,
   antigravityCommandOutlivesPrompt,
+  antigravityPromptStopFailure,
   antigravitySubagentInput,
   antigravitySubagentOutput,
-  antigravityPromptStopFailure,
+  antigravitySwarmWorker,
   classifyAntigravitySubagentToolCall,
   extractAntigravityUserInputQuestion,
   isAntigravityOpenCommand,
@@ -73,6 +77,7 @@ const AntigravityProviderCapabilitiesV2 = {
 } satisfies OrchestrationV2ProviderCapabilities;
 
 export interface AntigravityAdapterV2Options {
+  readonly mediaSpawner?: AntigravityMediaSpawner;
   readonly instanceId: ProviderInstanceId;
   readonly selfInvocation: SelfInvocation;
   /** Spawns the official agent with the instance's Google profile. */
@@ -88,29 +93,41 @@ export interface AntigravityAdapterV2Options {
   /** Model to select for the provider default alias, from the manifest. */
   readonly defaultModel: Effect.Effect<string | undefined>;
   readonly childWorkDirectories?: ReadonlyArray<string>;
-  /**
-   * The ids of the usage windows that count a model, such as `3p-5h` and `3p-weekly` for
-   * Claude and GPT. Google's quota notice names no window; a refusal names these so the
-   * limit leaves the models other windows count usable.
-   */
-  readonly quotaWindowIds?: (model: string) => Effect.Effect<ReadonlyArray<string>>;
   readonly onSessionStarted?: (
     started: AcpSessionRuntime.AcpSessionRuntimeStartResult,
     cwd: string,
+    session?: { readonly resumed: boolean },
   ) => Effect.Effect<void>;
   readonly onSessionEvent?: AcpAdapterV2Flavor["onSessionEvent"];
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
   readonly continuationRequests?: Parameters<typeof makeAcpAdapterV2>[0]["continuationRequests"];
 }
 
-/**
- * ACP 1.1.1 exposes subagent invocations as ordinary `start_subagent` tools
- * without child session ids. Project them as subagent items keyed by the tool
- * call so the timeline shows them as delegated work.
- */
+/** ACP reports Antigravity launches as tools without child session IDs. */
 const extractAntigravitySubagentUpdate: NonNullable<AcpAdapterV2Flavor["extractSubagentUpdate"]> = (
   toolCall,
 ) => {
+  const worker = antigravitySwarmWorker(toolCall);
+  if (worker !== undefined) {
+    const status =
+      toolCall.status === "failed"
+        ? "failed"
+        : toolCall.status === "completed"
+          ? "running"
+          : "pending";
+    return {
+      nativeTaskId: toolCall.toolCallId,
+      ...worker,
+      model: worker.model ?? null,
+      inheritParentModel: true,
+      status,
+      childSessionId: null,
+      result:
+        status === "failed"
+          ? (antigravitySubagentOutput(toolCall) ?? toolCall.detail ?? null)
+          : null,
+    };
+  }
   if (classifyAntigravitySubagentToolCall(toolCall) !== "subagent") {
     return undefined;
   }
@@ -209,13 +226,16 @@ export function makeAntigravityAcpAdapterFlavor(
           );
         },
         start: () =>
-          runtime
-            .start()
-            .pipe(
-              Effect.tap(
-                (started) => options.onSessionStarted?.(started, input.cwd) ?? Effect.void,
-              ),
+          runtime.start().pipe(
+            Effect.tap(
+              (started) =>
+                options.onSessionStarted?.(started, input.cwd, {
+                  resumed:
+                    input.resumeSessionId !== undefined &&
+                    started.sessionId === input.resumeSessionId,
+                }) ?? Effect.void,
             ),
+          ),
       } satisfies typeof runtime;
     }).pipe(
       Effect.provideService(Crypto.Crypto, options.crypto),
@@ -230,12 +250,15 @@ export function makeAntigravityAcpAdapterFlavor(
     driver: ANTIGRAVITY_PROVIDER,
     runtimeHarness: "Antigravity",
     capabilities: AntigravityProviderCapabilitiesV2,
+    mcpDiscoveryInstructions: antigravityMcpDiscoveryInstructions,
+    supportsMcpDiscovery: antigravitySupportsMcpDiscovery,
     buildPrompt: ({ text, attachments, promptCapabilities }) =>
       buildAntigravityPrompt({
         input: text,
         attachments,
         attachmentsDir: options.host.paths.attachmentsDir,
         promptCapabilities,
+        mediaSpawner: options.mediaSpawner,
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, options.fileSystem),
         Effect.provideService(Path.Path, options.path),
@@ -310,26 +333,7 @@ export function makeAntigravityAcpAdapterFlavor(
         }),
     },
     approvalOptions: antigravityApprovalOptions,
-    // A spent quota arrives as the reply. It names no usage window, so the failure names the
-    // windows that count the turn's model and leaves the other model family usable.
-    promptStopFailure: (input) =>
-      Effect.gen(function* () {
-        const failure = antigravityPromptStopFailure(input);
-        if (failure?.class !== "usage_limit") return failure;
-        const model =
-          input.model === ANTIGRAVITY_DEFAULT_MODEL ? yield* options.defaultModel : input.model;
-        const windowIds =
-          model === undefined || options.quotaWindowIds === undefined
-            ? []
-            : yield* options.quotaWindowIds(model);
-        yield* Effect.logWarning("Antigravity ended a turn on a spent quota", {
-          instanceId: options.instanceId,
-          model: model ?? input.model,
-          resetAt: failure.resetAt,
-          windowIds,
-        });
-        return windowIds.length === 0 ? failure : { ...failure, usageLimitWindowIds: windowIds };
-      }),
+    promptStopFailure: (input) => Effect.succeed(antigravityPromptStopFailure(input)),
     extractPermissionQuestion: (request) => {
       const question = extractAntigravityUserInputQuestion(request);
       if (question === undefined) return undefined;

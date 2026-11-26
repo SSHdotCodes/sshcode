@@ -1747,7 +1747,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               parentNodeId: turn.rootNodeId,
               rootNodeId: turn.rootNodeId,
               kind: "tool_call",
-              status: status.node,
+              status: turnItem.status === "failed" ? "failed" : status.node,
               countsForRun: false,
               providerThreadId: state.providerThread.id,
               providerTurnId: turn.providerTurnId,

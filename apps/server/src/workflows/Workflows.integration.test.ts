@@ -14,6 +14,9 @@ import {
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -33,9 +36,11 @@ import * as Worker from "../orchestration-v2/EffectWorker.ts";
 import * as Receipts from "../orchestration-v2/CommandReceiptStore.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as Launch from "../orchestration-v2/ThreadLaunchService.ts";
+import * as LocalFiles from "../assets/LocalFileAttachments.ts";
 import * as Folders from "../project/ManagedProjectFolders.ts";
 import * as Projects from "../project/ProjectService.ts";
 import * as Setup from "../project/ProjectSetupScriptRunner.ts";
+import * as WarmWorktreePool from "../project/WarmWorktreePool.ts";
 import * as SetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as CloneTracker from "../project/ProjectCloneTracker.ts";
 import * as Terminals from "../terminal/Manager.ts";
@@ -187,6 +192,11 @@ it.live.each([
         Layer.mock(Setup.ProjectSetupScriptRunner)({
           runForThread: () => Effect.succeed({ status: "no-script" as const }),
         }),
+        Layer.succeed(WarmWorktreePool.WarmWorktreePool, {
+          claim: () => Effect.succeed(null),
+          recordSetup: () => Effect.void,
+          recycle: () => Effect.succeed("unavailable"),
+        }),
         SetupTracker.layer,
         Layer.mock(CloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
         Layer.mock(Terminals.TerminalManager)({ close: () => Effect.void }),
@@ -200,7 +210,11 @@ it.live.each([
       const workflows = Workflows.layer.pipe(
         Layer.provideMerge(Layer.mergeAll(external, threads, launch, registry)),
       );
-      const all = Mcp.layer.pipe(Layer.provideMerge(workflows), Layer.provideMerge(replay));
+      const all = Mcp.layer.pipe(
+        Layer.provide(LocalFiles.layer),
+        Layer.provideMerge(workflows),
+        Layer.provideMerge(replay),
+      );
       yield* Effect.gen(function* () {
         const service = yield* Workflows.WorkflowsService,
           orchestrator = yield* Orchestrator.OrchestratorV2,
@@ -248,13 +262,18 @@ it.live.each([
           })
           .pipe(Effect.result);
         expect(wrong._tag).toBe("Failure");
+        const fs = yield* FileSystem.FileSystem;
+        const clip = (yield* Path.Path).join(cwd, "recording.wav");
+        yield* fs.writeFileString(clip, "workflow recording");
         const delegated = yield* mcp.delegateTask(scope, {
+          attachmentPaths: ["recording.wav"],
           task: "Work",
           title: "worker",
           target: { providerInstanceId: childSelection.instanceId, model: childSelection.model },
           mode: stopFirst ? "async" : "wait",
           clientRequestId: "worker",
         });
+        yield* fs.remove(clip);
         if (stopFirst) {
           yield* Deferred.await(childStarted);
           yield* service.mutate({
@@ -305,6 +324,15 @@ it.live.each([
         expect(retried.thread.modelSelection).toEqual(childSelection);
         expect(retried.thread.lineage.parentThreadId).toBe(lead.thread.id);
         expect(retried.messages[0]!.text).toBe(child.messages[0]!.text);
+        const media = retried.messages[0]!.attachments;
+        expect(media[0]?.id).not.toBe(child.messages[0]!.attachments[0]?.id);
+        expect(media).toMatchObject([{ name: "recording.wav", mimeType: "audio/wav" }]);
+        const { attachmentsDir } = yield* Config.ServerConfig;
+        expect(
+          yield* fs.readFileString(
+            resolveAttachmentPath({ attachmentsDir, attachment: media[0]! })!,
+          ),
+        ).toBe("workflow recording");
         yield* orchestrator
           .streamStoredEventsFrom({ threadId: lead.thread.id, eventType: "subagent.updated" })
           .pipe(

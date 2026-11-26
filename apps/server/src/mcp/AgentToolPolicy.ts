@@ -13,8 +13,13 @@ import * as Option from "effect/Option";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChatControls from "../sessionBoxes/chatControls.ts";
-import { agentToolCatalog } from "./AgentToolCatalog.ts";
+import {
+  agentToolCatalog,
+  agentToolDiscoveryCatalog,
+  agentToolListVisible,
+} from "./AgentToolCatalog.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import { ToolDiscoveryCatalog } from "./McpSessionRegistry.ts";
 
 /**
  * Settings read of the agent tool catalog. MCP enforcement does not require
@@ -75,6 +80,28 @@ export const currentAgentToolPolicyState = Effect.gen(function* () {
 /** Missing settings preserve legacy defaults; failed settings reads never grant access. */
 export const currentAgentToolPolicy = currentAgentToolPolicyState.pipe(
   Effect.map((value) => value.policy),
+);
+
+export const layerDiscovery = Layer.effect(
+  ToolDiscoveryCatalog,
+  Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const chatControls = Option.getOrElse(
+      yield* Effect.serviceOption(ChatControls.ChatControls),
+      () => ({ subagentsEnabled: () => true }),
+    );
+    const toolPolicy = currentAgentToolPolicy.pipe(
+      Effect.provideService(ServerSettings.ServerSettingsService, settings),
+    );
+    return (scope) =>
+      toolPolicy.pipe(
+        Effect.map((policy) =>
+          agentToolDiscoveryCatalog((name) =>
+            agentToolListVisible(policy, name, scope, chatControls),
+          ),
+        ),
+      );
+  }),
 );
 
 export const disabledAgentToolMessage = (name: string) =>

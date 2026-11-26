@@ -1,10 +1,10 @@
 /// <reference lib="dom" />
 /// <reference lib="dom.iterable" />
-// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Standalone Node benchmark driving Chrome.
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Standalone browser benchmark manages a temporary profile and writes each sample.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import * as NodeModule from "node:module";
+import { chromium } from "playwright-core";
 
 // Run against an isolated production server with a synthetic stopped chat.
 // Usage: node scripts/performance/browser-startup.ts <origin> <thread-path> <storage-state> <output-prefix> [local|remote]
@@ -15,11 +15,6 @@ if (!origin || !threadPath || !storageStatePath || !outputPrefix) {
 }
 if (network !== "local" && network !== "remote")
   throw new Error("Expected local or remote network");
-const require = NodeModule.createRequire(
-  new URL("../../apps/server/package.json", import.meta.url),
-);
-const { default: playwright } = await import(require.resolve("playwright-core"));
-const { chromium } = playwright;
 const state = JSON.parse(NodeFS.readFileSync(storageStatePath, "utf8"));
 const runs = [];
 for (let sample = 0; sample < 5; sample += 1) {

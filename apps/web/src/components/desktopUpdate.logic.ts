@@ -1,4 +1,5 @@
 import type {
+  DesktopBridge,
   DesktopUpdateActionResult,
   DesktopUpdateCheckResult,
   DesktopUpdateState,
@@ -105,6 +106,9 @@ export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string
       typeof state.downloadPercent === "number" ? ` (${Math.floor(state.downloadPercent)}%)` : "";
     return `Downloading update${progress}`;
   }
+  if (state.installWhenIdle !== undefined) {
+    return `Update ${state.downloadedVersion ?? "ready"} installs when chats finish (${state.installWhenIdle.working} working). Click to restart now.`;
+  }
   if (state.status === "downloaded") {
     return `Update ${state.downloadedVersion ?? state.availableVersion ?? "ready"} downloaded. Click to restart and install.`;
   }
@@ -117,11 +121,36 @@ export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string
   return "Up to date";
 }
 
+export const formatWorkingChats = (working: number) =>
+  `${working} ${working === 1 ? "chat" : "chats"}`;
+
+/**
+ * Confirms an install. A shell that can wait for idle chats waits for them;
+ * once it waits, confirming means restarting now.
+ */
 export function getDesktopUpdateInstallConfirmationMessage(
-  state: Pick<DesktopUpdateState, "availableVersion" | "downloadedVersion">,
+  state: Pick<DesktopUpdateState, "availableVersion" | "downloadedVersion" | "installWhenIdle">,
+  options: { readonly waitsForIdle?: boolean } = {},
 ): string {
   const version = state.downloadedVersion ?? state.availableVersion;
-  return `Install update${version ? ` ${version}` : ""} and restart SSHCode?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.`;
+  const named = version ? ` ${version}` : "";
+  if (state.installWhenIdle !== undefined) {
+    const { working } = state.installWhenIdle;
+    return `Restart SSHCode now to install${named}?\n\n${working} working ${working === 1 ? "chat" : "chats"} will be interrupted.`;
+  }
+  return options.waitsForIdle
+    ? `Install update${named} and restart SSHCode?\n\nIf agents are working, SSHCode waits for them to finish, up to 30 minutes.`
+    : `Install update${named} and restart SSHCode?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.`;
+}
+
+/** Restarts now while an install already waits for idle chats; otherwise waits for them when the shell can. */
+export function installDesktopUpdate(
+  bridge: Pick<DesktopBridge, "installUpdate" | "installUpdateWhenIdle">,
+  state: Pick<DesktopUpdateState, "installWhenIdle"> | null,
+): Promise<DesktopUpdateActionResult> {
+  return state?.installWhenIdle === undefined && bridge.installUpdateWhenIdle
+    ? bridge.installUpdateWhenIdle()
+    : bridge.installUpdate();
 }
 
 export function getDesktopUpdateActionError(result: DesktopUpdateActionResult): string | null {

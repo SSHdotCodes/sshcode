@@ -1,4 +1,5 @@
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 
 import { deriveThreadTitleFromPrompt } from "../lib/projectThreadStartTurn";
 import type { QueuedThreadCreation, QueuedThreadMessage } from "./thread-outbox-model";
@@ -50,11 +51,22 @@ export function composerDraftHasUserContent(draft: ComposerDraft): boolean {
   return draft.text.trim().length > 0 || draft.attachments.length > 0;
 }
 
+/**
+ * A draft's row title: what the user wrote. Attached pictures sit in the text as chips whose
+ * labels are file names ("IMG_0006.jpg"), which say nothing in a list, so they are counted
+ * instead of read out.
+ */
 function draftTitle(draft: ComposerDraft): string {
-  if (draft.text.trim().length > 0) {
-    return deriveThreadTitleFromPrompt(draft.text);
+  const written = replaceComposerContextReferences(draft.text, (reference) =>
+    reference.kind === "image" ? "" : reference.source,
+  );
+  if (written.trim().length > 0) {
+    return deriveThreadTitleFromPrompt(written);
   }
   const count = draft.attachments.length;
+  if (count > 0 && draft.attachments.every((attachment) => attachment.type === "image")) {
+    return count === 1 ? "1 photo" : `${count} photos`;
+  }
   return count === 1 ? "1 attachment" : `${count} attachments`;
 }
 

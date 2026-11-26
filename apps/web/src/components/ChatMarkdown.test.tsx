@@ -1718,6 +1718,41 @@ describe("ChatMarkdown emoji", () => {
   });
 });
 
+it("renders assistant inline values as prose and copies their authored markdown", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const paragraph = "At `` 54.5% `` use `lr=2.0e-6` and [see `8×B200`](https://example.com).";
+  const text = `${paragraph}\n\n\`\`\`text\n54.5%\n\`\`\`\n\n<code>54.5%</code>`;
+  const selection = window.getSelection()!;
+  try {
+    await getSyntaxHighlighterPromise("text");
+    await act(async () => root.render(<ChatMarkdown cwd={undefined} text={text} plainValues />));
+    expect(container.querySelector("p")?.textContent).toBe(
+      "At 54.5% use lr=2.0e-6 and see 8×B200.",
+    );
+    expect(
+      [...container.querySelectorAll("code")].map((element) => element.textContent?.trim()),
+    ).toEqual(["lr=2.0e-6", "54.5%", "54.5%"]);
+    const range = document.createRange();
+    range.selectNodeContents(container.querySelector("p")!);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    expect(chatMarkdownClipboardPayload(selection)?.text).toBe(paragraph);
+
+    await act(async () => root.render(<ChatMarkdown cwd={undefined} text={text} />));
+    expect([...container.querySelectorAll("p code")].map((element) => element.textContent)).toEqual(
+      ["54.5%", "lr=2.0e-6", "8×B200", "54.5%"],
+    );
+  } finally {
+    selection.removeAllRanges();
+    await act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  }
+});
+
 it("renders complete math while leaving prices, shell variables and streaming partials as text", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const container = document.createElement("div");

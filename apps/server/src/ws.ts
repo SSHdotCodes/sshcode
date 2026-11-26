@@ -35,7 +35,7 @@ import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import { rpcInitialItems } from "./rpcInitialItems.ts";
 import { rpcSerializationLayerFor, withChunkedMessages } from "./wsMessageCompression.ts";
-import { serverConfigTransport } from "./serverConfigTransport.ts";
+import { serverConfigTransport, serverSettingsConfigUpdates } from "./serverConfigTransport.ts";
 import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
 import { subscribeCodexAuthCallback } from "./provider/CodexAuthCallback.ts";
 import {
@@ -3417,14 +3417,7 @@ export const layerWsRpc = (
                       })),
                     )
                   : Stream.empty;
-              const settingsUpdates = settingsChanges.pipe(
-                Stream.map((settings) => ServerSettings.redactServerSettingsForClient(settings)),
-                Stream.map((settings) => ({
-                  version: 1 as const,
-                  type: "settingsUpdated" as const,
-                  payload: { settings },
-                })),
-              );
+              const settingsUpdates = serverSettingsConfigUpdates(settingsChanges);
 
               const chatTabUpdates =
                 input.chatTabs === true &&

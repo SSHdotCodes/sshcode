@@ -64,7 +64,7 @@ export function SettingsScopeSentence() {
     onChange: scope.selectScope,
   };
   return (
-    <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-3 text-base text-muted-foreground sm:px-4">
+    <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-3 text-sm text-muted-foreground sm:px-4">
       {/* Each connective stays with its picker so a wrap never strands "on". */}
       <span className="flex min-w-0 items-center gap-1.5">
         <span className="shrink-0">Applying settings for</span>
@@ -101,7 +101,10 @@ function ScopeMenu({
       >
         {icon}
         <span className="min-w-0 truncate">{label}</span>
-        <ChevronDownIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        <ChevronDownIcon
+          aria-hidden
+          className="-ms-0.5 size-3.5 shrink-0 text-muted-foreground/70"
+        />
       </MenuTrigger>
       <MenuPopup align="start">{children}</MenuPopup>
     </Menu>

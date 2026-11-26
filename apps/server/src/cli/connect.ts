@@ -42,7 +42,7 @@ import * as RelayTracing from "../cloud/relayTracing.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ExternalLauncher from "../process/externalLauncher.ts";
-import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
+import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import { resolveCliCommand } from "./invocation.ts";
 import { offerServiceDuringOnboarding, recoverServiceOnboardingOffer } from "./service.ts";
@@ -507,6 +507,32 @@ const connectLoginCommand = Command.make("login", {
   ),
 );
 
+export const connectNextStep = (
+  runtime: Option.Option<{ readonly pid: number; readonly serviceManaged?: boolean | undefined }>,
+  publishOnly: boolean,
+  baseDir: Option.Option<string>,
+) =>
+  Effect.gen(function* () {
+    const purpose = publishOnly
+      ? "publish agent activity (no managed tunnel)"
+      : "make this machine reachable";
+    const args = Option.isSome(baseDir) ? ["--base-dir", baseDir.value] : [];
+    if (Option.isSome(runtime) && isProcessAlive(runtime.value.pid)) {
+      if (!runtime.value.serviceManaged) return `Restart the running server to ${purpose}.`;
+      const command = yield* resolveCliCommand("service restart", args);
+      return `Restart the running background service with \`${command}\` to ${purpose}.`;
+    }
+    if (publishOnly) return `Start SSHCode to ${purpose}.`;
+    return `Start the server with \`${yield* resolveCliCommand("serve", args)}\` to ${purpose}.`;
+  });
+
+const readConnectNextStep = (publishOnly: boolean, baseDir: Option.Option<string>) =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    const state = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+    return yield* connectNextStep(state, publishOnly, baseDir);
+  });
+
 const connectLinkCommand = Command.make("link", {
   ...projectLocationFlags,
   headless: headlessFlag,
@@ -525,12 +551,8 @@ const connectLinkCommand = Command.make("link", {
         yield* Console.log("T3 Connect\n");
         const linked = yield* linkEnvironmentForConnect(flags);
         if (linked) {
-          const serveCommand = yield* resolveCliCommand("serve");
-          yield* Console.log(
-            flags.publishOnly
-              ? `✓ Authorized\n\nNext\n  Start SSHCode to publish agent activity (no managed tunnel).`
-              : `✓ Authorized\n\nNext\n  Start the server with \`${serveCommand}\` to make this machine reachable.`,
-          );
+          const next = yield* readConnectNextStep(flags.publishOnly, flags.baseDir);
+          yield* Console.log(`✓ Authorized\n\nNext\n  ${next}`);
         }
       }),
     ),
@@ -706,10 +728,8 @@ export const connectCommand = Command.make("connect", {
           );
           return;
         }
-        const serveCommand = yield* resolveCliCommand("serve");
-        yield* Console.log(
-          `\nNext\n  Start the server with \`${serveCommand}\` to make this machine reachable.`,
-        );
+        const next = yield* readConnectNextStep(false, flags.baseDir);
+        yield* Console.log(`\nNext\n  ${next}`);
       }),
     ),
   ),

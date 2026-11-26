@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - Standalone Node asset generator.
+// @effect-diagnostics nodeBuiltinImport:off - Offline asset generator writes PNGs synchronously.
 /**
  * Dithered tile-mosaic masks for the chat backdrop. Run with node scripts/generate-new-chat-horizon.ts.
  *

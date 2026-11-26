@@ -99,6 +99,22 @@ export const T3ProjectFile = Schema.Struct({
         'How new worktrees populate git submodules: "recursive" (the default) initializes nested submodules too, "top-level" initializes only those declared by this repository, and "none" leaves every submodule empty for a setup script to handle. A project or environment setting in SSHCode overrides this.',
     }),
   ),
+  worktreeSetupCache: Schema.optionalKey(
+    Schema.Struct({
+      inputs: Schema.Array(
+        trimmedNonEmpty(
+          {
+            description:
+              "Repository-relative Git glob for files the dependency install depends on.",
+          },
+          T3_PROJECT_FILE_PATH_MAX_LENGTH,
+        ),
+      ).check(Schema.isNonEmpty(), Schema.isMaxLength(64)),
+    }).annotate({
+      description:
+        "Opt in to warm subagent worktrees. The repository's setup command must support T3CODE_WORKTREE_SETUP_CACHE=prepare (install only into node_modules) and =reuse (recreate any other per-checkout setup without reinstalling dependencies). Include every tracked install input. The project file itself is always included.",
+    }),
+  ),
   scripts: Schema.optionalKey(
     Schema.Array(T3ProjectFileScript)
       .annotate({

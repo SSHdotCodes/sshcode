@@ -24,7 +24,7 @@ import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/t
 import { threadRowPreview } from "@t3tools/client-runtime/state/thread-row-preview";
 import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useEffect, useMemo, useState, type ComponentProps } from "react";
-import { Alert, Pressable, useWindowDimensions, View } from "react-native";
+import { Alert, Platform, Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
@@ -336,7 +336,23 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   );
 
   const rowContent = (
-    <View className="flex-row items-start gap-2">
+    <View className={cn("flex-row gap-2", sidebarPane ? "items-start" : "items-center gap-3")}>
+      {sidebarPane ? null : (
+        // Stands where a chat's painting does, so unsent work lines up with the chats under it.
+        <View
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          className="items-center justify-center rounded-xl bg-subtle"
+          style={{ width: ROW_PAINTING_SIZE, height: ROW_PAINTING_SIZE }}
+        >
+          <SymbolView
+            name={isDraft ? "square.and.pencil" : "arrow.up"}
+            size={16}
+            tintColorClassName={isDraft ? "accent-adaptive-amber-700-300" : "accent-icon-muted"}
+            type="monochrome"
+          />
+        </View>
+      )}
       {/* One line, unlike the two a thread row allows: a queued title is
           derived from the whole prompt rather than written as a title, so the
           second line is usually a stray word or emoji rather than meaning. */}
@@ -349,15 +365,17 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
       >
         {pendingTask.title}
       </Text>
-      <View className="flex-row items-center gap-1 pt-[3px]">
+      <View className={cn("flex-row items-center gap-1", sidebarPane && "pt-[3px]")}>
         {isDraft ? (
           <>
-            <SymbolView
-              name="square.and.pencil"
-              size={10}
-              tintColorClassName="accent-adaptive-amber-700-300"
-              type="monochrome"
-            />
+            {sidebarPane ? (
+              <SymbolView
+                name="square.and.pencil"
+                size={10}
+                tintColorClassName="accent-adaptive-amber-700-300"
+                type="monochrome"
+              />
+            ) : null}
             <Text className="text-xs text-adaptive-amber-700-300">Draft</Text>
           </>
         ) : (
@@ -406,9 +424,14 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
           rowContent
         ) : (
           <View>
-            <View className="px-5 py-2.5">{rowContent}</View>
+            <View className={THREAD_LIST_V2_ROW_CONTENT_CLASS_NAME}>{rowContent}</View>
             {props.showTrailingDivider !== false ? (
-              <View className="ml-5 h-px bg-border-subtle" />
+              <View
+                className={cn(
+                  "h-px bg-border-subtle",
+                  Platform.OS === "android" ? "ml-[60px]" : "ml-[68px]",
+                )}
+              />
             ) : null}
           </View>
         )}
@@ -416,6 +439,11 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
     </ControlPillMenu>
   );
 });
+
+/** The minute snooze presets are computed for; a row refreshes them when this moves. */
+function currentSnoozePresetMinute(): string {
+  return new Date().toISOString().slice(0, 16);
+}
 
 export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly readOnly?: boolean;
@@ -442,10 +470,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       slot. Precomputed per row — not via the list's extraData — so the minute
       tick re-renders only rows whose displayed text moved. */
   readonly timeLabel: string;
-  /** Parent minute tick carried on the row's list item, present only when the
-      row's menu offers snooze presets, so those menus refresh while mounted
-      without invalidating every other row. */
-  readonly snoozePresetMinute: string;
   /** Keep the environment's provider array stable across unrelated list updates. */
   readonly providers: ReadonlyArray<ThreadListProvider> | undefined;
   readonly providerInstance: ThreadRowProviderInstance | null;
@@ -670,9 +694,17 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     snoozable: canSnooze(thread, { now: new Date().toISOString() }),
     snoozed: snoozedRow,
   });
+  // Snooze presets ("In 1 hour · 7:15 PM") refresh when a finger lands on the row or one of
+  // its menus starts opening. A list-wide minute tick used to re-render every mounted row and
+  // rebuild its native menu, which froze the UI thread for a few hundred milliseconds.
+  const [snoozePresetMinute, setSnoozePresetMinute] = useState(currentSnoozePresetMinute);
+  const refreshSnoozePresets = useCallback(
+    () => setSnoozePresetMinute(currentSnoozePresetMinute()),
+    [],
+  );
   const snoozePresets = useMemo(
     () => (swipeActions.secondary === "snooze" ? resolveSnoozePresets(new Date()) : ([] as const)),
-    [props.snoozePresetMinute, swipeActions.secondary],
+    [snoozePresetMinute, swipeActions.secondary],
   );
   const snoozePresetActions = useMemo<MenuAction[]>(
     () => [
@@ -896,12 +928,19 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             menu: {
               actions: snoozePresetActions,
               onPressAction: handleMenuAction,
+              onOpen: refreshSnoozePresets,
               title: "Snooze until",
             },
             onPress: () => undefined,
           }
         : null,
-    [handleMenuAction, snoozePresetActions, swipeActions.secondary, displayTitle],
+    [
+      handleMenuAction,
+      refreshSnoozePresets,
+      snoozePresetActions,
+      swipeActions.secondary,
+      displayTitle,
+    ],
   );
   const accessibilityActions = useMemo(
     () => threadRowAccessibilityActions(menuActions, canOperateThread),
@@ -1282,6 +1321,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         close();
         handleMenuAction({ nativeEvent: { event: nativeEvent.actionName } });
       }}
+      onTouchStart={refreshSnoozePresets}
       onPressIn={() => preloadPhoneThread(thread.environmentId, thread.id)}
       onPress={() => {
         close();
@@ -1346,6 +1386,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           <ControlPillMenu
             actions={menuActions}
             onPressAction={handleMenuAction}
+            onMenuInteractionStart={refreshSnoozePresets}
+            onOpenMenu={refreshSnoozePresets}
             shouldOpenOnLongPress
           >
             {rowContent(close)}

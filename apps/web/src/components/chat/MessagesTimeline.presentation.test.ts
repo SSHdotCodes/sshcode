@@ -204,6 +204,26 @@ describe("timeline dividers", () => {
       ).toEqual(["Yesterday", "Today"]);
     }
   });
+  it("keeps a reply under its turn header when the turn runs past midnight", () => {
+    const fold: MessagesTimelineRow = {
+      kind: "turn-fold",
+      id: "fold",
+      createdAt: stamp(24, 23, 58),
+      runId: RunId.make("claude"),
+      label: "Worked for 4m",
+      expanded: false,
+    };
+    const rows = decorateMessagesTimelineRows(
+      [
+        message("ask", stamp(24, 23, 57), "user"),
+        fold,
+        message("reply", stamp(25, 0, 2)),
+        message("next", stamp(25, 9), "user", "later"),
+      ],
+      { ...options, discord: false },
+    );
+    expect(rows.map((row) => row.dayDivider)).toEqual(["Yesterday", undefined, undefined, "Today"]);
+  });
   it("marks only the first unseen message that existed when the chat opened", () => {
     const rows = [
       message("a", stamp(25, 14)),

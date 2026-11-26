@@ -30,11 +30,11 @@ const handlers = {
       return yield* service.stop(scope, monitorId);
     }),
   ),
-  monitor_list: McpToolAccess.actsAsCaller(() =>
+  monitor_list: McpToolAccess.actsAsCaller(({ includeOutput }) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* MonitorMcpService.MonitorMcpService;
-      return yield* service.list(scope);
+      return yield* service.list(scope, includeOutput === true);
     }),
   ),
   orchestrator_capabilities: McpToolAccess.reads((input) =>
@@ -67,12 +67,15 @@ const handlers = {
       return yield* service.council(scope, input);
     }),
   ),
-  task_status: McpToolAccess.actsAsCaller(({ taskId, grades }) =>
+  task_status: McpToolAccess.actsAsCaller(({ taskId, grades, summaryOffset }) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       const feedback = yield* service.gradeTasks(scope, grades);
-      const status = compactDelegateTaskResult(yield* service.taskStatus(scope, taskId));
+      const status = compactDelegateTaskResult(
+        yield* service.taskStatus(scope, taskId),
+        summaryOffset,
+      );
       const rated =
         Array.isArray(grades) &&
         grades.some(
@@ -86,9 +89,13 @@ const handlers = {
       const {
         summary: _readSummary,
         latestTerminalSummary: _readTerminalSummary,
+        nextSummaryOffset: _nextSummaryOffset,
         ...withoutResult
       } = status;
-      const result = rated ? withoutResult : status;
+      const result =
+        rated && (summaryOffset === undefined || status.summary === undefined)
+          ? withoutResult
+          : status;
       return feedback.skipped.length ? { ...result, grades: feedback } : result;
     }),
   ),
@@ -212,13 +219,8 @@ const handlers = {
         yield* McpInvocationContext.McpInvocationContext,
         "list_api_keys",
       );
-      return yield* (yield* ApiKeyStore.ApiKeyStore)
-        .list(scope.thread.threadId)
-        .pipe(
-          Effect.map((items) =>
-            items.map(({ name, scope, expiresAt }) => ({ name, scope, expiresAt })),
-          ),
-        );
+      const items = yield* (yield* ApiKeyStore.ApiKeyStore).list(scope.thread.threadId);
+      return { keys: items.map(({ name, scope, expiresAt }) => ({ name, scope, expiresAt })) };
     }),
   ),
   prepare_api_key: McpToolAccess.actsAsCaller((input) =>

@@ -62,6 +62,12 @@ const dependencies = Layer.mergeAll(
         fullReads++;
         throw new Error("full transcript read");
       }),
+    getRunAttemptState: (threadId, runId) =>
+      Effect.sync(() => {
+        NodeAssert.equal(threadId, current.thread.id);
+        const run = current.runs.find((row) => row.id === runId);
+        return run && { status: run.status, activeAttemptId: run.activeAttemptId };
+      }),
     hasUnpairedRunInterruptRequest: () => Effect.succeed(false),
     getThreadRecords: (threadId, fields) =>
       Effect.sync(() => {

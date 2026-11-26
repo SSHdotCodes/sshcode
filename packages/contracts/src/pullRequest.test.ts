@@ -71,6 +71,15 @@ const LIST_RESULT: PullRequestListResult = {
 };
 
 describe("PullRequestListResult", () => {
+  it("reads the public web host of legacy GitLab alternate SSH identities", () => {
+    expect(
+      pullRequestHostOf(
+        { canonicalKey: "altssh.gitlab.com/group/repo" },
+        SourceControlProviderKind.make("gitlab"),
+      ),
+    ).toBe("gitlab.com");
+  });
+
   it("separates Forgejo HTTP ports while preserving other provider host identities", () => {
     const identity = {
       canonicalKey: "forge.example/team/repo",

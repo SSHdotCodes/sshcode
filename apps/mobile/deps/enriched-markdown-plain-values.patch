@@ -1,0 +1,452 @@
+--- a/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.h
++++ b/android/generated/jni/react/renderer/components/EnrichedMarkdownTextSpec/Props.h
+@@ -1836,6 +1836,7 @@
+
+ struct EnrichedMarkdownMarkdownStyleCodeStruct {
+   std::string fontFamily{};
++  std::string plainValuePattern{};
+   Float fontSize{0.0};
+   SharedColor color{};
+   SharedColor backgroundColor{};
+@@ -1848,6 +1849,7 @@
+   folly::dynamic toDynamic() const {
+     folly::dynamic result = folly::dynamic::object();
+     result["fontFamily"] = fontFamily;
++    result["plainValuePattern"] = plainValuePattern;
+     result["fontSize"] = fontSize;
+     result["color"] = ::facebook::react::toDynamic(color);
+     result["backgroundColor"] = ::facebook::react::toDynamic(backgroundColor);
+@@ -1863,6 +1865,10 @@
+   auto tmp_fontFamily = map.find("fontFamily");
+   if (tmp_fontFamily != map.end()) {
+     fromRawValue(context, tmp_fontFamily->second, result.fontFamily);
++  }
++  auto tmp_plainValuePattern = map.find("plainValuePattern");
++  if (tmp_plainValuePattern != map.end()) {
++    fromRawValue(context, tmp_plainValuePattern->second, result.plainValuePattern);
+   }
+   auto tmp_fontSize = map.find("fontSize");
+   if (tmp_fontSize != map.end()) {
+@@ -6439,6 +6445,7 @@
+
+ struct EnrichedMarkdownTextMarkdownStyleCodeStruct {
+   std::string fontFamily{};
++  std::string plainValuePattern{};
+   Float fontSize{0.0};
+   SharedColor color{};
+   SharedColor backgroundColor{};
+@@ -6451,6 +6458,7 @@
+   folly::dynamic toDynamic() const {
+     folly::dynamic result = folly::dynamic::object();
+     result["fontFamily"] = fontFamily;
++    result["plainValuePattern"] = plainValuePattern;
+     result["fontSize"] = fontSize;
+     result["color"] = ::facebook::react::toDynamic(color);
+     result["backgroundColor"] = ::facebook::react::toDynamic(backgroundColor);
+@@ -6466,6 +6474,10 @@
+   auto tmp_fontFamily = map.find("fontFamily");
+   if (tmp_fontFamily != map.end()) {
+     fromRawValue(context, tmp_fontFamily->second, result.fontFamily);
++  }
++  auto tmp_plainValuePattern = map.find("plainValuePattern");
++  if (tmp_plainValuePattern != map.end()) {
++    fromRawValue(context, tmp_plainValuePattern->second, result.plainValuePattern);
+   }
+   auto tmp_fontSize = map.find("fontSize");
+   if (tmp_fontSize != map.end()) {
+--- a/android/src/main/java/com/swmansion/enriched/markdown/renderer/CodeRenderer.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/renderer/CodeRenderer.kt
+@@ -1,6 +1,8 @@
+ package com.swmansion.enriched.markdown.renderer
+
+ import android.text.SpannableStringBuilder
++import android.text.TextPaint
++import android.text.style.MetricAffectingSpan
+ import com.swmansion.enriched.markdown.parser.MarkdownASTNode
+ import com.swmansion.enriched.markdown.spans.CodeBackgroundSpan
+ import com.swmansion.enriched.markdown.spans.CodeSpan
+@@ -19,6 +21,11 @@
+     if (node.children.isEmpty() || node.children.all { it.content.isEmpty() }) return
+
+     factory.renderWithSpan(builder, { node.children.forEach { builder.append(it.content) } }) { start, end, blockStyle ->
++      if (config.style.codeStyle.plainValueRegex?.matches(builder.subSequence(start, end)) == true) {
++        builder.setSpan(TabularNumbersSpan(), start, end, SPAN_FLAGS_EXCLUSIVE_EXCLUSIVE)
++        return@renderWithSpan
++      }
++
+       builder.setSpan(
+         CodeSpan(factory.styleCache, blockStyle),
+         start,
+@@ -34,3 +41,13 @@
+     }
+   }
+ }
++
++private class TabularNumbersSpan : MetricAffectingSpan() {
++  override fun updateDrawState(tp: TextPaint) = applyTabularNumbers(tp)
++  override fun updateMeasureState(tp: TextPaint) = applyTabularNumbers(tp)
++
++  private fun applyTabularNumbers(paint: TextPaint) {
++    val features = paint.fontFeatureSettings
++    paint.fontFeatureSettings = if (features.isNullOrEmpty()) "'tnum'" else "$features, 'tnum'"
++  }
++}
+--- a/android/src/main/java/com/swmansion/enriched/markdown/styles/CodeStyle.kt
++++ b/android/src/main/java/com/swmansion/enriched/markdown/styles/CodeStyle.kt
+@@ -8,7 +8,12 @@
+   val color: Int,
+   val backgroundColor: Int,
+   val borderColor: Int,
++  val plainValuePattern: String = "",
+ ) {
++  val plainValueRegex = plainValuePattern.takeIf { it.isNotEmpty() }?.let { pattern ->
++    runCatching { Regex(pattern) }.getOrNull()
++  }
++
+   companion object {
+     fun fromReadableMap(
+       map: ReadableMap,
+@@ -20,7 +25,8 @@
+       val color = parser.parseColor(map, "color")
+       val backgroundColor = parser.parseColor(map, "backgroundColor")
+       val borderColor = parser.parseColor(map, "borderColor")
+-      return CodeStyle(fontFamily, fontSize, color, backgroundColor, borderColor)
++      val plainValuePattern = if (map.hasKey("plainValuePattern")) parser.parseString(map, "plainValuePattern") else ""
++      return CodeStyle(fontFamily, fontSize, color, backgroundColor, borderColor, plainValuePattern)
+     }
+   }
+ }
+--- a/ios/generated/ReactCodegen/EnrichedMarkdownTextSpec/Props.h
++++ b/ios/generated/ReactCodegen/EnrichedMarkdownTextSpec/Props.h
+@@ -1836,6 +1836,7 @@
+
+ struct EnrichedMarkdownMarkdownStyleCodeStruct {
+   std::string fontFamily{};
++  std::string plainValuePattern{};
+   Float fontSize{0.0};
+   SharedColor color{};
+   SharedColor backgroundColor{};
+@@ -1848,6 +1849,7 @@
+   folly::dynamic toDynamic() const {
+     folly::dynamic result = folly::dynamic::object();
+     result["fontFamily"] = fontFamily;
++    result["plainValuePattern"] = plainValuePattern;
+     result["fontSize"] = fontSize;
+     result["color"] = ::facebook::react::toDynamic(color);
+     result["backgroundColor"] = ::facebook::react::toDynamic(backgroundColor);
+@@ -1863,6 +1865,10 @@
+   auto tmp_fontFamily = map.find("fontFamily");
+   if (tmp_fontFamily != map.end()) {
+     fromRawValue(context, tmp_fontFamily->second, result.fontFamily);
++  }
++  auto tmp_plainValuePattern = map.find("plainValuePattern");
++  if (tmp_plainValuePattern != map.end()) {
++    fromRawValue(context, tmp_plainValuePattern->second, result.plainValuePattern);
+   }
+   auto tmp_fontSize = map.find("fontSize");
+   if (tmp_fontSize != map.end()) {
+@@ -6439,6 +6445,7 @@
+
+ struct EnrichedMarkdownTextMarkdownStyleCodeStruct {
+   std::string fontFamily{};
++  std::string plainValuePattern{};
+   Float fontSize{0.0};
+   SharedColor color{};
+   SharedColor backgroundColor{};
+@@ -6451,6 +6458,7 @@
+   folly::dynamic toDynamic() const {
+     folly::dynamic result = folly::dynamic::object();
+     result["fontFamily"] = fontFamily;
++    result["plainValuePattern"] = plainValuePattern;
+     result["fontSize"] = fontSize;
+     result["color"] = ::facebook::react::toDynamic(color);
+     result["backgroundColor"] = ::facebook::react::toDynamic(backgroundColor);
+@@ -6466,6 +6474,10 @@
+   auto tmp_fontFamily = map.find("fontFamily");
+   if (tmp_fontFamily != map.end()) {
+     fromRawValue(context, tmp_fontFamily->second, result.fontFamily);
++  }
++  auto tmp_plainValuePattern = map.find("plainValuePattern");
++  if (tmp_plainValuePattern != map.end()) {
++    fromRawValue(context, tmp_plainValuePattern->second, result.plainValuePattern);
+   }
+   auto tmp_fontSize = map.find("fontSize");
+   if (tmp_fontSize != map.end()) {
+--- a/ios/internals/MeasurementCache.h
++++ b/ios/internals/MeasurementCache.h
+@@ -149,7 +149,7 @@
+   hashFields(s.codeBlock.fontFamily, s.codeBlock.fontSize, s.codeBlock.fontWeight, s.codeBlock.marginTop,
+              s.codeBlock.marginBottom, s.codeBlock.lineHeight, s.codeBlock.padding, s.codeBlock.borderRadius,
+              s.codeBlock.borderWidth);
+-  hashFields(s.code.fontFamily, s.code.fontSize);
++  hashFields(s.code.fontFamily, s.code.fontSize, s.code.plainValuePattern);
+   hashFields(s.link.fontFamily, s.strong.fontFamily, s.strong.fontWeight, s.em.fontFamily, s.em.fontStyle);
+   // Variants change link metrics: a font family, or a pill box around the label.
+   for (const auto &variant : s.linkVariants) {
+--- a/ios/renderer/AttributedRenderer.m
++++ b/ios/renderer/AttributedRenderer.m
+@@ -1,6 +1,7 @@
+ #import "AttributedRenderer.h"
+ #import "BlockquoteBorder.h"
+ #import "CodeBlockBackground.h"
++#import "CodeRenderer.h"
+ #import "ENRMBlockquoteTextRenderer.h"
+ #import "ENRMLinkPillText.h"
+ #import "LastElementUtils.h"
+@@ -10,6 +11,7 @@
+ #import "RenderContext.h"
+ #import "RendererFactory.h"
+ #import "StyleConfig.h"
++#import <CoreText/CoreText.h>
+
+ @implementation AttributedRenderer {
+   StyleConfig *_config;
+@@ -65,6 +67,26 @@
+
+   // 4. Let the decorator post-process the finished string (e.g. stamp the quote's line height).
+   [block postProcess:output];
++  if (_config.codePlainValueRegex) {
++    // Use the final font, including emphasis, headings, and link styles.
++    [output enumerateAttributesInRange:NSMakeRange(0, output.length)
++                               options:NSAttributedStringEnumerationLongestEffectiveRangeNotRequired
++                            usingBlock:^(NSDictionary<NSAttributedStringKey, id> *attrs, NSRange range, BOOL *stop) {
++      if (!attrs[ENRMPlainValueAttributeName]) return;
++      UIFont *font = attrs[NSFontAttributeName];
++      if (!font) return;
++      UIFontDescriptor *descriptor = [font.fontDescriptor fontDescriptorByAddingAttributes:@{
++        UIFontDescriptorFeatureSettingsAttribute : @[
++          @{
++            UIFontFeatureTypeIdentifierKey : @(kNumberSpacingType),
++            UIFontFeatureSelectorIdentifierKey : @(kMonospacedNumbersSelector),
++          },
++        ],
++      }];
++      UIFont *tabularFont = [UIFont fontWithDescriptor:descriptor size:font.pointSize];
++      if (tabularFont) [output addAttribute:NSFontAttributeName value:tabularFont range:range];
++    }];
++  }
+   ENRMLinkPillsAdoptPlaceholderFonts(output);
+
+   // 5. Cleanup global state to prevent side effects in subsequent renders.
+--- a/ios/renderer/CodeRenderer.h
++++ b/ios/renderer/CodeRenderer.h
+@@ -3,6 +3,8 @@
+
+ NS_ASSUME_NONNULL_BEGIN
+
++FOUNDATION_EXPORT NSAttributedStringKey const ENRMPlainValueAttributeName;
++
+ @interface CodeRenderer : BaseRenderer
+ @end
+
+--- a/ios/renderer/CodeRenderer.m
++++ b/ios/renderer/CodeRenderer.m
+@@ -8,12 +8,28 @@
+ #import "StyleConfig.h"
+ #import <React/RCTFont.h>
+
++NSAttributedStringKey const ENRMPlainValueAttributeName = @"ENRMPlainValue";
++
+ @implementation CodeRenderer
+
+ - (void)renderNodeContent:(MarkdownASTNode *)node
+                      into:(NSMutableAttributedString *)output
+                   context:(RenderContext *)context
+ {
++  NSUInteger start = output.length;
++  [_rendererFactory renderChildrenOfNode:node into:output context:context];
++
++  NSRange range = [RenderContext rangeForRenderedContent:output start:start];
++  if (range.length == 0) {
++    return;
++  }
++
++  NSRegularExpression *plainValueRegex = _config.codePlainValueRegex;
++  if (plainValueRegex &&
++      NSEqualRanges([plainValueRegex rangeOfFirstMatchInString:output.string options:0 range:range], range)) {
++    [output addAttribute:ENRMPlainValueAttributeName value:@YES range:range];
++    return;
++  }
+
+   BlockStyle *blockStyle = [context getBlockStyle];
+
+@@ -44,26 +60,18 @@
+     codeFont = [UIFont monospacedSystemFontOfSize:codeFontSize * fontScale weight:weight];
+   }
+
+-  NSUInteger start = output.length;
++  NSDictionary *existingAttributes = [output attributesAtIndex:start effectiveRange:NULL];
++  NSMutableDictionary *codeAttributes = [existingAttributes ?: @{} mutableCopy];
++  codeAttributes[NSFontAttributeName] = codeFont;
++  if (codeColor) {
++    codeAttributes[NSForegroundColorAttributeName] = codeColor;
++  }
++  codeAttributes[CodeAttributeName] = @YES;
+
+-  [_rendererFactory renderChildrenOfNode:node into:output context:context];
++  // Store block line height directly for CodeBackground to use
++  codeAttributes[@"BlockLineHeight"] = @(UIFontLineHeight(blockFont));
+
+-  NSRange range = [RenderContext rangeForRenderedContent:output start:start];
+-  if (range.length > 0) {
+-    NSDictionary *existingAttributes = [output attributesAtIndex:start effectiveRange:NULL];
+-    NSMutableDictionary *codeAttributes = [existingAttributes ?: @{} mutableCopy];
+-
+-    codeAttributes[NSFontAttributeName] = codeFont;
+-    if (codeColor) {
+-      codeAttributes[NSForegroundColorAttributeName] = codeColor;
+-    }
+-    codeAttributes[CodeAttributeName] = @YES;
+-
+-    // Store block line height directly for CodeBackground to use
+-    codeAttributes[@"BlockLineHeight"] = @(UIFontLineHeight(blockFont));
+-
+-    [output setAttributes:codeAttributes range:range];
+-  }
++  [output setAttributes:codeAttributes range:range];
+ }
+
+ @end
+--- a/ios/styles/StyleConfig.h
++++ b/ios/styles/StyleConfig.h
+@@ -225,6 +225,8 @@
+ - (RCTUIColor *)underlineColor;
+ - (void)setUnderlineColor:(RCTUIColor *)newValue;
+ // Code properties
++- (nullable NSRegularExpression *)codePlainValueRegex;
++- (void)setCodePlainValuePattern:(NSString *)pattern;
+ - (NSString *)codeFontFamily;
+ - (void)setCodeFontFamily:(NSString *)newValue;
+ - (CGFloat)codeFontSize;
+--- a/ios/styles/StyleConfig.mm
++++ b/ios/styles/StyleConfig.mm
+@@ -137,6 +137,7 @@
+   // Underline properties
+   RCTUIColor *_underlineColor;
+   // Code properties
++  NSRegularExpression *_codePlainValueRegex;
+   NSString *_codeFontFamily;
+   CGFloat _codeFontSize;
+   RCTUIColor *_codeColor;
+@@ -440,6 +441,7 @@
+   copy->_highlightColor = [_highlightColor copy];
+   copy->_highlightBackgroundColor = [_highlightBackgroundColor copy];
+   copy->_underlineColor = [_underlineColor copy];
++  copy->_codePlainValueRegex = _codePlainValueRegex;
+   copy->_codeFontFamily = [_codeFontFamily copy];
+   copy->_codeFontSize = _codeFontSize;
+   copy->_codeColor = [_codeColor copy];
+@@ -1504,6 +1506,17 @@
+   _underlineColor = newValue;
+ }
+
++- (NSRegularExpression *)codePlainValueRegex
++{
++  return _codePlainValueRegex;
++}
++
++- (void)setCodePlainValuePattern:(NSString *)pattern
++{
++  _codePlainValueRegex =
++      pattern.length ? [NSRegularExpression regularExpressionWithPattern:pattern options:0 error:NULL] : nil;
++}
++
+ - (NSString *)codeFontFamily
+ {
+   return _codeFontFamily;
+--- a/ios/utils/StylePropsUtils.h
++++ b/ios/utils/StylePropsUtils.h
+@@ -703,6 +703,11 @@
+
+   // ── Code ───────────────────────────────────────────────────────────────────
+
++  if (newStyle.code.plainValuePattern != oldStyle.code.plainValuePattern) {
++    [config setCodePlainValuePattern:[NSString stringWithUTF8String:newStyle.code.plainValuePattern.c_str()]];
++    changed = YES;
++  }
++
+   if (newStyle.code.fontFamily != oldStyle.code.fontFamily) {
+     if (!newStyle.code.fontFamily.empty()) {
+       NSString *fontFamily = [[NSString alloc] initWithUTF8String:newStyle.code.fontFamily.c_str()];
+--- a/lib/typescript/src/EnrichedMarkdownNativeComponent.d.ts
++++ b/lib/typescript/src/EnrichedMarkdownNativeComponent.d.ts
+@@ -113,6 +113,7 @@
+ }
+ interface CodeStyleInternal {
+     fontFamily: string;
++    plainValuePattern?: string;
+     fontSize: CodegenTypes.Float;
+     color: ColorValue;
+     backgroundColor: ColorValue;
+--- a/lib/typescript/src/EnrichedMarkdownTextNativeComponent.d.ts
++++ b/lib/typescript/src/EnrichedMarkdownTextNativeComponent.d.ts
+@@ -113,6 +113,7 @@
+ }
+ interface CodeStyleInternal {
+     fontFamily: string;
++    plainValuePattern?: string;
+     fontSize: CodegenTypes.Float;
+     color: ColorValue;
+     backgroundColor: ColorValue;
+--- a/lib/typescript/src/types/MarkdownStyle.d.ts
++++ b/lib/typescript/src/types/MarkdownStyle.d.ts
+@@ -178,6 +178,8 @@
+ }
+ interface CodeStyle {
+     fontFamily?: string;
++    /** Native whole-span pattern for inline code displayed as prose with tabular digits. */
++    plainValuePattern?: string;
+     fontSize?: number;
+     color?: string;
+     backgroundColor?: string;
+--- a/lib/typescript/src/types/MarkdownStyleInternal.d.ts
++++ b/lib/typescript/src/types/MarkdownStyleInternal.d.ts
+@@ -116,6 +116,7 @@
+ }
+ interface CodeStyleInternal {
+     fontFamily: string;
++    plainValuePattern?: string;
+     fontSize: number;
+     color: string;
+     backgroundColor: string;
+--- a/src/EnrichedMarkdownNativeComponent.ts
++++ b/src/EnrichedMarkdownNativeComponent.ts
+@@ -137,6 +137,7 @@
+
+ interface CodeStyleInternal {
+   fontFamily: string;
++  plainValuePattern?: string;
+   fontSize: CodegenTypes.Float;
+   color: ColorValue;
+   backgroundColor: ColorValue;
+--- a/src/EnrichedMarkdownTextNativeComponent.ts
++++ b/src/EnrichedMarkdownTextNativeComponent.ts
+@@ -137,6 +137,7 @@
+
+ interface CodeStyleInternal {
+   fontFamily: string;
++  plainValuePattern?: string;
+   fontSize: CodegenTypes.Float;
+   color: ColorValue;
+   backgroundColor: ColorValue;
+--- a/src/types/MarkdownStyle.ts
++++ b/src/types/MarkdownStyle.ts
+@@ -196,6 +196,8 @@
+
+ interface CodeStyle {
+   fontFamily?: string;
++  /** Native whole-span pattern for inline code displayed as prose with tabular digits. */
++  plainValuePattern?: string;
+   fontSize?: number;
+   color?: string;
+   backgroundColor?: string;
+--- a/src/types/MarkdownStyleInternal.ts
++++ b/src/types/MarkdownStyleInternal.ts
+@@ -149,6 +149,7 @@
+
+ interface CodeStyleInternal {
+   fontFamily: string;
++  plainValuePattern?: string;
+   fontSize: number;
+   color: string;
+   backgroundColor: string;

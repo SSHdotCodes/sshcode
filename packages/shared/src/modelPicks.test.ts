@@ -350,6 +350,17 @@ describe("pickBestModels", () => {
     expect(picks.speed.ranked.some((c) => c.label === "Tiny")).toBe(false);
   });
 
+  it("does not transfer a measured speed to a different route", () => {
+    const recorded = used("apex-2", 100, 1_000_000, {
+      instanceId: "cloud",
+      timing: { outputTokens: 100_000, seconds: 500, responses: 100 },
+    });
+    const local = route("apex-2", { instanceId: "local", local: true });
+    const result = pickBestModels(input({ routes: [recorded, local], canStart: (r) => r.local }));
+    expect(result.picks.quality.winner?.route).toBe(local);
+    expect(result.picks.speed.winner).toBeNull();
+  });
+
   it("ranks speed by how soon the same work is done, not by tokens per second", () => {
     const table: PickBenchmarks = {
       ...benchmarks,
@@ -462,8 +473,8 @@ describe("pickBestModels", () => {
     };
     const weekStart = NOW - 3 * DAY;
     const routes = [
-      // A plan whose limits allow far more than its price: Swift Mini costs cents there.
-      used("swift-mini", 30, 30_000_000, { instanceId: "plan", routeLabel: "Plan" }),
+      // The account paid $20 for 300M output tokens.
+      used("swift-mini", 300, 300_000_000, { instanceId: "plan", routeLabel: "Plan" }),
       used("home-small", 0, 2_000_000, { local: true, instanceId: "home", routeLabel: "Home" }),
     ];
     const { picks } = pickBestModels(
@@ -490,6 +501,62 @@ describe("pickBestModels", () => {
     expect(realCostPerMOutput(swift)).toBeLessThanOrEqual(NEAR_FREE_PER_M_OUTPUT_USD);
     // Free but far weaker loses to a few cents for a much better model.
     expect(picks.frugal.ranked.map((c) => c.label)).toEqual(["Swift Mini", "Home Small"]);
+  });
+
+  it("applies the ten-cent budget to output price even when task sizes differ", () => {
+    const result = pickBestModels(
+      input({
+        benchmarks: {
+          ...benchmarks,
+          models: [
+            { id: "big", label: "Big", scores: { index: 80 }, outputTokensPerTask: 500_000 },
+            { id: "small", label: "Small", scores: { index: 90 }, outputTokensPerTask: 5_000 },
+            { id: "free", label: "Free", scores: { index: 70 }, outputTokensPerTask: 5_000 },
+          ],
+        },
+        routes: [
+          used("big", 0.09, 1_000_000),
+          used("small", 0.11, 1_000_000),
+          route("free", { local: true }),
+        ],
+      }),
+    );
+    expect(result.picks.frugal.ranked.map((c) => c.key)).toEqual(["big", "free", "small"]);
+  });
+
+  it("ranks genuinely free work ahead of inexpensive paid work without rounding away sub-cent differences", () => {
+    const result = pickBestModels(
+      input({
+        routes: [
+          used("apex-2", 0.005, 1_000_000),
+          used("solid-1.5", 0, 1_000_000, { local: true }),
+        ],
+      }),
+    );
+    expect(result.picks.value.winner?.key).toBe("solid-1-5");
+  });
+
+  it("keeps a public throughput reading without borrowing a task length from a different effort", () => {
+    const table = benchmarksAtEffort(
+      {
+        ...benchmarks,
+        models: [
+          {
+            id: "test",
+            label: "Test",
+            scores: { index: 60 },
+            efforts: {
+              xhigh: { outputTokensPerSecond: 200 },
+              max: { outputTokensPerSecond: 90, outputTokensPerTask: 30_000 },
+            },
+          },
+        ],
+      },
+      "xhigh",
+    );
+    const result = pickBestModels(input({ routes: [route("test")], benchmarks: table }));
+    expect(result.picks.speed.winner?.speed?.tokensPerSecond).toBe(200);
+    expect(result.picks.speed.winner?.speed?.secondsPerTask).toBeUndefined();
   });
 
   it("puts the faster of two equally good free models first", () => {
@@ -645,85 +712,84 @@ describe("pickBestModels", () => {
     expect(picks.frugal.winner?.billing).toBe("subscription");
   });
 
-  it("judges an account a few days old by the user's other account of that provider", () => {
-    const weekStart = NOW - 3 * DAY;
-    const routes = [
-      used("apex-2", 400, 4_000_000, { instanceId: "one", routeLabel: "One" }),
-      // Two days of use: already more work than its price, far less than it allows.
-      used("apex-2", 250, 2_500_000, { instanceId: "two", routeLabel: "Two" }),
-    ];
-    const weekly = (instanceId: string, usedPercent: number) => ({
-      instanceId,
-      id: "primary",
-      label: "Weekly",
-      kind: "weekly" as const,
-      usedPercent,
-      resetsAtMs: weekStart + 7 * DAY,
-      durationMs: 7 * DAY,
-    });
-    const pick = (startsOn?: ModelPicksInput["startsOn"]) =>
-      pickBestModels(
-        input({
-          routes,
-          // Two percent of a limit is too little to price it by.
-          limits: [weekly("one", 40), weekly("two", 2)],
-          plans: [
-            { instanceId: "one", label: "Small", monthlyUsd: 100, allowance: 10 },
-            { instanceId: "two", label: "Large", monthlyUsd: 200, allowance: 20 },
-          ],
-          usageSince: (since) => (since === weekStart ? routes : []),
-          ...(startsOn ? { startsOn } : {}),
-        }),
-      ).candidates.find((candidate) => candidate.key === "apex-2")!;
-    const onOne = pick();
-    const onTwo = pick(() => ({ instanceId: "two" }));
-    expect(onOne.route.instanceId).toBe("one");
-    expect(onOne.plan?.judgedFrom).toBeUndefined();
-    // Its own record would say 1.25 times its price; the other account's limits say more.
-    expect(onTwo.route.instanceId).toBe("two");
-    expect(onTwo.plan).toMatchObject({ label: "Large", monthlyUsd: 200, judgedFrom: "Small" });
-    expect(onTwo.plan?.leverage).toBeCloseTo(onOne.plan!.leverage!, 5);
-    expect(onTwo.plan!.leverage!).toBeGreaterThan(10);
-    expect(onTwo.limit?.remainingPercent).toBe(98);
-    // Enough of its own use to price the model's tokens from.
-    expect(onTwo.costPerMOutput).toBeCloseTo(100, 5);
-  });
-
-  it("goes by the other account's work when no limit can be measured on either", () => {
-    // What the real figures look like: plans whose worth is the work done on them.
-    const routes = [
-      used("apex-2", 3_231, 30_000_000, { instanceId: "one", routeLabel: "One" }),
-      used("apex-2", 22, 200_000, { instanceId: "two", routeLabel: "Two" }),
-      used("solid-1.5", 9_878, 90_000_000, { instanceId: "three", routeLabel: "Three" }),
-      // Past its price in two days: its own work says 1.06 times, far below what it allows.
-      used("solid-1.5", 212, 2_000_000, { instanceId: "four", routeLabel: "Four" }),
-    ];
-    const { candidates } = pickBestModels(
+  it("quotes consumption for the named limit when another window has fewer dollars left", () => {
+    const routes = [used("apex-2", 800, 8_000_000)];
+    const result = pickBestModels(
       input({
         routes,
-        plans: [
-          { instanceId: "one", label: "Small", monthlyUsd: 100, allowance: 10 },
-          { instanceId: "two", label: "Large", monthlyUsd: 200, allowance: 20 },
-          { instanceId: "three", label: "First", monthlyUsd: 200, allowance: 20 },
-          { instanceId: "four", label: "Second", monthlyUsd: 200, allowance: 20 },
+        limits: [
+          {
+            instanceId: "cloud",
+            id: "weekly",
+            label: "Weekly",
+            kind: "weekly",
+            usedPercent: 80,
+            dailyRise: [{ day: "week", percent: 80 }],
+          },
+          {
+            instanceId: "cloud",
+            id: "session",
+            label: "Session",
+            kind: "session",
+            usedPercent: 50,
+            dailyRise: [{ day: "today", percent: 50 }],
+          },
         ],
-        startsOn: (from) =>
-          from.instanceId === "one"
-            ? { instanceId: "two" }
-            : from.instanceId === "three"
-              ? { instanceId: "four" }
-              : undefined,
+        usageSinceDay: (day) => (day === "week" ? routes : [used("apex-2", 50, 500_000)]),
       }),
     );
-    const apex = candidates.find((candidate) => candidate.key === "apex-2")!;
-    const solid = candidates.find((candidate) => candidate.key === "solid-1-5")!;
-    // Twice the allowance of a plan that did $3,231 of work: $6,462 for $200.
-    expect(apex.route.instanceId).toBe("two");
-    expect(apex.plan).toMatchObject({ judgedFrom: "Small", capacityBasis: "used" });
-    expect(apex.plan?.leverage).toBeCloseTo(32.31, 2);
-    expect(solid.route.instanceId).toBe("four");
-    expect(solid.plan).toMatchObject({ judgedFrom: "First" });
-    expect(solid.plan?.leverage).toBeCloseTo(49.39, 2);
+    expect(result.picks.quality.winner?.limit).toMatchObject({
+      label: "Weekly",
+      remainingPercent: 20,
+      remainingUsd: 50,
+      percentPerMOutput: 10,
+    });
+  });
+
+  it("allocates only the destination account's fee, including priced work outside the candidate list", () => {
+    const one = used("apex-2", 400, 4_000_000, { instanceId: "one" });
+    const two = used("apex-2", 50, 50_000, { instanceId: "two" });
+    const result = pickBestModels(
+      input({
+        routes: [one, two],
+        usage: [one, two, used("retired", 150, 750_000, { instanceId: "two" })],
+        plans: [{ instanceId: "two", label: "Two", monthlyUsd: 100 }],
+        startsOn: () => ({ instanceId: "two" }),
+      }),
+    );
+    // One quarter of Two's $100 belongs to this model, for 50k actual output.
+    expect(result.picks.value.winner).toMatchObject({
+      route: { instanceId: "two" },
+      plan: { usedUsd: 200 },
+      paidPerMOutput: 500,
+    });
+  });
+
+  it("allocates a gateway fee only to identifiable plan traffic, pooling priced work across machines", () => {
+    const account = { instanceId: "gateway", accountKey: "one-plan" };
+    const apex = used("go/apex-2", 40, 100_000, { ...account, environmentId: "one" });
+    const elsewhere = used("api/solid-1.5", 500, 100_000, account);
+    const ambiguous = used("swift-mini", 100, 100_000, account);
+    const result = pickBestModels(
+      input({
+        routes: [apex, elsewhere, ambiguous],
+        usage: [
+          apex,
+          elsewhere,
+          ambiguous,
+          used("go/apex-2", 20, 100_000, { ...account, environmentId: "two" }),
+          used("go/old", 140, 100_000, { ...account, costKnown: false, unpricedTokens: 300 }),
+        ],
+        plans: [{ ...account, label: "Go", monthlyUsd: 10, providerIds: ["go"] }],
+      }),
+    );
+    expect(result.plans[0]).toMatchObject({ usedUsd: 200, unpricedTokens: 300 });
+    expect(result.candidates.find((c) => c.route === apex)?.paidPerMOutput).toBe(15);
+    expect(result.candidates.find((c) => c.route === elsewhere)).toMatchObject({
+      billing: "metered",
+      paidPerMOutput: 5000,
+    });
+    expect(result.candidates.find((c) => c.route === ambiguous)?.paidPerMOutput).toBeUndefined();
   });
 
   it("skips a subscription that is nearly out", () => {
@@ -803,7 +869,7 @@ describe("pickBestModels", () => {
             usageSinceDay: (day) => (day === "2026-11-08" ? sinceRise : []),
             plans: [{ instanceId: "plan", label: "Big Plan", monthlyUsd: 200 }],
           }),
-        ).candidates.find((c) => c.label === "Apex 2")!.plan;
+        ).plans[0];
 
       it("prices a percent by those days' work, however often the counter was reset", () => {
         // The week reads 3% used, yet the counter rose 133 points over two days.
@@ -820,16 +886,13 @@ describe("pickBestModels", () => {
 
       it("never guesses from the window's start instead", () => {
         // 20% used and a month of work would read as $150 a point.
-        expect(planOf(counted(20, []))).toMatchObject({
-          capacityBasis: "used",
-          monthlyCapacityUsd: 3000,
-        });
+        expect(planOf(counted(20, []))?.monthlyCapacityUsd).toBeUndefined();
       });
 
       it("waits until the rise is more than rounding", () => {
-        expect(planOf(counted(4, [{ day: "2026-11-08", percent: 4 }]))).toMatchObject({
-          capacityBasis: "used",
-        });
+        expect(
+          planOf(counted(4, [{ day: "2026-11-08", percent: 4 }]))?.monthlyCapacityUsd,
+        ).toBeUndefined();
       });
     });
 
@@ -853,20 +916,13 @@ describe("pickBestModels", () => {
       const solid = result.candidates.find((c) => c.label === "Solid 1.5")!;
       // $400 bought 20% of a week: $2,000 a week, so about $8,696 a month for $200.
       const capacity = 2000 * (MONTH / (7 * DAY));
-      expect(apex.plan).toMatchObject({
-        label: "Big Plan",
-        monthlyUsd: 200,
-        capacityBasis: "limit",
-      });
-      expect(apex.plan?.monthlyCapacityUsd).toBeCloseTo(capacity, 5);
-      expect(apex.plan?.leverage).toBeCloseTo(capacity / 200, 5);
+      expect(apex.plan).toMatchObject({ label: "Big Plan", monthlyUsd: 200, usedUsd: 400 });
       expect(apex.costPerMOutput).toBeCloseTo(100, 5);
-      expect(apex.paidPerMOutput).toBeCloseTo(100 / (capacity / 200), 5);
+      expect(apex.paidPerMOutput).toBeCloseTo(50, 5);
       expect(solid.paidPerMOutput).toBeCloseTo(30, 5);
       expect(solid.plan).toBeUndefined();
-      // The plan makes the better model the better deal too.
-      expect(result.picks.value.winner?.label).toBe("Apex 2");
-      expect(result.picks.frugal.winner?.label).toBe("Apex 2");
+      expect(result.picks.value.winner?.label).toBe("Solid 1.5");
+      expect(result.picks.frugal.winner?.label).toBe("Solid 1.5");
       expect(result.plans).toHaveLength(1);
       expect(result.plans[0]).toMatchObject({
         instanceId: "plan",
@@ -879,7 +935,7 @@ describe("pickBestModels", () => {
       expect(result.plans[0]?.monthlyCapacityUsd).toBeCloseTo(capacity, 5);
     });
 
-    it("charges a model more of the plan when its own limit is the tight one", () => {
+    it("allocates the whole fee once across models with different quota windows", () => {
       const routes = [
         used("apex-2", 400, 4_000_000, { instanceId: "plan" }),
         used("solid-1.5", 90, 3_000_000, { instanceId: "plan" }),
@@ -894,10 +950,10 @@ describe("pickBestModels", () => {
       );
       const apex = result.candidates.find((c) => c.label === "Apex 2")!;
       const solid = result.candidates.find((c) => c.label === "Solid 1.5")!;
-      // All models: $490 for 20% is $2,450 a week. Apex alone: $400 for 80% is $500 a week.
-      expect(solid.plan?.monthlyCapacityUsd).toBeCloseTo(2450 * (MONTH / (7 * DAY)), 5);
-      expect(apex.plan?.monthlyCapacityUsd).toBeCloseTo(500 * (MONTH / (7 * DAY)), 5);
-      expect(apex.plan!.leverage!).toBeLessThan(solid.plan!.leverage!);
+      // Both models allocate one $200 fee across the same $490 of recorded work.
+      expect(apex.paidPerMOutput).toBeCloseTo((100 * 200) / 490);
+      expect(solid.paidPerMOutput).toBeCloseTo((30 * 200) / 490);
+      expect(apex.paidPerMOutput! * 4 + solid.paidPerMOutput! * 3).toBeCloseTo(200);
       // The plan as a whole is worth what its all-model limit allows.
       expect(result.plans[0]?.monthlyCapacityUsd).toBeCloseTo(2450 * (MONTH / (7 * DAY)), 5);
     });
@@ -916,8 +972,7 @@ describe("pickBestModels", () => {
       );
       const apex = result.candidates.find((c) => c.label === "Apex 2")!;
       // $80 for 20% reads as $400 a week, about $1,739 a month: less than the $3,000 done.
-      expect(apex.plan).toMatchObject({ monthlyCapacityUsd: 3000, capacityBasis: "used" });
-      expect(apex.plan?.leverage).toBeCloseTo(30, 5);
+      expect(apex.plan).toMatchObject({ usedUsd: 3000 });
       expect(apex.paidPerMOutput).toBeCloseTo(100 / 30, 5);
       expect(result.plans[0]).toMatchObject({
         usedUsd: 3000,
@@ -940,8 +995,8 @@ describe("pickBestModels", () => {
         }),
       );
       const swift = result.candidates.find((c) => c.label === "Swift Mini")!;
-      expect(swift.plan).toMatchObject({ capacityBasis: "stated", leverage: 6 });
-      expect(swift.paidPerMOutput).toBeCloseTo(1.5 / 6, 5);
+      expect(swift.plan).toMatchObject({ usedUsd: 3 });
+      expect(swift.paidPerMOutput).toBeCloseTo(5, 5);
       expect(result.plans[0]).toMatchObject({ monthlyCapacityUsd: 60, capacityBasis: "stated" });
     });
 
@@ -967,7 +1022,7 @@ describe("pickBestModels", () => {
       );
       const apex = result.candidates.find((c) => c.label === "Apex 2")!;
       // What was done on it is all there is to go on: $400 for $100.
-      expect(apex.plan).toMatchObject({ capacityBasis: "used", leverage: 4 });
+      expect(apex.plan).toMatchObject({ usedUsd: 400 });
       expect(apex.limit?.remainingPercent).toBe(50);
     });
 
@@ -999,7 +1054,7 @@ describe("pickBestModels", () => {
         }),
       ).candidates[0]!;
       expect(busy.billing).toBe("subscription");
-      expect(busy.plan).toMatchObject({ capacityBasis: "used", leverage: 6 });
+      expect(busy.plan).toMatchObject({ usedUsd: 90 });
       expect(busy.paidPerMOutput).toBeCloseTo(5, 5);
 
       // $3 of work on a $15 plan says nothing about what the plan allows.
@@ -1009,9 +1064,8 @@ describe("pickBestModels", () => {
           plans: [plan],
         }),
       ).candidates[0]!;
-      expect(idle.plan?.leverage).toBeUndefined();
-      expect(idle.paidPerMOutput).toBeUndefined();
-      expect(realCostPerMOutput(idle)).toBeCloseTo(1.5, 5);
+      expect(idle.plan?.usedUsd).toBe(3);
+      expect(realCostPerMOutput(idle)).toBeCloseTo(7.5, 5);
     });
 
     it("treats a free plan as costing nothing", () => {

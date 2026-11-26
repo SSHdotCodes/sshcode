@@ -16,7 +16,8 @@ export interface ThreadFeedRowStoreState {
   readonly dispatchingMessageId: MessageId | null;
   readonly steerWait: SteerWait | null;
   readonly unsettledTurnId: RunId | null;
-  readonly terminalAssistantMessageIds: ReadonlySet<string>;
+  readonly finalAssistantMessageIds: ReadonlySet<string>;
+  readonly assistantIdsBeforeUserBubble: ReadonlySet<string>;
   readonly failedRunIds: ReadonlySet<RunId>;
   readonly decorations: ReturnType<ReturnType<typeof createTimelineDecorationsProjector>>;
   readonly agentAvatars: ReadonlyMap<string, ReturnType<typeof discordAvatarIdentity>> | undefined;
@@ -43,7 +44,8 @@ function sameRowStoreState(a: ThreadFeedRowStoreState, b: ThreadFeedRowStoreStat
     a.dispatchingMessageId === b.dispatchingMessageId &&
     a.steerWait === b.steerWait &&
     a.unsettledTurnId === b.unsettledTurnId &&
-    a.terminalAssistantMessageIds === b.terminalAssistantMessageIds &&
+    a.finalAssistantMessageIds === b.finalAssistantMessageIds &&
+    a.assistantIdsBeforeUserBubble === b.assistantIdsBeforeUserBubble &&
     a.failedRunIds === b.failedRunIds &&
     a.decorations === b.decorations &&
     a.agentAvatars === b.agentAvatars &&
@@ -89,7 +91,8 @@ export interface ThreadFeedRowVolatileSlice {
   readonly isDispatching: boolean;
   readonly steerWait: SteerWait | null;
   readonly isUnsettledTurn: boolean;
-  readonly isTerminalAssistant: boolean;
+  readonly isFinalAssistant: boolean;
+  readonly beforeUserBubble: boolean;
   readonly isFailedRun: boolean;
   readonly worktreeSetup: WorktreeSetupCardProps | null;
   readonly setupWorkingStartedAt: string | null;
@@ -143,12 +146,11 @@ export function selectRowVolatileSlice(
     steerWait: isMessage && state.steerWait?.messageId === item.message.id ? state.steerWait : null,
     isUnsettledTurn:
       state.unsettledTurnId !== null &&
-      ((isAssistantMessage && item.message.runId === state.unsettledTurnId) ||
-        (isActivityGroup &&
-          isContextCompactionActivityGroup(item) &&
-          item.runId === state.unsettledTurnId)),
-    isTerminalAssistant:
-      isAssistantMessage && state.terminalAssistantMessageIds.has(item.message.id),
+      isActivityGroup &&
+      isContextCompactionActivityGroup(item) &&
+      item.runId === state.unsettledTurnId,
+    isFinalAssistant: isAssistantMessage && state.finalAssistantMessageIds.has(item.message.id),
+    beforeUserBubble: isAssistantMessage && state.assistantIdsBeforeUserBubble.has(item.message.id),
     isFailedRun:
       isAssistantMessage &&
       item.message.runId !== null &&
@@ -177,7 +179,8 @@ export function sameRowVolatileSlice(
     a.isDispatching === b.isDispatching &&
     a.steerWait === b.steerWait &&
     a.isUnsettledTurn === b.isUnsettledTurn &&
-    a.isTerminalAssistant === b.isTerminalAssistant &&
+    a.isFinalAssistant === b.isFinalAssistant &&
+    a.beforeUserBubble === b.beforeUserBubble &&
     a.isFailedRun === b.isFailedRun &&
     a.worktreeSetup === b.worktreeSetup &&
     a.setupWorkingStartedAt === b.setupWorkingStartedAt &&

@@ -202,6 +202,7 @@ export const OrchestrationV2SessionCapabilities = Schema.Struct({
   supportsModelSwitchInSession: Schema.Boolean,
   supportsProviderSwitchingViaHandoff: Schema.Boolean,
   supportsRuntimeModeSwitchInSession: Schema.Boolean,
+  appliesRuntimeModeChangesImmediately: Schema.optional(Schema.Boolean),
   pendingRequestsSurviveRestart: Schema.Boolean,
 });
 export type OrchestrationV2SessionCapabilities = typeof OrchestrationV2SessionCapabilities.Type;
@@ -523,6 +524,16 @@ export const OrchestrationV2RunStatus = Schema.Literals([
   "rolled_back",
 ]);
 export type OrchestrationV2RunStatus = typeof OrchestrationV2RunStatus.Type;
+
+export function isTerminalRunStatus(status: OrchestrationV2RunStatus) {
+  return (
+    status === "completed" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "interrupted" ||
+    status === "rolled_back"
+  );
+}
 
 export const OrchestrationV2DelegatedCompletionTaskDeliveryState = Schema.Literals([
   "pending",
@@ -1168,6 +1179,8 @@ export const OrchestrationV2ProviderThread = Schema.Struct({
    * subagents after its initial reply ended (e.g. `agy acp` 1.5.15+).
    */
   waitingOnBackgroundWork: Schema.optional(Schema.Literal(true)),
+  /** When this open prompt most recently entered its uninterrupted background wait. */
+  backgroundWaitStartedAt: Schema.optional(IsoDateTime),
   contextUsage: Schema.optional(Schema.NullOr(ThreadTokenUsageSnapshot)).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1468,12 +1481,18 @@ export const OrchestrationV2Notification = Schema.Struct({
 });
 export type OrchestrationV2Notification = typeof OrchestrationV2Notification.Type;
 
+const threadSendFields = {
+  /** The sending agent's thread in this environment. */
+  senderThreadId: Schema.optional(ThreadId),
+  /** An independent thread's agent requested this run's result. */
+  notifySenderOnCompletion: Schema.optional(Schema.Boolean),
+};
+
 export const OrchestrationV2ConversationMessage = Schema.Struct({
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
   scheduledTaskId: Schema.optional(ScheduledTaskId),
-  // The sending agent's thread in this environment, separate from the receiving thread.
-  senderThreadId: Schema.optional(ThreadId),
+  ...threadSendFields,
   id: MessageId,
   threadId: ThreadId,
   runId: Schema.NullOr(RunId),
@@ -1762,8 +1781,13 @@ export const OrchestrationV2TurnItem = Schema.Union([
     type: Schema.Literal("user_message"),
     messageId: MessageId,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
-    senderThreadId: Schema.optional(ThreadId),
+    ...threadSendFields,
     inputIntent: OrchestrationV2UserMessageInputIntent,
+    /**
+     * A steer that reached an agent whose reply had ended and that was only waiting on background
+     * work. Clients show it as a new message, not a steer.
+     */
+    agentWasWaiting: Schema.optional(Schema.Literal(true)),
     text: Schema.String,
     /** Same as the text of message `messageId`. */
     textOmitted: DedupedBodyMarker,
@@ -1815,6 +1839,8 @@ export const OrchestrationV2TurnItem = Schema.Union([
     additions: Schema.optional(NonNegativeInt),
     deletions: Schema.optional(NonNegativeInt),
     diffStr: Schema.optional(Schema.String),
+    /** Set on timeline items when the tool's patch is available through getTurnItem. */
+    diffOmitted: Schema.optional(Schema.Boolean),
     oldStr: Schema.optional(Schema.String),
     newStr: Schema.optional(Schema.String),
     changes: Schema.optional(Schema.Array(OrchestrationV2FileChangeDetail)),
@@ -2387,6 +2413,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestrationV2PendingBackgroundTask)).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  /** Start of the active provider's open-prompt wait, when it reports one. */
+  backgroundWaitStartedAt: Schema.optional(IsoDateTime),
   // Distinct provider instances that have owned a root provider thread here,
   // in first-use order, so lists can show where a handed-off thread has been.
   // Omitted by servers that predate it; decodes to [].
@@ -2711,8 +2739,9 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     type: Schema.Literal("user_message"),
     messageId: MessageId,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
-    senderThreadId: Schema.optional(ThreadId),
+    ...threadSendFields,
     inputIntent: OrchestrationV2UserMessageInputIntent,
+    agentWasWaiting: Schema.optional(Schema.Literal(true)),
     text: Schema.String,
     context: Schema.optional(OrchestrationMessageContext),
     attachments: Schema.Array(ChatAttachment),
@@ -2761,6 +2790,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     additions: Schema.optional(NonNegativeInt),
     deletions: Schema.optional(NonNegativeInt),
     diffStr: Schema.optional(Schema.String),
+    diffOmitted: Schema.optional(Schema.Boolean),
     oldStr: Schema.optional(Schema.String),
     newStr: Schema.optional(Schema.String),
     changes: Schema.optional(Schema.Array(OrchestrationV2FileChangeDetail)),
@@ -3809,6 +3839,8 @@ type PreparedDelegatedTaskRequest = Omit<
   "workspaceStrategy"
 > & {
   readonly workspaceStrategy?: OrchestrationV2WorkspacePreparation | undefined;
+  /** Recipient-owned files prepared by server intake. Never accepted from a public delegation. */
+  readonly attachments?: ReadonlyArray<ChatAttachment>;
   /** The workflow JSON outbox can launch after its parent settles. Never decoded from a client. */
   readonly workflowAdmission?: true;
 };
@@ -3822,6 +3854,9 @@ export type OrchestrationV2ServerCommand =
   | (typeof OrchestrationV2MessageDispatchCommand.Type & {
       /** Server-owned redelivery after the adapter returned an unsupported steer. */
       readonly declinedSteerTurnId?: ProviderTurnId;
+      readonly notifySenderOnCompletion?: boolean;
+      /** A completion delivered under the recipient's thread lock. */
+      readonly threadSendCompletion?: true;
     })
   | PreparedDelegatedTaskRequest
   | OrchestrationV2InternalCommand;

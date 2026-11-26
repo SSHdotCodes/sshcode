@@ -181,7 +181,7 @@ const readSkillFrontmatter = Effect.fn("readAntigravitySkill")(function* (
 
 /**
  * Match the official ACP's explicit skill roots. The first valid same-name skill
- * wins. Each root loads its own SKILL.md or those in its immediate subdirectories.
+ * wins. Automatic .agent(s)/skills roots are collections of immediate child skills.
  * Read failures remain typed so workspace snapshots do not cache partial results.
  */
 export const discoverAntigravitySkills = Effect.fn("discoverAntigravitySkills")(function* (input: {
@@ -199,11 +199,15 @@ export const discoverAntigravitySkills = Effect.fn("discoverAntigravitySkills")(
     path.join(input.userHome, ".gemini"),
   );
   const roots = [
-    { directory: configSkills, scope: "user" },
-    { directory: path.resolve(input.cwd, ".gemini", "skills"), scope: "project" },
-    { directory: cliSkills, scope: "user" },
-    { directory: path.resolve(input.cwd, ".agents", "skills"), scope: "project" },
-    { directory: path.resolve(input.cwd, ".agent", "skills"), scope: "project" },
+    { directory: configSkills, scope: "user", collection: false },
+    {
+      directory: path.resolve(input.cwd, ".gemini", "skills"),
+      scope: "project",
+      collection: false,
+    },
+    { directory: cliSkills, scope: "user", collection: false },
+    { directory: path.resolve(input.cwd, ".agents", "skills"), scope: "project", collection: true },
+    { directory: path.resolve(input.cwd, ".agent", "skills"), scope: "project", collection: true },
   ];
   const budget: ScanBudget = {
     remainingBytes: MAX_SCAN_BYTES,
@@ -214,7 +218,7 @@ export const discoverAntigravitySkills = Effect.fn("discoverAntigravitySkills")(
   const scanDirectory = Effect.fn("scanAntigravitySkillDirectory")(function* (
     directory: string,
     scope: string,
-    scanChildren: boolean,
+    mode: "root" | "collection" | "child",
   ): Effect.fn.Return<void, AntigravitySkillsProbeError, FileSystem.FileSystem> {
     const info = yield* readIfPresent(fileSystem.stat(directory), directory);
     if (info?.type !== "Directory") return;
@@ -230,7 +234,7 @@ export const discoverAntigravitySkills = Effect.fn("discoverAntigravitySkills")(
 
     const sortedEntries = entries.toSorted();
     const skillFileName = sortedEntries.find((entry) => entry.toLowerCase() === "skill.md");
-    if (skillFileName !== undefined) {
+    if (mode !== "collection" && skillFileName !== undefined) {
       if (!skillFileName.endsWith(".md")) return;
       const skillPath = path.join(directory, skillFileName);
       const contents = yield* readSkillFrontmatter(skillPath, budget);
@@ -245,20 +249,20 @@ export const discoverAntigravitySkills = Effect.fn("discoverAntigravitySkills")(
       });
       return;
     }
-    if (scanChildren) {
+    if (mode !== "child") {
       const children = sortedEntries
         .map((entry) => ({ entry, sortKey: skillPathSortKey(entry) }))
         .sort((left, right) =>
           left.sortKey < right.sortKey ? -1 : left.sortKey > right.sortKey ? 1 : 0,
         );
       for (const { entry } of children) {
-        yield* scanDirectory(path.join(directory, entry), scope, false);
+        yield* scanDirectory(path.join(directory, entry), scope, "child");
       }
     }
   });
 
   for (const root of roots) {
-    yield* scanDirectory(root.directory, root.scope, true);
+    yield* scanDirectory(root.directory, root.scope, root.collection ? "collection" : "root");
   }
   return [...skillsByName.values()].sort((left, right) => left.name.localeCompare(right.name));
 });

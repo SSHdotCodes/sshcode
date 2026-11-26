@@ -117,6 +117,7 @@ import Animated, {
   FadeInDown,
   FadeOut,
   ReduceMotion,
+  runOnJS,
   useAnimatedReaction,
   useAnimatedStyle,
   useDerivedValue,
@@ -511,6 +512,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     connected: props.connectionStateLabel === "connected",
     visible: props.showContent !== false,
     supportsSyncMarker: props.serverConfig?.threadResumeCompletionMarker === true,
+    pendingRequestId: props.activePendingUserInput?.requestId ?? null,
   });
   const queuedCount = useThreadQueuedCount(props.selectedThreadDetailRef);
   const queueHeld = useThreadQueueHeld(props.selectedThreadDetailRef);
@@ -969,6 +971,15 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     // checks follow state again so a user who scrolled up stays put.
     scheduleOverlayRepin(230);
   }, [scheduleOverlayRepin, selectedThreadKey, showFloatingStatus]);
+  // Same for the question card: opening a chat onto a waiting question, its first
+  // measurement can land after the end-pin, leaving the agent's last reply behind it.
+  useAnimatedReaction(
+    () => userInputCoverageApplies && userInputCardCoverage.value > 0,
+    (covered, previous) => {
+      if (covered && previous !== true) runOnJS(scheduleOverlayRepin)(60);
+    },
+    [scheduleOverlayRepin, userInputCoverageApplies],
+  );
   const handleToggleUserInputCollapsed = useCallback(() => {
     if (activeUserInputRequestId === null) {
       return;
@@ -1347,11 +1358,23 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     [changeDraftMessage],
   );
 
+  // Gliding to the end from far up renders every row it passes at once, a 200-400 ms stall
+  // right after the tap. Landing instantly instead leaves the rows above unmeasured, so the
+  // next fling back up stutters. Jump to about one screen above the end, then glide the rest.
   const handleScrollToEnd = useCallback(() => {
     void Haptics.selectionAsync();
-    void scrollMessageToEnd({ animated: true, closeKeyboard: false }).catch(() => {
-      freeze.set(false);
-    });
+    const glide = () =>
+      scrollMessageToEnd({ animated: true, closeKeyboard: false }).catch(() => {
+        freeze.set(false);
+      });
+    const list = listRef.current;
+    const state = list?.getState();
+    const landing = state === undefined ? 0 : state.contentLength - 2 * state.scrollLength;
+    if (list === null || state === undefined || landing <= state.scroll + state.scrollLength) {
+      void glide();
+      return;
+    }
+    void list.scrollToOffset({ offset: landing, animated: false }).then(glide);
   }, [freeze, scrollMessageToEnd]);
 
   const showScrollToEndButton = contentPresentationKind === "ready" && !endFollowEnabled;
@@ -1711,6 +1734,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                           onChangeCustomAnswer={props.onChangeUserInputCustomAnswer}
                           onSubmit={props.onSubmitUserInput}
                           onDismiss={props.onDismissUserInput}
+                          composerAnswer={
+                            isProviderSubagent || composerSlotHidden
+                              ? undefined
+                              : { hasText: props.draftMessage.trim().length > 0 }
+                          }
                         />
                       ) : null}
                     </Animated.View>
@@ -1794,9 +1822,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                         draftMessage={props.draftMessage}
                         draftAttachments={props.draftAttachments}
                         placeholder={
-                          props.activePendingUserInput
-                            ? "Type your own answer, or pick an option above"
-                            : "Reply…"
+                          props.activePendingUserInput ? "Or type your own answer…" : "Reply…"
                         }
                         pendingAnswer={
                           props.activePendingUserInput && !parentAnswersQuestion

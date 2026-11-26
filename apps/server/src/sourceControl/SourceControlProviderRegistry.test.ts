@@ -183,6 +183,25 @@ it.effect("routes directly by provider kind for remote-first workflows", () =>
   }),
 );
 
+it.effect("skips background PR probes on a repository without a registered forge", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry({ remotes: [] });
+    const provider = yield* registry.resolve({ cwd: "/repo" });
+    const headSelectors = ["feature"];
+    const statusProbe = provider.headBranchProbe?.({ headSelectors, state: "all" });
+    assert.deepStrictEqual(statusProbe?.headSelectors ?? headSelectors, []);
+    const explicit = yield* provider
+      .listChangeRequests({
+        cwd: "/repo",
+        headSelector: "feature",
+        state: "all",
+        limit: 1,
+      })
+      .pipe(Effect.flip);
+    assert.strictEqual(explicit.operation, "listChangeRequests");
+  }),
+);
+
 it.effect("includes the request cwd when an unregistered provider is used", () =>
   Effect.gen(function* () {
     const registry = yield* makeRegistry({ remotes: [] });

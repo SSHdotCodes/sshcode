@@ -535,6 +535,51 @@ const expectModelFailure = (errorMessage: string, expectedClass = "provider_erro
   }).pipe(Effect.scoped, Effect.provide(layerTest));
 
 describe("PiAdapterV2", () => {
+  it.effect(
+    "sums final assistant usage across steps without double-counting streaming samples",
+    () =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        const providerThread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* startTurn(runtime, providerThread);
+        yield* fake.takeRequest("prompt");
+        yield* fake.emit({ type: "agent_start" });
+        const usage = {
+          input: 7,
+          output: 3,
+          cacheRead: 10,
+          cacheWrite: 2,
+          reasoning: 1,
+          totalTokens: 22,
+        };
+        for (let step = 0; step < 2; step++) {
+          yield* fake.emit({ type: "message_update", usage });
+          yield* fake.emit({ type: "message_end", message: { role: "assistant", usage } });
+        }
+        yield* fake.emit({ type: "agent_settled" });
+        const event = yield* takeEvent(
+          (e) => e.type === "provider_turn.updated" && e.providerTurn.status === "completed",
+        );
+        assert.deepEqual(
+          event.type === "provider_turn.updated" && event.providerTurn.turnTokenUsage,
+          {
+            usageScope: "main_agent",
+            usageStatus: "complete",
+            hasSubagents: false,
+            inputTokens: 38,
+            outputTokens: 6,
+            cachedInputTokens: 20,
+            cacheCreationTokens: 4,
+            reasoningTokens: 2,
+          },
+        );
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
   it.effect.each([false, true])(
     "completes a resumed user turn before native wake events arrive, Pi streaming=%s",
     (streaming) =>

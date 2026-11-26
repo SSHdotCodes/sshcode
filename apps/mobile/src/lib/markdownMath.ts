@@ -1,3 +1,4 @@
+import { isMarkdownPlainValue } from "@t3tools/shared/markdownPlainValues";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkParse from "remark-parse";
@@ -18,6 +19,7 @@ type MathNode = {
 
 export type MathPart =
   | { type: "text" | "inlineCode"; value: string }
+  | { type: "plainValue"; value: string; source: string }
   | { type: "break" }
   | { type: "container"; tag: string; start?: number; children: MathPart[] }
   | { type: "link"; url: string; source: string; children: MathPart[] }
@@ -37,6 +39,7 @@ export function findMathBlocks(
   markdown: string,
   allowLinks = false,
   nativeLinks?: { text?: RegExp | null; inlineCode?: RegExp },
+  plainValues = false,
 ): MathBlock[] {
   const blocks: MathBlock[] = [];
   try {
@@ -44,6 +47,12 @@ export function findMathBlocks(
     const convert = (node: MathNode): MathPart | null => {
       if (node.type === "text" || node.type === "inlineCode") {
         const value = node.value ?? "";
+        if (plainValues && node.type === "inlineCode" && isMarkdownPlainValue(value)) {
+          const start = node.position?.start.offset;
+          const end = node.position?.end.offset;
+          if (start !== undefined && end !== undefined)
+            return { type: "plainValue", value, source: markdown.slice(start, end) };
+        }
         const pattern = node.type === "text" ? nativeLinks?.text : nativeLinks?.inlineCode;
         if (pattern?.test(value)) return null;
         return { type: node.type, value };

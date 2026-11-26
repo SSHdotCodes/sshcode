@@ -85,7 +85,7 @@ const formatPendingPrimaryActionLabel = (input: {
 // The composer's labeled primary actions (Submit, Refine, Implement) share the send button's
 // message-action pill, so they are composer-owned buttons rather than restyled Buttons.
 const messageActionPillClassName =
-  "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-full bg-message-action font-medium text-base text-message-action-foreground shadow-xs shadow-message-action/24 outline-none transition-[background-color,box-shadow,scale] duration-120 ease-out motion-reduce:transition-none hover:bg-message-action-hover active:scale-[0.97] active:shadow-none motion-reduce:active:scale-100 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-64 disabled:shadow-none sm:text-sm";
+  "inline-flex shrink-0 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-full bg-message-action font-medium text-base text-message-action-foreground shadow-xs shadow-message-action/24 outline-none transition-[background-color,color,box-shadow,scale] duration-120 ease-out motion-reduce:transition-none hover:bg-message-action-hover active:scale-[0.97] active:shadow-none motion-reduce:active:scale-100 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:bg-foreground/12 disabled:text-muted-foreground disabled:shadow-none sm:text-sm";
 
 // Long enough for a slow host to settle an interrupt; after it, Stop can be retried.
 const STOP_PENDING_MAX_MS = 10_000;

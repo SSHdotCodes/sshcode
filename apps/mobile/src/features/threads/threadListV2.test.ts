@@ -1649,7 +1649,6 @@ function buildTickList(
   clockMs: number,
   pendingTasks: ReadonlyArray<PendingNewTask>,
   options?: {
-    readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
     readonly queuedThreadKeys?: ReadonlySet<string>;
     readonly moveAvailability?: ReadonlyMap<string, ThreadMoveAvailability>;
     readonly shelfPreferencesLoading?: boolean;
@@ -1669,9 +1668,6 @@ function buildTickList(
     settledShelfExpanded: true,
     snoozedShelfExpanded: true,
     snoozeLabelNow: now,
-    ...(options?.snoozeEnvironmentIds
-      ? { snoozeEnvironmentIds: options.snoozeEnvironmentIds }
-      : {}),
     ...(options?.queuedThreadKeys ? { queuedThreadKeys: options.queuedThreadKeys } : {}),
     ...(options?.moveAvailability ? { moveAvailability: options.moveAvailability } : {}),
     ...(options?.shelfPreferencesLoading !== undefined
@@ -1834,35 +1830,7 @@ describe("threadListV2ListItemsAreEqual", () => {
 });
 
 describe("buildThreadListV2ListItems clock scoping", () => {
-  const allEnvironments = new Set<EnvironmentId>([environmentId]);
   const tickQueued = () => [makePendingTask("tick-queued")];
-
-  it("carries the snooze menu clock on every row whose swipe menu offers presets", () => {
-    const threads = buildTickThreads();
-    const items = buildTickList(Object.values(threads), BASE_MS, tickQueued(), {
-      snoozeEnvironmentIds: allEnvironments,
-    });
-    const byKey = itemsByThreadKey(items);
-    const ready = byKey.get(`v2-thread:${environmentId}:tick-ready`)!;
-    const approval = byKey.get(`v2-thread:${environmentId}:tick-approval`)!;
-    const settled = byKey.get(`v2-thread:${environmentId}:tick-settled`)!;
-    const snoozed = byKey.get(`v2-thread:${environmentId}:tick-snoozed`)!;
-    expect(ready.type === "v2-thread" && ready.snoozePresetMinute).toBe(NOW);
-    // Settled rows offer the same snooze menu as every other row.
-    expect(settled.type === "v2-thread" && settled.snoozePresetMinute).toBe(NOW);
-    // Approval rows are never snoozable; snoozed rows only offer Wake.
-    expect(approval.type === "v2-thread" && approval.snoozePresetMinute).toBeUndefined();
-    expect(snoozed.type === "v2-thread" && snoozed.snoozePresetMinute).toBeUndefined();
-  });
-
-  it("keeps the snooze menu clock off rows on servers without the capability", () => {
-    const threads = buildTickThreads();
-    const items = buildTickList([threads.ready], BASE_MS, [], {
-      snoozeEnvironmentIds: new Set<EnvironmentId>(),
-    });
-    const ready = items.find((item) => item.type === "v2-thread")!;
-    expect(ready.type === "v2-thread" && ready.snoozePresetMinute).toBeUndefined();
-  });
 
   it("blanks the precomputed time for rows that render a label instead", () => {
     vi.useFakeTimers();
@@ -1921,16 +1889,11 @@ describe("thread list v2 minute tick invalidation", () => {
           invalidated.push(atStart[index]!.key);
         }
       }
-      // The ready row draws a minute-granular time and carries the snooze
-      // menu, and the settled row's snooze menu shows preset times too, so
-      // both rows' menu content moved. Every other row — the approval row
-      // (status label, never snoozable), the snoozed shelf row ("2h"
-      // unchanged, Wake only), the shelf header, and the queued row —
-      // survives the tick untouched.
-      expect(invalidated).toEqual([
-        `v2-thread:${environmentId}:tick-ready`,
-        `v2-thread:${environmentId}:tick-settled`,
-      ]);
+      // Only the ready row draws a minute-granular time. Snooze menus refresh
+      // their preset times inside the row when touched, so the settled row
+      // ("2d"), the approval row (status label), the snoozed shelf row ("2h"),
+      // the shelf header and the queued row all survive the tick untouched.
+      expect(invalidated).toEqual([`v2-thread:${environmentId}:tick-ready`]);
     } finally {
       vi.useRealTimers();
     }
@@ -1950,13 +1913,12 @@ describe("thread list v2 minute tick invalidation", () => {
         assistantMessageId: null,
       },
     });
-    const options = { snoozeEnvironmentIds: new Set<EnvironmentId>() };
     vi.useFakeTimers();
     try {
       vi.setSystemTime(BASE_MS);
-      const first = buildTickList([unread], BASE_MS, [], options)[0]!;
+      const first = buildTickList([unread], BASE_MS, [])[0]!;
       vi.setSystemTime(BASE_MS + MINUTE_MS);
-      const next = buildTickList([unread], BASE_MS + MINUTE_MS, [], options)[0]!;
+      const next = buildTickList([unread], BASE_MS + MINUTE_MS, [])[0]!;
       expect(threadHasUnseenCompletion(unread)).toBe(true);
       expect(first.type === "v2-thread" && first.timeLabel).toBe("5m");
       expect(next.type === "v2-thread" && next.timeLabel).toBe("6m");
@@ -1966,7 +1928,7 @@ describe("thread list v2 minute tick invalidation", () => {
     }
   });
 
-  it("keeps hour-granularity rows stable across a minute tick when they carry no snooze menu", () => {
+  it("keeps hour-granularity rows stable across a minute tick", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(BASE_MS);
@@ -1975,13 +1937,10 @@ describe("thread list v2 minute tick invalidation", () => {
         title: "tick stale",
         latestUserMessageAt: isoAt(BASE_MS - 3 * 60 * MINUTE_MS),
       });
-      const atStart = buildTickList([staleReady], BASE_MS, [], {
-        snoozeEnvironmentIds: new Set<EnvironmentId>(),
-      });
+      // The row is snoozable, but its menu refreshes preset times itself.
+      const atStart = buildTickList([staleReady], BASE_MS, []);
       vi.setSystemTime(BASE_MS + MINUTE_MS);
-      const atNextMinute = buildTickList([staleReady], BASE_MS + MINUTE_MS, [], {
-        snoozeEnvironmentIds: new Set<EnvironmentId>(),
-      });
+      const atNextMinute = buildTickList([staleReady], BASE_MS + MINUTE_MS, []);
       expect(threadListV2ListItemsAreEqual(atStart[0]!, atNextMinute[0]!)).toBe(true);
     } finally {
       vi.useRealTimers();
@@ -2064,18 +2023,14 @@ describe("buildThreadListV2ListItems row-state stamps", () => {
     settledOverride: "settled",
     settledAt: isoAt(BASE_MS - 3 * 24 * 60 * MINUTE_MS),
   });
-  const allEnvironments = new Set<EnvironmentId>([environmentId]);
-
   it("stamps queued outbox messages onto the matching row and notices removal", () => {
     // An outbox write never touches the thread shell, so the queued icon has
     // to ride on the item for the recycled cell to ever update it.
     const queued = buildTickList([readyThread, settledThread], BASE_MS, [], {
       queuedThreadKeys: new Set([`${environmentId}:stamp-ready`]),
-      snoozeEnvironmentIds: allEnvironments,
     });
     const plain = buildTickList([readyThread, settledThread], BASE_MS, [], {
       queuedThreadKeys: new Set<string>(),
-      snoozeEnvironmentIds: allEnvironments,
     });
     const byKey = (items: ThreadListV2ListItem[]) => itemsByThreadKey(items);
     const readyQueued = byKey(queued).get(`v2-thread:${environmentId}:stamp-ready`)!;
@@ -2099,11 +2054,9 @@ describe("buildThreadListV2ListItems row-state stamps", () => {
     ]);
     const open = buildTickList([readyThread, settledThread], BASE_MS, [], {
       moveAvailability: permissive,
-      snoozeEnvironmentIds: allEnvironments,
     });
     const closed = buildTickList([readyThread, settledThread], BASE_MS, [], {
       moveAvailability: blocked,
-      snoozeEnvironmentIds: allEnvironments,
     });
     const readyOpen = itemsByThreadKey(open).get(`v2-thread:${environmentId}:stamp-ready`)!;
     const readyClosed = itemsByThreadKey(closed).get(`v2-thread:${environmentId}:stamp-ready`)!;
@@ -2117,27 +2070,18 @@ describe("buildThreadListV2ListItems row-state stamps", () => {
     expect(threadListV2ListItemsAreEqual(settledOpen, settledClosed)).toBe(true);
   });
 
-  it("keeps a settled row's snooze menu fresh across a tick", () => {
+  it("keeps a snoozable settled row stable across a minute tick", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(BASE_MS);
-      const atStart = buildTickList([settledThread], BASE_MS, [], {
-        snoozeEnvironmentIds: allEnvironments,
-      });
+      const atStart = buildTickList([settledThread], BASE_MS, []);
       vi.setSystemTime(BASE_MS + MINUTE_MS);
-      const atNextMinute = buildTickList([settledThread], BASE_MS + MINUTE_MS, [], {
-        snoozeEnvironmentIds: allEnvironments,
-      });
+      const atNextMinute = buildTickList([settledThread], BASE_MS + MINUTE_MS, []);
       const rowAtStart = atStart.find((item) => item.type === "v2-thread")!;
       const rowAtNext = atNextMinute.find((item) => item.type === "v2-thread")!;
-      // The swipe-revealed secondary action carries the snooze preset menu;
-      // its minute clock must move, or the displayed wake times drift while
-      // the row is recycled-stable.
-      expect(rowAtStart.type === "v2-thread" && rowAtStart.snoozePresetMinute).toBe(isoAt(BASE_MS));
-      expect(rowAtNext.type === "v2-thread" && rowAtNext.snoozePresetMinute).toBe(
-        isoAt(BASE_MS + MINUTE_MS),
-      );
-      expect(threadListV2ListItemsAreEqual(rowAtStart, rowAtNext)).toBe(false);
+      // Re-rendering every snoozable row each minute rebuilt its native menu and
+      // froze the UI thread; the row now refreshes its snooze presets on touch.
+      expect(threadListV2ListItemsAreEqual(rowAtStart, rowAtNext)).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -2152,11 +2096,9 @@ describe("buildThreadListV2ListItems row-state stamps", () => {
     });
     const loading = buildTickList([snoozedThread], BASE_MS, [], {
       shelfPreferencesLoading: true,
-      snoozeEnvironmentIds: allEnvironments,
     });
     const loaded = buildTickList([snoozedThread], BASE_MS, [], {
       shelfPreferencesLoading: false,
-      snoozeEnvironmentIds: allEnvironments,
     });
     const shelfLoading = loading.find((item) => item.type === "v2-snoozed-shelf")!;
     const shelfLoaded = loaded.find((item) => item.type === "v2-snoozed-shelf")!;

@@ -11,7 +11,7 @@ import {
   mergeToolActivityData,
 } from "@t3tools/shared/toolActivity";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
-import { T3_MCP_TOOL_NAMES } from "@t3tools/shared/t3McpToolPresentation";
+import { resolveT3McpDispatch, T3_MCP_TOOL_NAMES } from "@t3tools/shared/t3McpToolPresentation";
 import type {
   OrchestrationV2ProviderThreadNativeMetadata,
   ThreadTokenUsageSnapshot,
@@ -912,9 +912,20 @@ function makeToolCallState(
   }
   const title = input.title?.trim() || undefined;
   const kind = normalizeToolKind(input.kind);
-  const command = extractToolCallCommand(input.rawInput, title, kind);
+  const status = normalizeToolCallStatus(input.status, options?.fallbackStatus);
   const extractedContent = extractTextContentFromToolCallContent(input.content);
   const textContent = extractedContent.text;
+  // Hermes puts the command in the start event's shell preview, then replaces
+  // that content with the result. Never infer a command from progress or output.
+  const commandPreview =
+    kind === "execute" &&
+    options?.fallbackStatus === "pending" &&
+    (status === "pending" || status === "inProgress") &&
+    input.content?.length === 1 &&
+    textContent?.startsWith("$ ")
+      ? textContent.slice(2).trim() || undefined
+      : undefined;
+  const command = extractToolCallCommand(input.rawInput, title, kind) ?? commandPreview;
   const normalizedTitle =
     title && title.toLowerCase() !== "terminal" && title.toLowerCase() !== "tool call"
       ? title
@@ -983,7 +994,6 @@ function makeToolCallState(
         fallbackSummary: title ?? "Tool",
       })
     : undefined;
-  const status = normalizeToolCallStatus(input.status, options?.fallbackStatus);
   // An update carrying only output (Kimi CLI's final one) would title the call
   // "Tool" and overwrite the title it already had when merged.
   const titled = title !== undefined || kind !== undefined || command !== undefined;
@@ -1179,6 +1189,11 @@ export interface AcpMcpToolCallIdentity {
   readonly input?: Record<string, unknown>;
 }
 
+export function acpMcpDispatch(identity: AcpMcpToolCallIdentity, rawInput: unknown) {
+  const args = identity.input ?? (isRecord(rawInput) ? (rawInput.arguments ?? rawInput) : rawInput);
+  return resolveT3McpDispatch(`${identity.server}.${identity.tool}`, args);
+}
+
 /** Matches an invocation of T3's `acp-mcp-call` bridge fallback CLI. */
 const ACP_MCP_FALLBACK_CALL = /(?:^|[\s"'=])acp-mcp-call[\s"']+([A-Za-z0-9_.-]+)(?:\s+(.+?))?\s*$/u;
 
@@ -1319,6 +1334,7 @@ export function extractMcpToolCallIdentity(
     meta?.toolName,
     claudeCode?.toolName,
     gooseToolCall?.toolName,
+    meta?.["cognition.ai/inferenceToolName"],
     toolCall.data.title,
   ].filter((value): value is string => typeof value === "string");
   for (const candidate of candidates) {

@@ -65,6 +65,8 @@ interface ThreadSwipeAction {
   readonly menu?: {
     readonly actions: MenuAction[];
     readonly onPressAction: NonNullable<ComponentProps<typeof ControlPillMenu>["onPressAction"]>;
+    /** Runs as the menu starts opening, so time-dependent actions can refresh. */
+    readonly onOpen?: () => void;
     readonly title?: string;
   };
   readonly onPress: () => void;
@@ -688,6 +690,8 @@ function SwipeActionButton(props: {
         <ControlPillMenu
           actions={props.menu.actions}
           onPressAction={props.menu.onPressAction}
+          onMenuInteractionStart={props.menu.onOpen}
+          onOpenMenu={props.menu.onOpen}
           title={props.menu.title}
           style={{ height: "100%", width: "100%" }}
         >

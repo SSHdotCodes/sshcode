@@ -9,11 +9,13 @@ import {
 } from "@t3tools/contracts";
 import { errorTag } from "@t3tools/shared/observability";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FiberHandle from "effect/FiberHandle";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -34,6 +36,7 @@ import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import * as DesktopLocalActivity from "./DesktopLocalActivity.ts";
 import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
 import { resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
 import {
@@ -53,6 +56,10 @@ import {
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
 const AUTO_UPDATE_POLL_INTERVAL = "4 minutes";
 const PREPARED_INSTALL_CHECK_WAIT = Duration.seconds(90);
+/** "When idle" installs: how often to ask, the re-check that confirms a zero, and the cap. */
+const IDLE_INSTALL_POLL = Duration.seconds(5);
+const IDLE_INSTALL_CONFIRM = Duration.seconds(2);
+const IDLE_INSTALL_CAP = Duration.minutes(30);
 
 type UpdateAction = "check" | "download" | "install" | "install-recovery" | "channel";
 
@@ -195,6 +202,12 @@ export class DesktopUpdates extends Context.Service<
     readonly check: (reason: string) => Effect.Effect<DesktopUpdateCheckResult>;
     readonly download: Effect.Effect<DesktopUpdateActionResult>;
     readonly install: Effect.Effect<DesktopUpdateActionResult>;
+    /**
+     * Installs at once when no chat has an agent working, otherwise once none
+     * does (or after 30 minutes); `installWhenIdle` in the state shows the wait.
+     */
+    readonly installWhenIdle: Effect.Effect<DesktopUpdateActionResult>;
+    readonly cancelInstallWhenIdle: Effect.Effect<DesktopUpdateState>;
     readonly installPrepared: (
       expectedVersion: string,
     ) => Effect.Effect<DesktopPreparedUpdateInstallResult>;
@@ -352,6 +365,8 @@ export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
+  const localActivity = yield* DesktopLocalActivity.DesktopLocalActivity;
+  const idleInstall = yield* FiberHandle.make<void, never>();
 
   const appUpdateYmlConfigRef = yield* Ref.make<Option.Option<AppUpdateYmlConfig>>(Option.none());
   const activeUpdateActionRef = yield* Ref.make<Option.Option<UpdateAction>>(Option.none());
@@ -827,6 +842,81 @@ export const make = Effect.gen(function* () {
     };
   });
 
+  const showIdleWait = (working: number) =>
+    Ref.get(updateStateRef).pipe(
+      Effect.flatMap((state) =>
+        state.installWhenIdle?.working === working
+          ? Effect.void
+          : setState({ ...state, installWhenIdle: { working } }),
+      ),
+    );
+
+  const clearIdleWait = Ref.get(updateStateRef).pipe(
+    Effect.flatMap(({ installWhenIdle, ...state }) =>
+      installWhenIdle === undefined ? Effect.void : setState(state),
+    ),
+  );
+
+  const stopWaitingForIdle = FiberHandle.clear(idleInstall).pipe(Effect.andThen(clearIdleWait));
+
+  // Asks again until no chat is working (a zero confirmed once more, since a
+  // finished turn can hand straight over to a queued one) or the cap passes.
+  const waitForIdleThenInstall = (startedAt: number) =>
+    Effect.gen(function* () {
+      while (true) {
+        yield* Effect.sleep(IDLE_INSTALL_POLL);
+        let working = yield* localActivity.workingChats;
+        if (Option.isSome(working) && working.value === 0) {
+          yield* Effect.sleep(IDLE_INSTALL_CONFIRM);
+          working = yield* localActivity.workingChats;
+        }
+        if (Option.isNone(working) || working.value === 0) break;
+        yield* showIdleWait(working.value);
+        const waited = (yield* Clock.currentTimeMillis) - startedAt;
+        if (waited >= Duration.toMillis(IDLE_INSTALL_CAP)) {
+          yield* logUpdaterInfo("installing the update while chats still work", {
+            working: working.value,
+          });
+          break;
+        }
+      }
+      yield* clearIdleWait;
+      // With the version named, an install that meets a scheduled check waits it out.
+      const { downloadedVersion } = yield* Ref.get(updateStateRef);
+      if (downloadedVersion !== null) yield* installWithExpectedVersion(downloadedVersion);
+    }).pipe(Effect.withSpan("desktop.updates.waitForIdleThenInstall"));
+
+  const installWhenIdle = Effect.gen(function* () {
+    const state = yield* Ref.get(updateStateRef);
+    if (state.installWhenIdle !== undefined) {
+      return { accepted: true, completed: false, state };
+    }
+    const installable =
+      state.downloadedVersion !== null &&
+      (state.status === "downloaded" ||
+        (state.status === "error" &&
+          (state.errorContext === null || state.errorContext === "install")));
+    if (
+      !installable ||
+      (yield* Ref.get(desktopState.quitting)) ||
+      !(yield* Ref.get(updaterConfiguredRef))
+    ) {
+      return { accepted: false, completed: false, state };
+    }
+    const working = yield* localActivity.workingChats;
+    // None: no backend could say (stopped, or remote only), so nothing here is cut.
+    if (Option.isNone(working) || working.value === 0) {
+      const { accepted, completed, state: next } = yield* installWithExpectedVersion();
+      return { accepted, completed, state: next };
+    }
+    yield* showIdleWait(working.value);
+    const startedAt = yield* Clock.currentTimeMillis;
+    yield* FiberHandle.run(idleInstall, waitForIdleThenInstall(startedAt), {
+      onlyIfMissing: true,
+    });
+    return { accepted: true, completed: false, state: yield* Ref.get(updateStateRef) };
+  }).pipe(Effect.withSpan("desktop.updates.installWhenIdle"));
+
   const startUpdatePollers: Effect.Effect<void, never, Scope.Scope> = Effect.gen(function* () {
     yield* Effect.sleep(AUTO_UPDATE_STARTUP_DELAY).pipe(
       Effect.andThen(checkForUpdates("startup")),
@@ -1174,10 +1264,15 @@ export const make = Effect.gen(function* () {
         state: yield* Ref.get(updateStateRef),
       };
     }).pipe(Effect.withSpan("desktop.updates.download")),
-    install: installWithExpectedVersion().pipe(
+    // Installing now ends any wait for idle chats.
+    install: stopWaitingForIdle.pipe(
+      Effect.andThen(installWithExpectedVersion()),
       Effect.map(({ accepted, completed, state }) => ({ accepted, completed, state })),
     ),
-    installPrepared: (expectedVersion) => installWithExpectedVersion(expectedVersion),
+    installWhenIdle,
+    cancelInstallWhenIdle: stopWaitingForIdle.pipe(Effect.andThen(Ref.get(updateStateRef))),
+    installPrepared: (expectedVersion) =>
+      stopWaitingForIdle.pipe(Effect.andThen(installWithExpectedVersion(expectedVersion))),
   });
 });
 

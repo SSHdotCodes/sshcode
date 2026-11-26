@@ -661,6 +661,31 @@ it.layer(
     }),
   );
 
+  it.effect("finishes startup after the opening client disconnects", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const ready = yield* Deferred.make<void>();
+      const adapter = new FakePtyAdapter();
+      const spawn = adapter.spawn.bind(adapter);
+      adapter.spawn = (input) =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(ready)),
+          Effect.andThen(() => spawn(input)),
+        );
+      const { manager, getEvents } = yield* createManager(5, { ptyAdapter: adapter });
+      const opening = yield* manager.open(openInput()).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      const disconnect = yield* Fiber.interrupt(opening).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(ready, undefined);
+      yield* Fiber.join(disconnect);
+      expect((yield* getEvents).map((event) => event.type)).toEqual(["started"]);
+      expect((yield* manager.open(openInput())).status).toBe("running");
+      expect(adapter.spawnInputs).toHaveLength(1);
+    }),
+  );
+
   it.effect("handles an exit replayed during subscription after publishing startup", () =>
     Effect.gen(function* () {
       const ptyAdapter = new FakePtyAdapter();
@@ -1088,14 +1113,19 @@ it.layer(
       yield* manager.open(openInput());
       expect((yield* getEvents).some((event) => event.type === "activity")).toBe(false);
 
-      inspect = { hasRunningSubprocess: true, childCommand: "vim", processIds: [100, 101] };
+      const prefix = "a".repeat(127);
+      inspect = {
+        hasRunningSubprocess: true,
+        childCommand: prefix + "😀tail",
+        processIds: [100, 101],
+      };
       yield* waitFor(
         Effect.map(getEvents, (events) =>
           events.some(
             (event) =>
               event.type === "activity" &&
               event.hasRunningSubprocess === true &&
-              event.label === "vim",
+              event.label === prefix,
           ),
         ),
         "1200 millis",
@@ -1323,6 +1353,24 @@ it.layer(
         false,
         false,
       ]);
+    }),
+  );
+
+  it.effect("pins a worktree while a terminal in its subdirectory is open", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* createManager();
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const worktree = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "t3-terminal-worktree-" }),
+      );
+      const child = path.join(worktree, "nested");
+      yield* fs.makeDirectory(child);
+      yield* manager.open(openInput({ cwd: child }));
+      expect(yield* manager.hasOpenInWorkspace!(worktree)).toBe(true);
+      expect(yield* manager.hasOpenInWorkspace!(path.join(worktree, "unrelated"))).toBe(false);
+      yield* manager.close({ threadId: "thread-1" });
+      expect(yield* manager.hasOpenInWorkspace!(worktree)).toBe(false);
     }),
   );
 

@@ -30,7 +30,7 @@ vi.mock("expo-haptics", () => ({
   impactAsync: harness.impact,
   notificationAsync: harness.notification,
   ImpactFeedbackStyle: { Light: "light" },
-  NotificationFeedbackType: { Success: "success", Error: "error" },
+  NotificationFeedbackType: { Success: "success", Error: "error", Warning: "warning" },
 }));
 
 import { playThreadFeedback, useThreadFeedback } from "./useThreadFeedback";
@@ -43,12 +43,14 @@ let syncStatus: EnvironmentThreadStatus;
 let connected: boolean;
 let visible: boolean;
 let supportsSyncMarker: boolean;
+let pendingRequestId: string | null;
 function Probe() {
   useThreadFeedback(threadKey, runs, composerError, {
     syncStatus,
     connected,
     visible,
     supportsSyncMarker,
+    pendingRequestId,
   });
   return null;
 }
@@ -83,6 +85,7 @@ beforeEach(() => {
   visible = true;
   supportsSyncMarker = true;
   composerError = null;
+  pendingRequestId = null;
   threadKey = "environment:thread";
   root = createRoot(document.createElement("div"));
 });
@@ -100,6 +103,29 @@ describe("focused thread feedback", () => {
     setStatus("completed");
     setStatus("completed");
     expect(harness.notification.mock.calls).toEqual([["success"]]);
+  });
+
+  it("taps once when a watched run asks a question, not for one already waiting", () => {
+    pendingRequestId = "request-old";
+    setStatus("running");
+    syncBaseline();
+    expect(harness.notification).not.toHaveBeenCalled();
+    setStatus("completed", "run");
+    harness.notification.mockClear();
+    runs = [{ id: RunId.make("run-2"), status: "running" }];
+    render();
+    pendingRequestId = "request-new";
+    render();
+    render();
+    expect(harness.notification.mock.calls).toEqual([["warning"]]);
+  });
+
+  it("stays quiet about a question found on opening a chat", () => {
+    setStatus("waiting");
+    pendingRequestId = "request";
+    syncBaseline();
+    render();
+    expect(harness.notification).not.toHaveBeenCalled();
   });
 
   it("announces failure without treating interruptions or cancellations as failures", () => {

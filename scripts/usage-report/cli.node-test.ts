@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalDate:off - Isolated synchronous Node and SQLite CLI fixtures.
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off - Node CLI integration tests launch an independent process against timestamped SQLite fixtures.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";

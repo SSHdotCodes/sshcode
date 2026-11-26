@@ -62,6 +62,7 @@ const withToolkit = <A, E, R>(
       caller?: McpInvocationContext.McpInvocationScope,
     ) => Effect.Effect<McpSchema.CallToolResult, McpSchema.InternalError | McpSchema.InvalidParams>;
     readonly caller: Ref.Ref<OrchestrationV2ThreadShell>;
+    readonly roster: Ref.Ref<ReadonlyArray<MonitorInfo>>;
     readonly starts: Ref.Ref<
       ReadonlyArray<
         MonitorStartInput & {
@@ -99,6 +100,7 @@ const withToolkit = <A, E, R>(
               Effect.provideService(McpSchema.McpServerClient, client),
             ),
         caller,
+        roster,
         starts,
       });
     }).pipe(
@@ -135,6 +137,7 @@ const withToolkit = <A, E, R>(
                         startedAt: 0,
                         timeoutMs: 3_600_000,
                         persistent: false,
+                        output: "recent fixture output",
                       },
                     ]),
                   ),
@@ -165,7 +168,7 @@ describe("monitor MCP tools", () => {
         expect(result.isError).toBe(false);
         expect(result.structuredContent).toEqual({
           monitorId: "monitor:test",
-          wakePolicy: "Throttled output + exit; use wakeOn:regex or false.",
+          wakePolicy: "Throttled output + exit",
         });
         expect((yield* Ref.get(starts))[0]).toMatchObject({
           cwd: "/scratch/projectless-chat",
@@ -176,6 +179,7 @@ describe("monitor MCP tools", () => {
         const listed = (yield* invoke("monitor_list", {})).structuredContent;
         expect(listed).toMatchObject({ monitors: [{ description: "Wait for server" }] });
         expect(listed).not.toHaveProperty("notice");
+        expect((listed as { monitors: object[] }).monitors[0]).not.toHaveProperty("output");
         // Asking again with nothing changed says the monitor wakes the thread itself.
         expect((yield* invoke("monitor_list", {})).structuredContent).toMatchObject({
           monitors: [{ description: "Wait for server" }],
@@ -183,6 +187,9 @@ describe("monitor MCP tools", () => {
             "Monitor exit (or output selected by its policy) wakes this thread",
           ),
         });
+        expect(
+          (yield* invoke("monitor_list", { includeOutput: true })).structuredContent,
+        ).toMatchObject({ monitors: [{ output: "recent fixture output" }] });
         expect(
           (yield* invoke("monitor_stop", { monitorId: "monitor:test" })).structuredContent,
         ).toEqual({ stopped: true });
@@ -194,11 +201,35 @@ describe("monitor MCP tools", () => {
     ),
   );
 
+  it.effect("returns fresh output without an unchanged notice when the monitor stays running", () =>
+    withToolkit(({ invoke, roster }) =>
+      Effect.gen(function* () {
+        const monitor = {
+          monitorId: "monitor:test",
+          threadId,
+          description: "Collect output",
+          startedAt: 0,
+          timeoutMs: null,
+          persistent: false,
+        };
+        yield* Ref.set(roster, [{ ...monitor, output: "first line" }]);
+        const first = yield* invoke("monitor_list", { includeOutput: true });
+        expect(first.structuredContent).toMatchObject({ monitors: [{ output: "first line" }] });
+        expect(first.structuredContent).not.toHaveProperty("notice");
+
+        yield* Ref.set(roster, [{ ...monitor, output: "second line" }]);
+        const second = yield* invoke("monitor_list", { includeOutput: true });
+        expect(second.structuredContent).toMatchObject({ monitors: [{ output: "second line" }] });
+        expect(second.structuredContent).not.toHaveProperty("notice");
+      }),
+    ),
+  );
+
   it.effect.each([
-    [{ wakeOn: false }, "Exit only; set wakeOn to a regex for milestones."],
-    [{ wakeOn: "^ready" }, "Matches + exit; omit wakeOn for throttled output."],
-    [{ durable: true }, "Exit only; set wakeOn to a regex for milestones."],
-    [{ durable: true, wakeOn: "^ready" }, "Matches + exit; use wakeOn:false for exit only."],
+    [{ wakeOn: false }, "Exit only"],
+    [{ wakeOn: "^ready" }, "Matches + exit"],
+    [{ durable: true }, "Exit only"],
+    [{ durable: true, wakeOn: "^ready" }, "Matches + exit"],
   ] as const)("reports the wake policy for %j", ([options, wakePolicy]) =>
     withToolkit(({ invoke }) =>
       Effect.gen(function* () {

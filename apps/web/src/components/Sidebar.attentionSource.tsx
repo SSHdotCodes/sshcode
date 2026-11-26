@@ -1,7 +1,6 @@
 import { useEffect, useMemo } from "react";
 import * as Schema from "effect/Schema";
 import {
-  ALL_CHATS_TAB,
   buildChatTabs,
   chatTabShowsThread,
   resolveSelectedChatTab,
@@ -17,6 +16,7 @@ import {
   useHiddenWorkflowChatKeys,
   withoutWorkflowRunChats,
 } from "./workflows/WorkflowRunChatsTracker";
+import { useSidebarChatTabSelection } from "./sidebar/useSidebarChatTabSelection";
 import { sidebarAttentionSourceAtom } from "./Sidebar.attention";
 
 /** Lives beside the shell controls, outside the narrow sidebar's unmounting sheet. */
@@ -30,11 +30,7 @@ export function SidebarAttentionSource() {
     "all",
     Schema.String,
   );
-  const [chatTabSelection] = useLocalStorage(
-    "t3code:sidebar-chat-tab:v1",
-    ALL_CHATS_TAB,
-    Schema.String,
-  );
+  const { selected: chatTabSelection } = useSidebarChatTabSelection();
   const visits = useUiStateStore((state) => state.threadLastVisitedAtById);
   const hiddenWorkflowChats = useHiddenWorkflowChatKeys();
   const threads = useMemo(() => {

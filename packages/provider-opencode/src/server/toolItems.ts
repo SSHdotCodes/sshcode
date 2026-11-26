@@ -120,6 +120,10 @@ export function openCodeToolTurnItem(
       return {
         ...base,
         type: "command_execution",
+        status:
+          base.status === "completed" && exitCode !== undefined && exitCode !== 0
+            ? "failed"
+            : base.status,
         input: recordString(input, "command", "cmd") ?? stableJson(input),
         ...(output === undefined ? {} : { output }),
         ...(exitCode === undefined ? {} : { exitCode }),

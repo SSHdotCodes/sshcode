@@ -2933,6 +2933,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     productName: resolveDesktopProductName(version),
     artifactName: "SSHCode-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
+    // runAsNode stays on: the app starts its server, helpers and the `t3` shim by running this
+    // binary as Node, and that mode still accepts inspector flags.
+    electronFuses: {
+      enableNodeCliInspectArguments: false,
+      // Nothing signs an unsigned macOS build after the flip, which voids its ad hoc signature.
+      resetAdHocDarwinSignature: platform === "mac" && !signed,
+    },
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
       ...(platform === "mac"
@@ -3712,6 +3719,18 @@ export const validateWindowsPackagedPayload = Effect.fn(
   return { packagedAppDir, fileCount, unpackedFiles } as const;
 });
 
+export const stageCompiledDirectory = Effect.fn("stageCompiledDirectory")(function* (
+  source: string,
+  destination: string,
+  move: boolean,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const copy = fs.copy(source, destination);
+  // The release worktree discards these generated outputs after packaging.
+  // Move them into the scoped stage when it is on the same volume.
+  yield* move ? fs.rename(source, destination).pipe(Effect.catch(() => copy)) : copy;
+});
+
 const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(function* (
   options: ResolvedBuildOptions,
 ) {
@@ -3906,7 +3925,16 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   }
 
   yield* Effect.log("[desktop-artifact] Staging release app...");
-  yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
+  const moveBuildOutputs =
+    options.platform === "mac" &&
+    !options.skipBuild &&
+    !options.keepStage &&
+    (yield* Config.Boolean("T3CODE_DESKTOP_MOVE_BUILD_OUTPUTS").pipe(Config.withDefault(false)));
+  yield* stageCompiledDirectory(
+    distDirs.desktopDist,
+    path.join(stageAppDir, "apps/desktop/dist-electron"),
+    moveBuildOutputs,
+  );
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
   if (options.platform === "linux") {
     const extensionDir = path.join(stageAppDir, "apps/desktop/gnome-extension");
@@ -3928,7 +3956,11 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   // On Windows the server tree ships in the server.asar sidecar instead of
   // app.asar (see stageWindowsServerSidecar), so the app stage omits it.
   if (options.platform !== "win") {
-    yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
+    yield* stageCompiledDirectory(
+      distDirs.serverDist,
+      path.join(stageAppDir, "apps/server/dist"),
+      moveBuildOutputs,
+    );
   }
   yield* stageResourceMonitor({
     repoRoot,

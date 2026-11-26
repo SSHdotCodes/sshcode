@@ -119,6 +119,12 @@ individual subagents, and an idle batch does not confirm that every child
 succeeded. See [agent work](./thread-sidebar.md#inspect-agent-work) for where to
 inspect activity.
 
+Use `/swarm` when it appears in your Antigravity command menu. Describe the work
+to split among named workers and how to verify it. The worker cards show the
+launches Antigravity reports, and the coordinator's reply contains its summary.
+The live board and individual worker messages are available in Google's
+[Antigravity CLI and App](https://antigravity.google/docs/swarm).
+
 ## Accounts and removal
 
 Add an Antigravity provider instance for each Google account in

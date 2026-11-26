@@ -84,6 +84,7 @@ import {
   stageResourceMonitor,
   stageLinuxCaptureHelper,
   stageWslRuntimeArchive,
+  stageCompiledDirectory,
   bundlesWslRuntime,
   STAGE_INSTALL_ARGS,
   ancestorNodeModulesPaths,
@@ -154,16 +155,18 @@ const makeLinuxCliArchiveFixture = Effect.fn("test.makeLinuxCliArchiveFixture")(
     yield* fs.makeDirectory(path.dirname(memberPath), { recursive: true });
     yield* fs.writeFileString(memberPath, member);
   }
-  const archivePath = path.join(input.root, `${input.stem}.tar.gz`);
+  const archiveName = `${input.stem}.tar.gz`;
   const tar = yield* spawner.spawn(
-    ChildProcess.make("tar", ["-czf", archivePath, "-C", contentRoot, "."], {
+    // GNU tar reads a drive letter in an absolute archive path as a remote host.
+    ChildProcess.make("tar", ["-czf", archiveName, "-C", contentRoot, "."], {
+      cwd: input.root,
       stdin: "ignore",
       stdout: "ignore",
       stderr: "pipe",
     }),
   );
   assert.equal(Number(yield* tar.exitCode), 0);
-  return archivePath;
+  return path.join(input.root, archiveName);
 });
 
 function mockProcess(exitCode: number, stdout = "") {
@@ -292,6 +295,34 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
 });
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
+  it.effect("packages every platform with Node inspector flags off and run-as-Node left on", () =>
+    Effect.gen(function* () {
+      const fuses = (platform: "mac" | "linux" | "win", target: string, signed: boolean) =>
+        createBuildConfig(platform, target, "0.0.33", signed, false, undefined, undefined).pipe(
+          Effect.map((config) => config.electronFuses),
+        );
+
+      // The desktop app starts its server and the `t3` shim by running its own binary as Node.
+      assert.deepEqual(yield* fuses("linux", "AppImage", false), {
+        enableNodeCliInspectArguments: false,
+        resetAdHocDarwinSignature: false,
+      });
+      assert.deepEqual(yield* fuses("win", "nsis", false), {
+        enableNodeCliInspectArguments: false,
+        resetAdHocDarwinSignature: false,
+      });
+      // Nothing signs an unsigned macOS build after the flip, so the flip re-signs it ad hoc.
+      assert.deepEqual(yield* fuses("mac", "dmg", false), {
+        enableNodeCliInspectArguments: false,
+        resetAdHocDarwinSignature: true,
+      });
+      assert.deepEqual(yield* fuses("mac", "dmg", true), {
+        enableNodeCliInspectArguments: false,
+        resetAdHocDarwinSignature: false,
+      });
+    }),
+  );
+
   it.effect("rejects overlapping builds from another process until restoration finishes", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -2879,6 +2910,45 @@ it("includes the filesystem root for posix paths", () => {
     "/node_modules",
   ]);
 });
+
+it.effect.each(["copy", "move", "move unavailable"] as const)(
+  "stages generated bundles using %s",
+  (method) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-stage-bundle-" });
+      const source = path.join(root, "dist");
+      const destination = path.join(root, "staged");
+      yield* fs.makeDirectory(path.join(source, "client"), { recursive: true });
+      yield* fs.writeFileString(path.join(source, "client/index.html"), "<title>Fixture</title>");
+      const stage = stageCompiledDirectory(source, destination, method !== "copy");
+
+      yield* method === "move unavailable"
+        ? stage.pipe(
+            Effect.provideService(FileSystem.FileSystem, {
+              ...fs,
+              rename: () =>
+                Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "Unknown",
+                    module: "FileSystem",
+                    method: "rename",
+                    pathOrDescriptor: source,
+                    syscall: "rename",
+                  }),
+                ),
+            }),
+          )
+        : stage;
+
+      assert.equal(
+        yield* fs.readFileString(path.join(destination, "client/index.html")),
+        "<title>Fixture</title>",
+      );
+      assert.equal(yield* fs.exists(source), method !== "move");
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
 
 // A UNC root must keep its \\server\share prefix. Rebuilding it from segments
 // produced relative paths, which fs.exists resolves against the build cwd, so

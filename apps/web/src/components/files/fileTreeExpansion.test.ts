@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "@effect/vitest";
 import {
   areAllDirectoriesExpanded,
   coalesceReentrantCalls,
+  onlyChildren,
   readExpandedDirectories,
   setAllDirectoriesExpanded,
   writeExpandedDirectories,
@@ -38,6 +39,23 @@ function makeModel(expanded: Record<string, boolean>) {
 }
 
 describe("file tree expansion", () => {
+  it("identifies a chain of only children and stops at a branch", () => {
+    const [root, child, source, first, second] = [
+      { path: "src", kind: "directory" },
+      { path: "src/core", kind: "directory" },
+      { path: "src/core/files", kind: "directory" },
+      { path: "src/core/files/a.ts", kind: "file" },
+      { path: "src/core/files/b.ts", kind: "file" },
+    ] as const;
+    const children = onlyChildren([root, child, source, first, second]);
+    expect([...children]).toEqual([
+      ["", root],
+      ["src", child],
+      ["src/core", source],
+      ["src/core/files", null],
+    ]);
+  });
+
   it("requires at least one directory and detects whether all are expanded", () => {
     const model = makeModel({ "src/": true, "test/": true });
     expect(areAllDirectoriesExpanded(model, [])).toBe(false);
@@ -106,4 +124,11 @@ describe("coalesceReentrantCalls", () => {
     handler();
     expect(depths).toEqual([1, 1]);
   });
+});
+
+it("keeps the 100 expanded folders nearest the root, so a remount does not list hundreds", () => {
+  const deep = Array.from({ length: 150 }, (_, index) => `pkg/mod/d${index}/`);
+  writeExpandedDirectories("env:/repo", [...deep, "pkg/mod/", "pkg/"]);
+  const restored = readExpandedDirectories("env:/repo");
+  expect(restored).toEqual(["pkg/", "pkg/mod/", ...deep.slice(0, 98)]);
 });

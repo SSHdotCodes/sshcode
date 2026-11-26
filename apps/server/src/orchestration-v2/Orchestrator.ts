@@ -128,6 +128,7 @@ import {
   delegatedCompletionWakeDetail,
   isBufferedProviderNotification,
   isUndeliveredMailboxSteer,
+  threadSendFields,
 } from "./NotificationMailbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
@@ -1219,6 +1220,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) =>
     Effect.gen(function* () {
       const pending = (yield* Ref.get(events)).filter((event) => event.threadId === threadId);
+      // A child created by this command exists only in its pending events until commit.
+      const created = pending.find((event) => event.type === "thread.created");
+      if (created) return pending.reduce(applyToProjection, emptyProjection(created));
       const pendingHistoryEdits = pending.some(
         (event) =>
           event.type === "run.updated" ||
@@ -1226,7 +1230,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           event.type === "message.updated" ||
           (event.type === "turn-item.updated" && event.payload.type === "user_message"),
       );
-      const stored = yield* Effect.option(
+      const stored = yield* (
         send === "thread" || send === "handoff"
           ? projectionStore
               .getThreadRecords(
@@ -1234,7 +1238,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 send === "thread" ? [] : ["runs", "attempts", "providerTurns", "providerThreads"],
               )
               .pipe(
-                Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })),
                 Effect.map((records): OrchestrationV2ThreadProjection => ({
                   ...emptyProjection({
                     payload: records.thread,
@@ -1243,55 +1246,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   ...records,
                 })),
               )
-          : projectionStore
-              .getMessageDispatchProjection(threadId, {
-                messageId: send.messageId,
-                targetRunId:
-                  "targetRunId" in send.dispatchMode ? send.dispatchMode.targetRunId : undefined,
-                instanceId: send.modelSelection?.instanceId,
-                // Also loads an earlier user message for the empty-thread test
-                // an auto deferred start makes in resolveMessageDispatchIntent.
-                checkMaintenanceHistory:
-                  (send.createdBy === "user" && !isNativeMaintenanceCommand(send)) ||
-                  (send.deliveryIntent === "auto" && send.dispatchMode.type === "defer_start"),
-                includeSubagents: send.notification !== undefined,
-                needsRunHistory:
-                  send.delegatedCompletion !== undefined ||
-                  send.providerRetryContinuationOfRunId !== undefined ||
-                  send.restartContinuationOfRunId !== undefined ||
-                  send.manualContinuationOfRunId !== undefined ||
-                  send.usageLimitContinuationOfRunId !== undefined ||
-                  pendingHistoryEdits,
+          : projectionStore.getMessageDispatchProjection(threadId, {
+              messageId: send.messageId,
+              targetRunId:
+                "targetRunId" in send.dispatchMode ? send.dispatchMode.targetRunId : undefined,
+              instanceId: send.modelSelection?.instanceId,
+              // Also loads an earlier user message for the empty-thread test
+              // an auto deferred start makes in resolveMessageDispatchIntent.
+              checkMaintenanceHistory:
+                (send.createdBy === "user" && !isNativeMaintenanceCommand(send)) ||
+                (send.deliveryIntent === "auto" && send.dispatchMode.type === "defer_start"),
+              includeSubagents: send.notification !== undefined,
+              needsRunHistory:
+                send.delegatedCompletion !== undefined ||
+                send.providerRetryContinuationOfRunId !== undefined ||
+                send.restartContinuationOfRunId !== undefined ||
+                send.manualContinuationOfRunId !== undefined ||
+                send.usageLimitContinuationOfRunId !== undefined ||
                 pendingHistoryEdits,
-              })
-              .pipe(
-                Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })),
-              ),
-      );
-      let projection: OrchestrationV2ThreadProjection;
-      if (Option.isSome(stored)) {
-        projection = stored.value;
-      } else {
-        const created = pending.find(
-          (
-            event,
-          ): event is Extract<OrchestrationV2DomainEvent, { readonly type: "thread.created" }> =>
-            event.type === "thread.created",
-        );
-        if (created === undefined) {
-          return yield* new OrchestratorProjectionError({ threadId });
-        }
-        projection = emptyProjection(created);
-      }
-
-      for (const event of pending) {
-        if (event.type === "thread.created" && projection.thread.id === event.payload.id) {
-          projection = { ...projection, thread: event.payload, updatedAt: event.occurredAt };
-          continue;
-        }
-        projection = applyToProjection(projection, event);
-      }
-      return projection;
+              pendingHistoryEdits,
+            })
+      ).pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
+      return pending.reduce(applyToProjection, stored);
     });
 
   const makeSystemEvent = <Event extends OrchestrationV2DomainEvent>(event: Omit<Event, "id">) =>
@@ -2019,9 +1995,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(queuedMessage.scheduledTaskId === undefined
             ? {}
             : { scheduledTaskId: queuedMessage.scheduledTaskId }),
-          ...(queuedMessage.senderThreadId === undefined
-            ? {}
-            : { senderThreadId: queuedMessage.senderThreadId }),
+          ...threadSendFields(queuedMessage),
         }),
         inputIntent: "queued_turn",
         status: "completed",
@@ -3221,7 +3195,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             command.threadId,
             command.type === "thread.model-selection.set" || command.type === "provider.switch"
               ? command.modelSelection.instanceId
-              : undefined,
+              : command.type === "thread.runtime-mode.set" &&
+                  command.runtimeMode !== thread.runtimeMode
+                ? thread.providerInstanceId
+                : undefined,
           )
           .pipe(mapDispatchError(command))
       : null;
@@ -3985,6 +3962,36 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return cancelled;
       }
     }
+    if (command.type === "thread.runtime-mode.set" && command.runtimeMode !== thread.runtimeMode) {
+      const providerThread = providerContext?.providerThreads.find(
+        (candidate) => candidate.id === thread.activeProviderThreadId,
+      );
+      const session = providerContext?.providerSessions.find(
+        (candidate) => candidate.id === providerThread?.providerSessionId,
+      );
+      if (
+        providerThread &&
+        session &&
+        session.capabilities.sessions.appliesRuntimeModeChangesImmediately &&
+        session.status !== "stopped" &&
+        session.status !== "error"
+      ) {
+        yield* Ref.update(effects, (current) => [
+          ...current,
+          {
+            id: `effect:${command.commandId}:provider-session.runtime-mode.apply`,
+            commandId: command.commandId,
+            threadId: command.threadId,
+            request: {
+              type: "provider-session.runtime-mode.apply",
+              providerSessionId: session.id,
+              providerThreadId: providerThread.id,
+              runtimeMode: command.runtimeMode,
+            },
+          } satisfies PendingOrchestrationEffectV2,
+        ]);
+      }
+    }
     // Other in-flight selection changes take effect at the next turn boundary.
     const turnRunning =
       (providerSwitchPlan?.releaseProviderSessionIds.length ?? 0) > 0 &&
@@ -4449,6 +4456,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly creationSource: OrchestrationV2ConversationMessage["creationSource"];
     readonly scheduledTaskId?: OrchestrationV2ConversationMessage["scheduledTaskId"];
     readonly senderThreadId?: OrchestrationV2ConversationMessage["senderThreadId"];
+    readonly notifySenderOnCompletion?: boolean;
     readonly notification?: OrchestrationV2ConversationMessage["notification"];
     readonly delegatedCompletion?: OrchestrationV2ConversationMessage["delegatedCompletion"];
     readonly forceRestart: boolean;
@@ -4600,6 +4608,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: selectionTransition.reason,
         });
       }
+      // The agent's reply ended and only background work (a timer, a command, a subagent) holds
+      // its prompt open, e.g. `agy acp` 1.5.15+. A steer then starts new work for the user.
+      const agentWasWaiting = providerThread.waitingOnBackgroundWork === true;
       const appendSteeringMessage = (messageInput: {
         readonly runId: OrchestrationV2Run["id"];
         readonly nodeId: OrchestrationV2ExecutionNode["id"];
@@ -4619,7 +4630,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...(input.scheduledTaskId === undefined
               ? {}
               : { scheduledTaskId: input.scheduledTaskId }),
-            ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
+            ...threadSendFields(input),
             id: input.messageId,
             threadId: input.command.threadId,
             runId: messageInput.runId,
@@ -4638,7 +4649,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...(input.scheduledTaskId === undefined
               ? {}
               : { scheduledTaskId: input.scheduledTaskId }),
-            ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
+            ...threadSendFields(input),
             id: idAllocator.derive.userTurnItem({ messageId: input.messageId }),
             threadId: input.command.threadId,
             runId: messageInput.runId,
@@ -4659,6 +4670,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               input.command.type === "queued-message.promote-to-steer"
                 ? "promoted_queued_to_steer"
                 : "steer",
+            ...(agentWasWaiting ? { agentWasWaiting: true as const } : {}),
             text: input.text,
             attachments: input.attachments,
             ...(input.context ? { context: input.context } : {}),
@@ -4732,6 +4744,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           providerThreadId: providerThread.id,
           providerInstanceId: targetRun.providerInstanceId,
         });
+        // A message to a waiting agent starts new work: the working timer counts from it, not from
+        // the prompt the wait belonged to. Wakes don't start new work.
+        if (
+          agentWasWaiting &&
+          input.notification === undefined &&
+          input.delegatedCompletion === undefined
+        ) {
+          yield* emitEvent({
+            type: "run.updated",
+            threadId: input.command.threadId,
+            runId: targetRun.id,
+            nodeId: rootNodeId,
+            providerInstanceId: targetRun.providerInstanceId,
+            occurredAt: now,
+            payload: { ...targetRun, workStartedAt: now },
+          });
+        }
         yield* Ref.update(input.effects, (existing) => [
           ...existing,
           {
@@ -5504,7 +5533,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
         projection = applyToProjection(projection, event);
       }
-      if (projection.thread.snoozedUntil != null) {
+      if (projection.thread.snoozedUntil != null && command.scheduledTaskId === undefined) {
         const now = yield* DateTime.now;
         const thread: OrchestrationV2AppThread = {
           ...projection.thread,
@@ -5897,9 +5926,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.scheduledTaskId === undefined
             ? {}
             : { scheduledTaskId: command.scheduledTaskId }),
-          ...(command.senderThreadId === undefined
-            ? {}
-            : { senderThreadId: command.senderThreadId }),
+          ...threadSendFields(command),
           forceRestart: dispatchMode.type === "restart_active",
         });
         return;
@@ -6151,9 +6178,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.scheduledTaskId === undefined
             ? {}
             : { scheduledTaskId: command.scheduledTaskId }),
-          ...(command.senderThreadId === undefined
-            ? {}
-            : { senderThreadId: command.senderThreadId }),
+          ...threadSendFields(command),
           id: command.messageId,
           threadId: command.threadId,
           runId,
@@ -6523,9 +6548,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.scheduledTaskId === undefined
             ? {}
             : { scheduledTaskId: command.scheduledTaskId }),
-          ...(command.senderThreadId === undefined
-            ? {}
-            : { senderThreadId: command.senderThreadId }),
+          ...threadSendFields(command),
           id: command.messageId,
           threadId: command.threadId,
           runId,
@@ -6546,9 +6569,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.scheduledTaskId === undefined
             ? {}
             : { scheduledTaskId: command.scheduledTaskId }),
-          ...(command.senderThreadId === undefined
-            ? {}
-            : { senderThreadId: command.senderThreadId }),
+          ...threadSendFields(command),
           id: idAllocator.derive.userTurnItem({ messageId: command.messageId }),
           threadId: command.threadId,
           runId,
@@ -7202,7 +7223,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(command.scheduledTaskId === undefined
           ? {}
           : { scheduledTaskId: command.scheduledTaskId }),
-        ...(command.senderThreadId === undefined ? {} : { senderThreadId: command.senderThreadId }),
+        ...threadSendFields(command),
         id: command.messageId,
         threadId: command.threadId,
         runId,
@@ -7223,7 +7244,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(command.scheduledTaskId === undefined
           ? {}
           : { scheduledTaskId: command.scheduledTaskId }),
-        ...(command.senderThreadId === undefined ? {} : { senderThreadId: command.senderThreadId }),
+        ...threadSendFields(command),
         id: idAllocator.derive.userTurnItem({ messageId: command.messageId }),
         threadId: command.threadId,
         runId,
@@ -7889,7 +7910,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         senderThreadId: command.parentThreadId,
         messageId: childMessageId,
         text: command.task,
-        attachments: [],
+        attachments: command.attachments ?? [],
         ...(command.context ? { context: command.context } : {}),
         modelSelection: command.modelSelection,
         dispatchMode:
@@ -9046,9 +9067,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(queuedMessage.scheduledTaskId === undefined
           ? {}
           : { scheduledTaskId: queuedMessage.scheduledTaskId }),
-        ...(queuedMessage.senderThreadId === undefined
-          ? {}
-          : { senderThreadId: queuedMessage.senderThreadId }),
+        ...threadSendFields(queuedMessage),
         forceRestart: false,
       });
     });
@@ -9247,9 +9266,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   ...(queuedMessage.scheduledTaskId === undefined
                     ? {}
                     : { scheduledTaskId: queuedMessage.scheduledTaskId }),
-                  ...(queuedMessage.senderThreadId === undefined
-                    ? {}
-                    : { senderThreadId: queuedMessage.senderThreadId }),
+                  ...threadSendFields(queuedMessage),
                   inputIntent: "queued_turn",
                   startedAt: queuedMessage.createdAt,
                   completedAt: now,
@@ -13076,6 +13093,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
             ),
           );
+        if (
+          command.threadSendCompletion &&
+          (thread.archivedAt !== null || thread.deletedAt !== null)
+        )
+          break;
         if (isProviderNativeSubagentThread(thread)) {
           return yield* new OrchestratorSubagentThreadReadOnlyError({
             commandId: command.commandId,
@@ -13460,6 +13482,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         // its expected outcome, not a failure.
         planned.events.length > 0 ||
         isUnobservedAcknowledgement(command) ||
+        (command.type === "message.dispatch" && command.threadSendCompletion === true) ||
         command.type === "thread.background-work.settle" ||
         command.type === "thread.stop" ||
         command.type === "subagent.stop"

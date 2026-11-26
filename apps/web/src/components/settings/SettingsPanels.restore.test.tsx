@@ -6,6 +6,7 @@ import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 const state = vi.hoisted(() => ({
   settings: null as UnifiedSettings | null,
   update: vi.fn(),
+  updateShared: vi.fn(),
   confirm: vi.fn(),
 }));
 
@@ -23,6 +24,15 @@ vi.mock("react/compiler-runtime", async () => {
   const { reactHookHarness } = await import("../../test/reactHookHarness");
   return { c: reactHookHarness.useMemoCache };
 });
+
+vi.mock("@effect/atom-react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@effect/atom-react")>()),
+  useAtomValue: () => state.settings?.chatListTabsEnabled,
+}));
+vi.mock("../../hooks/useSettings", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../hooks/useSettings")>()),
+  useUpdateEnvironmentSettings: () => state.updateShared,
+}));
 
 vi.mock("../../hooks/useTheme", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../hooks/useTheme")>()),
@@ -77,6 +87,16 @@ describe("restoring V2 settings", () => {
     expect(state.confirm.mock.calls[0]?.[0]).toContain(label);
     expect(state.update).toHaveBeenCalledOnce();
     expect(state.update.mock.calls[0]?.[0][key]).toBe(DEFAULT_UNIFIED_SETTINGS[key]);
+  });
+
+  it("restores chat list tabs through the shared server write", async () => {
+    state.settings = { ...DEFAULT_UNIFIED_SETTINGS, chatListTabsEnabled: false };
+    hooks.beginRender();
+    const restore = useSettingsRestore();
+    expect(restore.changedSettingLabels).toEqual(["Chat list tabs"]);
+    await restore.restoreDefaults();
+    expect(state.updateShared).toHaveBeenCalledWith({ chatListTabsEnabled: true });
+    expect(state.update.mock.calls[0]?.[0]).not.toHaveProperty("chatListTabsEnabled");
   });
 
   it("restores the new chat dashboard after it was turned off", async () => {

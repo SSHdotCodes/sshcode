@@ -8,6 +8,7 @@ import type {
   PullRequestMergeability,
   PullRequestReviewDecision,
   PullRequestState,
+  ScopedThreadRef,
 } from "@t3tools/contracts";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import {
@@ -21,6 +22,7 @@ import {
 } from "lucide-react";
 import { Children, type CSSProperties, isValidElement, type ReactNode, useState } from "react";
 
+import { useOpenLink } from "~/browser/useOpenLink";
 import { cn } from "~/lib/utils";
 
 import { Badge } from "../ui/badge";
@@ -459,13 +461,16 @@ export function PullRequestActorLabel({
   variant = "label",
   tooltip = true,
   profileUrl,
+  threadRef,
 }: {
   actor: PullRequestActor | null;
   className?: string;
   variant?: "label" | "avatar";
   tooltip?: boolean;
   profileUrl?: string | null;
+  threadRef?: ScopedThreadRef | null;
 }) {
+  const openLink = useOpenLink(threadRef);
   const login = actor?.login ?? "ghost";
   const label = (
     <span className={cn("flex min-w-0 items-center", variant === "label" && "gap-1.5")}>
@@ -487,6 +492,10 @@ export function PullRequestActorLabel({
               render={
                 <a
                   href={profileUrl}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void openLink(profileUrl, { event }).catch(console.error);
+                  }}
                   target="_blank"
                   rel="noopener noreferrer"
                   aria-label={`Open ${login}'s profile`}

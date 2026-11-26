@@ -17,6 +17,10 @@ import { VideoPreviewModal, type VideoPreviewSource } from "../../components/Vid
 import { useServerConfigs } from "../../state/entities";
 import { appAtomRegistry } from "../../state/atom-registry";
 import {
+  useCompressingComposerVideo,
+  withComposerVideoPreparation,
+} from "../../state/composer-video-preparation";
+import {
   appendComposerDraftAttachments,
   composerDraftsAtom,
   removeComposerDraftAttachment,
@@ -49,6 +53,15 @@ export function QuestionAttachments(props: {
     props.requestId,
     props.question.id,
   ]);
+  const key = selectedThread
+    ? questionAttachmentDraftKey(
+        selectedThread.environmentId,
+        selectedThread.id,
+        props.requestId,
+        props.question.id,
+      )
+    : null;
+  const compressingVideo = useCompressingComposerVideo(key);
   const pickerScope = useRef<{ key: string; active: boolean } | null>(null);
   useEffect(() => {
     const scope = { key: scopeKey, active: true };
@@ -106,44 +119,35 @@ export function QuestionAttachments(props: {
       )
       .finally(() => changeQuestionAttachmentPreparation(key, -1));
   });
-  if (!selectedThread || props.question.allowCustomAnswer === false) return null;
+  if (!selectedThread || !key || props.question.allowCustomAnswer === false) return null;
   const { environmentId, id: threadId } = selectedThread;
   const capabilities = configs.get(environmentId)?.environment.capabilities;
   const canAttach = capabilities?.questionAttachments === true;
-  const key = questionAttachmentDraftKey(
-    environmentId,
-    threadId,
-    props.requestId,
-    props.question.id,
-  );
   const attachments = drafts[key]?.attachments ?? [];
   const pick = async (kind: "media" | "files") => {
     const scope = pickerScope.current;
     changeQuestionAttachmentPreparation(key, 1);
     try {
-      const existingCount = appAtomRegistry.get(composerDraftsAtom)[key]?.attachments.length ?? 0;
-      const result =
-        kind === "files"
-          ? await pickComposerFiles({
-              existingCount,
-              maxBytes: capabilities?.fileAttachments?.maxUploadBytes,
-            })
-          : await pickComposerMedia({
-              existingCount,
-              maxVideoBytes: capabilities?.fileAttachments?.maxUploadBytes,
-            });
-      const picked = "files" in result ? result.files : result.attachments;
-      // Resolution on another client clears the reservation while the picker is open.
-      if (
-        !scope?.active ||
-        (appAtomRegistry.get(questionAttachmentPreparationAtom)[key] ?? 0) === 0
-      ) {
-        await releaseUnusedComposerAttachmentFiles(picked);
-        return;
-      }
-      const rejected = append(key, picked);
-      if (result.error || rejected > 0)
-        Alert.alert("Could not attach file", result.error ?? "Too many attachments.");
+      const error = await withComposerVideoPreparation(key, async (onCompressing) => {
+        const existingCount = appAtomRegistry.get(composerDraftsAtom)[key]?.attachments.length ?? 0;
+        const maxBytes = capabilities?.fileAttachments?.maxUploadBytes;
+        const result =
+          kind === "files"
+            ? await pickComposerFiles({ existingCount, maxBytes, onCompressing })
+            : await pickComposerMedia({ existingCount, maxVideoBytes: maxBytes, onCompressing });
+        const picked = "files" in result ? result.files : result.attachments;
+        // Resolution on another client clears the reservation while the picker is open.
+        if (
+          !scope?.active ||
+          (appAtomRegistry.get(questionAttachmentPreparationAtom)[key] ?? 0) === 0
+        ) {
+          await releaseUnusedComposerAttachmentFiles(picked);
+          return null;
+        }
+        const rejected = append(key, picked);
+        return result.error ?? (rejected > 0 ? "Too many attachments." : null);
+      });
+      if (error) Alert.alert("Could not attach file", error);
     } catch (error) {
       Alert.alert("Could not attach file", error instanceof Error ? error.message : "Try again.");
     } finally {
@@ -155,6 +159,7 @@ export function QuestionAttachments(props: {
       <ComposerAttachmentStrip
         environmentId={environmentId}
         attachments={attachments}
+        compressingVideo={compressingVideo}
         onRemove={props.disabled ? undefined : (id) => removeComposerDraftAttachment(key, id)}
         onPressPreview={setPreviewFile}
         onPressVideo={(attachment, sourceIdentifier) =>

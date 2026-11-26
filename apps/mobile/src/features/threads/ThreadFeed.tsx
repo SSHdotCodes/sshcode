@@ -271,6 +271,7 @@ import {
   createThreadFeedPresentationProjector,
   threadFeedSummary,
   threadFeedFailedRunIds,
+  threadFeedFinalAssistantMessageIds,
 } from "../../lib/threadFeedProjection";
 import { htmlRenderFrameHeight } from "@t3tools/shared/htmlRender";
 import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
@@ -453,6 +454,8 @@ function AssistantPinButton(props: {
           },
         });
       }}
+      // A 44 pt touch target around the 28 pt icon, like the copy button.
+      hitSlop={8}
       className="h-7 w-7 items-center justify-center"
     >
       <SymbolView
@@ -523,6 +526,7 @@ function AssistantForkButton(props: {
           })
           .finally(() => setBusy(false));
       }}
+      hitSlop={8}
       className="h-7 w-7 items-center justify-center disabled:opacity-40"
     >
       {busy ? (
@@ -995,6 +999,7 @@ type AssistantMarkdownSegment = { readonly key: string } & (
 
 const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly displayOnly?: boolean;
+  readonly plainValues?: boolean;
   readonly markdown: string;
   readonly isStreaming?: boolean;
   readonly environmentId: EnvironmentId;
@@ -1058,6 +1063,7 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
         markdown={segment.markdown}
         displayOnly={props.displayOnly}
         isStreaming={props.isStreaming}
+        plainValues={props.plainValues ?? false}
         skills={props.skills}
         models={models}
         textStyle={props.markdownStyles.nativeTextStyle}
@@ -1472,7 +1478,9 @@ function renderFeedEntry(
     readonly userBubbleFadeColor: string;
     readonly workRowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
     readonly workGroupScrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
-    readonly terminalAssistantMessageIds: ReadonlySet<string>;
+    readonly finalAssistantMessageIds: ReadonlySet<string>;
+    /** This agent message sits directly above a user bubble. */
+    readonly beforeUserBubble: boolean;
     readonly unsettledTurnId: RunId | null;
     readonly failedRunIds: ReadonlySet<RunId>;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
@@ -1686,14 +1694,9 @@ function renderFeedEntry(
     // is clamped, so the paragraphs around the block end up drawn on top of
     // each other. Pinning the width removes that pass.
     const hasWideBlock = hasWideMarkdownBlock(renderedText, WIDE_MARKDOWN_BLOCK_OPTIONS);
-    const assistantTurnStillInProgress =
-      message.role === "assistant" &&
-      props.unsettledTurnId !== null &&
-      message.runId === props.unsettledTurnId;
     const showAssistantMeta =
       message.role === "assistant" &&
-      props.terminalAssistantMessageIds.has(message.id) &&
-      !assistantTurnStillInProgress &&
+      props.finalAssistantMessageIds.has(message.id) &&
       !message.streaming;
 
     if (isUser && (message.questionAnswer || message.id.startsWith("async-answer:"))) {
@@ -1725,7 +1728,9 @@ function renderFeedEntry(
             props.contentWidth
           : 0
         : props.userBubbleMaxWidth;
-      const intentBadge = resolveUserMessageIntentBadge(message.inputIntent);
+      const intentBadge = resolveUserMessageIntentBadge(
+        message.agentWasWaiting ? undefined : message.inputIntent,
+      );
       const referenceIds = new Set(
         collectComposerContextReferences(message.text).map((reference) => reference.contextId),
       );
@@ -1891,6 +1896,7 @@ function renderFeedEntry(
               >
                 <UserMessageContent
                   text={renderedText}
+                  plainValues={isAgentMessage}
                   environmentId={props.environmentId}
                   context={message.context}
                   markdownStyles={styles}
@@ -2006,7 +2012,7 @@ function renderFeedEntry(
           environmentId={props.environmentId}
           senderThreadId={message.senderThreadId}
           text={renderedText}
-          inputIntent={message.inputIntent}
+          inputIntent={message.agentWasWaiting ? undefined : message.inputIntent}
           status={message.projectedItem?.item.status}
           timestampLabel={timestampLabel}
           rowSizing={props.workRowSizing}
@@ -2041,7 +2047,13 @@ function renderFeedEntry(
             ? "px-0"
             : showAssistantMeta && !(message.runId && props.failedRunIds.has(message.runId))
               ? "mb-5 px-1"
-              : "mb-1 px-1",
+              : props.beforeUserBubble && !showAssistantMeta
+                ? // A user bubble sits where it would under the footer: its row
+                  // (mt-1 + 28) and the mb-5 below it.
+                  "mb-[52px] px-1"
+                : // A paragraph's worth of space, so back-to-back agent updates read as
+                  // separate paragraphs rather than one run-on block.
+                  "mb-3 px-1",
           hasWideBlock && "w-full",
         )}
         {...(enterAnimated ? { entering: THREAD_FEED_ASSISTANT_ENTER } : {})}
@@ -2072,6 +2084,7 @@ function renderFeedEntry(
               {(text, displayOnly) => (
                 <AssistantMarkdownContent
                   displayOnly={displayOnly}
+                  plainValues
                   markdown={renderAssistantCitationsAsText(text)}
                   isStreaming={message.streaming}
                   environmentId={props.environmentId}
@@ -2192,6 +2205,7 @@ function renderFeedEntry(
 
 type UserMessageContentProps = {
   readonly text: string;
+  readonly plainValues: boolean;
   readonly environmentId: EnvironmentId;
   readonly context?: OrchestrationMessageContext;
   readonly markdownStyles: MarkdownStyleSet;
@@ -2332,6 +2346,7 @@ function UserMessageMarkdownContent(props: UserMessageContentProps) {
     return (
       <SelectableMarkdownText
         markdown={text}
+        plainValues={props.plainValues}
         contextClipboardFragment={contextClipboardFragment}
         skills={props.skills}
         models={models}
@@ -2366,6 +2381,7 @@ function UserMessageMarkdownContent(props: UserMessageContentProps) {
           <SelectableMarkdownText
             key={segment.id}
             markdown={text}
+            plainValues={props.plainValues}
             contextClipboardFragment={contextClipboardFragment}
             skills={props.skills}
             models={models}
@@ -2532,7 +2548,8 @@ type ThreadFeedSharedRowContextValue = Omit<
   | "dispatchingMessageId"
   | "steerWait"
   | "unsettledTurnId"
-  | "terminalAssistantMessageIds"
+  | "finalAssistantMessageIds"
+  | "beforeUserBubble"
   | "failedRunIds"
   | "messageRunActive"
 > & {
@@ -2586,16 +2603,11 @@ const ThreadFeedRowContent = memo(function ThreadFeedRowContent(props: {
           ? item.pendingMessage.messageId
           : null,
       steerWait: slice.steerWait,
-      unsettledTurnId: slice.isUnsettledTurn
-        ? item.type === "message"
-          ? item.message.runId
-          : item.type === "activity-group"
-            ? item.runId
-            : null
-        : null,
-      terminalAssistantMessageIds: slice.isTerminalAssistant
-        ? snapshot.terminalAssistantMessageIds
+      unsettledTurnId: slice.isUnsettledTurn && item.type === "activity-group" ? item.runId : null,
+      finalAssistantMessageIds: slice.isFinalAssistant
+        ? snapshot.finalAssistantMessageIds
         : EMPTY_STRING_SET,
+      beforeUserBubble: slice.beforeUserBubble,
       failedRunIds: slice.isFailedRun ? snapshot.failedRunIds : EMPTY_RUN_ID_SET,
       messageRunActive: slice.messageRunActive,
     },
@@ -3122,6 +3134,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     },
     [props.onHeaderMaterialVisibilityChange],
   );
+  const readIsAtEnd = useCallback(
+    () => props.listRef.current?.getState().isAtEnd ?? false,
+    [props.listRef],
+  );
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       // anchorTopInset, not topContentInset: under automatic insets the list
@@ -3129,22 +3145,22 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       // UIKit's adjustedContentInset, so topContentInset is 0 here). Add the
       // header height back or the material toggles a full header too late.
       reportHeaderMaterialVisibility(event.nativeEvent.contentOffset.y + anchorTopInset > 6);
-      // LegendList recomputes its inset-aware end distance before invoking
-      // this handler, so getState() is current. Only the actual end re-arms
-      // follow: its broader maintain-scroll threshold is large enough for a
-      // streaming chunk to pull a user back before their upward drag escapes.
-      // A live user-scroll session still wins even if the first scroll event
-      // remains inside LegendList's at-end tolerance.
-      const listState = props.listRef.current?.getState();
-      if (listState) {
-        transitionEndFollow({
-          type: "scroll",
-          isAtEnd: listState.isAtEnd,
-          userScrollSessionActive: userScrollSessionRef.current,
-        });
-      }
+      if (!props.listRef.current) return;
+      // LegendList's state is current here. The follow state only needs that
+      // full snapshot when a paused list can resume outside a user gesture.
+      transitionEndFollow({
+        type: "scroll",
+        readIsAtEnd,
+        userScrollSessionActive: userScrollSessionRef.current,
+      });
     },
-    [reportHeaderMaterialVisibility, anchorTopInset, props.listRef, transitionEndFollow],
+    [
+      reportHeaderMaterialVisibility,
+      anchorTopInset,
+      props.listRef,
+      readIsAtEnd,
+      transitionEndFollow,
+    ],
   );
   const clearUserScrollSettle = useCallback(() => {
     if (userScrollSettleTimerRef.current !== null) {
@@ -3170,11 +3186,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         // With no momentum, preserve the finger-release position. Streaming
         // growth during the native momentum-detection window must not turn a
         // release at the live edge into an opt-out from follow.
-        isAtEnd: releaseIsAtEnd ?? props.listRef.current?.getState().isAtEnd ?? false,
+        isAtEnd: releaseIsAtEnd ?? readIsAtEnd(),
         userScrollSessionActive,
       });
     },
-    [clearUserScrollSettle, props.listRef, transitionEndFollow],
+    [clearUserScrollSettle, readIsAtEnd, transitionEndFollow],
   );
   // Finger-lift velocity is not a reliable momentum signal: a gentle fling
   // can report zero and still decelerate. Give native momentum a short window
@@ -3183,9 +3199,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // mirrors the native-event handoff used by the home thread list's scroll gate.
   const handleScrollEndDrag = useCallback(() => {
     clearUserScrollSettle();
-    const releaseIsAtEnd = props.listRef.current?.getState().isAtEnd ?? false;
+    const releaseIsAtEnd = readIsAtEnd();
     userScrollSettleTimerRef.current = setTimeout(() => finishUserScroll(releaseIsAtEnd), 160);
-  }, [clearUserScrollSettle, finishUserScroll, props.listRef]);
+  }, [clearUserScrollSettle, finishUserScroll, readIsAtEnd]);
   const handleMomentumScrollBegin = useCallback(() => {
     if (userScrollSessionRef.current) {
       clearUserScrollSettle();
@@ -3495,7 +3511,13 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     () => threadFeedFailedRunIds(feedSummary, props.latestRun),
     [feedSummary, props.latestRun],
   );
-  const terminalAssistantMessageIds = feedSummary.terminalAssistantMessageIds;
+  // Without foreground work (activeWorkStartedAt) an open run only waits on
+  // background work, so its latest reply is finished too.
+  const workingRunId = props.activeWorkStartedAt === null ? null : unsettledTurnId;
+  const finalAssistantMessageIds = useMemo(
+    () => threadFeedFinalAssistantMessageIds(feedSummary, workingRunId),
+    [feedSummary, workingRunId],
+  );
   useEffect(() => {
     const previous = previousLatestTurnRef.current;
     previousLatestTurnRef.current = props.latestRun;
@@ -3853,7 +3875,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     dispatchingMessageId: props.dispatchingMessageId,
     steerWait: props.steerWait ?? null,
     unsettledTurnId,
-    terminalAssistantMessageIds,
+    finalAssistantMessageIds,
+    assistantIdsBeforeUserBubble: presentedFeedSummary.assistantIdsBeforeUserBubble,
     failedRunIds,
     decorations,
     agentAvatars: props.agentAvatars,

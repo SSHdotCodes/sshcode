@@ -64,11 +64,18 @@ export function hasSteerableTurn(
  * has no turn to steer it into. Any explicit mode still wakes the parent.
  */
 export function shouldHoldForParent(input: {
+  readonly attachmentPaths?: ReadonlyArray<string> | undefined;
   readonly mode: "auto" | "queue" | "steer" | "restart" | undefined;
   readonly caller: Pick<OrchestrationV2ThreadProjection, "thread"> | undefined;
   readonly target: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "providerTurns">;
 }): boolean {
-  if ((input.mode ?? "auto") !== "auto" || input.caller === undefined) return false;
+  // File deliveries need durable intake. Held progress can be truncated or evicted.
+  if (
+    (input.mode ?? "auto") !== "auto" ||
+    input.caller === undefined ||
+    input.attachmentPaths?.length
+  )
+    return false;
   const lineage = input.caller.thread.lineage;
   return (
     lineage.relationshipToParent === "subagent" &&

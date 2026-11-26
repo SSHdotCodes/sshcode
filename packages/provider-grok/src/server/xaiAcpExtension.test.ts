@@ -421,6 +421,16 @@ describe("XAiAcpExtension", () => {
     expect(extractXAiMonitorTaskId(normalized)).toBe("019f44a5-87d1-7640-8e35-6a4667ffc873");
   });
 
+  it("keeps Grok's tool name distinct from the per-call label", () => {
+    const tool = normalizeXAiAcpToolCallState({
+      toolCallId: "list",
+      title: "List directory /scratch",
+      data: { meta: { "x.ai/tool": { name: "list_dir" } }, rawInput: { variant: "ListDir" } },
+    });
+    expect(tool.title).toBe("List directory /scratch");
+    expect(tool.data.name).toBe("list_dir");
+  });
+
   // Recorded from Grok 1.0.77 calling stdio MCP tools through `use_tool`.
   it("rewrites use_tool MCP calls and results into the generic ACP MCP shapes", () => {
     const meta = { "x.ai/tool": { version: 1, name: "use_tool", kind: "use_tool" } };
@@ -1785,13 +1795,35 @@ describe("XAiAcpExtension", () => {
       yield* sessionUpdateHandler!({
         sessionId: "root-session",
         update: {
+          sessionUpdate: "response_completed",
+          usage: { input_tokens: 15, output_tokens: 5, cache_read_input_tokens: 10 },
+        },
+      });
+      yield* sessionUpdateHandler!({
+        sessionId: "root-session",
+        update: {
           sessionUpdate: "turn_completed",
           prompt_id: promptId,
           stop_reason: "end_turn",
+          usage: {
+            inputTokens: 80,
+            outputTokens: 20,
+            totalTokens: 100,
+            cachedReadTokens: 60,
+            reasoningTokens: 5,
+          },
         },
       });
       const response = yield* Fiber.join(promptFiber);
       expect(response.stopReason).toBe("end_turn");
+      expect(response._meta?.totalTokens).toBe(30);
+      expect(response.usage).toEqual({
+        inputTokens: 80,
+        outputTokens: 20,
+        totalTokens: 100,
+        cachedReadTokens: 60,
+        thoughtTokens: 5,
+      });
     }),
   );
 

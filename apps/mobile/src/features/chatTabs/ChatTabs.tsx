@@ -21,7 +21,11 @@ import { showTextInputDialog } from "../../components/ConfirmDialogHost";
 import { cn } from "../../lib/cn";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
-import { environmentServerConfigsAtom, serverEnvironment } from "../../state/server";
+import {
+  chatListTabsEnabledAtom,
+  environmentServerConfigsAtom,
+  serverEnvironment,
+} from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { resolveHomeChatTab } from "../terminalSessions/terminalSessions.logic";
 import { buildHomeChatTabs } from "./ChatTabs.logic";
@@ -64,18 +68,20 @@ export function useHomeChatTabs(
   useEffect(() => {
     appAtomRegistry.set(chatTabViewsAtom, tabs);
   }, [membership]);
-  const stored = AsyncResult.isSuccess(preferences)
-    ? (preferences.value.threadListChatTab ?? ALL_CHATS_TAB)
+  const device = AsyncResult.isSuccess(preferences) ? preferences.value : undefined;
+  const enabled = useAtomValue(chatListTabsEnabledAtom);
+  const selected = enabled
+    ? resolveHomeChatTab(device?.threadListChatTab ?? ALL_CHATS_TAB, tabs)
     : ALL_CHATS_TAB;
-  const selected = resolveHomeChatTab(stored, tabs);
   const select = useCallback(
     (key: string) => {
+      if (!enabled) return;
       void Haptics.selectionAsync();
       save({ threadListChatTab: key });
     },
-    [save],
+    [enabled, save],
   );
-  return { tabs, selected, select };
+  return { tabs, selected, select, enabled: enabled !== false };
 }
 
 /** The chips row. All and Terminal stay even when there are no named tabs. */
@@ -100,6 +106,9 @@ export function HomeChatTabs(props: {
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
+      // A scroll view grows by default: above an empty list it took half the screen, pushing
+      // the empty state down and leaving the chips' divider stranded mid-screen.
+      className="grow-0"
       contentContainerClassName="gap-1.5 px-4 pb-1.5 pt-1"
       accessibilityRole="tablist"
     >

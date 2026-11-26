@@ -5,7 +5,17 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
 vi.mock("expo-image", () => ({
-  Image: ({ onError }: { onError: () => void }) => <img alt="" onError={onError} />,
+  Image: (props: {
+    onError: () => void;
+    onLoad?: (event: { source: { width: number; height: number } }) => void;
+  }) => (
+    <img
+      alt=""
+      onError={props.onError}
+      // Contact sheets decode much wider than the tile.
+      onLoad={() => props.onLoad?.({ source: { width: 3000, height: 1000 } })}
+    />
+  ),
 }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -21,8 +31,10 @@ vi.mock("react-native", () => ({
       ))}
     </div>
   ),
-  Pressable: (props: { children: ReactNode; onPress: () => void }) => (
-    <button onClick={props.onPress}>{props.children}</button>
+  Pressable: (props: { children: ReactNode; onPress: () => void; style?: object }) => (
+    <button onClick={props.onPress} style={props.style}>
+      {props.children}
+    </button>
   ),
   StyleSheet: { absoluteFill: {} },
   ActivityIndicator: () => <div data-testid="activity-indicator" />,
@@ -169,6 +181,42 @@ it("shows the loading state while a tile's signed URL resolves", () => {
     expect(host.querySelector("[data-testid='activity-indicator']")).not.toBeNull();
   } finally {
     assetUrlState.current = settled;
+    act(() => root.unmount());
+  }
+});
+
+it("keeps every tile one width while pictures arrive and decode", () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const tile = (index: number): ThreadImageStripItem => ({
+    key: String(index),
+    name: `Sheet ${index + 1}`,
+    preview: {
+      kind: "image",
+      name: `Sheet ${index + 1}`,
+      environmentId: EnvironmentId.make("environment"),
+      resource: {
+        _tag: "tool-output-image",
+        threadId: ThreadId.make("thread"),
+        itemId: TurnItemId.make(`tool-${index}`),
+        index: 0,
+      },
+    },
+  });
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  const widths = () => [...host.querySelectorAll("button")].map((button) => button.style.width);
+  const render = (items: ThreadImageStripItem[]) =>
+    act(() =>
+      root.render(<ThreadImageStrip items={items} height={120} onPressPreview={() => {}} />),
+    );
+  try {
+    render([tile(0), { key: "pending", pending: true }]);
+    expect(widths()).toEqual(["160px"]);
+    act(() => host.querySelectorAll("img").forEach((img) => img.dispatchEvent(new Event("load"))));
+    render([tile(0), tile(1), tile(2)]);
+    act(() => host.querySelectorAll("img").forEach((img) => img.dispatchEvent(new Event("load"))));
+    expect(widths()).toEqual(["160px", "160px", "160px"]);
+  } finally {
     act(() => root.unmount());
   }
 });

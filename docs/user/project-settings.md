@@ -148,6 +148,24 @@ runs the `runOnWorktreeCreate` script from its own `t3.json`, unless the project
 action list. Subagents in a new worktree start only after that setup finishes, waiting up to 10
 minutes, and are told if it failed.
 
+On macOS and Linux, repositories can opt into faster subagent launches from the default
+worktree location. Add `worktreeSetupCache.inputs` to `t3.json` with Git globs for every tracked
+dependency input, including lockfiles, package manifests and the setup script. T3 runs the
+setup action with `T3CODE_WORKTREE_SETUP_CACHE=prepare` to install into `node_modules` while
+the machine is idle. On reuse it runs the action with `T3CODE_WORKTREE_SETUP_CACHE=reuse` so
+it can recreate checkout-specific files without another install. With the variable unset,
+the action should perform its normal full setup. A changed input or an unavailable warm
+checkout uses full setup.
+
+When a deleted chat releases its worktree, the server can clean and reuse the checkout in place.
+Saved chats reserve their checkout paths. Repositories without a setup action can also reuse clean
+checkouts without keeping dependency folders.
+
+The server keeps one spare per recently used repository and at most two total. It retires
+spares after seven days of inactivity or when free space drops below 12 GiB. Set
+`T3CODE_WARM_WORKTREES_PER_REPO=0` in the server's environment to turn warming off, or set
+it to `2` to allow both spares for the same repository when there is room.
+
 Settings a repository can also declare in `t3.json`, such as the workspace for new threads,
 resolve in one order: a project override, then the environment setting, then `t3.json`, then the
 built-in default. Leave a setting on **Inherit** to let the next tier decide.

@@ -8,7 +8,6 @@ import {
   type ServerProvider,
   UsageLimitSourceSnapshot,
 } from "@t3tools/contracts";
-import { formatResetsIn, usedPercentLabel } from "@t3tools/shared/usageLimits";
 import { recentUsageRunOut } from "@t3tools/shared/usageLimitForecast";
 import * as Schema from "effect/Schema";
 import * as DateTime from "effect/DateTime";
@@ -26,17 +25,16 @@ export const UsageLimitsInput = Schema.Struct({
 });
 
 // An agent choosing a provider has no use for the day-by-day rise the Usage page prices with.
-const { dailyRise: _dailyRise, ...agentWindowFields } = ServerProviderUsageWindow.fields;
+const { dailyRise: _dailyRise, id: _id, ...agentWindowFields } = ServerProviderUsageWindow.fields;
 
 const Reading = Schema.Struct({
   checkedAt: IsoDateTime,
   stale: Schema.Boolean,
-  unavailable: Schema.NullOr(ServerProviderUsageLimits.fields.unavailable.schema),
+  unavailable: ServerProviderUsageLimits.fields.unavailable,
   windows: Schema.Array(
     Schema.Struct({
       ...agentWindowFields,
-      resetsAt: Schema.NullOr(IsoDateTime),
-      resetsIn: Schema.NullOr(Schema.String),
+      runOutInMinutes: Schema.optional(Schema.Number),
     }),
   ),
   resetCredits: Schema.optional(
@@ -46,18 +44,22 @@ const Reading = Schema.Struct({
     }),
   ),
   externalUsage: ServerProviderUsageLimits.fields.externalUsage,
-  summary: Schema.String,
 });
 
 export const UsageLimitsResult = Schema.Struct({
   createdAt: IsoDateTime,
-  staleAfterMs: Schema.Number,
   providers: Schema.Array(
     Schema.Struct({
       providerInstanceId: ProviderInstanceId,
       driver: ProviderDriverKind,
       displayName: Schema.String,
       ...Reading.fields,
+      accountUnavailable: Schema.optional(
+        Schema.Struct({ reason: Schema.String, recheckAt: Schema.optional(IsoDateTime) }),
+      ),
+      recentLimit: Schema.optional(
+        Schema.Struct({ occurredAt: IsoDateTime, resetAt: Schema.optional(IsoDateTime) }),
+      ),
     }),
   ),
   sources: Schema.Array(
@@ -68,7 +70,7 @@ export const UsageLimitsResult = Schema.Struct({
       displayName: Schema.String,
       checkedAt: IsoDateTime,
       stale: Schema.Boolean,
-      unavailable: Schema.NullOr(Schema.String),
+      unavailable: Schema.optional(Schema.String),
       accounts: Schema.Array(
         Schema.Struct({
           accountId: Schema.String,
@@ -87,40 +89,26 @@ function isStale(checkedAt: string, now: number): boolean {
 }
 
 function reading(
+  driver: ProviderDriverKind,
   limits: ServerProviderUsageLimits,
-  name: string,
   now: number,
 ): typeof Reading.Type {
-  const windows = limits.windows.map(({ dailyRise: _rise, ...window }) => ({
-    ...window,
-    resetsAt: window.resetsAt ?? null,
-    resetsIn: formatResetsIn(window, now),
-  }));
-  const stale = isUsageLimitReadingStale(limits, now);
-  const windowsText = windows
-    .map((window, index) => {
-      const at = stale ? null : recentUsageRunOut(limits.windows[index]!, now);
-      const minutes = at === null ? null : Math.max(1, Math.round((at - now) / 60_000));
-      const left =
-        at !== null && minutes !== null && at - now <= 3 * 60 * 60_000
-          ? `; ~${minutes < 60 ? `${minutes}m` : `${Math.round(minutes / 6) / 10}h`} left at current pace`
-          : "";
-      return `${window.label}: ${usedPercentLabel(window)} (${window.resetsIn ?? "reset unknown"})${left}`;
-    })
-    .join("; ");
-  const failure = limits.unavailable
-    ? `unavailable (${limits.unavailable.message ?? limits.unavailable.reason})`
-    : null;
-  // A failed probe can still carry the last reading, dated by `checkedAt`.
-  const status =
-    failure && windows.length > 0
-      ? `${failure}; last read ${limits.checkedAt}: ${windowsText}`
-      : (failure ?? (windows.length === 0 ? "no limit windows reported" : windowsText));
+  const stale = isUsageLimitReadingStale(driver, limits, now);
+  const windows = limits.windows.map((window) => {
+    const { dailyRise: _rise, id: _id, ...fields } = window;
+    const runOutAt = stale ? null : recentUsageRunOut(window, now);
+    return {
+      ...fields,
+      ...(runOutAt !== null && runOutAt - now <= 3 * 60 * 60_000
+        ? { runOutInMinutes: Math.max(1, Math.round((runOutAt - now) / 60_000)) }
+        : {}),
+    };
+  });
   const credits = limits.resetCredits;
   return {
     checkedAt: limits.checkedAt,
     stale,
-    unavailable: limits.unavailable ?? null,
+    ...(limits.unavailable === undefined ? {} : { unavailable: limits.unavailable }),
     windows,
     ...(credits
       ? {
@@ -131,7 +119,6 @@ function reading(
         }
       : {}),
     ...(limits.externalUsage ? { externalUsage: limits.externalUsage } : {}),
-    summary: `${name}: ${status}${credits ? `; ${credits.availableCount} reset credits` : ""}${stale ? "; stale" : ""}`,
   };
 }
 
@@ -144,7 +131,6 @@ export function collectUsageLimits(
 ): UsageLimitsResult {
   return {
     createdAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
-    staleAfterMs: USAGE_LIMIT_STALE_AFTER_MS,
     providers: providers.flatMap((provider) => {
       const account = accountUnavailable(provider, now);
       if (
@@ -156,13 +142,11 @@ export function collectUsageLimits(
       }
       const displayName = provider.displayName?.trim() || String(provider.driver);
       const limits = provider.usageLimits
-        ? reading(provider.usageLimits, `${displayName} [${provider.instanceId}]`, now)
+        ? reading(provider.driver, provider.usageLimits, now)
         : {
             checkedAt: provider.checkedAt,
             stale: isStale(provider.checkedAt, now),
-            unavailable: null,
             windows: [],
-            summary: "No quota reading.",
           };
       // A run that just hit the limit is fresher than the last quota probe.
       const limitedRun = activeProviderFailure(provider, now);
@@ -173,16 +157,13 @@ export function collectUsageLimits(
           displayName,
           ...limits,
           ...(account
-            ? {
-                summary: account.recheckAt
-                  ? `Account unavailable: ${account.reason} Recheck ${account.recheckAt}.`
-                  : account.reason,
-              }
+            ? { accountUnavailable: account }
             : limitedRun?.kind === "usage_limit"
               ? {
-                  summary: `${limits.summary}; a run hit the limit at ${limitedRun.occurredAt}${
-                    limitedRun.resetAt ? `, resets ${limitedRun.resetAt}` : ""
-                  }`,
+                  recentLimit: {
+                    occurredAt: limitedRun.occurredAt,
+                    ...(limitedRun.resetAt ? { resetAt: limitedRun.resetAt } : {}),
+                  },
                 }
               : {}),
         },
@@ -199,12 +180,12 @@ export function collectUsageLimits(
             ...(source.credits ? { credits: source.credits } : {}),
             checkedAt: source.checkedAt,
             stale: isStale(source.checkedAt, now),
-            unavailable: source.error ?? null,
+            ...(source.error === undefined ? {} : { unavailable: source.error }),
             accounts: source.accounts.map((account) => ({
               accountId: account.id,
               driver: account.driver,
               displayName: `${source.label} / ${account.id}`,
-              ...reading(account.usageLimits, `${source.label} / ${account.id}`, now),
+              ...reading(account.driver, account.usageLimits, now),
             })),
           }))
         : [],

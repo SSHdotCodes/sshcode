@@ -1712,6 +1712,46 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  it.effect("keeps a saved credential only for the address it was entered for", () =>
+    Effect.gen(function* () {
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const id = ProviderInstanceId.make("opencode_test");
+      const hub = UsageLimitSourceId.make("test-hub");
+      const save = (url: string, secret: string) =>
+        service
+          .updateSettings({
+            providerInstances: {
+              [id]: {
+                driver: ProviderDriverKind.make("opencode"),
+                config: { serverUrl: url, serverPassword: secret },
+              },
+            },
+            usageLimitSources: {
+              [hub]: { kind: "cliproxy", url, managementKey: secret, enabled: true },
+            },
+          })
+          .pipe(
+            Effect.map((settings) => [
+              (settings.providerInstances[id]?.config as { serverPassword?: string })
+                ?.serverPassword,
+              settings.usageLimitSources[hub]?.managementKey,
+            ]),
+          );
+      const marker = "••••••";
+      yield* save("https://host.test/v1", "saved-fixture");
+      assert.deepEqual(yield* save("https://HOST.TEST:443/v1/", marker), [
+        "saved-fixture",
+        "saved-fixture",
+      ]);
+      assert.deepEqual(yield* save("https://host.test/v2", marker), ["", ""]);
+      assert.deepEqual(yield* save("https://other.test", "new-fixture"), [
+        "new-fixture",
+        "new-fixture",
+      ]);
+      assert.deepEqual(yield* save("https://elsewhere.test", marker), ["", ""]);
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect(
     "uses the same secret lifecycle for provider config, environment, host tokens, and quota keys",
     () =>

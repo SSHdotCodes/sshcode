@@ -18,12 +18,17 @@ time, open it, then choose **Open Anyway** in System Settings → Privacy & Secu
 Each update comes as a new disk image. Drag the new SSHCode onto Applications and
 choose Replace; chats and settings are kept in `~/.sshcode`.
 
+When you install a downloaded update while an agent is working, the app waits
+for working chats to finish, up to 30 minutes, then restarts. Chats only
+waiting on background work count as finished. To restart sooner, click the
+update button again; **Cancel** on the notice or in **Settings → General →
+About** stops waiting.
+
 ### The `sshcode` command
 
 The desktop app includes the `sshcode` command-line tool. To run it from any
 terminal, open **Settings → General → About** and choose **Install** next to
-**sshcode command**. **Remove** takes it off again. A `sshcode` installed from npm is
-SSHCode's, not SSHCode's.
+**sshcode command**. **Remove** takes it off again.
 
 ### Open a project from a terminal
 

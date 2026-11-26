@@ -15,6 +15,8 @@ import { TestClock } from "effect/testing";
 import * as ProcessRunner from "../processRunner.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 
+const listConfiguredUrls = ["config", "--null", "--get-regexp", "^remote\\..*\\.url$"];
+
 const normalizePathSeparators = (value: string) => value.replaceAll("\\", "/");
 const normalizeResolvedPath = (value: string) => normalizePathSeparators(value);
 
@@ -53,7 +55,9 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
           return {
             stdout: input.args.includes("rev-parse")
               ? `${rootPath}\n`
-              : `origin\t${remoteUrl} (fetch)\n`,
+              : input.args.includes("config")
+                ? `remote.origin.url\n${remoteUrl}\0`
+                : `origin\t${remoteUrl} (fetch)\n`,
             stderr: "",
             code: ChildProcessSpawner.ExitCode(0),
             timedOut: false,
@@ -108,7 +112,7 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       expect(refinements).toBe(1);
       expect(calls).toEqual([
         ["-C", "/repo/packages/web", "rev-parse", "--show-toplevel"],
-        ["-C", "/repo", "remote", "-v"],
+        ["-C", "/repo", ...listConfiguredUrls],
       ]);
 
       const refreshed = yield* resolver.resolve("/repo/packages/web", { refresh: true });
@@ -116,7 +120,7 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       expect(yield* resolver.resolve("/repo/packages/web")).toEqual(refreshed);
       expect(calls.slice(2)).toEqual([
         ["-C", "/repo/packages/web", "rev-parse", "--show-toplevel"],
-        ["-C", "/repo/packages/web", "remote", "-v"],
+        ["-C", "/repo/packages/web", ...listConfiguredUrls],
       ]);
       remoteUrl = "git@ssh.forge.test:team/repo.git";
       const forgejo = yield* resolver.resolve(rootPath, { refresh: true });
@@ -151,7 +155,7 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
               ? failed
                 ? ""
                 : "/repo\n"
-              : "origin\tgit@github.com:T3Tools/t3code.git (fetch)\n",
+              : "remote.origin.url\ngit@github.com:T3Tools/t3code.git\0",
             stderr: failed ? "temporary Git failure" : "",
             code: ChildProcessSpawner.ExitCode(failed ? 1 : 0),
             timedOut: false,
@@ -178,7 +182,7 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       expect(calls).toEqual([
         ["-C", "/repo/packages/web", "rev-parse", "--show-toplevel"],
         ["-C", "/repo/packages/web", "rev-parse", "--show-toplevel"],
-        ["-C", "/repo", "remote", "-v"],
+        ["-C", "/repo", ...listConfiguredUrls],
       ]);
     }).pipe(Effect.provide(Layer.merge(TestClock.layer(), layerResolver)));
   });
@@ -191,6 +195,11 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       });
 
       yield* git(cwd, ["init"]);
+      yield* git(cwd, [
+        "config",
+        "url.https://mirror.example.test/github/.insteadOf",
+        "git@github.com:T3Tools/",
+      ]);
       yield* git(cwd, ["remote", "add", "origin", "git@github.com:T3Tools/t3code.git"]);
 
       const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
@@ -208,6 +217,11 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       expect(identity?.provider).toBe("github");
       expect(identity?.owner).toBe("t3tools");
       expect(identity?.name).toBe("t3code");
+
+      yield* git(cwd, ["config", "url.https://gitlab.com/team/.insteadOf", "team-alias:"]);
+      yield* git(cwd, ["remote", "set-url", "origin", "team-alias:repo.git"]);
+      const aliased = yield* resolver.resolve(cwd, { refresh: true });
+      expect(aliased?.canonicalKey).toBe("gitlab.com/team/repo");
     }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
   );
 

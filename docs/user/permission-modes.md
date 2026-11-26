@@ -32,8 +32,11 @@ Grok offers no **Auto-accept edits**. A Grok thread already set to it runs in **
 file-change approvals offer **Allow all edits this session**. Its command approvals have no
 session-wide choice, because Grok would remember that command for the whole project.
 
-ACP Registry agents run their own tools in their own mode; SSHCode answers their approval requests
-by the permission mode. See [ACP Registry permissions](./providers-acp.md#permissions-and-terminals).
+In Claude Code's **Auto** mode, Claude reviews routine tool calls. When Claude asks for a decision,
+SSHCode shows the approval request. This also applies when Claude falls back to its default mode.
+
+For ACP Registry agents with compatible approval levels, the thread's permission mode also sets
+the agent's approval level. See [ACP Registry permissions](./providers-acp.md#permissions-and-terminals).
 
 Antigravity can still send native approval requests in **Full access**. It only offers remembered
 approvals for actions that support them.

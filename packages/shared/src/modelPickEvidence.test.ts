@@ -14,6 +14,7 @@ import {
   gradesFromSnapshots,
   limitsFromProviders,
   pickBarShare,
+  pickRank,
   pickRouteIcon,
   picksBasis,
   pickValueText,
@@ -423,6 +424,62 @@ describe("buildModelPicks", () => {
       },
     }) as never;
 
+  it.each([
+    ["oauth-personal", "subscription"],
+    ["oauth-business", "subscription"],
+    ["gemini-api-key", "metered"],
+  ])("ranks Google models without quota windows for %s", (type, billing) => {
+    const picks = buildModelPicks({
+      environments: [],
+      contractVersion: 6,
+      providers: [
+        provider("google", {
+          driver: "antigravity",
+          auth: { status: "authenticated", type },
+        }),
+      ],
+      snapshots: [],
+      table: benchmarks,
+      effort: undefined,
+      providerLabel: label,
+      planPrices: {},
+      timeZone: "UTC",
+      now: NOW,
+    });
+    const candidate = picks.picks.quality.winner;
+    expect(candidate).toMatchObject({ billing, route: { instanceId: "google" } });
+    expect(candidate?.limit).toBeUndefined();
+    if (billing === "subscription") expect(candidate?.paidPerMOutput).toBeUndefined();
+  });
+
+  it("keeps past Google usage in plan totals after the catalog retires a family", () => {
+    const history = environment([bucket("2026-11-08", "apex-2-high", 300, 3_000_000)]);
+    const rank = (models: ReadonlyArray<Record<string, unknown>>) =>
+      buildModelPicks({
+        environments: [history],
+        contractVersion: 6,
+        providers: [provider("codex", { driver: "antigravity", models })],
+        snapshots: [],
+        table: benchmarks,
+        effort: undefined,
+        planPrices: { codex: 20 },
+        providerLabel: label,
+        timeZone: "UTC",
+        now: NOW,
+      });
+    const current = { slug: "apex-2", name: "Apex", isCustom: false, capabilities: null };
+    expect(rank([current]).picks.quality.winner?.label).toBe("Apex 2");
+    for (const catalog of [
+      [],
+      [{ ...current, isLegacy: true }],
+      [{ ...current, unavailableReason: "Retired" }],
+    ]) {
+      const result = rank(catalog);
+      expect(result.picks.quality.winner).toBeNull();
+      expect(result.plans[0]?.usedUsd).toBe(300);
+    }
+  });
+
   it("joins usage, catalog, grades and limits into the four picks", () => {
     // The week's limit opened at noon UTC on Nov 7; usage before that must not price it.
     const weekStart = Date.UTC(2026, 10, 7, 12);
@@ -657,8 +714,8 @@ describe("buildModelPicks", () => {
         modelLabel: "Apex-3",
         instanceId: "codex",
       });
-      // Priced from the user's own runs of the version before it: $400 for 4M output tokens.
-      expect(apex).toMatchObject({ costBasis: "yours" });
+      // Only the older model was measured: $400 for 4M output tokens.
+      expect(apex).toMatchObject({ costBasis: "other" });
       expect(apex.costPerMOutput).toBeCloseTo(100, 5);
       expect(picks.picks.quality.winner?.label).toBe("Apex 3");
       expect(describePick(picks.picks.quality, picks)?.lines).toContain(
@@ -678,7 +735,7 @@ describe("buildModelPicks", () => {
       expect(route([hide(first), hide(second)])).toBeUndefined();
     });
 
-    it("stands on the account a new chat starts on, judged by the one with a record", () => {
+    it("does not borrow a sibling plan’s usage when a new chat starts on an unused account", () => {
       const alone = build({ balanceAccounts: () => false }).candidates.find(
         (candidate) => candidate.key === "apex-3",
       )!;
@@ -686,23 +743,10 @@ describe("buildModelPicks", () => {
       // Club 20x has nearly all of twice the allowance left, so new chats go there.
       expect(apex.route).toMatchObject({ instanceId: "codex_b", routeLabel: "Club 20x" });
       expect(apex.limit?.remainingPercent).toBe(98);
-      // 2% used is too little to price Club 20x. Club 10x's limits allow $1,000 a week;
-      // twice that for twice the price is the same work per dollar.
-      expect(alone.plan?.judgedFrom).toBeUndefined();
-      expect(apex.plan).toMatchObject({
-        label: "Club 20x",
-        monthlyUsd: 200,
-        judgedFrom: "Club 10x",
-      });
-      expect(apex.plan?.leverage).toBeCloseTo(alone.plan!.leverage!, 5);
-      expect(apex.plan?.monthlyCapacityUsd).toBeCloseTo(alone.plan!.monthlyCapacityUsd! * 2, 5);
-      // Its cost and speed are the model's, wherever it runs.
-      expect(apex.costPerMOutput).toBeCloseTo(100, 5);
-      expect(apex.paidPerMOutput).toBeCloseTo(alone.paidPerMOutput!, 5);
-      const value = build();
-      expect(describePick(value.picks.value, value)?.lines.join("\n")).toContain(
-        "going by Club 10x, this plan makes it about",
-      );
+      expect(alone.plan?.usedUsd).toBe(400);
+      expect(apex.plan).toMatchObject({ label: "Club 20x", monthlyUsd: 200, usedUsd: 0 });
+      expect(apex.paidPerMOutput).toBeUndefined();
+      expect(alone.paidPerMOutput).toBeCloseTo(25, 5);
     });
 
     it("is not a pick through a gateway that lists only the older one", () => {
@@ -800,7 +844,6 @@ describe("plans", () => {
         label: "Codex",
         planLabel: "ChatGPT Pro 10x",
         listUsd: 100,
-        allowance: 10,
         hasLimits: true,
       },
       {
@@ -809,6 +852,7 @@ describe("plans", () => {
         planLabel: "OpenCode Go",
         listUsd: 10,
         includedMonthlyUsd: 60,
+        providerIds: ["opencode-go"],
         hasLimits: true,
       },
       { instanceId: "grok_build", label: "Grok Build", planLabel: "Grok Build", hasLimits: true },
@@ -892,9 +936,15 @@ describe("plans", () => {
   it("lets the user's own price win, and price a plan the table does not know", () => {
     const plans = plansFromProviders(providers, { codex: 120, grok_build: 30 });
     expect(plans).toEqual([
-      { instanceId: "codex", label: "ChatGPT Pro 10x", monthlyUsd: 120, allowance: 10 },
+      { instanceId: "codex", label: "ChatGPT Pro 10x", monthlyUsd: 120 },
       { instanceId: "grok_build", label: "Grok Build", monthlyUsd: 30 },
-      { instanceId: "opencode", label: "OpenCode Go", monthlyUsd: 10, includedMonthlyUsd: 60 },
+      {
+        instanceId: "opencode",
+        label: "OpenCode Go",
+        monthlyUsd: 10,
+        includedMonthlyUsd: 60,
+        providerIds: ["opencode-go"],
+      },
     ]);
     // Without their price, a plan the table does not know has none.
     expect(plansFromProviders(providers).map((plan) => plan.instanceId)).toEqual([
@@ -929,13 +979,42 @@ describe("wording", () => {
     now: NOW,
   });
 
+  it("distinguishes exact ties from rounded near ties and keeps their ranks stable", () => {
+    const tied = (ids: string[]) =>
+      pickBestModels({
+        routes: ids.map((id) => ({ ...routes[0]!, model: id })),
+        grades: [],
+        limits: [],
+        now: NOW,
+        benchmarks: {
+          ...benchmarks,
+          models: ids.map((id) => ({ id, label: id, scores: { index: id === "c" ? 59.99 : 60 } })),
+        },
+      });
+    for (const order of [
+      ["c", "b", "a"],
+      ["b", "a", "c"],
+    ]) {
+      const result = tied(order);
+      const pick = result.picks.quality;
+      expect(pick.ranked.map((c, i) => [c.key, pickRank(pick, i)])).toEqual([
+        ["a", 1],
+        ["b", 1],
+        ["c", 3],
+      ]);
+      expect(describePick(pick, result)?.lines).toContain("b ties for the top quality score");
+      expect(pickValueText("quality", pick.ranked[1]!, pick)).toBe("Tied");
+      expect(pickValueText("quality", pick.ranked[2]!, pick)).toBe(">99.9%");
+    }
+  });
+
   it("describes the quality pick by its benchmark and the user's grades", () => {
     const description = describePick(picks.picks.quality, picks)!;
     expect(description.title).toBe("Quality");
-    expect(description.headline).toMatchObject({ value: 80, text: "80", unit: "Index" });
+    expect(description.headline).toMatchObject({ text: "80", unit: "Index" });
     expect(description.lines).toEqual([
-      "Your grades: 9.0/10 across 6 graded tasks",
-      "Solid 1 follows at 93% of it",
+      "9.0/10 across 6 rated tasks",
+      "Solid 1 has 93% of the top quality score",
     ]);
   });
 
@@ -948,8 +1027,9 @@ describe("wording", () => {
       "per 1M output tokens with their context, at API prices",
     );
     expect(description.lines).toEqual([
-      "93% of the best quality for 3.3× less than Apex 2",
-      "Enter what this plan costs you to see its real price",
+      "Highest quality per estimated dollar, assuming typical task length",
+      "93% of the top quality score · Apex 2 costs ~3.3× as much per output token including input",
+      "Plan price or coverage unknown. Showing the API estimate.",
       "1M output tokens uses about 13% of your Weekly limit, 60% left",
     ]);
     expect(pickValueText("value", picks.picks.value.ranked[1]!)).toBe("$100/M");
@@ -979,15 +1059,16 @@ describe("wording", () => {
     const description = describePick(onPlan.picks.value, onPlan)!;
     expect(onPlan.picks.value.winner?.label).toBe("Solid 1");
     expect(description.headline).toMatchObject({
-      text: "$0.61",
-      unit: "per 1M output tokens with their context, on your Two Pro plan",
+      text: "$6.67",
+      unit: "per 1M output tokens including input · estimated from Two Pro’s 30-day usage",
     });
     expect(description.lines).toEqual([
-      "93% of the best quality for 163× less than Apex 2",
-      "API price $30.00, so the plan makes it 49× cheaper",
+      "Highest quality per estimated dollar, assuming typical task length",
+      "93% of the top quality score · Apex 2 costs ~15× as much per output token including input",
+      "$20.00/month allocated over $90.00 of priced work. Model rate from recorded usage.",
       "1M output tokens uses about 13% of your Weekly limit, 60% left",
     ]);
-    expect(pickValueText("value", onPlan.picks.value.ranked[0]!)).toBe("$0.61/M");
+    expect(pickValueText("value", onPlan.picks.value.ranked[0]!)).toBe("$6.67/M");
     expect(pickValueText("value", onPlan.picks.value.ranked[1]!)).toBe("$100/M");
     const plan = onPlan.plans.find((entry) => entry.instanceId === "two")!;
     expect(describePlan(plan)).toMatchObject({
@@ -999,6 +1080,18 @@ describe("wording", () => {
       capacity: "room for about $978 a month (49× its price)",
     });
     expect(describePlan(plan).usedShare).toBeCloseTo(90 / 978.35, 3);
+  });
+
+  it("distinguishes unidentifiable gateway usage from a measured zero", () => {
+    expect(
+      describePlan({
+        instanceId: "gateway",
+        label: "Go",
+        usedUsd: 0,
+        hasLimits: true,
+        scopedUsage: true,
+      }).used,
+    ).toBe("No priced usage identified this plan in 30 days");
   });
 
   it("counts a plan's work on models without an API price in tokens, never as $0", () => {
@@ -1082,12 +1175,12 @@ describe("wording", () => {
     expect(timed.picks.speed.winner?.label).toBe("Solid 1");
     expect(description.headline).toMatchObject({
       text: "4.0×",
-      unit: "sooner than Apex 2 on the same work",
+      unit: "as fast as Apex 2 at generating benchmark output (estimated)",
     });
     expect(description.lines).toEqual([
-      "90 tokens a second, a public figure: too few of your responses timed",
+      "90 tokens a second in public benchmarks",
       "Spends 45% of the tokens Apex 2 does on the same benchmark tasks",
-      "93% of the best quality",
+      "93% of the top quality score",
     ]);
     expect(pickValueText("speed", timed.picks.speed.ranked[1]!, timed.picks.speed)).toBe(
       "4.0× as long",
@@ -1100,11 +1193,11 @@ describe("wording", () => {
 
   it("says when speed is a public figure", () => {
     const description = describePick(picks.picks.speed, picks)!;
-    expect(description.headline).toMatchObject({ value: 90, unit: "output tokens per second" });
+    expect(description.headline).toMatchObject({ text: "90", unit: "output tokens per second" });
     expect(description.badge).toBeNull();
     expect(description.lines).toEqual([
-      "Public figure: not enough of your responses timed yet",
-      "1.8× Apex 2's speed, at 93% of the best quality",
+      "Public benchmark throughput",
+      "1.8× Apex 2's speed, at 93% of the top quality score",
     ]);
   });
 
@@ -1131,14 +1224,15 @@ describe("wording", () => {
     const description = describePick(pick, cloudOnly)!;
     expect(pick.winner?.label).toBe("Solid 1");
     expect(description.headline).toMatchObject({
-      value: 30,
       text: "$30.00",
       unit: "per 1M output tokens with their context, at API prices",
     });
     // $90 bought 40% of the week: a percent is $2.25, so $30 of work is about 13%.
     expect(description.lines).toEqual([
-      "93% of the best quality for 3.3× less than Apex 2",
+      "Lowest estimated cost for comparable work",
+      "93% of the top quality score · Apex 2 costs ~3.3× as much per output token including input",
       "1M output tokens uses about 13% of your Weekly limit, 60% left",
+      "Plan price or coverage unknown. Showing the API estimate.",
     ]);
     expect(pickBarShare("frugal", pick.ranked[1]!, pick)).toBeCloseTo(0.3, 5);
   });
@@ -1166,7 +1260,7 @@ describe("wording", () => {
 
   it("names what the picks rest on", () => {
     expect(picksBasis(picks, benchmarks)).toBe(
-      "2 models you can run · your last 30 days of usage · 6 graded subagent tasks · public benchmarks from Nov 10",
+      "2 models scored · your last 30 days of usage · 6 rated subagent tasks · public benchmarks from Nov 10",
     );
   });
 

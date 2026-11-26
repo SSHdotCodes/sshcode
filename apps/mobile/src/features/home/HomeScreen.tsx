@@ -826,7 +826,6 @@ function HomeScreenContent(allProps: HomeScreenProps) {
         settledShelfExpanded: discord || settledShelfExpanded,
         snoozedShelfExpanded: discord || snoozedShelfExpanded,
         snoozeLabelNow: `${nowMinute}:00.000Z`,
-        snoozeEnvironmentIds,
         queuedThreadKeys,
         moveAvailability: threadMoveAvailability,
         shelfPreferencesLoading: !shelfPreferencesLoaded,
@@ -838,7 +837,6 @@ function HomeScreenContent(allProps: HomeScreenProps) {
       shelfPreferencesLoaded,
       settledShelfExpanded,
       snoozedShelfExpanded,
-      snoozeEnvironmentIds,
       threadListV2Layout,
       v2PendingTasks,
     ],
@@ -1018,7 +1016,6 @@ function HomeScreenContent(allProps: HomeScreenProps) {
           onUnsettleThread={props.onUnsettleThread}
           pinned={item.item.pinned}
           longRunningStatus={item.item.longRunningStatus}
-          snoozePresetMinute={item.snoozePresetMinute ?? ""}
           snoozeWakeLabelText={item.snoozeWakeLabelText}
           timeLabel={item.timeLabel}
           showTrailingDivider={item.showTrailingDivider}
@@ -1246,14 +1243,28 @@ function HomeScreenContent(allProps: HomeScreenProps) {
   const offerAddEnvironment = !props.catalogState.hasReadyEnvironment && !emptyState.loading;
 
   const refreshControl = <RefreshControl refreshing={refreshing} onRefresh={refreshThreads} />;
-  const chatTabStrip = (
+  const chatTabStrip = chatTabs.enabled ? (
     <HomeChatTabs
       tabs={chatTabs.tabs}
       selected={chatTabs.selected}
       onSelect={chatTabs.select}
       trailing={<HomeShortcutChips />}
     />
-  );
+  ) : null;
+  const machineChips =
+    machines.size >= 2 ? (
+      <HomeMachines
+        unknownCountEnvironments={unknownCountEnvironments}
+        rail={false}
+        machines={machines}
+        configs={serverConfigs}
+        selected={selectedMachine}
+        onSelect={selectMachine}
+        top={0}
+        bottom={0}
+        trailing={!chatTabs.enabled && !hasSearchQuery ? <HomeShortcutChips /> : null}
+      />
+    ) : null;
 
   if (chatTabs.selected === CLAUDE_RC_TAB) {
     const terminalTop = Platform.OS === "ios" ? insets.top + 8 : 0;
@@ -1285,18 +1296,7 @@ function HomeScreenContent(allProps: HomeScreenProps) {
           }}
         >
           {Platform.OS === "android" ? <HomeTopContentSpacer /> : null}
-          {!discord && machines.size >= 2 ? (
-            <HomeMachines
-              unknownCountEnvironments={unknownCountEnvironments}
-              rail={false}
-              machines={machines}
-              configs={serverConfigs}
-              selected={selectedMachine}
-              onSelect={selectMachine}
-              top={0}
-              bottom={0}
-            />
-          ) : null}
+          {!discord ? machineChips : null}
           {chatTabStrip}
           <TerminalSessionsPanel
             environments={allProps.environments}
@@ -1322,10 +1322,12 @@ function HomeScreenContent(allProps: HomeScreenProps) {
           contentContainerStyle={{
             flexGrow: 1,
             paddingBottom: Platform.OS === "ios" ? iosBottomClearance : Math.max(insets.bottom, 24),
-            paddingTop: NATIVE_LIQUID_GLASS_SUPPORTED ? insets.top + 72 : 0,
+            // Lands the chips where the chat list has them, so they hold still when the
+            // first chats arrive. The scroll view already clears the status bar itself.
+            paddingTop: NATIVE_LIQUID_GLASS_SUPPORTED ? insets.top + 8 : 0,
           }}
         >
-          {chatTabStrip}
+          {chatTabStrip ?? <HomeShortcutsRow />}
           <View
             className="w-full max-w-[430px] flex-1 items-center justify-center self-center"
             style={{
@@ -1363,7 +1365,9 @@ function HomeScreenContent(allProps: HomeScreenProps) {
     );
   }
 
-  const listChatTabStrip = hasSearchQuery ? null : chatTabStrip;
+  const listChatTabStrip = hasSearchQuery
+    ? null
+    : (chatTabStrip ?? (machineChips ? null : <HomeShortcutsRow />));
   // The phone's own home list; the iPad sidebar and the Discord layout keep to chats.
   const showsSky = Platform.OS === "ios" && !Platform.isPad && !discord && !primaryColumn;
   const showsInsights = showsSky && !hasSearchQuery;
@@ -1378,18 +1382,7 @@ function HomeScreenContent(allProps: HomeScreenProps) {
       <OutboxRecovery threads={allProps.threads} />
       {!hasSearchQuery ? (
         <>
-          {machines.size >= 2 ? (
-            <HomeMachines
-              unknownCountEnvironments={unknownCountEnvironments}
-              rail={false}
-              machines={machines}
-              configs={serverConfigs}
-              selected={selectedMachine}
-              onSelect={selectMachine}
-              top={0}
-              bottom={0}
-            />
-          ) : null}
+          {machineChips}
           {listChatTabStrip}
         </>
       ) : null}
@@ -1398,18 +1391,7 @@ function HomeScreenContent(allProps: HomeScreenProps) {
     <>
       <HomeTopContentSpacer />
       <OutboxRecovery threads={allProps.threads} />
-      {machines.size >= 2 ? (
-        <HomeMachines
-          unknownCountEnvironments={unknownCountEnvironments}
-          rail={false}
-          machines={machines}
-          configs={serverConfigs}
-          selected={selectedMachine}
-          onSelect={selectMachine}
-          top={0}
-          bottom={0}
-        />
-      ) : null}
+      {machineChips}
       {listChatTabStrip}
     </>
   );
@@ -1448,7 +1430,7 @@ function HomeScreenContent(allProps: HomeScreenProps) {
           style={{ paddingBottom: insets.bottom }}
         >
           <HomeTopContentSpacer />
-          {hasSearchQuery ? null : <>{chatTabStrip}</>}
+          {hasSearchQuery ? null : (chatTabStrip ?? <HomeShortcutsRow />)}
           <View className="flex-1 items-center justify-center px-4">
             <OutboxRecovery threads={allProps.threads} />
             {v2ListEmpty}

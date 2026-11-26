@@ -3,10 +3,10 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   AntigravitySettings,
+  type ServerProvider,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSetupError,
-  type ServerProviderUsageLimits,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -22,6 +22,7 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { mergeProviderSnapshot } from "./ProviderRegistry.ts";
 import * as ProviderHostLive from "./ProviderHostLive.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
@@ -133,7 +134,6 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
     readonly auth?: { readonly type: string; readonly label: string };
     readonly enabled?: boolean;
     readonly safe?: boolean;
-    readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits>;
   } = {},
 ) {
   const initialProbe = yield* Deferred.make<EffectAcpSchema.InitializeResponse, ProbeError>();
@@ -148,7 +148,6 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
     {
       stampIdentity: (snapshot) => Effect.succeed({ ...snapshot, instanceId, driver }),
       ...(options.auth ? { auth: options.auth } : {}),
-      ...(options.probeUsage ? { probeUsage: options.probeUsage } : {}),
       probe: Ref.update(probeCalls, (count) => count + 1).pipe(
         Effect.andThen(Ref.get(probe)),
         Effect.flatten,
@@ -531,6 +530,175 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
     ),
   );
 
+  it.effect(
+    "does not let live session thinking-level or model changes overwrite catalog defaults",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+        yield* harness.initialize;
+        const thinking = (
+          currentValue: string,
+          levels: ReadonlyArray<string> = ["low", "medium", "high", "xhigh"],
+        ) =>
+          ({
+            id: "thought_level",
+            name: "Thinking Level",
+            category: "thought_level",
+            type: "select",
+            currentValue,
+            options: levels.map((value) => ({ value, name: value })),
+          }) satisfies EffectAcpSchema.SessionConfigOption;
+        const catalogModels = {
+          ...modelConfig,
+          currentValue: "neon",
+          options: [
+            { value: "neon", name: "Neon" },
+            { value: "carbon", name: "Carbon" },
+          ],
+        } satisfies EffectAcpSchema.SessionConfigOption;
+        yield* harness.provider.onSessionStarted(
+          {
+            ...started,
+            sessionSetupResult: {
+              sessionId: "session-fresh",
+              configOptions: [catalogModels, thinking("high")],
+            },
+          },
+          "/workspace",
+        );
+
+        // A live chat session setting thought_level=xhigh must not pollute the catalog default.
+        yield* harness.provider.onConfigOptionsUpdated([catalogModels, thinking("xhigh")]);
+        // A live chat session switching to another model with a custom level must neither move
+        // isDefault nor overwrite cached thinking defaults for that model.
+        const switchedToCarbon = {
+          ...catalogModels,
+          currentValue: "carbon",
+        } satisfies EffectAcpSchema.SessionConfigOption;
+        yield* harness.provider.onConfigOptionsUpdated([
+          switchedToCarbon,
+          thinking("low", ["low", "medium", "high"]),
+        ]);
+
+        const snapshot = yield* harness.provider.snapshot.getSnapshot;
+        const neon = snapshot.models.find((model) => model.slug === "neon");
+        const carbon = snapshot.models.find((model) => model.slug === "carbon");
+        expect(neon?.isDefault).toBe(true);
+        expect(neon?.aliases).toContain(ANTIGRAVITY_DEFAULT_MODEL);
+        expect(neon?.capabilities?.optionDescriptors?.[0]).toMatchObject({
+          id: "thought_level",
+          currentValue: "high",
+        });
+        expect(carbon?.isDefault).toBeUndefined();
+        expect(carbon?.capabilities?.optionDescriptors).toEqual([]);
+
+        // Updating an observed model's choices keeps its recorded default while still offered,
+        // and falls back if the agent removes that default.
+        yield* harness.provider.onConfigOptionsUpdated([
+          catalogModels,
+          thinking("max", ["low", "medium", "high", "xhigh", "max"]),
+        ]);
+        const expanded = (yield* harness.provider.snapshot.getSnapshot).models.find(
+          (model) => model.slug === "neon",
+        )?.capabilities?.optionDescriptors?.[0];
+        expect(expanded).toMatchObject({
+          id: "thought_level",
+          currentValue: "high",
+          options: [
+            { id: "low" },
+            { id: "medium" },
+            { id: "high" },
+            { id: "xhigh" },
+            { id: "max" },
+          ],
+        });
+
+        yield* harness.provider.onConfigOptionsUpdated([
+          catalogModels,
+          thinking("medium", ["low", "medium"]),
+        ]);
+        const narrowed = (yield* harness.provider.snapshot.getSnapshot).models.find(
+          (model) => model.slug === "neon",
+        )?.capabilities?.optionDescriptors?.[0];
+        expect(narrowed).toMatchObject({
+          id: "thought_level",
+          currentValue: "medium",
+          options: [{ id: "low" }, { id: "medium" }],
+        });
+
+        // A catalog probe records each model's default level and keeps the default model intact.
+        yield* harness.provider.onConfigOptionsUpdated(
+          [switchedToCarbon, thinking("medium", ["low", "medium", "high"])],
+          { fromCatalogProbe: true },
+        );
+        const probed = yield* harness.provider.snapshot.getSnapshot;
+        expect(probed.models.find((model) => model.slug === "neon")?.isDefault).toBe(true);
+        expect(
+          probed.models.find((model) => model.slug === "carbon")?.capabilities
+            ?.optionDescriptors?.[0],
+        ).toMatchObject({ id: "thought_level", currentValue: "medium" });
+
+        // After a restart, resuming a session on another model at xhigh leaves unobserved
+        // models and default identity unset so the registry retains the cached defaults.
+        const restarted = yield* makeHarness();
+        yield* restarted.initialize;
+        yield* restarted.provider.onSessionStarted(
+          {
+            ...started,
+            sessionSetupResult: {
+              sessionId: "session-resumed",
+              configOptions: [switchedToCarbon, thinking("xhigh")],
+            },
+          },
+          "/workspace",
+          { resumed: true },
+        );
+        const merged = mergeProviderSnapshot(
+          probed,
+          yield* restarted.provider.snapshot.getSnapshot,
+        );
+        const mergedNeon = merged.models.find((model) => model.slug === "neon");
+        const mergedCarbon = merged.models.find((model) => model.slug === "carbon");
+        expect(mergedNeon?.isDefault).toBe(true);
+        expect(mergedNeon?.aliases).toContain(ANTIGRAVITY_DEFAULT_MODEL);
+        expect(mergedNeon?.capabilities?.optionDescriptors?.[0]).toMatchObject({
+          id: "thought_level",
+          currentValue: "medium",
+        });
+        expect(mergedCarbon?.isDefault).toBeUndefined();
+        expect(mergedCarbon?.aliases).toBeUndefined();
+        expect(mergedCarbon?.capabilities?.optionDescriptors?.[0]).toMatchObject({
+          id: "thought_level",
+          currentValue: "medium",
+        });
+
+        // A later authoritative session start replaces the cached default model.
+        yield* restarted.provider.onSessionStarted(
+          {
+            ...started,
+            sessionSetupResult: {
+              sessionId: "session-fresh-after-restart",
+              configOptions: [switchedToCarbon, thinking("low", ["low", "medium", "high"])],
+            },
+          },
+          "/workspace",
+        );
+        const updatedAfterFresh = mergeProviderSnapshot(
+          merged,
+          yield* restarted.provider.snapshot.getSnapshot,
+        );
+        expect(updatedAfterFresh.models.find((model) => model.slug === "neon")?.isDefault).toBe(
+          undefined,
+        );
+        expect(updatedAfterFresh.models.find((model) => model.slug === "carbon")?.isDefault).toBe(
+          true,
+        );
+        expect(
+          updatedAfterFresh.models.find((model) => model.slug === "carbon")?.aliases,
+        ).toContain(ANTIGRAVITY_DEFAULT_MODEL);
+      }),
+  );
+
   it.effect("does not guess a version before a custom launcher's first handshake", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -814,6 +982,65 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
     ),
   );
 
+  it.effect("a session in an unscanned folder does not publish its skills as scanned", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* harness.initialize;
+      const unscanned = () =>
+        Effect.map(harness.provider.snapshot.getSnapshot, (snapshot) => {
+          const entry = snapshot.workspaceSnapshots?.find((item) => item.cwd === "/workspace");
+          // ProviderRegistry skips the skill scan for a current entry that is not pending.
+          return entry === undefined || entry.slashCommandsPending === true;
+        });
+
+      yield* harness.provider.onSessionStarted(started, "/workspace");
+      expect(yield* unscanned()).toBe(true);
+      yield* harness.provider.onAvailableCommands(commands, "/workspace");
+      expect(yield* unscanned()).toBe(true);
+    }),
+  );
+
+  it.effect("a skill scan leaves the folder entry it scanned from unchanged", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      yield* harness.initialize;
+      yield* harness.provider.onSessionStarted(started, "/workspace");
+      const published = yield* harness.provider.snapshot.getSnapshot;
+      const entryOf = (provider: ServerProvider) =>
+        provider.workspaceSnapshots?.find((entry) => entry.cwd === "/workspace");
+      const skills = [{ name: "deploy", path: "/workspace/.agent/skills/deploy", enabled: true }];
+
+      yield* harness.provider.snapshotForCwd("/workspace", skills);
+      // ProviderRegistry saves the scan only if the entry it scanned from is still published.
+      const republished = mergeProviderSnapshot(
+        published,
+        yield* harness.provider.snapshot.getSnapshot,
+      );
+      expect(entryOf(republished)).toEqual(entryOf(published));
+    }),
+  );
+
+  it.effect(
+    "keeps a scanned folder's own commands when another folder reports different ones",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+        yield* harness.initialize;
+        yield* harness.provider.onAvailableCommands(commands, "/a");
+        yield* harness.provider.snapshotForCwd("/a", []);
+        yield* harness.provider.onAvailableCommands(commands.slice(1), "/b");
+        expect((yield* harness.provider.snapshotForCwd("/a", [])).slashCommands).toEqual(
+          expectedCommands,
+        );
+        yield* harness.provider.onSessionStarted(started, "/a");
+        expect(
+          (yield* harness.provider.snapshot.getSnapshot).workspaceSnapshots?.find(
+            (entry) => entry.cwd === "/a",
+          )?.slashCommands,
+        ).toEqual(expectedCommands);
+      }),
+  );
+
   it.effect("bounds workspace metadata without starting sessions for workspace lookup", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -832,70 +1059,24 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
     ),
   );
 
-  it.effect("publishes fresh limits and probe failures, and clears limits on sign-out", () =>
+  it.effect("keeps Google limits unavailable across health checks, sessions and sign-out", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const limits: ServerProviderUsageLimits = {
-          checkedAt: "2026-10-09T12:00:00.000Z",
-          windows: [
-            {
-              id: "3p-weekly",
-              kind: "weekly",
-              label: "Claude & GPT (shared) · Weekly",
-              usedPercent: 75,
-            },
-          ],
-        };
-        const usage = yield* Ref.make(limits);
-        const harness = yield* makeHarness({ probeUsage: Ref.get(usage) });
-        yield* harness.initialize;
-        expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toEqual(limits);
-        yield* Ref.set(harness.probe, Effect.succeed(initializeResult));
-        const failed = {
-          checkedAt: "2026-10-09T12:01:00.000Z",
+        const harness = yield* makeHarness();
+        const expected = {
           windows: [],
-          unavailable: { reason: "probeFailed" as const },
+          unavailable: {
+            reason: "unsupported",
+            message: "Google doesn't share limits with apps yet",
+          },
         };
-        yield* Ref.set(usage, failed);
-        expect((yield* harness.provider.snapshot.refresh).usageLimits).toEqual(failed);
-        yield* harness.provider.onSignedOut;
-        expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toBeUndefined();
-        yield* Ref.set(usage, {
-          checkedAt: "2026-10-09T12:02:00.000Z",
-          windows: [],
-          unavailable: { reason: "unsupported" },
-        });
-        expect((yield* harness.provider.snapshot.refresh).usageLimits?.windows).toEqual([]);
-      }),
-    ),
-  );
-
-  it.effect("a quota read finishing after sign-out cannot restore account limits", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const readStarted = yield* Deferred.make<void>();
-        const readResult = yield* Deferred.make<ServerProviderUsageLimits>();
-        const usage = yield* Ref.make<Effect.Effect<ServerProviderUsageLimits>>(
-          Effect.succeed({ checkedAt: "2026-10-09T12:00:00.000Z", windows: [] }),
-        );
-        const harness = yield* makeHarness({ probeUsage: Ref.get(usage).pipe(Effect.flatten) });
         yield* harness.initialize;
-        yield* Ref.set(harness.probe, Effect.succeed(initializeResult));
-        yield* Ref.set(
-          usage,
-          Deferred.succeed(readStarted, undefined).pipe(Effect.andThen(Deferred.await(readResult))),
-        );
-        const refresh = yield* harness.provider.snapshot.refresh.pipe(Effect.forkChild);
-        yield* Deferred.await(readStarted);
+        expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toMatchObject(expected);
+        yield* harness.provider.onSessionStarted(started);
+        expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toMatchObject(expected);
         yield* harness.provider.onSignedOut;
-        yield* Deferred.succeed(readResult, {
-          checkedAt: "2026-10-09T12:01:00.000Z",
-          windows: [
-            { id: "gemini-5h", kind: "session", label: "Gemini · 5-hour", usedPercent: 10 },
-          ],
-        });
-        yield* Fiber.join(refresh);
-        expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toBeUndefined();
+        yield* Ref.set(harness.probe, Effect.succeed(initializeResult));
+        expect((yield* harness.provider.snapshot.refresh).usageLimits).toMatchObject(expected);
       }),
     ),
   );

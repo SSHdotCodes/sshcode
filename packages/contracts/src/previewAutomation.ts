@@ -61,14 +61,8 @@ export const PreviewAutomationOperation = Schema.Literals(PREVIEW_AUTOMATION_SER
 export type PreviewAutomationOperation = typeof PreviewAutomationOperation.Type;
 
 const PreviewAutomationTabTargetFields = {
-  tabId: Schema.optional(
-    PreviewTabId.annotate({
-      description:
-        "Tab id from preview_status. Omit for this session's tab, else the user's visible tab.",
-    }),
-  ).annotate({
-    description:
-      "Tab id from preview_status. Omit for this session's tab, else the user's visible tab.",
+  tabId: Schema.optional(PreviewTabId).annotate({
+    description: "Tab from preview_status. Defaults to your tab, then the user's visible tab.",
   }),
 };
 

@@ -789,8 +789,9 @@ export function BranchToolbarBranchSelector({
           >
             <GitBranchIcon
               className={cn(
-                "size-3 shrink-0 opacity-70",
-                displayMode === "panel" && THREAD_DETAILS_PANEL_ICON_CLASS,
+                "size-3 shrink-0",
+                // The panel's row icons share one tone; the composer chip keeps its softer one.
+                displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "opacity-70",
               )}
             />
             <ComposerContextLabel displayMode={displayMode}>

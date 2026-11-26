@@ -81,7 +81,10 @@ import {
   formatReadToolLabel,
   formatSearchToolLabel,
 } from "@t3tools/shared/toolActivity";
-import { delegatedTaskHandle } from "@t3tools/shared/delegatedTaskHandle";
+import {
+  delegationCallsShownAsCards,
+  type DelegationTimelineItem,
+} from "@t3tools/client-runtime/t3ToolSummary";
 import { isWindowsAbsolutePath } from "@t3tools/shared/path";
 import type { HandoffTimelineRun } from "@t3tools/client-runtime/handoff";
 
@@ -705,6 +708,8 @@ type MessagesTimelineRowContent =
       showAssistantMeta: boolean;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
+      /** An agent message without its meta row, directly above a user bubble. */
+      beforeUserBubble?: true;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
       revertTurnCount?: number | undefined;
     }
@@ -845,8 +850,15 @@ export function resolveAssistantMessageCopyState({
   };
 }
 
-function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<TimelineEntry>) {
+/**
+ * The last agent message of each reply, and of each run's latest reply. A reply
+ * ends with its run, or where a message reaches an agent that only waits on
+ * background work (`agentWasWaiting`): that message starts a new reply.
+ */
+function deriveAssistantReplyEnds(timelineEntries: ReadonlyArray<TimelineEntry>) {
   const lastAssistantMessageIdByResponseKey = new Map<string, string>();
+  const openReplyIdByRun = new Map<string, string>();
+  const replyCountByRun = new Map<string, number>();
   let nullTurnResponseIndex = 0;
 
   for (const timelineEntry of timelineEntries) {
@@ -856,6 +868,10 @@ function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<Timeli
     const { message } = timelineEntry;
     if (message.role === "user") {
       nullTurnResponseIndex += 1;
+      if (message.agentWasWaiting === true && message.runId) {
+        replyCountByRun.set(message.runId, (replyCountByRun.get(message.runId) ?? 0) + 1);
+        openReplyIdByRun.delete(message.runId);
+      }
       continue;
     }
     if (message.role !== "assistant") {
@@ -863,12 +879,27 @@ function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<Timeli
     }
 
     const responseKey = message.runId
-      ? `turn:${message.runId}`
+      ? `turn:${message.runId}:${replyCountByRun.get(message.runId) ?? 0}`
       : `unkeyed:${nullTurnResponseIndex}`;
     lastAssistantMessageIdByResponseKey.set(responseKey, message.id);
+    if (message.runId) openReplyIdByRun.set(message.runId, message.id);
   }
 
-  return new Set(lastAssistantMessageIdByResponseKey.values());
+  return {
+    terminalIds: new Set(lastAssistantMessageIdByResponseKey.values()),
+    openReplyIds: new Set(openReplyIdByRun.values()),
+  };
+}
+
+/** A user message drawn as the user's own bubble, not folded like a tool row. */
+function rowIsUserBubble(row: MessagesTimelineRow | undefined): boolean {
+  return (
+    row?.kind === "message" &&
+    row.message.role === "user" &&
+    row.message.questionAnswer === undefined &&
+    !row.message.id.startsWith("async-answer:") &&
+    resolveUserMessagePresentation(row.message).attribution !== "agent"
+  );
 }
 
 interface TurnFold {
@@ -1068,13 +1099,14 @@ function timelineEntryFoldRunId(entry: TimelineEntry, runlessKey: RunId | null):
   return null;
 }
 
-/** A steer adds input to its existing turn, without creating a new header. */
+/** An active steer keeps the header. Input to a parked turn starts a new visible response. */
 function timelineEntryStartsResponse(entry: TimelineEntry): boolean {
   return (
     (entry.kind === "message" &&
       entry.message.role === "user" &&
-      entry.message.inputIntent !== "steer" &&
-      entry.message.inputIntent !== "promoted_queued_to_steer") ||
+      (entry.message.agentWasWaiting === true ||
+        (entry.message.inputIntent !== "steer" &&
+          entry.message.inputIntent !== "promoted_queued_to_steer"))) ||
     (entry.kind === "work" && entry.entry.itemType === "notification")
   );
 }
@@ -1460,39 +1492,43 @@ function attachTrailingToolGroupsToAssistant(
   return result;
 }
 
-// Delegation already has a durable child card. Remove its tool row only after
-// the returned task or child thread identifies that child; pending calls can share a prompt.
+// A delegation whose subagent card is in the timeline shows as the card alone.
 function withoutSubagentDelegationRows(entries: ReadonlyArray<TimelineEntry>) {
-  const childrenByRun = new Map<RunId, Set<string>>();
-  for (const entry of entries) {
-    if (entry.kind !== "event" || entry.projectedItem.item.type !== "subagent") continue;
-    const item = entry.projectedItem.item;
-    if (item.origin !== "app_owned" || item.runId === null) continue;
-    const children = childrenByRun.get(item.runId) ?? new Set<string>();
-    children.add(item.subagentId);
-    // delegate_task answers with the short handle of the subagent's id.
-    children.add(delegatedTaskHandle(item.subagentId));
-    if (item.childThreadId !== null) children.add(item.childThreadId);
-    childrenByRun.set(item.runId, children);
-  }
-  return entries.filter((entry) => {
-    if (entry.kind !== "work" || workEntryDisplayIndicatesToolFailure(entry.entry)) return true;
-    const item = entry.entry.projectedItem?.item ?? entry.entry.structuredPayload;
-    if (
-      item?.type !== "dynamic_tool" ||
-      item.runId === null ||
-      (item.status !== "running" && item.status !== "completed") ||
-      resolveT3McpToolDefinition(item.toolName)?.summaryAction !== "delegate"
-    )
-      return true;
-    const output = compactDynamicToolOutput(item.output);
-    if (output?.isError) return true;
-    const children = childrenByRun.get(item.runId);
-    return !(
-      (output?.taskId !== undefined && children?.has(output.taskId)) ||
-      (output?.childThreadId !== undefined && children?.has(output.childThreadId))
-    );
-  });
+  const shownAsCards = delegationCallsShownAsCards(
+    entries.map((entry): DelegationTimelineItem | null => {
+      if (entry.kind === "event" && entry.projectedItem.item.type === "subagent") {
+        const item = entry.projectedItem.item;
+        return item.origin === "app_owned" && item.runId !== null
+          ? {
+              kind: "card",
+              runId: item.runId,
+              subagentId: item.subagentId,
+              childThreadId: item.childThreadId,
+            }
+          : null;
+      }
+      if (entry.kind !== "work") return null;
+      const item = entry.entry.projectedItem?.item ?? entry.entry.structuredPayload;
+      if (
+        item?.type !== "dynamic_tool" ||
+        item.runId === null ||
+        resolveT3McpToolDefinition(item.toolName)?.summaryAction !== "delegate"
+      )
+        return null;
+      const output = compactDynamicToolOutput(item.output);
+      return {
+        kind: "call",
+        runId: item.runId,
+        failed:
+          (item.status !== "running" && item.status !== "completed") ||
+          output?.isError === true ||
+          workEntryDisplayIndicatesToolFailure(entry.entry),
+        taskId: output?.taskId,
+        childThreadId: output?.childThreadId,
+      };
+    }),
+  );
+  return entries.filter((_entry, index) => !shownAsCards.has(index));
 }
 
 const supersededReasoningEntries = new WeakMap<TimelineEntry, TimelineEntry>();
@@ -1550,7 +1586,7 @@ function deriveTimelineTurnFolds(
   });
   return deriveTurnFolds({
     timelineEntries,
-    terminalAssistantMessageIds: deriveTerminalAssistantMessageIds(timelineEntries),
+    terminalAssistantMessageIds: deriveAssistantReplyEnds(timelineEntries).terminalIds,
     latestRun: input.latestRun ?? null,
     unfoldedRunIds: new Set([...activeVisualResponseRunIds, ...failedRunIds]),
     runlessWorkActive: input.isWorking && input.runlessWorkActive === true,
@@ -1599,7 +1635,8 @@ export function deriveMessagesTimelineRows(input: {
   const durationStartByMessageId = computeMessageDurationStart(
     timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
   );
-  const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineEntries);
+  const { terminalIds: terminalAssistantMessageIds, openReplyIds } =
+    deriveAssistantReplyEnds(timelineEntries);
   const unsettledRunId = deriveUnsettledRunId(input.latestRun ?? null, input.runningRunId ?? null);
   const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
   const liveSubagentEntryIds = liveSubagentCardEntryIds(timelineEntries);
@@ -2104,8 +2141,15 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
+    // A reply that a message to the waiting agent followed has finished, even
+    // while background work (a timer, a monitor) holds its run open.
+    const replyEnded =
+      timelineEntry.message.runId != null &&
+      terminalAssistantMessageIds.has(timelineEntry.message.id) &&
+      !openReplyIds.has(timelineEntry.message.id);
     const assistantResponseStillInProgress =
       timelineEntry.message.role === "assistant" &&
+      !replyEnded &&
       runIdIsActiveResponse(timelineEntry.message.runId);
 
     const durationStart =
@@ -2269,11 +2313,21 @@ export function deriveMessagesTimelineRows(input: {
   const result = attachTrailingToolGroupsToAssistant(
     attachCreatedThreadSummaries(nextRows, timelineEntries),
   );
-  return result.map((row, index) =>
-    timelineRowIsWorkLog(row) && timelineRowIsWorkLog(result[index + 1])
-      ? { ...row, continuesWorkLog: true }
-      : row,
-  );
+  return result.map((row, index) => {
+    const next = result[index + 1];
+    if (timelineRowIsWorkLog(row) && timelineRowIsWorkLog(next)) {
+      return { ...row, continuesWorkLog: true };
+    }
+    if (
+      row.kind === "message" &&
+      row.message.role === "assistant" &&
+      !row.showAssistantMeta &&
+      rowIsUserBubble(next)
+    ) {
+      return { ...row, beforeUserBubble: true as const };
+    }
+    return row;
+  });
 }
 
 /** Images a group's tools viewed, once each in call order; failed reads have none to show. */
@@ -2826,6 +2880,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.showAssistantMeta === bm.showAssistantMeta &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
+        a.beforeUserBubble === bm.beforeUserBubble &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
         a.revertTurnCount === bm.revertTurnCount
       );
@@ -2932,6 +2987,7 @@ export function decorateMessagesTimelineRows(
   let previousDay: string | null = null;
   let previousAuthor: string | null = null;
   let previousMessageAt = NaN;
+  let foldedRunId: RunId | null = null;
   let foundUnread = false;
   const watermark = options.lastVisitedAt === null ? NaN : Date.parse(options.lastVisitedAt);
   const openedAt = Date.parse(options.openedAt);
@@ -3007,7 +3063,16 @@ export function decorateMessagesTimelineRows(
     const at = row.createdAt === null ? NaN : Date.parse(row.createdAt);
     // Metadata follows its message, and must not split the next author's group.
     if (row.kind === "assistant-meta") return options.discord ? [] : [row];
-    const day = message !== null && Number.isFinite(at) ? localDayKey(new Date(at)) : null;
+    if (row.kind === "turn-fold") foldedRunId = row.runId;
+    // A reply stays with the turn it answers: a turn that runs past midnight must not have
+    // the new day's divider wedged between its "Worked for" header and its reply.
+    const replyUnderFold =
+      message !== null &&
+      message.role === "assistant" &&
+      foldedRunId !== null &&
+      message.runId === foldedRunId;
+    const day =
+      message !== null && Number.isFinite(at) && !replyUnderFold ? localDayKey(new Date(at)) : null;
     const dayDivider =
       day !== null &&
       day !== previousDay &&

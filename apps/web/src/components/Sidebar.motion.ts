@@ -29,6 +29,9 @@ function progress(animation: Animation) {
 
 /** Animate rows between their layout positions. The list must be
  * positioned so every direct child's offsetTop has the same origin. */
+/** Marks a list child the motion leaves alone. */
+export const STATIC_ROW_ATTRIBUTE = "data-sidebar-static-row";
+
 export function createSidebarListMotion(parent: HTMLUListElement) {
   let positions: Map<HTMLElement, RowPosition> | null = null;
   let disposed = false;
@@ -157,12 +160,16 @@ export function createSidebarListMotion(parent: HTMLUListElement) {
     );
   };
 
+  // The spacer that holds the list's free height is not a row: it has nothing to glide.
+  const isMovingRow = (node: Element): node is HTMLElement =>
+    node instanceof HTMLElement && !exiting.has(node) && !node.hasAttribute(STATIC_ROW_ATTRIBUTE);
+
   return {
     update(animate: boolean) {
       if (disposed) return;
       const next = new Map(
         Array.from(parent.children)
-          .filter((node): node is HTMLElement => node instanceof HTMLElement && !exiting.has(node))
+          .filter(isMovingRow)
           .map((node) => [
             node,
             {
@@ -295,7 +302,7 @@ export function createSidebarListMotion(parent: HTMLUListElement) {
       const origin = parent.getBoundingClientRect().top;
       released = new Map(
         Array.from(parent.children)
-          .filter((node): node is HTMLElement => node instanceof HTMLElement && !exiting.has(node))
+          .filter(isMovingRow)
           .map((node) => [node, node.getBoundingClientRect().top - origin]),
       );
     },

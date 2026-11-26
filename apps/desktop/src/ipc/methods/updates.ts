@@ -51,6 +51,26 @@ export const installUpdate = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const installUpdateWhenIdle = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.UPDATE_INSTALL_WHEN_IDLE_CHANNEL,
+  payload: Schema.Void,
+  result: DesktopUpdateActionResultSchema,
+  handler: Effect.fn("desktop.ipc.updates.installWhenIdle")(function* () {
+    const updates = yield* DesktopUpdates.DesktopUpdates;
+    return yield* updates.installWhenIdle;
+  }),
+});
+
+export const cancelUpdateWhenIdle = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.UPDATE_CANCEL_WHEN_IDLE_CHANNEL,
+  payload: Schema.Void,
+  result: DesktopUpdateStateSchema,
+  handler: Effect.fn("desktop.ipc.updates.cancelWhenIdle")(function* () {
+    const updates = yield* DesktopUpdates.DesktopUpdates;
+    return yield* updates.cancelInstallWhenIdle;
+  }),
+});
+
 export const checkForUpdate = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.UPDATE_CHECK_CHANNEL,
   payload: Schema.Void,

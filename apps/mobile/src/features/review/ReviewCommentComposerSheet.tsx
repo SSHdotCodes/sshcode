@@ -70,7 +70,7 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
       ? firstNumber !== null
         ? `Line ${firstNumber}`
         : "File comment"
-      : firstNumber !== null && lastNumber !== null
+      : firstNumber !== null && lastNumber !== null && firstNumber < lastNumber
         ? `Lines ${firstNumber}-${lastNumber}`
         : `${selectedLines.length} lines selected`;
   const previewHeight = Math.max(

@@ -1,3 +1,4 @@
+import * as LocalFiles from "../assets/LocalFileAttachments.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import {
@@ -33,6 +34,7 @@ import { liveThreadShell, idleThreadProjection } from "./McpToolAccess.testkit.t
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
 const layerOrchestratorService = OrchestratorMcpService.layer.pipe(
+  Layer.provide(Layer.mock(LocalFiles.LocalFileAttachments)({})),
   Layer.provide(
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
   ),

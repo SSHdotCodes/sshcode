@@ -2,7 +2,16 @@
 import { act, createRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
+import { RegistryContext } from "@effect/atom-react";
+import { Atom, AtomRegistry } from "effect/reactivity";
+import { useSidebarChatTabSelection } from "./useSidebarChatTabSelection";
 import { SidebarChatTabs } from "./SidebarChatTabs";
+
+vi.mock("../../state/server", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { chatListTabsEnabledAtom: Atom.make<boolean | null>(true) };
+});
+import { chatListTabsEnabledAtom } from "../../state/server";
 
 vi.mock("../ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: React.ReactNode }) => children,
@@ -37,6 +46,7 @@ it("navigates tabs with a roving tab stop and opens actions from the keyboard", 
     const [selected, select] = useState("");
     return (
       <SidebarChatTabs
+        enabled
         ref={createRef()}
         tabs={tabs}
         selected={selected}
@@ -92,6 +102,7 @@ it("keeps Terminal last, outside tab actions and chat drop targets", async () =>
     },
   ];
   const props = {
+    enabled: true,
     ref: createRef<HTMLDivElement>(),
     tabs,
     selected: "",
@@ -123,4 +134,62 @@ it("keeps Terminal last, outside tab actions and chat drop targets", async () =>
   await act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
+});
+
+it("resets the saved folder and releases Ctrl+Tab when chat list tabs are disabled", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+  const registry = AtomRegistry.make();
+  const preference = chatListTabsEnabledAtom as Atom.Writable<boolean | null>;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const tabs = [
+    { key: "work", name: "Work", threadKeys: new Set<string>(), attention: false, working: false },
+  ];
+  function App() {
+    const { enabled, selected, select } = useSidebarChatTabSelection();
+    return (
+      <SidebarChatTabs
+        ref={null}
+        enabled={enabled}
+        selected={selected}
+        tabs={tabs}
+        dropTarget={null}
+        renaming={null}
+        onSelect={select}
+        onRename={() => {}}
+        onRenameEnd={() => {}}
+        onContextMenu={() => {}}
+      />
+    );
+  }
+  try {
+    await act(() =>
+      root.render(
+        <RegistryContext.Provider value={registry}>
+          <App />
+        </RegistryContext.Provider>,
+      ),
+    );
+    const cycle = () =>
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Tab", ctrlKey: true, cancelable: true }),
+      );
+    await act(() => {
+      expect(cycle()).toBe(false);
+    });
+    const active = () => container.querySelector('[aria-selected="true"]')?.textContent;
+    expect(active()).toBe("Work");
+    await act(() => registry.set(preference, false));
+    expect(active()).toBe("All");
+    expect(cycle()).toBe(true);
+    await act(() => registry.set(preference, true));
+    expect(active()).toBe("All");
+  } finally {
+    await act(() => root.unmount());
+    registry.dispose();
+    localStorage.removeItem("t3code:sidebar-chat-tab:v1");
+    vi.unstubAllGlobals();
+  }
 });

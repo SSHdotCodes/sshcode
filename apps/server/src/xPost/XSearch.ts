@@ -1,10 +1,8 @@
 /**
  * XSearch — searches X for agents.
  *
- * With an X API key saved for all sessions (`X_API_BEARER_TOKEN`) a search is
- * one API request: about a second, billed per post. Otherwise, or when the API
- * refuses the query or finds nothing, the search runs on a provider instance
- * that can search X with the user's own account (Grok): no key, but slower.
+ * Recent searches use the X API. Grok handles explicit deep searches and
+ * queries the API cannot answer.
  *
  * @module xPost/XSearch
  */
@@ -22,7 +20,8 @@ import * as ApiKeyStore from "../secrets/ApiKeyStore.ts";
 
 export const X_API_KEY_NAME = "X_API_BEARER_TOKEN";
 export const X_SEARCH_UNAVAILABLE = `X search needs Grok Build switched on and signed in (Settings > Providers), or an X API bearer token saved for all sessions as ${X_API_KEY_NAME}.`;
-export const X_SEARCH_EMPTY = "No posts matched.";
+const X_SEARCH_EMPTY =
+  "No posts in the last 7 days. For older posts, call search_x again with deep: true (slower, 1-4 min).";
 const X_API_SEARCH_URL = "https://api.x.com/2/tweets/search/recent";
 const X_API_TIMEOUT = "15 seconds";
 /** The API's smallest page; each returned post is billed. */
@@ -41,12 +40,14 @@ export class XSearch extends Context.Service<
   XSearch,
   {
     /** Posts matching the query, as text with links. */
-    readonly search: (query: string) => Effect.Effect<string, XSearchError>;
+    readonly search: (query: string, deep?: boolean) => Effect.Effect<string, XSearchError>;
   }
 >()("t3/xPost/XSearch") {}
 
 const Count = Schema.optional(Schema.Number);
 const XApiSearchResponse = Schema.Struct({
+  meta: Schema.optional(Schema.Struct({ result_count: Count })),
+  errors: Schema.optional(Schema.Array(Schema.Unknown)),
   data: Schema.optional(
     Schema.Array(
       Schema.Struct({
@@ -118,14 +119,17 @@ function postTime(value: string | undefined): string | undefined {
     : undefined;
 }
 
-/** The posts as text, or undefined when the reply holds none. */
+/** Render a recent search result, including a confirmed empty result. */
 export function renderXApiPosts(body: string): string | undefined {
   const decoded = decodeResponse(body);
   if (Option.isNone(decoded)) return undefined;
-  const users = new Map(
-    (decoded.value.includes?.users ?? []).map((user) => [user.id, user] as const),
-  );
-  const posts = (decoded.value.data ?? []).map((post) => {
+  const { data, errors, includes, meta } = decoded.value;
+  if (!data?.length) {
+    const count = meta?.result_count ?? data?.length;
+    return count === 0 && !errors?.length ? X_SEARCH_EMPTY : undefined;
+  }
+  const users = new Map((includes?.users ?? []).map((user) => [user.id, user] as const));
+  const posts = data.map((post) => {
     const author = post.author_id === undefined ? undefined : users.get(post.author_id);
     const metrics = post.public_metrics;
     const counts = [
@@ -153,12 +157,11 @@ export function renderXApiPosts(body: string): string | undefined {
       .filter(Boolean)
       .join("\n");
   });
-  return posts.length === 0 ? undefined : posts.join("\n\n");
+  return posts.join("\n\n");
 }
 
 type ApiOutcome =
-  | { readonly kind: "posts"; readonly text: string }
-  | { readonly kind: "empty" }
+  | { readonly kind: "answered"; readonly text: string }
   | { readonly kind: "failed"; readonly detail: string }
   | { readonly kind: "no-key" };
 
@@ -194,30 +197,33 @@ const make = Effect.gen(function* () {
         } as const;
       }
       const text = renderXApiPosts(reply.value.body);
-      return text === undefined ? ({ kind: "empty" } as const) : ({ kind: "posts", text } as const);
+      return text === undefined
+        ? ({ kind: "failed", detail: "The X API returned an invalid search response." } as const)
+        : ({ kind: "answered", text } as const);
     });
 
   return XSearch.of({
-    search: (query) =>
+    search: (query, deep) =>
       Effect.gen(function* () {
-        const api = yield* searchApi(query);
-        if (api.kind === "posts") return api.text;
+        const api = deep ? undefined : yield* searchApi(query);
+        if (api?.kind === "answered") return api.text;
         const instances = yield* registry.listInstances;
         const searcher = instances.find(
           (instance) => instance.enabled && instance.xSearch !== undefined,
         )?.xSearch;
         if (searcher === undefined) {
-          if (api.kind === "empty") return X_SEARCH_EMPTY;
-          return yield* api.kind === "failed"
-            ? new XSearchError({ reason: "failed", detail: api.detail })
-            : new XSearchError({ reason: "unavailable", detail: X_SEARCH_UNAVAILABLE });
+          if (api?.kind === "failed") {
+            return yield* new XSearchError({ reason: "failed", detail: api.detail });
+          }
+          return yield* new XSearchError({
+            reason: "unavailable",
+            detail: deep
+              ? "Deep X search needs Grok Build switched on and signed in (Settings > Providers)."
+              : X_SEARCH_UNAVAILABLE,
+          });
         }
         return yield* searcher(query).pipe(
-          Effect.catch((error) =>
-            api.kind === "empty"
-              ? Effect.succeed(X_SEARCH_EMPTY)
-              : Effect.fail(new XSearchError({ reason: "failed", detail: error.detail })),
-          ),
+          Effect.mapError((error) => new XSearchError({ reason: "failed", detail: error.detail })),
         );
       }),
   });

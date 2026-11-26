@@ -662,6 +662,63 @@ describe("MuseAdapterV2", () => {
     ),
   );
 
+  it.effect("reads the native patch for a completed edit and projects its hunks", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeMuse();
+      const harness = yield* makeHarness(fake);
+      const { nativeId } = yield* startConversation(harness, fake);
+      const content = JSON.stringify({
+        files: [
+          {
+            path: "toy.txt",
+            hunks: [
+              {
+                oldStart: 1,
+                oldLines: 2,
+                newStart: 1,
+                newLines: 2,
+                lines: [" keep", "-before", "+after"],
+              },
+            ],
+          },
+        ],
+      });
+      fake.queueResponse("item/readOutput", {
+        offsetBytes: 0,
+        eof: true,
+        encoding: "utf8",
+        content,
+      });
+      yield* fake.emit("item/completed", {
+        item: {
+          itemId: "edit-1",
+          kind: "toolCall",
+          tool: "edit_file",
+          turnId: nativeId,
+          revision: 2,
+          status: "completed",
+          patchRef: {
+            id: "patch-1",
+            availability: "available",
+            byteLen: Buffer.byteLength(content),
+          },
+        },
+      });
+      const request = yield* fake.takeCall("item/readOutput");
+      assert.equal(request.params.itemId, "edit-1");
+      assert.equal(request.params.outputRef, "patch-1");
+      const { turnItem } = yield* harness.takeEvent("turn_item.updated");
+      assert.equal(turnItem.type, "file_change");
+      if (turnItem.type !== "file_change") return;
+      assert.equal(turnItem.fileName, "toy.txt");
+      assert.equal(turnItem.additions, 1);
+      assert.equal(turnItem.deletions, 1);
+      assert.include(turnItem.diffStr ?? "", "@@ -1,2 +1,2 @@\n keep\n-before\n+after\n");
+      yield* fake.emit("turn/completed", { turnId: nativeId, terminal: "completed" });
+      assert.equal((yield* harness.takeEvent("turn.terminal")).status, "completed");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("skips an unreadable usage notification without ending the turn", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakeMuse();

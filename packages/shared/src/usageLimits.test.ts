@@ -1403,6 +1403,26 @@ describe("plans whose probe read nothing", () => {
     expect(pool?.windows[0]?.pace).toBeNull();
   });
 
+  it("shows both unsupported Google plans on Limits and omits both from ring data", () => {
+    const message = "Google doesn't share limits with apps yet";
+    const usageLimits = {
+      checkedAt: readAt,
+      windows: [],
+      unavailable: { reason: "unsupported" as const, message },
+    };
+    const plans = on(ultra(usageLimits), { ...pro, usageLimits });
+    const pools = collectLimitPools(collectLimitAccounts(plans, { withNotices: true }), now);
+    expect(
+      pools.map((pool) => [pool.label, pool.windows, pool.unread.map((a) => a.notice)]),
+    ).toEqual([
+      ["Google Ultra", [], [message]],
+      ["Google Pro", [], [message]],
+    ]);
+    const onlyUltra = collectLimitAccounts(on(ultra(usageLimits)), { withNotices: true });
+    expect(collectLimitPools(onlyUltra, now)[0]?.label).toBe("Google Ultra");
+    expect(collectLimitAccounts(plans)).toEqual([]);
+  });
+
   it("lists a plan with no numbers as its own row with its notice", () => {
     const unread = ultra({
       checkedAt: "2026-09-03T11:59:00.000Z",

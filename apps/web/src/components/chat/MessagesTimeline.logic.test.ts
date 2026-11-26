@@ -1970,7 +1970,7 @@ describe("deriveMessagesTimelineRows", () => {
   });
 
   it.each(["steer", "promoted_queued_to_steer"] as const)(
-    "keeps the duration header at the initiating prompt when %s arrives before output",
+    "anchors the duration header to the initiating message for busy and waiting %s delivery",
     (inputIntent) => {
       const runId = RunId.make("steered-run");
       const time = (second: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, second)).toISOString();
@@ -2016,6 +2016,27 @@ describe("deriveMessagesTimelineRows", () => {
           streaming: false,
         },
       };
+      // agy delivers input to a parked timer through the same run. Its new
+      // response starts below the waiting message, after the earlier answer.
+      const followup = prompt("followup", 25, inputIntent);
+      const resumedRows = deriveMessagesTimelineRows({
+        timelineEntries: [
+          entries[0]!,
+          final,
+          {
+            ...followup,
+            message: { ...followup.message, agentWasWaiting: true },
+          },
+        ],
+        latestRun: { runId, status: "running", startedAt: time(0), completedAt: null },
+        isWorking: true,
+        activeTurnStartedAt: time(25),
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+      });
+      expect(resumedRows.findIndex((row) => row.kind === "working")).toBe(
+        resumedRows.findIndex((row) => row.id === "followup") + 1,
+      );
       for (const isWorking of [true, false]) {
         for (const expanded of [true, false]) {
           const rows = deriveMessagesTimelineRows({
@@ -3288,6 +3309,79 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRow?.showAssistantMeta).toBe(false);
     expect(assistantRow?.showAssistantCopyButton).toBe(false);
     expect(rows.at(-1)).toMatchObject({ kind: "thinking" });
+  });
+
+  describe("replies in a run held open by background work", () => {
+    const message = (
+      id: string,
+      role: "user" | "assistant",
+      extra: { agentWasWaiting?: true; inputIntent?: "steer" } = {},
+    ) => ({
+      id: `${id}-entry`,
+      kind: "message" as const,
+      createdAt: "2026-01-01T00:00:10Z",
+      message: {
+        id: id as never,
+        role,
+        text: "Text.",
+        runId: "turn-1" as never,
+        createdAt: "2026-01-01T00:00:10Z",
+        updatedAt: "2026-01-01T00:00:11Z",
+        streaming: false,
+        ...extra,
+      },
+    });
+    const rowsFor = (
+      timelineEntries: ReadonlyArray<ReturnType<typeof message>>,
+      isWorking: boolean,
+    ) =>
+      deriveMessagesTimelineRows({
+        timelineEntries,
+        latestRun: {
+          runId: "turn-1" as never,
+          status: "running",
+          startedAt: "2026-01-01T00:00:00Z",
+          completedAt: null,
+        },
+        isWorking,
+        activeTurnStartedAt: isWorking ? "2026-01-01T00:00:00Z" : null,
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+      }).flatMap((row) =>
+        row.kind === "message" && row.message.role === "assistant"
+          ? [[row.message.id, row.showAssistantMeta, row.beforeUserBubble ?? false]]
+          : [],
+      );
+
+    it("shows metadata on a reply a message to the waiting agent followed", () => {
+      const entries = [
+        message("user-1", "user"),
+        message("reply-1", "assistant"),
+        message("user-2", "user", { inputIntent: "steer", agentWasWaiting: true }),
+        message("reply-2", "assistant"),
+      ];
+      expect(rowsFor(entries, true)).toEqual([
+        ["reply-1", true, false],
+        ["reply-2", false, false],
+      ]);
+    });
+
+    it("spaces an update a steer to the working agent follows like a reply", () => {
+      expect(
+        rowsFor(
+          [
+            message("user-1", "user"),
+            message("update-1", "assistant"),
+            message("user-2", "user", { inputIntent: "steer" }),
+            message("reply-1", "assistant"),
+          ],
+          true,
+        ),
+      ).toEqual([
+        ["update-1", false, true],
+        ["reply-1", false, false],
+      ]);
+    });
   });
 
   it.each([
@@ -5068,7 +5162,7 @@ describe("linked timeline resources", () => {
     { status: "running", envelope: "direct", role: "general" },
     { status: "running", envelope: "direct", role: "research" },
   ] as const)(
-    "matches $status $role delegation calls by child identity with $envelope output",
+    "shows $status $role delegations with $envelope output as their cards alone",
     ({ status, envelope, role }) => {
       const child = (id: string) => {
         const entry = event(id, "subagent");
@@ -5147,21 +5241,25 @@ describe("linked timeline resources", () => {
           subagents: [{ item: { id: "a" } }, { item: { id: "b" } }],
         });
         expect(rows.some((row) => row.id === "b")).toBe(false);
+        expect(rows.find((row) => row.id === "c")).toBeDefined();
       } else {
-        expect(rows.find((row) => row.id === "a")).toBeDefined();
+        // With the running calls folded into their cards, a and c sit together.
+        expect(rows.find((row) => row.id === "a")).toMatchObject({
+          subagents: [{ item: { id: "a" } }, { item: { id: "c" } }],
+        });
         expect(rows.find((row) => row.id === "b")).toBeUndefined();
       }
-      expect(rows.find((row) => row.id === "c")).toBeDefined();
       expect(rows.find((row) => row.id === "d")).toBeDefined();
       const visibleTools = rows.flatMap((row) =>
         row.kind === "work" || row.kind === "work-live"
           ? row.groupedEntries.map((entry) => entry.id)
           : [],
       );
-      expect(visibleTools).toContain("unmatched");
+      // A running call has no output yet, so it takes the run's next unclaimed card.
+      expect(visibleTools.includes("unmatched")).toBe(status === "completed");
       expect(visibleTools).toContain("failed");
-      expect(visibleTools.includes("delegate-a")).toBe(status === "running");
-      expect(visibleTools.includes("delegate-b")).toBe(status === "running");
+      expect(visibleTools).not.toContain("delegate-a");
+      expect(visibleTools).not.toContain("delegate-b");
     },
   );
 

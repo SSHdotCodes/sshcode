@@ -19,6 +19,16 @@ const isJsonStringSchema = (value: Json) =>
 
 /** Values, not schemas: compacting inside them would change what they allow. */
 const DATA_KEYWORDS = new Set(["const", "enum", "default", "examples"]);
+const BOUND_KEYWORDS = new Set([
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+]);
 
 const SAFE_INTEGER_BOUNDS: Record<string, number> = {
   maximum: Number.MAX_SAFE_INTEGER,
@@ -30,6 +40,39 @@ const tagOf = (branch: JsonObject, key: string): Json => {
   return Predicate.isObject(property) && Array.isArray(property.enum) && property.enum.length === 1
     ? property.enum[0]
     : undefined;
+};
+
+/** Combine literal-only branches without dropping validation or per-choice guidance. */
+const mergeLiteralEnums = (
+  branches: ReadonlyArray<Json>,
+): { type: string; enum: ReadonlyArray<unknown> } | undefined => {
+  if (branches.length < 2) return undefined;
+  const first = branches[0];
+  if (
+    !Predicate.isObject(first) ||
+    (first.type !== "string" &&
+      first.type !== "integer" &&
+      first.type !== "number" &&
+      first.type !== "boolean")
+  )
+    return undefined;
+  const choices = new Set<unknown>();
+  for (const branch of branches) {
+    if (
+      !Predicate.isObject(branch) ||
+      branch.type !== first.type ||
+      Object.keys(branch).length !== 2
+    )
+      return undefined;
+    if (Array.isArray(branch.enum)) {
+      for (const value of branch.enum) choices.add(value);
+    } else if ("const" in branch) {
+      choices.add(branch.const);
+    } else {
+      return undefined;
+    }
+  }
+  return { type: first.type, enum: [...choices] };
 };
 
 /** One object for a tagged union of objects: each property once, the tag listing every value. */
@@ -98,15 +141,25 @@ const compact = (schema: Json, mergeTags = true): Json => {
   // Effect can emit the same annotation both on a field and in allOf.
   // Remove only an annotation that adds neither a constraint nor new guidance.
   if (Array.isArray(result.allOf)) {
-    const branches = result.allOf.filter(
-      (branch) =>
-        !(
-          Predicate.isObject(branch) &&
-          Object.keys(branch).length === 1 &&
-          typeof result.description === "string" &&
-          branch.description === result.description
-        ),
-    );
+    const branches = result.allOf.filter((branch) => {
+      if (!Predicate.isObject(branch)) return true;
+      const keys = Object.keys(branch);
+      if (
+        keys.length === 1 &&
+        typeof result.description === "string" &&
+        branch.description === result.description
+      )
+        return false;
+      if (
+        "type" in result &&
+        !("$ref" in result) &&
+        keys.every((key) => BOUND_KEYWORDS.has(key) && !(key in result))
+      ) {
+        Object.assign(result, branch);
+        return false;
+      }
+      return true;
+    });
     if (branches.length === 0) delete result.allOf;
     else result.allOf = branches;
   }
@@ -122,8 +175,18 @@ const compact = (schema: Json, mergeTags = true): Json => {
     const { anyOf: _anyOf, ...rest } = result;
     const nulls = branches.filter(isNullSchema);
     const objects = branches.filter((branch) => !isNullSchema(branch));
+    const literals =
+      "type" in rest || "enum" in rest || "const" in rest ? undefined : mergeLiteralEnums(objects);
     const merged = mergeTags ? mergeTaggedObjects(objects) : undefined;
-    const options = merged === undefined ? branches : [merged, ...nulls];
+    if (literals !== undefined && nulls.length === 1) {
+      return {
+        ...rest,
+        type: [literals.type, "null"],
+        enum: [...literals.enum, null],
+      };
+    }
+    const options =
+      literals === undefined && merged === undefined ? branches : [literals ?? merged, ...nulls];
     const only = options.length === 1 ? options[0] : undefined;
     result = Predicate.isObject(only) ? { ...only, ...rest } : { ...rest, anyOf: options };
     // Nullable primitives/objects need no separate anyOf wrapper. Preserve all
@@ -171,8 +234,19 @@ const compact = (schema: Json, mergeTags = true): Json => {
   return result;
 };
 
-/** Output types must retain each union branch's required fields. */
-export const advertisedOutputSchema = <T>(schema: T): T => compact(schema, false) as T;
+/** MCP requires an object type at the root, including for unions of objects. */
+export const advertisedOutputSchema = <T>(schema: T): T => {
+  const output = compact(schema, false);
+  if (
+    Predicate.isObject(output) &&
+    output.type === undefined &&
+    (Object.keys(output).length === 0 ||
+      (Array.isArray(output.anyOf) &&
+        output.anyOf.every((branch) => Predicate.isObject(branch) && branch.type === "object")))
+  )
+    return { type: "object", ...output } as T;
+  return output as T;
+};
 
 /**
  * The input schema T3 advertises for a tool. Drops JSON noise that every thread pays for:
@@ -191,4 +265,53 @@ export const advertisedJsonSchema = (tool: Tool.Any) => {
     ...document.schema,
     ...(Object.keys(document.definitions).length ? { $defs: document.definitions } : {}),
   }) as ReturnType<typeof Tool.getJsonSchema>;
+};
+
+const SCHEMA_MAP_KEYWORDS = new Set([
+  "properties",
+  "patternProperties",
+  "$defs",
+  "dependentSchemas",
+]);
+const SCHEMA_ANNOTATIONS = new Set(["description", "title", "examples", "$comment"]);
+const PROVIDER_SLUG_PATTERN = "^[a-zA-Z][a-zA-Z0-9_-]*$";
+
+/** Compact the declaration sent to eager models. The tool's decoder still
+ * enforces the original input schema, including text-size limits. */
+export const compactAdvertisedInput = (
+  schema: Json,
+  fieldGuidance: (field: string) => string | undefined,
+): Json => {
+  const project = (value: Json): Json => {
+    if (Array.isArray(value)) return value.map(project);
+    if (!Predicate.isObject(value)) return value;
+    const result: JsonObject = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (SCHEMA_ANNOTATIONS.has(key) || (key === "minLength" && child === 1)) continue;
+      if (key === "maxLength" || (key === "minItems" && child === 1)) continue;
+      if (key === "pattern" && child === PROVIDER_SLUG_PATTERN) continue;
+      if (key === "minimum" && child === 0) continue;
+      if (DATA_KEYWORDS.has(key)) {
+        result[key] = child;
+      } else if (SCHEMA_MAP_KEYWORDS.has(key) && Predicate.isObject(child)) {
+        result[key] = Object.fromEntries(
+          Object.entries(child).map(([name, definition]) => {
+            const projected = project(definition);
+            const description = key === "properties" ? fieldGuidance(name) : undefined;
+            return [
+              name,
+              description !== undefined && Predicate.isObject(projected)
+                ? { ...projected, description }
+                : projected,
+            ];
+          }),
+        );
+      } else {
+        result[key] = project(child);
+      }
+    }
+    return result;
+  };
+  // Removing prose can make enum or union branches identical.
+  return compact(project(schema));
 };

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import { CommandId, EnvironmentId, MessageId, ProjectId, ThreadId } from "@t3tools/contracts";
+import {
+  formatComposerContextReference,
+  toComposerContextId,
+} from "@t3tools/shared/composerContextReferences";
 
 import type { QueuedThreadMessage } from "./thread-outbox-model";
 import type { ComposerDraft } from "./use-composer-drafts";
@@ -106,7 +110,38 @@ describe("buildPendingNewTasks", () => {
       },
     });
 
-    expect(tasks.map((task) => task.title)).toEqual(["1 attachment"]);
+    expect(tasks.map((task) => task.title)).toEqual(["1 photo"]);
+  });
+
+  it("counts attached pictures instead of reading out their file names", () => {
+    const image = (id: string) =>
+      ({
+        type: "image",
+        id,
+        uri: `file:///${id}.jpg`,
+        mimeType: "image/jpeg",
+        name: `${id}.jpg`,
+        sizeBytes: 1,
+      }) as unknown as ComposerDraft["attachments"][number];
+    const chip = (id: string) =>
+      formatComposerContextReference({
+        kind: "image",
+        contextId: toComposerContextId(id),
+        label: `${id}.jpg`,
+      });
+    const tasks = buildPendingNewTasks({
+      queuedMessages: [],
+      drafts: {
+        "new-task:photos": draft(`${chip("ctx-a")} ${chip("ctx-b")} `, "2026-09-05T09:00:00.000Z", {
+          attachments: [image("a"), image("b")],
+        }),
+        "new-task:words": draft(`Why is ${chip("ctx-a")} blurry?`, "2026-09-05T08:00:00.000Z", {
+          attachments: [image("a")],
+        }),
+      },
+    });
+
+    expect(tasks.map((task) => task.title)).toEqual(["2 photos", "Why is blurry?"]);
   });
 
   it("orders queued creations newest first and skips existing-thread messages", () => {

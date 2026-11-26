@@ -281,7 +281,7 @@ describe("sidebar quick filters", () => {
 
   it("explains pending approvals, inherited questions, plans, errors and limits", () => {
     expect(sidebarThreadAttentionLabel(approval)).toBe("Needs approval");
-    expect(sidebarThreadAttentionLabel(input)).toBe("Reply needed");
+    expect(sidebarThreadAttentionLabel(input)).toBe("Needs you");
     expect(sidebarThreadAttentionLabel(plan)).toBe("Plan ready");
     expect(sidebarThreadAttentionLabel(failed)).toBe("Failed");
     expect(

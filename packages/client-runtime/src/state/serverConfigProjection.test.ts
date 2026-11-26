@@ -13,7 +13,10 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { applyServerConfigProjection } from "./serverConfigProjection.ts";
+import {
+  applyServerConfigProjection,
+  restoreCachedServerConfig,
+} from "./serverConfigProjection.ts";
 import {
   hasCompleteProviderWorkspaceSnapshot,
   resolveProviderSkillsForCwd,
@@ -100,6 +103,28 @@ const encodeCanonical = Schema.encodeSync(ServerConfigStreamEvent);
 const wireRoundTrip = (event: ServerConfigStreamWireEvent) => decodeWire(encodeWire(event));
 
 const initial = () => applyServerConfigProjection(Option.none(), wireRoundTrip(compactSnapshot));
+
+it("restores a cached Google model catalog without last version's quota windows", () => {
+  const google = {
+    ...provider,
+    driver: ProviderDriverKind.make("antigravity"),
+    auth: { status: "authenticated", type: "oauth-personal" },
+    models: [{ slug: "gemini", name: "Gemini", isCustom: false, capabilities: null }],
+    usageLimits: {
+      checkedAt: provider.checkedAt,
+      windows: [{ id: "old", label: "Weekly", kind: "weekly", usedPercent: 100 }],
+    },
+  } satisfies ServerProvider;
+  const restored = restoreCachedServerConfig({ ...config, providers: [google, provider] });
+  expect(restored.providers[0]).toMatchObject({
+    models: google.models,
+    usageLimits: {
+      windows: [],
+      unavailable: { reason: "unsupported", message: "Google doesn't share limits with apps yet" },
+    },
+  });
+  expect(restored.providers[1]).toBe(provider);
+});
 
 describe("server config projection transport expansion", () => {
   it.each([fullSnapshot, compactSnapshot])("round-trips a full config through $type", (event) => {

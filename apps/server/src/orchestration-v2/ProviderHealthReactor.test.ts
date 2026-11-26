@@ -355,7 +355,7 @@ it.effect("keeps processing provider health after one failed run lookup", () =>
       "usage_limit",
       "authentication_error",
     ]);
-    expect(failures.every(({ modelIds }) => modelIds === undefined)).toBe(true);
+    expect(failures.map(({ modelIds }) => modelIds)).toEqual([["model-a"], ["model-a"], undefined]);
   }),
 );
 

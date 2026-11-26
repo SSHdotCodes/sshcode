@@ -597,6 +597,10 @@ it("readThread and sendToThread reach threads in other projects", async () => {
                   }),
                 )
               : Effect.succeed({
+                  message: {
+                    id: input.messageId,
+                    notifySenderOnCompletion: input.notifySenderOnCompletion,
+                  },
                   run: { id: "run-foreign", status: "queued" },
                   delivery: "started",
                 } as unknown as ThreadManagementService.ThreadManagementSendResult),
@@ -639,7 +643,10 @@ it("readThread and sendToThread reach threads in other projects", async () => {
       threadId: foreignThreadId,
       message: "hi",
     });
-    expect(sent.threadId).toBe(foreignThreadId);
+    expect(sent).toMatchObject({
+      threadId: foreignThreadId,
+      notice: "You’ll wake when this run ends.",
+    });
     const finished = yield* service
       .sendToThread(makeScope(), { threadId: foreignThreadId, message: "redo", mode: "restart" })
       .pipe(Effect.flip);

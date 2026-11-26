@@ -419,6 +419,7 @@ it.effect.each([
     const projection = {
       thread: {
         id: threadId,
+        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
         projectId,
         worktreePath,
         branch,
@@ -616,6 +617,8 @@ it.effect.each([
     };
     const projection = {
       thread: {
+        id: threadId,
+        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
         worktreePath: shared === "root" ? null : process.cwd(),
         activeProviderThreadId: providerThreadId,
         modelSelection: { instanceId, model: "test" },

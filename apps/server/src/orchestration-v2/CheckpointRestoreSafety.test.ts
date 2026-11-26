@@ -88,6 +88,7 @@ it.effect.each([
     const projection = {
       thread: {
         id: threadId,
+        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
         projectId,
         worktreePath: cwd,
         activeProviderThreadId: providerThreadId,

@@ -946,12 +946,16 @@ it.effect(
       assert.equal(summary.terminalizedRuns, 1);
       assert.equal(summary.stoppedSessions, 1);
       assert.equal(summary.retiredEffects, 2);
-      assert.deepEqual(committedInput?.cancelUnsettledEffects?.effectTypes, [
-        "provider-turn.start",
-        "provider-turn.interrupt",
-        "provider-turn.restart",
-        "runtime-request.respond",
-      ]);
+      assert.sameMembers(
+        [...(committedInput?.cancelUnsettledEffects?.effectTypes ?? [])],
+        [
+          "provider-session.runtime-mode.apply",
+          "provider-turn.start",
+          "provider-turn.interrupt",
+          "provider-turn.restart",
+          "runtime-request.respond",
+        ],
+      );
       const events = committedInput?.events ?? [];
       assert.deepEqual(
         events.map((event) => [

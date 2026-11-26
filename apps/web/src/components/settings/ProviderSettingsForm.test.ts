@@ -65,7 +65,7 @@ describe("ProviderSettingsForm helpers", () => {
 
     expect(serverPassword).toMatchObject({
       label: "Server password",
-      description: "Stored in plain text on disk.",
+      description: "Stored separately on the host.",
       control: "password",
     });
   });

@@ -279,6 +279,7 @@ function makeLocalCommandHarness(input: {
   let projection: OrchestrationV2ThreadProjection = {
     thread: {
       id: threadId,
+      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
       activeProviderThreadId: providerThreadId,
       projectId: ProjectId.make("project-native-account-command"),
       branch: input.worktreePath === undefined ? null : "feature/restore",
@@ -713,6 +714,7 @@ effectIt.effect.each(["cleanup-first", "startup-first"])(
       );
       expect(harness.open).toHaveBeenCalledWith(
         expect.objectContaining({
+          isSubagent: false,
           runtimePolicy: expect.objectContaining({ cwd: worktreePath }),
         }),
       );

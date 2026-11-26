@@ -573,7 +573,7 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
       }),
   );
 
-  it.effect.each(["x", "🙂"])("caps each %s result at 4 KiB without splitting UTF-8", (character) =>
+  it.effect.each(["x", "🙂"])("caps each %s result at 6 KiB without splitting UTF-8", (character) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const sink = yield* EventSink.EventSinkV2;
@@ -595,6 +595,7 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
         now,
       });
       const task = (yield* orchestrator.getThreadProjection(threadId)).subagents[0]!;
+      const full = `Result head: ${character.repeat(7000)} END`;
       yield* sink.write({
         events: [firstId, secondId].map((id) => ({
           id: EventId.make(`event:cap:${id}`),
@@ -607,7 +608,7 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
             ...task,
             id,
             model: "gpt-5.4",
-            result: `Result head: ${character.repeat(5000)} END`,
+            result: full,
           },
         })),
       });
@@ -628,7 +629,8 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
       const results = text.split("\n\n");
       assert.lengthOf(results, 2);
       for (const [index, result] of results.entries()) {
-        assert.isAtMost(Buffer.byteLength(result, "utf8"), 4096);
+        assert.isAtMost(Buffer.byteLength(result, "utf8"), 6144);
+        assert.isAbove(Buffer.byteLength(result, "utf8"), 6144 - Buffer.byteLength(character));
         assert.include(result, "Result head:");
         assert.notInclude(result, " END");
         assert.notInclude(result, "�");
@@ -636,7 +638,6 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
         const [preview, rest] = result.split("\n… rest: ");
         const shown = preview!.slice(preview!.indexOf("Result head:"));
         assert.equal(rest, `task_status({taskId:"${reference}",summaryOffset:${shown.length}})`);
-        const full = `Result head: ${character.repeat(5000)} END`;
         assert.equal(shown + full.slice(shown.length), full);
       }
     }),

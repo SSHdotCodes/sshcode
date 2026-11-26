@@ -702,7 +702,7 @@ it.effect(
   },
 );
 
-it.effect("returns compact quota JSON and text summaries to a read-only client", () =>
+it.effect("returns one compact quota result to a read-only client", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     yield* TestClock.setTime(Date.parse("2026-10-16T12:00:00.000Z"));
@@ -719,13 +719,19 @@ it.effect("returns compact quota JSON and text summaries to a read-only client",
       providers: [
         {
           providerInstanceId: "codex",
-          windows: [{ usedPercent: 35, resetsIn: "resets in 2h 10m" }],
+          windows: [
+            {
+              kind: "session",
+              label: "5-hour",
+              usedPercent: 35,
+              resetsAt: "2026-10-16T14:10:00.000Z",
+            },
+          ],
         },
       ],
     });
     expect(result.content).toEqual([
       { type: "text", text: JSON.stringify(result.structuredContent) },
-      { type: "text", text: "Codex Pro [codex]: 5-hour: 35% used (resets in 2h 10m)" },
     ]);
     const tool = server.tools.find(({ tool }) => tool.name === "usage_limits")!.tool;
     const validate = new AjvJsonSchemaValidator().getValidator(tool.outputSchema as JsonSchemaType);

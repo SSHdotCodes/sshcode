@@ -16,6 +16,7 @@ import { chatMarkdownClipboardPayload } from "../markdown-clipboard";
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { GitHubIcon } from "./Icons";
 import { Button } from "./ui/button";
+import { WebsiteLetterTile } from "./WebsiteLetterTile";
 import { toastManager } from "./ui/toast";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 
@@ -26,13 +27,19 @@ vi.mock("./chat/MermaidDiagram", () => ({
   MermaidDiagram: () => <svg aria-label="Diagram" />,
 }));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
+// Pinned here so these tests hold whichever way Website icons defaults.
+const websiteIcons = vi.hoisted(() => ({ enabled: true }));
 vi.mock("../hooks/useSettings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../hooks/useSettings")>();
-  const settings = actual.getClientSettings();
+  const defaults = actual.getClientSettings();
+  const on = { ...defaults, websiteIconsEnabled: true };
+  const off = { ...defaults, websiteIconsEnabled: false };
   return {
     ...actual,
-    useClientSettings: (select?: (value: typeof settings) => unknown) =>
-      select ? select(settings) : settings,
+    useClientSettings: (select?: (value: typeof defaults) => unknown) => {
+      const settings = websiteIcons.enabled ? on : off;
+      return select ? select(settings) : settings;
+    },
   };
 });
 vi.mock("./ui/tooltip", async () => {
@@ -271,6 +278,25 @@ describe("ChatMarkdown favicon privacy", () => {
       expect(renderer!.root.findAllByType("img")).toHaveLength(0);
       expect(renderer!.root.findAllByType(GitHubIcon)).toHaveLength(1);
     } finally {
+      await act(async () => {
+        renderer?.unmount();
+      });
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("draws a local letter tile and requests no icon when Website icons is off", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    websiteIcons.enabled = false;
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(<ChatMarkdown cwd="/tmp/project" text="[Link](https://example.com)" />);
+      });
+      expect(renderer!.root.findAllByType("img")).toHaveLength(0);
+      expect(renderer!.root.findAllByType(WebsiteLetterTile)).toHaveLength(1);
+    } finally {
+      websiteIcons.enabled = true;
       await act(async () => {
         renderer?.unmount();
       });

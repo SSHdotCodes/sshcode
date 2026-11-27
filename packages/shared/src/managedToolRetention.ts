@@ -28,28 +28,37 @@ function references(haystack: string, directory: string) {
   }
 }
 
+/**
+ * Gone, or a same-user process the kernel will not show us (another user
+ * namespace, a confined profile). Containers and sandboxed apps are common, so
+ * one of them must not stop every prune. Its command line is still checked
+ * through the `ps` listing.
+ */
+const cannotInspect = (error: unknown) =>
+  ["ENOENT", "ESRCH", "EACCES", "EPERM"].some((code) => hasCode(error, code));
+
 async function readLinuxProcessPaths() {
   const paths: string[] = [];
+  const optional = <A>(read: Promise<A>, missing: A) =>
+    read.catch((error: unknown) => {
+      if (cannotInspect(error)) return missing;
+      throw error;
+    });
   for (const pid of await NodeFSP.readdir("/proc")) {
     if (!/^\d+$/u.test(pid)) continue;
     const directory = "/proc/" + pid;
-    try {
-      if ((await NodeFSP.stat(directory)).uid !== process.getuid?.()) continue;
-      const readLink = (file: string) =>
-        NodeFSP.readlink(file).catch((error: unknown) => {
-          if (hasCode(error, "ENOENT")) return "";
-          throw error;
-        });
-      paths.push(
-        await readLink(directory + "/exe"),
-        await readLink(directory + "/cwd"),
-        await NodeFSP.readFile(directory + "/maps", "utf8"),
-      );
-      for (const fd of await NodeFSP.readdir(directory + "/fd")) {
-        paths.push(await readLink(directory + "/fd/" + fd));
-      }
-    } catch (error) {
-      if (!hasCode(error, "ENOENT") && !hasCode(error, "ESRCH")) throw error;
+    const owner = await optional(
+      NodeFSP.stat(directory).then((info): number | undefined => info.uid),
+      undefined,
+    );
+    if (owner === undefined || owner !== process.getuid?.()) continue;
+    paths.push(
+      await optional(NodeFSP.readlink(directory + "/exe"), ""),
+      await optional(NodeFSP.readlink(directory + "/cwd"), ""),
+      await optional(NodeFSP.readFile(directory + "/maps", "utf8"), ""),
+    );
+    for (const fd of await optional(NodeFSP.readdir(directory + "/fd"), [])) {
+      paths.push(await optional(NodeFSP.readlink(directory + "/fd/" + fd), ""));
     }
   }
   return paths.join("\0");

@@ -1,12 +1,18 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, expect, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import { Command } from "effect/cli";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { SERVER_DOWNLOADS_UNAVAILABLE, ServerDownloadsPublished } from "@t3tools/shared/cliRelease";
+import * as NetService from "@t3tools/shared/Net";
 
-import { repointLauncher, resolveLauncherPath } from "./update.ts";
+import packageJson from "../../package.json" with { type: "json" };
+import { repointLauncher, resolveLauncherPath, updateCommand } from "./update.ts";
 
 it.layer(NodeServices.layer)("sshcode update launcher", (it) => {
   it.effect("repoints a symlink that lives in a runtime versions tree", () =>
@@ -100,5 +106,43 @@ it.layer(NodeServices.layer)("sshcode update launcher", (it) => {
       assert.equal(relative, launcher);
       assert.equal(absent, undefined);
     }).pipe(Effect.scoped, Effect.provideService(HostProcess.Platform, "linux")),
+  );
+});
+
+it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("sshcode update command", (it) => {
+  const runUpdateCommand = (baseDir: string, published: boolean) =>
+    Command.runWith(updateCommand, { version: packageJson.version })([
+      "not-a-version",
+      "--base-dir",
+      baseDir,
+    ]).pipe(
+      Effect.provideService(ServerDownloadsPublished, published),
+      Effect.provideService(HostProcess.Environment, {}),
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
+      Effect.flip,
+    );
+
+  it.effect("refuses before any work while releases carry no server download", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = `${yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-cli-test-" })}/home`;
+
+      const error = yield* runUpdateCommand(baseDir, false);
+
+      expect(error).toMatchObject({ _tag: "UserError", userMessage: SERVER_DOWNLOADS_UNAVAILABLE });
+      expect(yield* fs.exists(baseDir)).toBe(false);
+    }),
+  );
+
+  it.effect("goes on to the update once releases carry it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = `${yield* fs.makeTempDirectoryScoped({ prefix: "t3-update-cli-test-" })}/home`;
+
+      // The version check is the update's first step and needs no network.
+      const error = yield* runUpdateCommand(baseDir, true);
+
+      expect(error).toMatchObject({ _tag: "CliUpdateError" });
+    }),
   );
 });

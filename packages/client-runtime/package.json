@@ -351,6 +351,14 @@
       "types": "./src/state/subagentRankings.ts",
       "default": "./src/state/subagentRankings.ts"
     },
+    "./state/team-board": {
+      "types": "./src/state/teamBoard.ts",
+      "default": "./src/state/teamBoard.ts"
+    },
+    "./state/team-board-fixture": {
+      "types": "./src/state/teamBoardFixture.ts",
+      "default": "./src/state/teamBoardFixture.ts"
+    },
     "./state/subagent-display": {
       "types": "./src/state/subagentDisplay.ts",
       "default": "./src/state/subagentDisplay.ts"
@@ -522,6 +530,14 @@
     "./state/chat-tabs": {
       "types": "./src/state/chatTabs.ts",
       "default": "./src/state/chatTabs.ts"
+    },
+    "./state/agent-behavior": {
+      "types": "./src/state/agentBehavior.ts",
+      "default": "./src/state/agentBehavior.ts"
+    },
+    "./state/bots": {
+      "types": "./src/state/bots.ts",
+      "default": "./src/state/bots.ts"
     },
     "./state/session-boxes": {
       "types": "./src/state/sessionBoxes.ts",

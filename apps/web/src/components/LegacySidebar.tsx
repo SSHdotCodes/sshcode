@@ -91,7 +91,7 @@ import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import {
   readThreadShell,
-  useProjects,
+  useSidebarProjects,
   useThreadShells,
   useThreadShellsForProjectRefs,
   waitForProjectRemoval,
@@ -214,6 +214,7 @@ import {
 import { sortThreads } from "../lib/threadSort";
 import { SidebarNotesLink } from "./sidebar/SidebarNotesLink";
 import { SidebarWorkflowsLink } from "./sidebar/SidebarWorkflowsLink";
+import { SidebarBotsGroup } from "./sidebar/SidebarBotsGroup";
 import {
   useHiddenWorkflowChatKeys,
   withoutWorkflowRunChats,
@@ -3127,6 +3128,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
           </SidebarMenu>
           <SidebarNotesLink />
           <SidebarWorkflowsLink />
+          <SidebarBotsGroup />
         </SidebarGroup>
       }
     >
@@ -3271,7 +3273,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
 });
 
 export default function LegacySidebar() {
-  const projects = useProjects();
+  const projects = useSidebarProjects();
   const rawSidebarThreads = useThreadShells();
   const hiddenWorkflowChats = useHiddenWorkflowChatKeys();
   const sidebarThreads = useMemo(

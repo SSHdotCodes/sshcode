@@ -6,7 +6,11 @@ import {
   describeReadinessCause,
   waitForHttpReady as waitForHttpReadyShared,
 } from "@t3tools/shared/httpReadiness";
-import { cliReleaseDownloadBaseUrl } from "@t3tools/shared/cliRelease";
+import {
+  cliReleaseDownloadBaseUrl,
+  ServerDownloadsPublished,
+  serverDownloadsUnavailable,
+} from "@t3tools/shared/cliRelease";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as NetService from "@t3tools/shared/Net";
 import { extractJsonObject, fromLenientJson } from "@t3tools/shared/schemaJson";
@@ -1799,6 +1803,14 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       ...sshTargetLogFields(target),
       issuePairingToken: requestOptions?.issuePairingToken === true,
     });
+    const runner =
+      options.resolveCliRunner === undefined ? undefined : yield* options.resolveCliRunner;
+    // Only a dev node-script runner works without the release archive the remote would install.
+    const unavailable = isNodeScriptRunner(runner)
+      ? null
+      : serverDownloadsUnavailable(yield* ServerDownloadsPublished);
+    if (unavailable !== null)
+      return yield* new SshLaunchError({ message: unavailable, stdout: "" });
     const baseResolved = yield* resolveSshTarget(target.alias || target.hostname);
     const resolvedTarget: DesktopSshEnvironmentTarget = {
       ...baseResolved,
@@ -1810,8 +1822,6 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       ...sshTargetLogFields(resolvedTarget),
       key,
     });
-    const runner =
-      options.resolveCliRunner === undefined ? undefined : yield* options.resolveCliRunner;
     yield* Effect.logDebug("ssh.environment.runner.resolved", {
       ...sshTargetLogFields(resolvedTarget),
       ...sshRunnerLogFields(runner),

@@ -19,10 +19,10 @@ For a command-line host, run:
 sshcode connect
 ```
 
-Follow the sign-in instructions. Setup offers a
-[background service](./background-service.md); if you decline it, start the
-server with `sshcode serve`. Saving your sign-in alone does not make the machine
-reachable.
+Follow the sign-in instructions, then start the server with `sshcode serve`.
+Saving your sign-in alone does not make the machine reachable. A
+[background service](./background-service.md) is not available yet:
+SSHCode's releases don't include the server download this needs, so run the server from a source checkout instead.
 
 On your other device, sign in to the same T3 Connect account and choose the
 environment. Over SSH, the CLI prints a browser link and a short code. Open the
@@ -163,6 +163,8 @@ scheme uses HTTP, so include `https://` when your server uses HTTPS.
 
 ## Desktop-managed SSH
 
+Not available yet: SSHCode's releases don't include the server download this needs, so run the server from a source checkout instead.
+
 In the desktop app, open **Settings → Connections → Add environment**, choose
 **SSH**, and enter a host or SSH alias such as `user@example.com`. SSHCode starts
 or reuses a server there and opens the port forward for you. Projects, provider
@@ -225,8 +227,7 @@ command to run on the host:
 sudo sshcode browser setup
 ```
 
-The server shows the exact line for how you started it, such as
-`sudo npx sshcode browser setup`, and keeps your `PATH` when Node is installed only
+The server shows the exact line to run, and keeps your `PATH` when Node is installed only
 for your user. Where `sshcode` is not on your `PATH`, such as with only the
 desktop app installed, it names the full path of the app's own `sshcode` instead. It allows Chrome's sandbox with an AppArmor profile and installs
 any missing libraries with apt. It is safe to run again. Without `sudo`, it
@@ -254,11 +255,11 @@ expires.
 To choose a token's permissions, pass `--scope` once for each scope you want:
 
 ```sh
-npx sshcode pair --scope orchestration:read --scope relay:read
+sshcode pair --scope orchestration:read --scope relay:read
 ```
 
 The selected scopes replace the default permissions. The same option works with
-`npx sshcode auth pairing create` and `npx sshcode auth session issue`; each command's
+`sshcode auth pairing create` and `sshcode auth session issue`; each command's
 `--help` lists the available scopes. Without `--scope`, pairing tokens retain
 standard client permissions and issued bearer sessions retain administrative
 permissions.

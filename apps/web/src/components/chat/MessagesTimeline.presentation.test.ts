@@ -212,6 +212,7 @@ describe("timeline dividers", () => {
       runId: RunId.make("claude"),
       label: "Worked for 4m",
       expanded: false,
+      hidesWork: true,
     };
     const rows = decorateMessagesTimelineRows(
       [
@@ -251,6 +252,7 @@ describe("timeline dividers", () => {
       runId: RunId.make("earlier"),
       label: "Earlier turn",
       expanded: false,
+      hidesWork: true,
     };
     const timelineEntries = [
       {

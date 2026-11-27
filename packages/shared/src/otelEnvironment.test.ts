@@ -511,3 +511,13 @@ describe("OtelEnvironment", () => {
     );
   });
 });
+
+describe("isDoNotTrackSet", () => {
+  it("reads the DO_NOT_TRACK convention's truthy values only", () => {
+    assert.isTrue(OtelEnvironment.isDoNotTrackSet({ DO_NOT_TRACK: "1" }));
+    assert.isTrue(OtelEnvironment.isDoNotTrackSet({ DO_NOT_TRACK: " true " }));
+    assert.isFalse(OtelEnvironment.isDoNotTrackSet({ DO_NOT_TRACK: "0" }));
+    assert.isFalse(OtelEnvironment.isDoNotTrackSet({ DO_NOT_TRACK: "" }));
+    assert.isFalse(OtelEnvironment.isDoNotTrackSet({}));
+  });
+});

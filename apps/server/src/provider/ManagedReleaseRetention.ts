@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import { lock } from "proper-lockfile";
+import { pruneManagedToolVersions } from "@t3tools/shared/managedToolRetention";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -18,6 +19,7 @@ const missing = (error: unknown) =>
 /** Call lease, rememberRollback, prune and hasLeases while holding withLock. */
 export function managedReleaseRetention(input: {
   readonly directory: string;
+  readonly toolsDirectory?: string;
   readonly versionsDirectory: string;
   readonly validName: (name: string) => boolean;
   readonly active: Effect.Effect<string | null>;
@@ -71,13 +73,18 @@ export function managedReleaseRetention(input: {
       return () => io(() => NodeFSP.rm(file, { force: true })).pipe(Effect.ignore);
     });
 
-  const leased = (version: string) =>
+  const leased = (version: string, dryRun = false) =>
     io(async () => {
+      const lstat = (directory: string) =>
+        NodeFSP.lstat(directory).catch((error: unknown) => {
+          if (missing(error)) return null;
+          throw error;
+        });
+      const rootInfo = await lstat(leaseRoot);
+      if (rootInfo === null) return false;
+      if (!rootInfo.isDirectory()) return true;
       const directory = NodePath.join(leaseRoot, version);
-      const info = await NodeFSP.lstat(directory).catch((error: unknown) => {
-        if (missing(error)) return null;
-        throw error;
-      });
+      const info = await lstat(directory);
       if (info === null) return false;
       if (!info.isDirectory() || info.isSymbolicLink()) return true;
       for (const name of await NodeFSP.readdir(directory)) {
@@ -90,7 +97,7 @@ export function managedReleaseRetention(input: {
           // Unknown owners and permission failures protect the release.
           if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) return true;
         }
-        await NodeFSP.rm(NodePath.join(directory, name), { force: true });
+        if (!dryRun) await NodeFSP.rm(NodePath.join(directory, name), { force: true });
       }
       return false;
     });
@@ -112,40 +119,40 @@ export function managedReleaseRetention(input: {
       ? Effect.void
       : io(() => NodeFSP.writeFile(rollbackPath, JSON.stringify(previous), { mode: 0o600 }));
 
-  const prune = Effect.gen(function* () {
-    const active = yield* input.active;
-    if (active === null || !input.validName(active)) return;
-    const rollback = yield* io(async () => {
-      try {
-        const raw = await NodeFSP.readFile(rollbackPath, "utf8");
-        const parsed: unknown = JSON.parse(raw);
-        return typeof parsed === "string" && input.validName(parsed) ? parsed : null;
-      } catch (error) {
-        if (missing(error) || error instanceof SyntaxError) return null;
-        throw error;
+  const prune = (dryRun = false) =>
+    Effect.gen(function* () {
+      const active = yield* input.active;
+      if (active === null || !input.validName(active)) return;
+      const rollback = yield* io(async () => {
+        try {
+          const raw = await NodeFSP.readFile(rollbackPath, "utf8");
+          const parsed: unknown = JSON.parse(raw);
+          return typeof parsed === "string" && input.validName(parsed) ? parsed : null;
+        } catch (error) {
+          if (missing(error) || error instanceof SyntaxError) return null;
+          throw error;
+        }
+      });
+      const result = yield* pruneManagedToolVersions({
+        toolsDirectory: input.toolsDirectory ?? NodePath.dirname(input.directory),
+        versionsDirectory: input.versionsDirectory,
+        current: active,
+        rollback: rollback ?? undefined,
+        isVersion: input.validName,
+        completed: input.completed,
+        leased: (name) => leased(name, dryRun),
+        dryRun,
+      }).pipe(Effect.mapError((cause) => new ManagedReleaseRetentionError({ cause })));
+      if (!dryRun) {
+        for (const directory of result.candidates) {
+          // Remove only empty lease directories. Their parents are separate from release files.
+          yield* io(() =>
+            NodeFSP.rmdir(NodePath.join(leaseRoot, NodePath.basename(directory))),
+          ).pipe(Effect.ignore);
+        }
       }
+      return result;
     });
-    const candidates: Array<{ readonly name: string; readonly modified: number }> = [];
-    const names = yield* io(() => NodeFSP.readdir(input.versionsDirectory));
-    for (const name of names) {
-      if (!input.validName(name)) continue;
-      const info = yield* io(() => NodeFSP.lstat(NodePath.join(input.versionsDirectory, name)));
-      if (!info.isDirectory() || info.isSymbolicLink() || !(yield* input.completed(name))) continue;
-      candidates.push({ name, modified: info.mtimeMs });
-    }
-    const previous =
-      candidates.find(({ name }) => name === rollback && name !== active) ??
-      candidates
-        .filter(({ name }) => name !== active)
-        .sort((a, b) => b.modified - a.modified || a.name.localeCompare(b.name))[0];
-    for (const { name } of candidates) {
-      if (name === active || name === previous?.name || (yield* leased(name))) continue;
-      // Acquisition and activation take the same lock, so neither can race deletion.
-      yield* io(() =>
-        NodeFSP.rm(NodePath.join(input.versionsDirectory, name), { recursive: true, force: true }),
-      );
-      yield* io(() => NodeFSP.rm(NodePath.join(leaseRoot, name), { recursive: true, force: true }));
-    }
-  });
+
   return { withLock, lease, hasLeases, rememberRollback, prune };
 }

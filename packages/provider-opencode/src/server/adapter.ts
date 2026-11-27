@@ -65,6 +65,7 @@ import {
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import {
   SubagentsEnabled,
+  currentAgentBehavior,
   t3OrchestrationSystemPrompt,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
@@ -293,6 +294,7 @@ interface ActiveOpenCodeTurn {
   readonly providerTurn: OrchestrationV2ProviderTurn;
   nextItemOrdinal: number;
   nativeUserMessageId: string | null;
+  unsentRootPrompt: boolean;
   admissionMessageId: string | null;
   interrupted: boolean;
   finalized: boolean;
@@ -384,6 +386,7 @@ interface OpenCodeSubagentContext {
   childThreadId: ThreadId | null;
   childProviderThreadId: OrchestrationV2ProviderThread["id"] | null;
   model: string | null;
+  nativeType: string | undefined;
   result: string | null;
   // A background task call returns at launch; held here until its child session stops.
   launch: ToolPart | null;
@@ -642,11 +645,17 @@ export function openCodePermissionRules(
   const implicitFullAccess =
     sandboxType === undefined && runtimePolicy.runtimeMode === "full-access";
 
+  const noSubagents: PermissionRuleset =
+    currentAgentBehavior().subagents === "none"
+      ? [{ permission: "task", pattern: "*", action: "deny" }]
+      : [];
+
   if (!requiresApproval && (externallySandboxed || dangerFullAccess || implicitFullAccess)) {
     // Task children copy only external_directory and deny rules before their first tool call.
     return [
       { permission: "*", pattern: "*", action: "allow" },
       { permission: "external_directory", pattern: "*", action: "allow" },
+      ...noSubagents,
     ];
   }
 
@@ -716,6 +725,10 @@ export function openCodePermissionRules(
         }
       }
     }
+  }
+
+  if (noSubagents.length > 0) {
+    rules.push(...noSubagents);
   }
 
   return rules;
@@ -1204,6 +1217,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 : providerRef(turn.nativeUserMessageId, "weak"),
             status,
             completedAt,
+            ...(status === "interrupted" && turn.unsentRootPrompt ? { promptDropped: true } : {}),
             ...(completedAt === null
               ? {}
               : {
@@ -1379,6 +1393,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           const input = toolInput(part);
           const prompt = recordString(input, "prompt") ?? "";
           const title = toolTitle(part) ?? recordString(input, "description") ?? null;
+          const nativeType = recordString(input, "subagent_type")?.trim() || undefined;
           let context = subagentsByNativeItemId.get(part.id);
           if (context === undefined) {
             context = {
@@ -1393,12 +1408,14 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               childThreadId: null,
               childProviderThreadId: null,
               model: null,
+              nativeType,
               result: null,
               launch: null,
             };
             subagentsByNativeItemId.set(part.id, context);
           }
           context.model = toolModel(part) ?? context.model;
+          context.nativeType = nativeType ?? context.nativeType;
           const childSessionId = taskSessionId(part);
           if (childSessionId !== null && context.childSessionId === null) {
             context.childSessionId = childSessionId;
@@ -1532,6 +1549,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             prompt,
             title,
             model: context.model,
+            ...(context.nativeType === undefined ? {} : { nativeType: context.nativeType }),
             status: subagentStatus,
             result: context.result,
             startedAt: context.startedAt,
@@ -2376,6 +2394,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             providerTurn,
             nextItemOrdinal: 1,
             nativeUserMessageId: message.id,
+            unsentRootPrompt: false,
             admissionMessageId: null,
             interrupted: false,
             finalized: false,
@@ -3082,6 +3101,16 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           },
           abortController: AbortController,
         ) {
+          const generation = turn.admissionGeneration;
+          const sendIfCurrent =
+            <A>(send: (signal: AbortSignal) => Promise<A>) =>
+            async (signal: AbortSignal) => {
+              const requestSignal = AbortSignal.any([signal, abortController.signal]);
+              if (requestSignal.aborted || !promptAdmissionIsCurrent(state, turn, generation))
+                return;
+              turn.unsentRootPrompt = false;
+              return send(requestSignal);
+            };
           const text = payload.parts
             ?.filter((part) => part.type === "text")
             .map((part) => part.text)
@@ -3089,16 +3118,16 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             .trim();
           const match = text?.match(/^\/([^\s/]+)(?:\s+([\s\S]*))?$/);
           const command = match
-            ? (yield* OpenCodeRuntime.loadOpenCodeCommands(client).pipe(
+            ? (yield* OpenCodeRuntime.loadOpenCodeCommands(client, abortController.signal).pipe(
                 Effect.timeout("10 seconds"),
                 Effect.orElseSucceed(() => []),
               )).find((entry) => entry.name === match[1])
             : undefined;
           if (!command) {
-            return yield* sdkCall("session.promptAsync", payload, (signal) =>
-              client.session.promptAsync(payload, {
-                signal: AbortSignal.any([signal, abortController.signal]),
-              }),
+            return yield* sdkCall(
+              "session.promptAsync",
+              payload,
+              sendIfCurrent((signal) => client.session.promptAsync(payload, { signal })),
             ).pipe(Effect.asVoid);
           }
           const receipt = Deferred.makeUnsafe<void>();
@@ -3107,7 +3136,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             commandControllers.get(payload.sessionID) ?? new Set<AbortController>();
           controllers.add(abortController);
           commandControllers.set(payload.sessionID, controllers);
-          const generation = turn.admissionGeneration;
           const commandPayload = {
             sessionID: payload.sessionID,
             messageID: payload.messageID,
@@ -3120,10 +3148,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             ...(payload.variant ? { variant: payload.variant } : {}),
             parts: payload.parts?.filter((part) => part.type === "file") ?? [],
           };
-          const request = yield* sdkCall("session.command", commandPayload, (signal) =>
-            client.session.command(commandPayload, {
-              signal: AbortSignal.any([signal, abortController.signal]),
-            }),
+          const request = yield* sdkCall(
+            "session.command",
+            commandPayload,
+            sendIfCurrent((signal) => client.session.command(commandPayload, { signal })),
           ).pipe(
             Effect.asVoid,
             Effect.tapError((cause) =>
@@ -3232,6 +3260,26 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 client.session.get({ sessionID: sessionId }),
               );
               const nativeSession = unwrapData("session.get", response);
+              // The 1.x event stream is scoped to this client directory. A resumed
+              // session can still be associated with the previous worktree.
+              if (typeof nativeSession.directory === "string" && nativeSession.directory !== cwd) {
+                const paths = yield* sdkCall("path.get", {}, (signal) =>
+                  client.path.get(undefined, { signal }),
+                );
+                const directory = unwrapData("path.get", paths).directory;
+                if (nativeSession.directory !== directory) {
+                  const body = { sessionID: sessionId, destination: { directory } };
+                  yield* sdkCall("session.move", body, (signal) =>
+                    client["client"].post({
+                      url: "/experimental/control-plane/move-session",
+                      body,
+                      signal,
+                      throwOnError: true,
+                    }),
+                  );
+                }
+              }
+
               const resumedAt = yield* DateTime.now;
               const providerThread = {
                 ...threadInput.providerThread,
@@ -3340,6 +3388,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 providerTurn,
                 nextItemOrdinal: turnInput.providerTurnOrdinal * 100 + 1,
                 nativeUserMessageId: null,
+                unsentRootPrompt: !isCompaction,
                 admissionMessageId,
                 interrupted: false,
                 finalized: false,
@@ -3624,7 +3673,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 // succeeded; only surface failures for a turn that is
                 // genuinely still running.
                 Effect.catch((cause) =>
-                  turn.finalized
+                  turn.finalized || turn.unsentRootPrompt
                     ? Effect.void
                     : Effect.suspend(() => {
                         turn.interrupted = false;
@@ -3636,6 +3685,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               // even if the root has already emitted its terminal event.
               yield* abortDescendants(sessionId);
               yield* interruptLaunchedSubagents(sessionId);
+              // No native prompt ran, so OpenCode might never publish an idle event for it.
+              if (turn.unsentRootPrompt) yield* finalizeTurn(state!, turn, "interrupted");
             }).pipe(
               Effect.mapError(
                 (cause) =>

@@ -6,10 +6,6 @@ import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/mod
 import { failureNeedsYou } from "@t3tools/client-runtime/state/thread-inbox";
 import * as DateTime from "effect/DateTime";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import {
-  liftNamedChats,
-  rankChatsByTitleSearch,
-} from "@t3tools/client-runtime/composerThreadItems";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
 import {
@@ -19,6 +15,9 @@ import {
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import {
   type EnvironmentThreadSearchMatch,
+  mergeThreadSearchResults,
+  resolveThreadSearchActivityAt,
+  threadSearchContextTerms,
   threadSearchMatchKey,
 } from "@t3tools/client-runtime/state/thread-search";
 import type {
@@ -1261,25 +1260,7 @@ export function sidebarSessionActivityAt(
     "createdAt" | "updatedAt" | "latestUserMessageAt" | "latestRun" | "unsettledAt"
   >,
 ): string | null {
-  let latest: string | null = null;
-  let latestMs = Number.NEGATIVE_INFINITY;
-  for (const candidate of [
-    thread.unsettledAt,
-    thread.latestUserMessageAt,
-    thread.latestRun?.requestedAt,
-    thread.latestRun?.startedAt,
-    thread.latestRun?.completedAt,
-  ]) {
-    const parsed = toSortableTimestamp(candidate ?? undefined);
-    if (candidate && parsed !== null && parsed > latestMs) {
-      latest = candidate;
-      latestMs = parsed;
-    }
-  }
-  if (latest !== null) return latest;
-  if (toSortableTimestamp(thread.updatedAt) !== null) return thread.updatedAt;
-  if (toSortableTimestamp(thread.createdAt) !== null) return thread.createdAt;
-  return null;
+  return resolveThreadSearchActivityAt(thread);
 }
 
 export function sidebarSessionActivityMs(thread: SidebarSessionOrderInput): number {
@@ -1465,55 +1446,6 @@ export {
 // (state/thread-sort) so web and mobile compute identical pinned orders.
 export { pinOrderKeyBetween } from "@t3tools/client-runtime/state/thread-sort";
 export { sortPinnedThreadsByOrderKey as sortPinnedThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";
-
-const EMPTY_CONTENT_MATCH_KEYS: ReadonlySet<string> = new Set<string>();
-
-/**
- * Search the already-ordered sidebar thread collection by title or linked PR, best named
- * first (`rankChatsByTitleSearch`; equal matches keep the sidebar's lifecycle order), plus
- * any thread whose messages the server matched (`contentMatchKeys`, keyed by
- * `threadSearchMatchKey`).
- */
-export function searchSidebarThreads<
-  T extends {
-    readonly environmentId: EnvironmentId;
-    readonly id: ThreadId;
-    readonly title: string;
-  } & Parameters<typeof threadPullRequestSearchTerms>[0],
->(
-  threads: readonly T[],
-  query: string,
-  contentMatchKeys: ReadonlySet<string> = EMPTY_CONTENT_MATCH_KEYS,
-): T[] {
-  const normalizedQuery = query.trim().toLowerCase();
-  if (normalizedQuery.length === 0) return [];
-  // Best named first; equal matches keep the sidebar's order (active, snoozed, settled).
-  const titleMatches = rankChatsByTitleSearch(threads, query, (thread) => ({
-    title: thread.title,
-    extraTerms: threadPullRequestSearchTerms(thread),
-  }));
-  const titled = new Set(titleMatches);
-  const contentMatches: T[] = [];
-  for (const thread of threads) {
-    if (titled.has(thread)) {
-      continue;
-    } else if (
-      contentMatchKeys.size > 0 &&
-      contentMatchKeys.has(
-        threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
-      )
-    ) {
-      contentMatches.push(thread);
-    }
-  }
-  const ranks = new Map([...contentMatchKeys].map((key, index) => [key, index]));
-  contentMatches.sort(
-    (a, b) =>
-      (ranks.get(threadSearchMatchKey({ environmentId: a.environmentId, threadId: a.id })) ?? 0) -
-      (ranks.get(threadSearchMatchKey({ environmentId: b.environmentId, threadId: b.id })) ?? 0),
-  );
-  return [...titleMatches, ...contentMatches];
-}
 
 /**
  * Whether a PR's search terms contain every whitespace-separated token of the
@@ -1868,70 +1800,25 @@ export function sortScopedProjectsForSidebar<
   );
 }
 
-/** Title matches stay first; loaded and archived content hits share one relevance order. */
-export function mergeSidebarSearchMatches<T extends { environmentId: EnvironmentId; id: ThreadId }>(
-  titles: ReadonlyArray<T>,
-  matches: ReadonlyArray<EnvironmentThreadSearchMatch>,
-  known: ReadonlyArray<T>,
-): Array<T | EnvironmentThreadSearchMatch> {
-  const key = (thread: T) =>
-    threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id });
-  const seen = new Set(titles.map(key));
-  const loaded = new Map(known.map((thread) => [key(thread), thread]));
-  return [
-    ...titles,
-    ...matches.flatMap((match) => {
-      const id = threadSearchMatchKey(match);
-      if (seen.has(id)) return [];
-      seen.add(id);
-      return [loaded.get(id) ?? match];
-    }),
-  ];
-}
-
-/**
- * The sidebar's search list: what the title and message searches found, with the chats the
- * words name moved first (`liftNamedChats`). The found order cannot see what a chat ran
- * on, so "muse wonder full black hole" listed chats that mention those words ahead of the
- * Muse Wonder Full black hole chats themselves. `nameable` are the chats that may be listed
- * on their name alone, in sidebar order.
- */
 export function rankSidebarSearchResults<
-  T extends {
-    readonly environmentId: EnvironmentId;
-    readonly id: ThreadId;
-    readonly title: string;
-    readonly modelSelection?:
-      | { readonly model: string; readonly instanceId?: string | null | undefined }
-      | null
-      | undefined;
-  },
+  T extends { readonly environmentId: EnvironmentId; readonly id: ThreadId } & Parameters<
+    typeof resolveThreadSearchActivityAt
+  >[0] &
+    Parameters<typeof threadSearchContextTerms>[0],
 >(input: {
   readonly query: string;
-  readonly titles: ReadonlyArray<T>;
   readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
   readonly known: ReadonlyArray<T>;
-  readonly nameable: ReadonlyArray<T>;
+  readonly projectOf?: (thread: T) => Parameters<typeof threadSearchContextTerms>[1];
 }): Array<T | EnvironmentThreadSearchMatch> {
-  const found = mergeSidebarSearchMatches(input.titles, input.matches, input.known);
-  const keyOf = (row: T | EnvironmentThreadSearchMatch) =>
-    "id" in row
-      ? threadSearchMatchKey({ environmentId: row.environmentId, threadId: row.id })
-      : threadSearchMatchKey(row);
-  const listed = new Set(found.map(keyOf));
-  return liftNamedChats<T | EnvironmentThreadSearchMatch>({
+  return mergeThreadSearchResults({
     query: input.query,
-    results: found,
-    chatOf: (row) =>
-      "id" in row
-        ? {
-            title: row.title,
-            model: row.modelSelection?.model,
-            providerInstanceId: row.modelSelection?.instanceId,
-          }
-        : row.title === undefined
-          ? null
-          : { title: row.title },
-    others: input.nameable.filter((thread) => !listed.has(keyOf(thread))),
+    threads: input.known,
+    matches: input.matches,
+    keyOf: (thread) =>
+      threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+    activityAt: resolveThreadSearchActivityAt,
+    contextTerms: (thread) => threadSearchContextTerms(thread, input.projectOf?.(thread)),
+    fromMatch: (match) => match,
   });
 }

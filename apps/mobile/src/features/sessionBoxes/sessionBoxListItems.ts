@@ -12,14 +12,61 @@ import {
   threadHasUnseenCompletion,
   threadListV2ListItemsAreEqual,
   type ThreadListV2ListItem,
+  type ThreadListV2SearchListItem,
 } from "../threads/threadListV2";
 
 export interface SessionBoxEntry {
   readonly thread: EnvironmentThreadShell;
   readonly box: SessionBoxPresentation;
   readonly pinned: boolean;
+  readonly settled: boolean;
+  readonly snoozed: boolean;
   /** While searching: the words around the match inside the chat, if it matched there. */
   readonly match: string | null;
+}
+
+export type SessionBoxMenuActionKind =
+  | "open"
+  | "pin"
+  | "unpin"
+  | "settle"
+  | "unsettle"
+  | "unsnooze"
+  | "rename"
+  | "archive";
+
+export interface SessionBoxMenuActionSpec {
+  readonly kind: SessionBoxMenuActionKind;
+  readonly label: string;
+  readonly destructive?: boolean;
+}
+
+export function resolveSessionBoxMenuActions(
+  entry: Pick<SessionBoxEntry, "pinned" | "settled" | "snoozed">,
+  capabilities: {
+    readonly pinningSupported: boolean;
+    readonly settlementSupported: boolean;
+    readonly snoozeSupported: boolean;
+  },
+): ReadonlyArray<SessionBoxMenuActionSpec> {
+  const actions: SessionBoxMenuActionSpec[] = [{ kind: "open", label: "Open" }];
+  if (capabilities.pinningSupported) {
+    actions.push(entry.pinned ? { kind: "unpin", label: "Unpin" } : { kind: "pin", label: "Pin" });
+  }
+  if (entry.snoozed) {
+    if (capabilities.snoozeSupported) {
+      actions.push({ kind: "unsnooze", label: "Unsnooze" });
+    }
+  } else if (capabilities.settlementSupported) {
+    actions.push(
+      entry.settled ? { kind: "unsettle", label: "Unsettle" } : { kind: "settle", label: "Settle" },
+    );
+  }
+  actions.push(
+    { kind: "rename", label: "Rename" },
+    { kind: "archive", label: "Archive", destructive: true },
+  );
+  return actions;
 }
 
 export interface SessionBoxHeadingItem {
@@ -42,6 +89,7 @@ import type { DiscordHeading } from "../discord/discordHeading";
 export type HomeListItem =
   | DiscordHeading
   | ThreadListV2ListItem
+  | ThreadListV2SearchListItem
   | SessionBoxHeadingItem
   | SessionBoxRowItem;
 
@@ -64,19 +112,26 @@ export function matchExcerpt(snippet: string, query: string): string {
 }
 
 function entrySignature(entry: SessionBoxEntry): string {
-  const { box } = entry;
+  const { box, thread } = entry;
   return [
-    entry.thread.environmentId,
-    entry.thread.id,
+    thread.environmentId,
+    thread.id,
+    thread.title,
+    thread.runtime?.providerInstanceId ?? thread.modelSelection?.instanceId,
+    thread.modelSelection?.model,
     box.label,
     box.now,
+    box.status,
     box.statusShort,
+    box.connectionStatus,
     box.tone,
     box.face,
     box.badge,
     box.mascot,
     box.hue,
     entry.pinned,
+    entry.settled,
+    entry.snoozed,
     entry.match,
   ].join("|");
 }
@@ -130,6 +185,8 @@ export function buildSessionBoxListItems(input: {
     return {
       thread: item.item.thread,
       pinned: item.item.pinned,
+      settled: item.item.settled === true,
+      snoozed: item.item.snoozed === true,
       match: snippet ? matchExcerpt(snippet, search?.query ?? "") : null,
       box: sessionBoxConnectionPresentation(
         presentSessionBoxCached(item.item.thread, {

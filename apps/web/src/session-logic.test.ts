@@ -1140,7 +1140,9 @@ describe("native provider presentation in the v2 timeline", () => {
       turnDiffSummaries: [],
       supportsConversationRollback: false,
     });
-    expect(rows.map((row) => row.kind)).toEqual(["message"]);
+    // With the checkpoint gone it is a text-only turn: a plain time header, nothing to open.
+    expect(rows.map((row) => row.kind)).toEqual(["turn-fold", "message"]);
+    expect(rows[0]).toMatchObject({ kind: "turn-fold", hidesWork: false });
   });
 
   it("adds a thought once complete, without rebuilding while it streams", () => {

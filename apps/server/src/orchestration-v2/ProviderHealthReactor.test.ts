@@ -25,7 +25,7 @@ import {
 } from "./ProviderHealthReactor.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
-import { makeModelFailureTracker } from "../provider/modelFailures.ts";
+import { makeModelFailureTracker, modelFailureNote } from "../provider/modelFailures.ts";
 import { modelRankingSelectionKey } from "@t3tools/shared/modelRankings";
 
 const at = DateTime.makeUnsafe("2026-11-03T20:00:00.000Z");
@@ -76,6 +76,7 @@ describe("model failure streaks", () => {
       count: 2,
       at: now,
       message: "Too many requests",
+      kind: "usage_limit",
     });
     expect(tracker.snapshot(now).size).toBe(3);
   });
@@ -101,7 +102,11 @@ describe("model failure streaks", () => {
       },
     } as OrchestrationV2DomainEvent);
     expect(tracker.snapshot(now).get(key)?.count).toBe(1);
-    tracker.record(runUpdated("completed"));
+    tracker.record(run("done"));
+    tracker.record({
+      ...run("done"),
+      payload: { ...run("done").payload, status: "completed" },
+    } as OrchestrationV2DomainEvent);
     expect(tracker.snapshot(now).has(key)).toBe(false);
     tracker.record(run("next"));
     tracker.record(fail("next"));
@@ -112,18 +117,112 @@ describe("model failure streaks", () => {
     ["transport_error", "Connection lost"],
     ["validation_error", "Bad request"],
     ["unknown", "Unknown"],
-    ["billing_error", "Budget exhausted"],
-    ["permission_error", "Forbidden"],
-    ["authentication_error", "Signed out"],
-    ["subscription_error", "Model not in plan"],
     ["provider_error", "Model gemini-3.1-pro has been deprecated."],
-    ["provider_error", "Insufficient credits"],
-    ["usage_limit", "Quota exhausted"],
   ] as const)("ignores %s: %s", (kind, message) => {
     const tracker = makeModelFailureTracker();
     tracker.record(runUpdated("running"));
     tracker.record(errorItem({ class: kind, message }));
     expect(tracker.snapshot(now).size).toBe(0);
+  });
+
+  // Each failure leads retried on the same route in the audit of 11-12 to 11-26.
+  it.each([
+    [
+      "Vertex 429",
+      "provider_error",
+      'Provider request failed with HTTP 429: [{ "error": { "code": 429, "message": "Resource exhausted. Please try again later." } }]',
+      "usage limit 12m ago: HTTP 429 Resource exhausted. Please try again later.",
+    ],
+    [
+      "OpenRouter credit",
+      "provider_error",
+      "This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 1200.",
+      "usage limit 12m ago: This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 1200.",
+    ],
+    [
+      "OpenCode Go limit",
+      "usage_limit",
+      "OpenCode Go 5 hour usage limit reached. Switch to a free model.",
+      "usage limit 12m ago: OpenCode Go 5 hour usage limit reached. Switch to a free model.",
+    ],
+    [
+      "Qwen token quota",
+      "provider_error",
+      "429 Token quota is exhausted",
+      "usage limit 12m ago: 429 Token quota is exhausted",
+    ],
+    [
+      "Qwen token plan",
+      "usage_limit",
+      "Quota exhausted: Your token-plan 1-month quota has been exhausted.",
+      "usage limit 12m ago: Quota exhausted: Your token-plan 1-month quota has been exhausted.",
+    ],
+    [
+      "Kimi empty turn",
+      "provider_error",
+      "The agent ended its turn without writing anything or using a tool. Its model API most likely rejected the request.",
+      "1 failed in a row, last 12m ago: The agent ended its turn without writing anything or using a tool. Its model API most likely rejected the request.",
+    ],
+    [
+      "Tencent model error",
+      "provider_error",
+      "Claude gave up after repeated API errors. There's an issue with the selected model (hy4-flash-dev).",
+      "1 failed in a row, last 12m ago: Claude gave up after repeated API errors. There's an issue with the selected model (hy4-flash-dev).",
+    ],
+    [
+      "Codex policy flag",
+      "validation_error",
+      "Invalid prompt: your prompt was flagged as potentially violating our usage policy.",
+      "usage policy flag 12m ago: Invalid prompt: your prompt was flagged as potentially violating our usage policy.",
+    ],
+    [
+      "policy flag as unknown",
+      "unknown",
+      "Invalid prompt: your prompt was flagged as potentially violating our usage policy.",
+      "usage policy flag 12m ago: Invalid prompt: your prompt was flagged as potentially violating our usage policy.",
+    ],
+    ["billing", "billing_error", "Budget exhausted", "out of credit 12m ago: Budget exhausted"],
+    [
+      "credits",
+      "provider_error",
+      "Insufficient credits",
+      "out of credit 12m ago: Insufficient credits",
+    ],
+    ["plan", "subscription_error", "Model not in plan", "not in plan 12m ago: Model not in plan"],
+    ["sign-in", "authentication_error", "Signed out", "signed out 12m ago: Signed out"],
+    ["permission", "permission_error", "Forbidden", "permission denied 12m ago: Forbidden"],
+  ] as const)("keeps a %s failure on its route", (_name, kind, message, note) => {
+    const tracker = makeModelFailureTracker();
+    tracker.record(runUpdated("running"));
+    tracker.record(errorItem({ class: kind, message }));
+    expect(modelFailureNote(tracker.snapshot(now).get(key)!, now + 12 * 60_000)).toBe(note);
+  });
+
+  it("names the latest kind on a streak and reads hours past the first", () => {
+    const tracker = makeModelFailureTracker();
+    tracker.record(run("a"));
+    tracker.record(fail("a"));
+    tracker.record(run("b"));
+    tracker.record(fail("b", { class: "usage_limit", message: "Token quota is exhausted" }));
+    expect(modelFailureNote(tracker.snapshot(now).get(key)!, now + 135 * 60_000)).toBe(
+      "usage limit, 2 failed in a row, last 2h 15m ago: Token quota is exhausted",
+    );
+  });
+
+  it("keeps a failure past a completed status on the failed run itself", () => {
+    const tracker = makeModelFailureTracker();
+    tracker.record(runUpdated("running"));
+    tracker.record(
+      errorItem({ class: "usage_limit", message: "OpenCode Go 5 hour usage limit reached." }),
+    );
+    tracker.record(runUpdated("completed"));
+    expect(tracker.snapshot(now).get(key)?.kind).toBe("usage_limit");
+    tracker.record(run("next"));
+    tracker.record({
+      ...run("next"),
+      payload: { ...run("next").payload, status: "completed" },
+    } as OrchestrationV2DomainEvent);
+    expect(tracker.snapshot(now).has(key)).toBe(false);
   });
 
   it("ignores retrying errors and failures without a known run", () => {
@@ -134,24 +233,25 @@ describe("model failure streaks", () => {
     expect(tracker.snapshot(now).size).toBe(0);
   });
 
-  it("expires 60 minutes after the last failure, also before counting another run", () => {
+  it("expires 6 hours after the last failure, also before counting another run", () => {
+    const hours = 6 * 60;
     const tracker = makeModelFailureTracker();
     tracker.record(runUpdated("running"));
-    tracker.record(errorItem(busy));
-    expect(tracker.snapshot(now + 60 * 60_000 - 1).get(key)?.count).toBe(1);
+    tracker.record(errorItem({ class: "usage_limit", message: "Token quota is exhausted" }));
+    expect(tracker.snapshot(now + hours * 60_000 - 1).get(key)?.count).toBe(1);
     tracker.record(run("b"));
-    tracker.record({ ...fail("b"), occurredAt: DateTime.add(at, { minutes: 59 }) });
-    expect(tracker.snapshot(now + 60 * 60_000).get(key)?.count).toBe(2);
-    expect(tracker.snapshot(now + 119 * 60_000).size).toBe(0);
+    tracker.record({ ...fail("b"), occurredAt: DateTime.add(at, { minutes: hours - 1 }) });
+    expect(tracker.snapshot(now + hours * 60_000).get(key)?.count).toBe(2);
+    expect(tracker.snapshot(now + (2 * hours - 1) * 60_000).size).toBe(0);
     tracker.record(run("c"));
-    tracker.record({ ...fail("c"), occurredAt: DateTime.add(at, { minutes: 120 }) });
-    expect(tracker.snapshot(now + 120 * 60_000).get(key)?.count).toBe(1);
+    tracker.record({ ...fail("c"), occurredAt: DateTime.add(at, { minutes: 2 * hours }) });
+    expect(tracker.snapshot(now + 2 * hours * 60_000).get(key)?.count).toBe(1);
     const fresh = makeModelFailureTracker();
     fresh.record(run("a"));
     fresh.record(fail("a"));
     fresh.record(run("b"));
-    fresh.record({ ...fail("b"), occurredAt: DateTime.add(at, { minutes: 60 }) });
-    expect(fresh.snapshot(now + 60 * 60_000).get(key)?.count).toBe(1);
+    fresh.record({ ...fail("b"), occurredAt: DateTime.add(at, { minutes: hours }) });
+    expect(fresh.snapshot(now + hours * 60_000).get(key)?.count).toBe(1);
   });
 
   it("bounds both remembered models and runs, evicting the oldest", () => {

@@ -1,7 +1,7 @@
 # SSHCode Mobile
 
 The SSHCode iPhone and Android app connects to any SSHCode server (the desktop app, or
-`npx sshcode` on another machine) and controls its agents remotely. It is not in an app store:
+a server built from source on another machine) and controls its agents remotely. It is not in an app store:
 build it from source.
 
 > [!NOTE]

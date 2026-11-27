@@ -168,7 +168,7 @@ const runLimitedSwitch = (scenario: string): Effect.Effect<void, unknown> =>
           worktreePath: null,
         });
         const originalRequest = oversized
-          ? "Long original constraints ".repeat(8_000)
+          ? "Long original constraints ".repeat(4_000)
           : "Original request: preserve the user's constraints";
         yield* dispatch(
           1,
@@ -222,8 +222,8 @@ const runLimitedSwitch = (scenario: string): Effect.Effect<void, unknown> =>
             : yield* encodeJson(yield* Ref.get(injectedHistory));
           assert.include(delivered, "t3_thread_read");
           if (oversized) {
-            // The 200,000-character request does not fit: it is carried shortened, with its
-            // start, and the full text stays saved in the chat.
+            // The request fits the first turn but exceeds the handoff budget. Keep its
+            // start in the handoff and the full text in the chat.
             assert.isTrue(
               projection.contextHandoffs.some((handoff) =>
                 handoff.history?.messages.some(

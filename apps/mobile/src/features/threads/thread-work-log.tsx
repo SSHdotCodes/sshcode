@@ -40,6 +40,7 @@ import {
   AccessibilityInfo,
   AppState,
   type ColorValue,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -60,7 +61,8 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { canContinueOnAnotherModel } from "@t3tools/shared/continueOnModel";
 import { ContinueOnModelButton } from "./ContinueOnModelButton";
 import { ReplaceProviderCredentialButton } from "./ReplaceProviderCredentialButton";
-import { toolActivityFaviconUrl } from "@t3tools/shared/favicon";
+import { toolActivityFaviconUrl, websiteLetterTile } from "@t3tools/shared/favicon";
+import { useWebsiteIconsEnabled } from "./useNewChatDashboard";
 import { isJavaScriptReplTool } from "@t3tools/shared/toolActivity";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 
@@ -941,6 +943,7 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
   if (failureItem.type === "error" && failureItem.status === "failed") {
     const automatic = automaticProviderRetryPresentation(failureItem);
     const warning = failureItem.failure.class === "usage_limit";
+    const verificationUrl = failureItem.failure.verificationUrl;
     const resetAt = failureItem.failure.resetAt;
     const resetTime = resetAt
       ? new Date(resetAt).toLocaleString(undefined, {
@@ -986,7 +989,7 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
             ) : null}
             <Text
               accessibilityLabel={formatTranscriptTimestamp(row.createdAt)}
-              className="shrink-0 text-2xs tabular-nums text-foreground-muted"
+              className="shrink-0 text-2xs text-foreground-muted"
               style={{ color: props.iconSubtleColor }}
             >
               {formatTranscriptTimestamp(row.createdAt)}
@@ -996,6 +999,15 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
             <Text selectable className="ml-7 text-sm text-foreground">
               {automatic?.detail ?? failureItem.failure.message}
             </Text>
+          ) : null}
+          {verificationUrl ? (
+            <Pressable
+              accessibilityRole="link"
+              className="ml-7 self-start py-2"
+              onPress={() => void Linking.openURL(verificationUrl).catch(() => undefined)}
+            >
+              <Text className="text-sm text-primary">Verify Google account</Text>
+            </Pressable>
           ) : null}
           {failureItem.failure.code === ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE &&
           failureItem.runId !== null ? (
@@ -1644,17 +1656,13 @@ function ToolActivityIconView(props: {
     return <WorkLogIcon icon={props.fallback} color={props.fallbackColor} />;
   }
   if (props.icon._tag === "website") {
-    const source = toolActivityFaviconUrl(props.icon, props.themeAppearance, 32);
-    return source ? (
-      <ToolActivityImage
-        key={source}
-        source={source}
+    return (
+      <WebsiteToolActivityIcon
+        icon={props.icon}
         fallback={props.fallback}
-        color={props.fallbackColor}
+        fallbackColor={props.fallbackColor}
         themeAppearance={props.themeAppearance}
       />
-    ) : (
-      <WorkLogIcon icon={props.fallback} color={props.fallbackColor} />
     );
   }
   if (props.icon._tag === "themed-logo") {
@@ -1680,6 +1688,46 @@ function ToolActivityIconView(props: {
       color={props.fallbackColor}
       themeAppearance={props.themeAppearance}
     />
+  );
+}
+
+function WebsiteToolActivityIcon(props: {
+  readonly icon: Extract<ToolActivityIcon, { readonly _tag: "website" }>;
+  readonly fallback: WorkContentIcon;
+  readonly fallbackColor: ColorValue;
+  readonly themeAppearance: "light" | "dark";
+}) {
+  const [websiteIconsEnabled] = useWebsiteIconsEnabled();
+  if (!websiteIconsEnabled) {
+    const tile = websiteLetterTile(props.icon.pageUrl);
+    return tile ? (
+      // Same box and corner as ToolActivityImage, dimmed like its icon.
+      <View
+        className="h-4 w-4 items-center justify-center overflow-hidden rounded-[3px]"
+        style={{ backgroundColor: tile.background, opacity: 0.7 }}
+      >
+        <Text
+          allowFontScaling={false}
+          style={{ color: "#ffffff", fontSize: 10, fontWeight: "500", lineHeight: 12 }}
+        >
+          {tile.letter}
+        </Text>
+      </View>
+    ) : (
+      <WorkLogIcon icon={props.fallback} color={props.fallbackColor} />
+    );
+  }
+  const source = toolActivityFaviconUrl(props.icon, props.themeAppearance, 32);
+  return source ? (
+    <ToolActivityImage
+      key={source}
+      source={source}
+      fallback={props.fallback}
+      color={props.fallbackColor}
+      themeAppearance={props.themeAppearance}
+    />
+  ) : (
+    <WorkLogIcon icon={props.fallback} color={props.fallbackColor} />
   );
 }
 

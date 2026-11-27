@@ -278,8 +278,9 @@ describe("sshcode pair", () => {
         typeof error === "object" && error !== null && "cause" in error ? error.cause : error,
       );
       assert.include(rendered, "No running SSHCode server found.");
-      assert.include(rendered, "npx sshcode serve");
-      assert.include(rendered, "npx sshcode connect");
+      assert.include(rendered, "Start one with `sshcode serve`");
+      assert.include(rendered, "`sshcode connect`");
+      assert.notInclude(rendered, "npx");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

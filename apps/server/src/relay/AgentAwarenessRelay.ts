@@ -11,6 +11,7 @@ import {
   type RelayAgentActivityPublishProofPayload,
   type RelayAgentActivityState,
 } from "@t3tools/contracts/relay";
+import { isKnownBotThread } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
 import { turnItemUpdateCanEndBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -356,6 +357,9 @@ export function resolveAgentAwarenessRelayActiveThreadIds(input: {
   const projectById = new Map(input.projects.map((project) => [project.id, project]));
   return input.threads
     .filter((thread) => {
+      if (isKnownBotThread(thread.id)) {
+        return false;
+      }
       const project = projectById.get(thread.projectId);
       if (!project) {
         return false;
@@ -537,8 +541,11 @@ export const make = Effect.gen(function* () {
     // domain event, so materializing the full shell here would make the cost
     // of one thread's activity proportional to how many threads exist.
     const threadShell = yield* threads.getThreadShell(threadId);
+    // A bot's own chat wakes on its own all day; it reaches the phone through
+    // Message first (BotService), not Live Activities — also while Bots are off.
+    const botChat = isKnownBotThread(threadId);
     if (
-      threadShell?.lineage.relationshipToParent === "subagent" &&
+      (threadShell?.lineage.relationshipToParent === "subagent" || botChat) &&
       !(yield* Ref.get(publishedStateByThreadRef)).has(threadId)
     ) {
       // Subagents never project activity, so the relay holds no row to clear.
@@ -548,7 +555,7 @@ export const make = Effect.gen(function* () {
       return;
     }
     const thread =
-      threadShell === null || threadShell.archivedAt !== null
+      threadShell === null || threadShell.archivedAt !== null || botChat
         ? Option.none<OrchestrationV2ThreadShell>()
         : Option.some(threadShell);
     const project = Option.isSome(thread)

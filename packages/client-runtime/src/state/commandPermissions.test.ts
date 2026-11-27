@@ -62,6 +62,26 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("allows board history reads without permission to post", () =>
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      const read = createCommandPermissions(runtime, WS_METHODS.teamBoardSubscribe);
+      const write = createCommandPermissions(runtime, WS_METHODS.teamBoardPost);
+      const input = { threadId: ThreadId.make("lead"), text: "A new decision" };
+      registry.set(
+        sessions(env),
+        AsyncResult.success({ ...grant(false), permissions: [AuthOrchestrationReadScope] }),
+      );
+      yield* read.authorize(registry, env, input);
+      expect((yield* write.authorize(registry, env, input).pipe(Effect.exit))._tag).toBe("Failure");
+      registry.set(
+        sessions(env),
+        AsyncResult.success({ ...grant(true), permissions: [AuthOrchestrationOperateScope] }),
+      );
+      yield* write.authorize(registry, env, input);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("only provider managers can clear a credit warning", () =>
     Effect.scoped(
       Effect.gen(function* () {

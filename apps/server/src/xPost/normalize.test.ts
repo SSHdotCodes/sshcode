@@ -161,6 +161,16 @@ describe("recorded response normalization (2026-11-10, trimmed)", () => {
   });
 });
 
+it("decodes the embed's HTML entities but leaves the mirror's text alone", () => {
+  const post = (text: string) => ({ id_str: "20", text, user: { screen_name: "a", name: "A" } });
+  expect(normalizePost(post("Weights &amp; paper &lt;3"), "syndication", "20")?.post.text).toBe(
+    "Weights & paper <3",
+  );
+  expect(normalizePost({ tweet: post("literal &amp;") }, "fxtwitter", "20")?.post.text).toBe(
+    "literal &amp;",
+  );
+});
+
 it("reads a recorded quoted post and detects the embed's note preview", () => {
   expect(normalizePost(xQuote, "syndication", "1769826435576037702")?.incomplete).toBe(true);
   const p = normalizePost(fxQuote, "fxtwitter", "1769826435576037702")!;

@@ -1,4 +1,8 @@
-import type { OrchestrationV2ProjectedTurnItem, OrchestrationV2TurnItem } from "@t3tools/contracts";
+import type {
+  OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2TurnItem,
+  RunId,
+} from "@t3tools/contracts";
 import {
   isSingleRowReplacement,
   visibleTurnItemsRevision,
@@ -6,6 +10,7 @@ import {
 import { turnItemIsWorkspacePreparation } from "@t3tools/client-runtime/state/turn-item-presentation";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 import { isNewerRunningTool } from "@t3tools/client-runtime/work-log/presentation";
+import { cardFromToolItem, cardPresentationsEqual } from "@t3tools/shared/cards";
 import { resolveT3McpToolDefinition } from "@t3tools/shared/t3McpToolPresentation";
 import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
 import * as DateTime from "effect/DateTime";
@@ -25,6 +30,7 @@ import {
   type ThreadFeedEntry,
   type ThreadFeedLatestRun,
   type ThreadFeedPresentationMeta,
+  type ThreadFeedRunTiming,
 } from "./threadActivity";
 
 type MessageEntry = Extract<ThreadFeedEntry, { readonly type: "message" }>;
@@ -95,10 +101,11 @@ function isDelegateTool(item: OrchestrationV2TurnItem): boolean {
   );
 }
 
-/** A completed dynamic tool carrying an HTML render or MCP App stands alone outside activity groups. */
+/** A dynamic tool carrying an interactive card, HTML render, or MCP App stands alone outside activity groups. */
 function becomesStandaloneToolRow(item: OrchestrationV2TurnItem): boolean {
+  if (item.type !== "dynamic_tool") return false;
+  if (cardFromToolItem(item) !== undefined) return true;
   return (
-    item.type === "dynamic_tool" &&
     item.status === "completed" &&
     (htmlRenderFromToolItem(item) !== undefined || mcpAppFromToolItem(item) !== undefined)
   );
@@ -272,12 +279,44 @@ export function createThreadFeedProjector() {
   };
 }
 
+function sameUtc(
+  left: ThreadFeedRunTiming["startedAt"],
+  right: ThreadFeedRunTiming["startedAt"],
+): boolean {
+  if (left === right) return true;
+  if (left == null || right == null) return false;
+  return DateTime.toEpochMillis(left) === DateTime.toEpochMillis(right);
+}
+
+function runTimingsEqual(
+  left: ReadonlyArray<ThreadFeedRunTiming> | undefined,
+  right: ReadonlyArray<ThreadFeedRunTiming> | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return (left?.length ?? 0) === (right?.length ?? 0);
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index++) {
+    const a = left[index]!;
+    const b = right[index]!;
+    if (
+      a.id !== b.id ||
+      a.status !== b.status ||
+      !sameUtc(a.startedAt, b.startedAt) ||
+      !sameUtc(a.completedAt, b.completedAt)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /** Reuse folds and tool groups while only an already-visible streaming message changes. */
 export function createThreadFeedPresentationProjector() {
   let previous:
     | {
         readonly version: FeedRevision;
         readonly options: readonly unknown[];
+        readonly runs: ReadonlyArray<ThreadFeedRunTiming> | undefined;
         readonly input: ReadonlyArray<ThreadFeedEntry>;
         readonly feed: ThreadFeedEntry[];
         readonly messageIndices: ReadonlyMap<string, number>;
@@ -285,7 +324,7 @@ export function createThreadFeedPresentationProjector() {
       }
     | undefined;
   return (...args: Parameters<typeof deriveThreadFeedPresentation>): ThreadFeedEntry[] => {
-    const [feed, run, expandedRuns, expandedGroups, startedAt, runless] = args;
+    const [feed, run, expandedRuns, expandedGroups, startedAt, runless, runs, botChat] = args;
     const options = [
       run?.runId,
       run?.status,
@@ -295,10 +334,14 @@ export function createThreadFeedPresentationProjector() {
       expandedGroups,
       startedAt,
       runless,
+      botChat,
     ];
     const update = threadFeedRevision(feed);
     const previousOptions = previous?.options;
-    const sameOptions = options.every((value, index) => value === previousOptions?.[index]);
+    const sameOptions =
+      previous !== undefined &&
+      options.every((value, index) => value === previousOptions?.[index]) &&
+      runTimingsEqual(previous.runs, runs);
     if (previous && sameOptions && previous.version.revision === update.revision)
       return previous.feed;
     if (
@@ -331,6 +374,7 @@ export function createThreadFeedPresentationProjector() {
     previous = {
       version: update,
       options,
+      runs,
       input: feed,
       feed: presented,
       messageIndices: new Map(
@@ -499,10 +543,20 @@ export function threadFeedSummary(feed: ReadonlyArray<ThreadFeedEntry>) {
 export function threadFeedFailedRunIds(
   summary: ReturnType<typeof threadFeedSummary>,
   latestRun: ThreadFeedLatestRun | null,
+  runs?: ReadonlyArray<Pick<ThreadFeedRunTiming, "id" | "status">>,
 ) {
-  return latestRun?.status === "failed" && !summary.failedRunIds.has(latestRun.runId)
-    ? new Set([...summary.failedRunIds, latestRun.runId])
-    : summary.failedRunIds;
+  let failed: Set<RunId> | null = null;
+  if (latestRun?.status === "failed" && !summary.failedRunIds.has(latestRun.runId)) {
+    failed = new Set(summary.failedRunIds);
+    failed.add(latestRun.runId);
+  }
+  for (const run of runs ?? []) {
+    if (run.status === "failed" && !summary.failedRunIds.has(run.id)) {
+      failed ??= new Set(summary.failedRunIds);
+      failed.add(run.id);
+    }
+  }
+  return failed ?? summary.failedRunIds;
 }
 
 /**
@@ -671,6 +725,16 @@ function sameFeedEntry(a: StabilizableThreadFeedEntry, b: StabilizableThreadFeed
     case "thinking": {
       const right = b as Extract<ThreadFeedEntry, { readonly type: "thinking" }>;
       return a.runId === right.runId && a.label === right.label && a.shimmer === right.shimmer;
+    }
+    case "agent-card": {
+      const right = b as Extract<ThreadFeedEntry, { readonly type: "agent-card" }>;
+      return (
+        a.runId === right.runId &&
+        a.sourceThreadId === right.sourceThreadId &&
+        a.itemId === right.itemId &&
+        cardPresentationsEqual(a.card, right.card) &&
+        JSON.stringify(a.lockedState) === JSON.stringify(right.lockedState)
+      );
     }
     case "html-render": {
       const right = b as Extract<ThreadFeedEntry, { readonly type: "html-render" }>;

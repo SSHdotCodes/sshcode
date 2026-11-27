@@ -40,6 +40,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Cause from "effect/Cause";
+import * as Crypto from "effect/Crypto";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -107,6 +108,8 @@ import {
   acpRegistryPromptFailure,
   registerMistralVibeAcpExtensions,
 } from "@t3tools/provider-acp-registry/testing";
+import { makeAntigravityAdapterV2 } from "./AntigravityAdapterV2.ts";
+import { makeAntigravityAcpRuntime } from "../../provider/acp/AntigravityAcpSupport.ts";
 
 const DEFAULT_GROK_SETTINGS = Schema.decodeSync(GrokSettings)({});
 
@@ -4856,6 +4859,9 @@ describe("AcpAdapterV2", () => {
         "task-b": ["completed", "`b.txt` has three lines."],
         "task-bg": ["completed", "a.txt b.txt"],
       });
+      assert.equal(tasks.get("task-a")?.nativeType, "explore");
+      assert.equal(tasks.get("task-b")?.nativeType, "explore");
+      assert.equal(tasks.get("task-bg")?.nativeType, "explore");
       assert.isTrue(
         items.some(
           (item) =>
@@ -8550,6 +8556,7 @@ describe("AcpAdapterV2", () => {
 
   const runFormElicitation = (input: {
     readonly name: string;
+    readonly antigravity?: boolean;
     readonly requestedSchema: unknown;
     readonly answer: (
       questions: ReadonlyArray<OrchestrationV2UserInputQuestion>,
@@ -8559,6 +8566,7 @@ describe("AcpAdapterV2", () => {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
+      const crypto = yield* Crypto.Crypto;
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -8567,30 +8575,49 @@ describe("AcpAdapterV2", () => {
       });
       const responseLog = path.join(directory, "responses.jsonl");
       const instanceId = ProviderInstanceId.make(`acp-test-form-${input.name}`);
-      const adapter = yield* makeAcpAdapterV2({
-        instanceId,
-        flavor: {
-          driver: ACP_TEST_DRIVER,
-          capabilities: AcpProviderCapabilitiesV2,
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner,
-            mockAgentPath,
-            environment: {
-              T3_ACP_EMIT_ELICITATION: "1",
-              T3_ACP_ELICITATION_SCHEMA: JSON.stringify(input.requestedSchema),
-              T3_ACP_ELICITATION_RESPONSE_LOG_PATH: responseLog,
+      const environment = {
+        T3_ACP_EMIT_ELICITATION: "1",
+        T3_ACP_ELICITATION_SCHEMA: JSON.stringify(input.requestedSchema),
+        T3_ACP_ELICITATION_RESPONSE_LOG_PATH: responseLog,
+      };
+      const selfInvocation = yield* resolveSelfInvocation();
+      const adapter = yield* input.antigravity
+        ? makeAntigravityAdapterV2({
+            instanceId,
+            selfInvocation,
+            makeRuntime: (runtime) =>
+              makeAntigravityAcpRuntime({
+                ...runtime,
+                childProcessSpawner,
+                spawn: {
+                  command: process.execPath,
+                  args: [mockAgentPath],
+                  cwd: runtime.cwd,
+                  env: { ...environment, T3_ACP_ANTIGRAVITY: "1" },
+                },
+              }).pipe(Effect.provideService(Crypto.Crypto, crypto)),
+            withProcess: (_stop, task) => task,
+            defaultModel: Effect.succeed(undefined),
+          })
+        : makeAcpAdapterV2({
+            instanceId,
+            selfInvocation,
+            flavor: {
+              driver: ACP_TEST_DRIVER,
+              capabilities: AcpProviderCapabilitiesV2,
+              makeRuntime: makeMockRuntime({ childProcessSpawner, mockAgentPath, environment }),
             },
-          }),
-        },
-        selfInvocation: yield* resolveSelfInvocation(),
-      });
+          });
       const threadId = ThreadId.make(`thread-acp-form-${input.name}`);
       const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
         runtimeMode: "approval-required",
         interactionMode: "default",
         cwd: process.cwd(),
       });
-      const modelSelection = { instanceId, model: "default" } as const;
+      const modelSelection = {
+        instanceId,
+        model: input.antigravity ? "gemini-test-low" : "default",
+      };
       const runtime = yield* adapter.openSession({
         threadId,
         providerSessionId: ProviderSessionId.make(`provider-session-acp-form-${input.name}`),
@@ -8608,6 +8635,7 @@ describe("AcpAdapterV2", () => {
           providerThread,
           instanceId,
           runtimePolicy,
+          modelSelection,
           now: yield* DateTime.now,
         }),
       );
@@ -8645,6 +8673,43 @@ describe("AcpAdapterV2", () => {
   /** Submits like the web and mobile clients: an option's `value`, else its label. */
   const optionValues = (question: OrchestrationV2UserInputQuestion | undefined) =>
     question?.options.map((option) => option.value ?? option.label);
+
+  it.live(
+    "shows Antigravity ask_question titles in the question bodies and returns the answers",
+    () =>
+      Effect.gen(function* () {
+        const choice = (title: string) => ({
+          type: "string",
+          title,
+          oneOf: [
+            { const: "npm", title: "npm" },
+            { const: "pnpm", title: "pnpm" },
+          ],
+        });
+        const { questions, response } = yield* runFormElicitation({
+          name: "antigravity-ask-question",
+          antigravity: true,
+          requestedSchema: {
+            type: "object",
+            properties: {
+              q0: choice("Which package manager should the app use?"),
+              q0_other: { type: "string", title: "Other" },
+              q1: choice("Which package manager should the docs use?"),
+              q1_other: { type: "string", title: "Other" },
+            },
+          },
+          answer: () => ({ q0: "pnpm", q1: "yarn" }),
+        });
+        assert.deepEqual(
+          questions?.map(({ header, question }) => [header, question]),
+          [
+            ["Question 1", "Which package manager should the app use?"],
+            ["Question 2", "Which package manager should the docs use?"],
+          ],
+        );
+        assert.deepEqual(response, { action: "accept", content: { q0: "pnpm", q1_other: "yarn" } });
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
 
   it.live("asks form fields with their fixed choices and answers in the declared types", () =>
     Effect.gen(function* () {

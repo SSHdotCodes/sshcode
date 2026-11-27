@@ -9,6 +9,34 @@ const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<stri
     { tag: "path", attrs: { d: "M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" } },
     { tag: "path", attrs: { d: "M10 12h4" } },
   ],
+  // The Bots glyph (Icons.tsx BotsIcon): a face with the avatar's filled eyes.
+  bots: [
+    { tag: "circle", attrs: { cx: "12", cy: "12", r: "9" } },
+    {
+      tag: "rect",
+      attrs: {
+        x: "8.22",
+        y: "9.3",
+        width: "2.52",
+        height: "3.96",
+        rx: "1.26",
+        fill: "currentColor",
+        stroke: "none",
+      },
+    },
+    {
+      tag: "rect",
+      attrs: {
+        x: "13.26",
+        y: "9.3",
+        width: "2.52",
+        height: "3.96",
+        rx: "1.26",
+        fill: "currentColor",
+        stroke: "none",
+      },
+    },
+  ],
   check: [{ tag: "path", attrs: { d: "M20 6 9 17l-5-5" } }],
   timer: [
     { tag: "line", attrs: { x1: "10", x2: "14", y1: "2", y2: "2" } },
@@ -98,6 +126,20 @@ const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<stri
     },
     { tag: "path", attrs: { d: "M12 8v6" } },
     { tag: "path", attrs: { d: "M9 11h6" } },
+  ],
+  "messages-square": [
+    {
+      tag: "path",
+      attrs: {
+        d: "M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z",
+      },
+    },
+    {
+      tag: "path",
+      attrs: {
+        d: "M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1",
+      },
+    },
   ],
   pin: [
     { tag: "path", attrs: { d: "M12 17v5" } },

@@ -1,4 +1,5 @@
 import { automaticProviderRetryPresentation } from "@t3tools/shared/orchestrationV2ThreadError";
+import { botActivityLabel, isShowCardTool } from "@t3tools/client-runtime/state/bots";
 import type {
   ThreadPendingApproval,
   ThreadPendingUserInput,
@@ -24,6 +25,7 @@ import {
 } from "@t3tools/client-runtime/work-log/item-detail";
 import { commandDisplayText } from "@t3tools/client-runtime/work-log/command-label";
 import { resumedRestartNoticeIds } from "@t3tools/client-runtime/work-log/restart-notice";
+import { secretAnswerNoticeIds } from "@t3tools/client-runtime/secret-request";
 import {
   contextCompactionLabel,
   toolItemForDisplay,
@@ -56,6 +58,7 @@ import type {
   OrchestrationV2ExecutionNode,
   OrchestrationMessageContext,
   OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2Run,
   OrchestrationV2RunAttempt,
   OrchestrationV2RunStatus,
   OrchestrationV2TurnItem,
@@ -75,6 +78,13 @@ import {
   formatSearchToolLabel,
 } from "@t3tools/shared/toolActivity";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import {
+  cardFromToolItem,
+  resolveCardLockedState,
+  type TimelineCardScanMessage,
+  type AgentCardToolPresentation,
+  type CardLockedState,
+} from "@t3tools/shared/cards";
 import type { HtmlRenderReference } from "@t3tools/shared/htmlRender";
 import type { McpAppReference } from "@t3tools/shared/mcpApp";
 import {
@@ -186,6 +196,17 @@ type RawThreadFeedEntry =
       readonly activity: ThreadFeedActivity;
     }
   | {
+      /** A native interactive card rendered from a `show_card` tool call. */
+      readonly type: "agent-card";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly sourceThreadId: ThreadId;
+      readonly itemId: TurnItemId;
+      readonly card: AgentCardToolPresentation;
+      readonly lockedState: CardLockedState;
+    }
+  | {
       /** A page a completed `html_render` call published, shown in place of its work row. */
       readonly type: "html-render";
       readonly id: string;
@@ -209,7 +230,7 @@ type RawThreadFeedEntry =
 export type ThreadFeedEntry = ThreadFeedEntryContent & { readonly continuesWorkLog?: boolean };
 
 type ThreadFeedEntryContent =
-  | Extract<RawThreadFeedEntry, { type: "message" | "html-render" | "mcp-app" }>
+  | Extract<RawThreadFeedEntry, { type: "message" | "agent-card" | "html-render" | "mcp-app" }>
   | {
       readonly type: "activity-group";
       readonly id: string;
@@ -273,6 +294,11 @@ export interface ThreadFeedLatestRun {
   readonly startedAt: string | null;
   readonly completedAt: string | null;
 }
+
+export type ThreadFeedRunTiming = Pick<
+  OrchestrationV2Run,
+  "id" | "status" | "startedAt" | "completedAt"
+>;
 
 export interface AgentSpawnSummary {
   readonly title: string;
@@ -1100,7 +1126,9 @@ function groupAdjacentActivities(rawEntries: ReadonlyArray<RawThreadFeedEntry>):
     const isStandaloneActivity =
       entry.activity.projectedItem.item.type === "compaction" ||
       entry.activity.projectedItem.item.type === "handoff" ||
-      entry.activity.projectedItem.item.type === "notification";
+      entry.activity.projectedItem.item.type === "notification" ||
+      // A card is its own row, where the card renderer draws it.
+      isShowCardActivity(entry.activity);
     if (
       isStandaloneActivity ||
       entry.activity.prominent ||
@@ -1123,6 +1151,25 @@ function groupAdjacentActivities(rawEntries: ReadonlyArray<RawThreadFeedEntry>):
   }
   flushGroup();
   return grouped;
+}
+
+function isShowCardActivity(activity: ThreadFeedActivity): boolean {
+  const item = activity.projectedItem.item;
+  return item.type === "dynamic_tool" && isShowCardTool(item.toolName);
+}
+
+/** The tool names a bot turn's fold counts; thinking and notes are not tools. */
+function botFoldToolNames(entries: ReadonlyArray<ThreadFeedEntry>): string[] {
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (entry.type !== "activity-group") continue;
+    for (const activity of entry.activities) {
+      if (!activity.toolLike) continue;
+      const item = activity.projectedItem.item;
+      names.push(item.type === "dynamic_tool" ? (item.toolName ?? item.type) : item.type);
+    }
+  }
+  return names;
 }
 
 function computeElapsedMs(startIso: string, endIso: string): number | null {
@@ -1177,9 +1224,13 @@ interface ThreadFeedRunFold {
 export function failedFeedRunIds(
   feed: ReadonlyArray<ThreadFeedEntry>,
   latestRun: ThreadFeedLatestRun | null,
+  runs?: ReadonlyArray<Pick<ThreadFeedRunTiming, "id" | "status">>,
 ) {
   const failed = new Set<RunId>();
   if (latestRun?.status === "failed") failed.add(latestRun.runId);
+  for (const run of runs ?? []) {
+    if (run.status === "failed") failed.add(run.id);
+  }
   for (const entry of feed) {
     if (entry.type !== "activity-group") continue;
     for (const activity of entry.activities) {
@@ -1206,6 +1257,8 @@ function deriveThreadFeedRunFolds(
   latestRun: ThreadFeedLatestRun | null,
   runlessWorkActive: boolean,
   feedFailedRunIds: ReadonlySet<RunId>,
+  runs: ReadonlyArray<ThreadFeedRunTiming> | undefined,
+  botChat: boolean,
 ): ReadonlyMap<string, ThreadFeedRunFold> {
   const terminalAssistantMessageIdByRun = new Map<RunId, string>();
   const interruptedRunIds = new Set<RunId>();
@@ -1245,6 +1298,7 @@ function deriveThreadFeedRunFolds(
       entry.type === "message" && entry.message.role === "assistant"
         ? (entry.message.runId ?? runlessKey)
         : entry.type === "activity-group" ||
+            entry.type === "agent-card" ||
             entry.type === "html-render" ||
             entry.type === "mcp-app"
           ? (entry.runId ?? runlessKey)
@@ -1282,6 +1336,8 @@ function deriveThreadFeedRunFolds(
     }
   }
 
+  const runsById =
+    runs && runs.length > 0 ? new Map(runs.map((run) => [run.id, run] as const)) : null;
   const activeRunId = unsettledRunId(latestRun);
   const foldsByAnchorId = new Map<string, ThreadFeedRunFold>();
   for (const [runId, group] of groupsByRunId) {
@@ -1301,6 +1357,7 @@ function deriveThreadFeedRunFolds(
         .filter(
           (entry) =>
             entry.type !== "message" &&
+            entry.type !== "agent-card" &&
             entry.type !== "html-render" &&
             entry.type !== "mcp-app" &&
             !(
@@ -1312,14 +1369,17 @@ function deriveThreadFeedRunFolds(
                   activity.projectedItem.item.type === "handoff" ||
                   // A child still working outlives its settled launching run;
                   // its group stays visible while any member is live.
-                  isLiveSubagentTurnItem(activity.projectedItem.item),
+                  isLiveSubagentTurnItem(activity.projectedItem.item) ||
+                  // A bot's cards are its reply, never part of the quiet fold.
+                  (botChat && isShowCardActivity(activity)),
               )
             ),
         )
         .map((entry) => entry.id),
     );
     // A run-wide fold cannot span prose. Consecutive activity groups already
-    // provide compact tool rows on either side of each message.
+    // provide compact tool rows on either side of each message. A bot turn is a
+    // conversation, so all of its work folds into the one quiet row anyway.
     let hasProse = false;
     let crossesProse = false;
     for (const entry of group.entries) {
@@ -1329,7 +1389,7 @@ function deriveThreadFeedRunFolds(
         break;
       }
     }
-    if (crossesProse) continue;
+    if (crossesProse && !botChat) continue;
     const firstEntry = group.entries[0];
     const firstHiddenEntry = group.entries.find((entry) => hiddenEntryIds.has(entry.id));
     const lastEntry = group.entries.at(-1);
@@ -1343,6 +1403,7 @@ function deriveThreadFeedRunFolds(
     const terminalEntry = terminalAssistantId
       ? group.entries.find((entry) => entry.id === terminalAssistantId)
       : null;
+    const run = runsById?.get(runId);
     const latestRunMatches = latestRun?.runId === runId;
     const lastEntryEnd =
       lastEntry.type === "message"
@@ -1351,30 +1412,47 @@ function deriveThreadFeedRunFolds(
           ? // Mac work entries are ungrouped; the group's first timestamp is not its end.
             (lastEntry.activities.at(-1)?.createdAt ?? lastEntry.createdAt)
           : lastEntry.createdAt;
+    const runDurationMs =
+      run?.startedAt != null && run.completedAt != null
+        ? DateTime.toEpochMillis(run.completedAt) - DateTime.toEpochMillis(run.startedAt)
+        : null;
     const elapsedMs =
-      latestRunMatches && latestRun.startedAt && latestRun.completedAt
-        ? computeElapsedMs(latestRun.startedAt, latestRun.completedAt)
-        : computeElapsedMs(
-            group.startBoundary ?? firstEntry.createdAt,
-            maxIsoTimestamp(
-              terminalEntry?.type === "message" ? terminalEntry.message.updatedAt : null,
-              lastEntryEnd,
-            ) ?? lastEntryEnd,
-          );
+      runDurationMs !== null && Number.isFinite(runDurationMs) && runDurationMs >= 0
+        ? runDurationMs
+        : latestRunMatches && latestRun.startedAt && latestRun.completedAt
+          ? computeElapsedMs(latestRun.startedAt, latestRun.completedAt)
+          : computeElapsedMs(
+              group.startBoundary ?? firstEntry.createdAt,
+              maxIsoTimestamp(
+                terminalEntry?.type === "message" ? terminalEntry.message.updatedAt : null,
+                lastEntryEnd,
+              ) ?? lastEntryEnd,
+            );
     const duration = elapsedMs === null ? null : formatDuration(elapsedMs);
     const interrupted =
-      latestRunMatches && (latestRun.status === "interrupted" || latestRun.status === "cancelled");
+      run !== undefined
+        ? run.status === "interrupted" || run.status === "cancelled"
+        : latestRunMatches &&
+          (latestRun.status === "interrupted" || latestRun.status === "cancelled");
+    const botLabel =
+      botChat && !interrupted
+        ? botActivityLabel(
+            botFoldToolNames(group.entries.filter((entry) => hiddenEntryIds.has(entry.id))),
+          )
+        : "";
     foldsByAnchorId.set(firstHiddenEntry.id, {
       runId,
       createdAt: firstHiddenEntry.createdAt,
       hiddenEntryIds,
-      label: interrupted
-        ? duration
-          ? `You stopped after ${duration}`
-          : "You stopped this response"
-        : duration
-          ? `Worked for ${duration}`
-          : "Worked",
+      label: botLabel
+        ? botLabel
+        : interrupted
+          ? duration
+            ? `You stopped after ${duration}`
+            : "You stopped this response"
+          : duration
+            ? `Worked for ${duration}`
+            : "Worked",
     });
   }
   return foldsByAnchorId;
@@ -1388,6 +1466,9 @@ export function deriveThreadFeedPresentation(
   activeWorkStartedAt: string | null = null,
   /** The live work is a provider-native subagent's runless root turn. */
   runlessWorkActive = false,
+  runs?: ReadonlyArray<ThreadFeedRunTiming>,
+  /** A bot's home chat: each finished turn's tools fold into one plain line, cards stay out. */
+  botChat = false,
 ): ThreadFeedEntry[] {
   const sourceFeed = feed.filter(
     (entry) =>
@@ -1396,7 +1477,7 @@ export function deriveThreadFeedPresentation(
       entry.type !== "thinking" &&
       entry.type !== "viewed-images",
   );
-  const failedRunIds = failedFeedRunIds(sourceFeed, latestRun);
+  const failedRunIds = failedFeedRunIds(sourceFeed, latestRun, runs);
   const activeTailGroup = sourceFeed.at(-1);
   const activeRunId = unsettledRunId(latestRun);
   const isWorking = activeWorkStartedAt !== null && latestRun?.status !== "preparing";
@@ -1415,6 +1496,8 @@ export function deriveThreadFeedPresentation(
     latestRun,
     isWorking && runlessWorkActive,
     failedRunIds,
+    runs,
+    botChat,
   );
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorId.values()) {
@@ -2100,10 +2183,12 @@ export function buildThreadFeed(
     }
   }
   const resumedRestartNotices = resumedRestartNoticeIds(visibleTurnItems);
+  // The card's own row already says the secret was saved or declined.
+  const repeatedSecretNotices = secretAnswerNoticeIds(visibleTurnItems);
   for (const row of visibleTurnItems) {
     const item = row.item;
     if (turnItemIsWorkspacePreparation(item)) continue;
-    if (resumedRestartNotices.has(item.id)) continue;
+    if (resumedRestartNotices.has(item.id) || repeatedSecretNotices.has(item.id)) continue;
     if (item.type === "checkpoint" || (item.type === "todo_list" && item.steps.length === 0))
       continue;
     if (
@@ -2129,6 +2214,20 @@ export function buildThreadFeed(
       continue;
     }
     const createdAt = DateTime.formatIso(item.startedAt ?? item.updatedAt);
+    const agentCard = item.type === "dynamic_tool" ? cardFromToolItem(item) : undefined;
+    if (agentCard !== undefined) {
+      entries.push({
+        type: "agent-card",
+        id: `agent-card:${row.visibility}:${row.sourceThreadId}:${row.sourceItemId}`,
+        createdAt,
+        runId: item.runId,
+        sourceThreadId: row.sourceThreadId,
+        itemId: row.sourceItemId,
+        card: agentCard,
+        lockedState: { locked: false },
+      });
+      continue;
+    }
     // A running or failed render stays an ordinary work row.
     const render =
       item.type === "dynamic_tool" && item.status === "completed"
@@ -2214,7 +2313,34 @@ export function buildThreadFeed(
     projectedEntriesCache.set(row, { attemptId, entry });
     entries.push(entry);
   }
-  if (!options?.anchoredMessages?.length) return groupAdjacentActivities(entries);
+  const finalizeCards = (list: RawThreadFeedEntry[]): ThreadFeedEntry[] => {
+    for (let i = 0; i < list.length; i += 1) {
+      const entry = list[i];
+      if (entry?.type !== "agent-card" || entry.card.state !== "ready" || !entry.card.card) {
+        continue;
+      }
+      const subsequentUsers: TimelineCardScanMessage[] = [];
+      for (let scan = i + 1; scan < list.length; scan += 1) {
+        const later = list[scan];
+        if (later?.type === "message" && later.message.role === "user") {
+          subsequentUsers.push({
+            text: later.message.text,
+            ...(later.message.context ? { context: later.message.context } : {}),
+            createdBy: later.message.createdBy,
+            scheduledTaskId: later.message.scheduledTaskId,
+          });
+        }
+      }
+      const lockedState = resolveCardLockedState(
+        String(entry.itemId),
+        entry.card.card,
+        subsequentUsers,
+      );
+      list[i] = { ...entry, lockedState };
+    }
+    return groupAdjacentActivities(list);
+  };
+  if (!options?.anchoredMessages?.length) return finalizeCards(entries);
   const retainedMessageIds = new Set([
     ...answerByMessageId.keys(),
     ...entries.flatMap((entry) => (entry.type === "message" ? [entry.id] : [])),
@@ -2253,5 +2379,5 @@ export function buildThreadFeed(
     if (insertionIndex === -1) entries.push(entry);
     else entries.splice(insertionIndex, 0, entry);
   }
-  return groupAdjacentActivities(entries);
+  return finalizeCards(entries);
 }

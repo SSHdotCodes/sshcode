@@ -482,6 +482,18 @@ export function summarizeT3ToolCalls(
     case "html-render":
       label = phrase("Rendered", "render", quantity(selected.length, "HTML page"));
       break;
+    case "bot-memory":
+      label = phrase("Updated", "update", `memory ${times}`);
+      break;
+    case "bot-watch":
+      label = phrase("Changed", "change", `watched chats ${times}`);
+      break;
+    case "bot-message":
+      label = phrase("Messaged", "message", `the bot ${times}`);
+      break;
+    case "card":
+      label = phrase("Showed", "show", quantity(selected.length, "card"));
+      break;
     case "question-ask":
       label = phrase("Asked", "ask", `the user ${times}`);
       break;
@@ -506,6 +518,12 @@ export function summarizeT3ToolCalls(
       break;
     case "model-preferences":
       label = phrase("Read", "read", `model preferences ${times}`);
+      break;
+    case "progress-report":
+      label = phrase("Reported", "report", `progress ${times}`);
+      break;
+    case "team-board":
+      label = phrase("Used", "use", `the team board ${times}`);
       break;
     case "capabilities":
       label = phrase("Checked", "check", `orchestration capabilities ${times}`);

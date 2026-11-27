@@ -1,4 +1,4 @@
-import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
+import { latestExecutedRun } from "@t3tools/shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
   CommandId,
@@ -172,7 +172,13 @@ const cancelledItem = (
         completedAt: now,
         updatedAt: now,
       }
-    : { ...item, status: "cancelled", completedAt: now, updatedAt: now };
+    : {
+        ...item,
+        ...("streaming" in item ? { streaming: false } : {}),
+        status: "cancelled",
+        completedAt: now,
+        updatedAt: now,
+      };
 
 /**
  * A provider thread's latest started run: the last turn that provider saw.
@@ -183,15 +189,10 @@ function latestStartedRun(
   projection: ProjectionStore.ProjectionRuntimeRecoveryState,
   providerThreadId: ProviderThreadId,
 ) {
-  return projection.runs.reduce<OrchestrationV2ThreadProjection["runs"][number] | undefined>(
-    (latest, run) =>
-      run.providerThreadId === providerThreadId &&
-      run.status !== "queued" &&
-      run.status !== "rolled_back" &&
-      (latest === undefined || runRanAfter(run, latest))
-        ? run
-        : latest,
-    undefined,
+  return latestExecutedRun(
+    projection.runs.filter(
+      (run) => run.providerThreadId === providerThreadId && run.status !== "rolled_back",
+    ),
   );
 }
 
@@ -691,7 +692,7 @@ export const make = Effect.gen(function* () {
       }
       for (const [providerThreadId, work] of cancelledBackgroundWork) {
         const noteRun = latestStartedRun(projection, providerThreadId);
-        if (noteRun === undefined) continue;
+        if (noteRun === null) continue;
         // Its own event: a run snapshot read before this commit could regress
         // a lifecycle change (e.g. a checkpoint completing the run) made since.
         events.push({

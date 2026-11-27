@@ -236,3 +236,30 @@ it.effect(
       assert.equal(shellSnapshotCalls, 0);
     }).pipe(Effect.provide(SqlitePersistenceMemory)),
 );
+
+it.effect("finds the first active, non-subagent bootstrap chat in the project", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const projectId = ProjectId.make("bootstrap-project");
+    const early = "2026-01-01T00:00:00.000Z";
+    const later = "2026-01-02T00:00:00.000Z";
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_threads (
+        thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+        payload_json, created_at, updated_at, archived_at, deleted_at
+      ) VALUES
+        ('other', 'another-project', '', 'codex', 'full-access', 'default', '{}', ${early}, ${early}, NULL, NULL),
+        ('archived', ${projectId}, '', 'codex', 'full-access', 'default', '{}', ${early}, ${early}, ${early}, NULL),
+        ('deleted', ${projectId}, '', 'codex', 'full-access', 'default', '{}', ${early}, ${early}, NULL, ${early}),
+        ('subagent', ${projectId}, '', 'codex', 'full-access', 'default',
+          '{"lineage":{"relationshipToParent":"subagent"}}', ${early}, ${early}, NULL, NULL),
+        ('chat-z', ${projectId}, '', 'codex', 'full-access', 'default', '{}', ${early}, ${later}, NULL, NULL),
+        ('chat-a', ${projectId}, '', 'codex', 'full-access', 'default', '{}', ${early}, ${later}, NULL, NULL)
+    `;
+
+    assert.equal(yield* ServerRuntimeStartup.findBootstrapThreadId(projectId), "chat-a");
+    assert.isUndefined(
+      yield* ServerRuntimeStartup.findBootstrapThreadId(ProjectId.make("missing")),
+    );
+  }).pipe(Effect.provide(SqlitePersistenceMemory)),
+);

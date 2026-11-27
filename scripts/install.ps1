@@ -160,22 +160,27 @@ $marker = Join-Path $targetDir ".install-complete"
 if ((Test-Path $marker) -and ((Get-Content $marker -Raw).Trim() -eq $version)) {
   Step "Version $version is already downloaded."
 } else {
+  # A release without server downloads has no checksum file. Say so before writing anything;
+  # the sentence matches SERVER_DOWNLOADS_UNAVAILABLE in packages/shared/src/cliRelease.ts.
+  $sums = [System.IO.Path]::GetTempFileName()
+  try {
+    Fetch "$baseUrl/v$version/SHA256SUMS" $sums
+  } catch {
+    Remove-Item $sums -Force -ErrorAction SilentlyContinue
+    $status = $_.Exception.Response.StatusCode.value__
+    if ($status -eq 404) {
+      Fail "Not available yet: SSHCode's releases don't include the server download this needs, so run the server from a source checkout instead."
+    }
+    throw
+  }
   New-Item -ItemType Directory -Force -Path $versionsDir | Out-Null
   $staging = Join-Path $versionsDir (".staging-" + [System.IO.Path]::GetRandomFileName())
   New-Item -ItemType Directory -Path $staging | Out-Null
   try {
+    Move-Item $sums (Join-Path $staging "SHA256SUMS")
     if ($interactive) { [Console]::Error.Write("`r$esc[2K") }
     [Console]::Error.WriteLine("  ${muted}Installing$reset SSHCode $bold$version$reset`n")
     Step "Downloading..."
-    try {
-      Fetch "$baseUrl/v$version/SHA256SUMS" (Join-Path $staging "SHA256SUMS")
-    } catch {
-      $status = $_.Exception.Response.StatusCode.value__
-      if ($status -eq 404) {
-        Fail "sshcode $version has no release archive for win32-$arch; releases before the self-contained CLI can only be installed with 'npm install -g sshcode@$version'"
-      }
-      throw
-    }
     Fetch "$baseUrl/v$version/$archive" (Join-Path $staging $archive) -progress
 
     Step "Verifying the download..."

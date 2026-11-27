@@ -3,7 +3,15 @@ import { QaSandbox } from "../preview/QaSandbox.ts";
 import { ComputerUseService } from "../computer/ComputerUseService.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { ProviderInstanceId } from "@t3tools/contracts";
+import {
+  DEFAULT_AGENT_BEHAVIOR,
+  EnvironmentId,
+  MessageId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
+import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
+import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import { kimiMcpDiscoveryInstructions } from "@t3tools/provider-acp-registry/server";
 import { McpProviderSessions } from "@t3tools/provider-core/server/McpProviderSessions";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
@@ -51,6 +59,8 @@ import {
   codexBackgroundCommandDetail,
 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import {
+  orchestrationInstructionsFor,
+  registerAgentBehavior,
   t3AcpInstructionState,
   t3AcpPromptWithInstructions,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
@@ -60,22 +70,36 @@ import {
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import { writeAgentQualityArtifact } from "../orchestration-v2/testkit/AgentQualityRecorder.ts";
+import { BOARD_NOTICE_PREFIX } from "../teamBoard/TeamBoardMailbox.ts";
 import { auditToolSchemas } from "../../../../scripts/lib/agentQuality.ts";
+import { EMPTY_BOARD_STATE, TEAM_BOARD_CLAUSE, TEAM_BOARD_TOOL } from "../teamBoard/model.ts";
 import { OrchestratorToolkit } from "../mcp/toolkits/orchestrator/tools.ts";
 import {
   agentToolDiscoveryCatalog,
+  agentToolListVisible,
   rewriteToolsListBody,
   type ToolsListTransform,
+  type ToolsCatalogTransform,
   withGeminiSafeEnums,
+  withTeamBoardToolMeta,
 } from "../mcp/AgentToolCatalog.ts";
 import { withCompactAgentCatalog } from "../mcp/EagerAgentToolCatalog.ts";
-import { deferMcpCatalog, deferredMcpHarness } from "../mcp/DeferredMcpCatalog.ts";
+import {
+  deferMcpCatalog,
+  deferMcpCatalogFor,
+  deferMcpCatalogLow,
+  deferredMcpHarness,
+} from "../mcp/DeferredMcpCatalog.ts";
 import { PreviewSnapshotTool } from "../mcp/toolkits/preview/tools.ts";
 import { Tool } from "effect/ai";
 import { buildCodexDeveloperInstructions } from "./CodexDeveloperInstructions.ts";
 import { ProviderRegistry } from "./ProviderRegistry.ts";
 import { antigravityMcpDiscoveryInstructions } from "./acp/AntigravityAcpSupport.ts";
 import budget from "./agentContextBudget.json" with { type: "json" };
+import { DEFAULT_AGENT_TOOL_POLICY, DEFAULT_BOT_PERMISSIONS } from "@t3tools/contracts";
+import { botInstructions, memoryNotes } from "../bots/botInstructions.ts";
+import { setBotThreads } from "../bots/botsRuntime.ts";
+import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 
 // Registration only stores tool definitions, so the handlers' services are never called.
 const toolHandlerServices = Layer.mergeAll(
@@ -146,6 +170,127 @@ const codexTurn = (toolDiscoveryCatalog?: string) =>
     toolDiscoveryCatalog,
   });
 
+const BOT_THREAD = "thread:bot:budget";
+const CHAT_THREAD = "thread-chat";
+// A chat with every capability, at Settings defaults, as the bot sees other chats' tools.
+const chatScope = (threadId: string) =>
+  ({
+    thread: { threadId, providerInstanceId: "codex" },
+    capabilities: new Set(["orchestration", "device", "preview"]),
+  }) as unknown as McpInvocationScope;
+
+/**
+ * What each chat lists with and without Bots: the listed tools' JSON, full and compact. The
+ * bot toolkit sits outside layerAgentTools, so the lists above never count it.
+ */
+const listedBytes = (withBots: boolean) =>
+  Effect.gen(function* () {
+    const mcp = yield* McpServer.McpServer;
+    const tools = mcp.tools.map(({ tool }) => ({ ...tool }) as Record<string, unknown>);
+    const advertise = (names: (name: string) => boolean, transform?: ToolsListTransform) =>
+      tools
+        .filter((tool) => names(String(tool.name)))
+        .map((tool) => {
+          const advertised = transform ? transform({ ...tool }) : tool;
+          return {
+            name: advertised.name,
+            description: advertised.description,
+            inputSchema: advertised.inputSchema,
+          };
+        });
+    const json = (names: (name: string) => boolean, transform?: ToolsListTransform) =>
+      utf8Bytes(JSON.stringify(advertise(names, transform)));
+    const deferred = (names: (name: string) => boolean, eagerCards: boolean) =>
+      utf8Bytes(
+        JSON.stringify(
+          deferMcpCatalogFor({ low: false, eagerCards })(advertise(names, withCompactAgentCatalog)),
+        ),
+      );
+    const visibleIn = (threadId: string) => (name: string) =>
+      agentToolListVisible(DEFAULT_AGENT_TOOL_POLICY, name, chatScope(threadId), {
+        subagentsEnabled: () => true,
+      });
+    // Like McpHttpServer: a compact list holds show_card back unless cards are eager, and a
+    // bot's chat always has eager cards.
+    const withoutCards = (names: (name: string) => boolean) => (name: string) =>
+      name !== "show_card" && names(name);
+    const lists = () => ({
+      chat: json(visibleIn(CHAT_THREAD)),
+      chatEager: json(withoutCards(visibleIn(CHAT_THREAD)), withCompactAgentCatalog),
+      bot: json(visibleIn(BOT_THREAD)),
+      botEager: json(visibleIn(BOT_THREAD), withCompactAgentCatalog),
+      chatDeferred: deferred(visibleIn(CHAT_THREAD), false),
+      botDeferred: deferred(visibleIn(BOT_THREAD), true),
+    });
+    try {
+      setBotThreads({ active: false, threads: new Map() });
+      const off = lists();
+      setBotThreads({
+        active: true,
+        threads: new Map([[BOT_THREAD, { permissions: DEFAULT_BOT_PERMISSIONS }]]),
+      });
+      const on = lists();
+      const only = (names: ReadonlyArray<string>, transform?: ToolsListTransform) =>
+        json((name) => names.includes(name), transform);
+      const botChatTools = ["bot_memory", "watch_chats", "unwatch_chats"];
+      return {
+        off,
+        on,
+        messageBot: only(["message_bot"]),
+        messageBotEager: only(["message_bot"], withCompactAgentCatalog),
+        botChatTools: only(botChatTools),
+        botChatToolsEager: only(botChatTools, withCompactAgentCatalog),
+      };
+    } finally {
+      setBotThreads({ active: false, threads: new Map() });
+    }
+  }).pipe(
+    Effect.provide(
+      (withBots
+        ? Layer.merge(McpHttpServer.layerAgentTools, McpHttpServer.layerBotToolkit)
+        : McpHttpServer.layerAgentTools
+      ).pipe(Layer.provideMerge(McpServer.McpServer.layer), Layer.provide(toolHandlerServices)),
+    ),
+  );
+
+const botInstructionBytes = (cards: boolean) =>
+  utf8Bytes(
+    botInstructions({ name: "Pip", permissions: DEFAULT_BOT_PERMISSIONS, memory: [], cards }),
+  );
+
+it.effect(
+  "Bots add nothing to any chat while off, and only message_bot to other chats while on",
+  () =>
+    Effect.gen(function* () {
+      const without = yield* listedBytes(false);
+      const withBots = yield* listedBytes(true);
+      // Off: every chat lists exactly what it lists without the bot toolkit.
+      expect(withBots.off).toEqual(without.off);
+      expect(without.on).toEqual(without.off);
+      // On: other chats gain message_bot (plus the array comma); a bot's chat gains its own three.
+      expect(withBots.on.chat - withBots.off.chat).toBe(withBots.messageBot - 2 + 1);
+      expect(withBots.on.chatEager - withBots.off.chatEager).toBe(withBots.messageBotEager - 2 + 1);
+      expect(withBots.on.bot - withBots.off.chat).toBe(withBots.botChatTools - 2 + 1);
+      expect(withBots.messageBot).toBeLessThanOrEqual(350);
+      // The caps every chat has at Settings defaults with every capability; a bot's chat lists
+      // cards up front, so it has the eager-cards (High) caps. With every capability on, the
+      // compact list is ~30.2 KB with Bots on: message_bot is the feature's cost (Bots are off by
+      // default), so the 30 KB default cap stays strict and Bots-on chats may exceed it by that.
+      expect(withBots.on.chatEager).toBeLessThan(30_000);
+      expect(withBots.on.botEager).toBeLessThan(35_000);
+      expect(withBots.on.chatDeferred).toBeLessThanOrEqual(10_000);
+      expect(withBots.on.botDeferred).toBeLessThan(14_000);
+      expect(botInstructionBytes(false)).toBeLessThanOrEqual(1_500);
+      expect(botInstructionBytes(true)).toBeLessThanOrEqual(1_500);
+      const fullMemory = Array.from({ length: 20 }, (_, index) => ({
+        id: `m${index}`,
+        at: "2026-11-26",
+        text: "x".repeat(300),
+      }));
+      expect(utf8Bytes(memoryNotes(fullMemory).join("\n"))).toBeLessThanOrEqual(1_500);
+    }),
+);
+
 const withCompactGeminiCatalog: ToolsListTransform = (tool) =>
   withGeminiSafeEnums(withCompactAgentCatalog(tool));
 
@@ -156,20 +301,24 @@ const toolListBytes = (
   tools: typeof McpHttpServer.layerAllTools,
   part: "input" | "output",
   transform?: ToolsListTransform,
+  includeTool: (name: string) => boolean = (name) => name !== TEAM_BOARD_TOOL,
 ) =>
   Effect.gen(function* () {
     const mcp = yield* McpServer.McpServer;
     return utf8Bytes(
       JSON.stringify(
-        mcp.tools.map(({ tool }) => {
-          if (part === "output") return tool.outputSchema ?? null;
-          const advertised = transform ? transform({ ...tool }) : tool;
-          return {
-            name: advertised.name,
-            description: advertised.description,
-            inputSchema: advertised.inputSchema,
-          };
-        }),
+        mcp.tools
+          .filter(({ tool }) => includeTool(tool.name))
+          .map(({ tool }) => {
+            if (part === "output") return tool.outputSchema ?? null;
+            const advertised = transform ? transform({ ...tool }) : tool;
+            return {
+              name: advertised.name,
+              description: advertised.description,
+              inputSchema: advertised.inputSchema,
+              _meta: advertised._meta,
+            };
+          }),
       ),
     );
   }).pipe(
@@ -214,8 +363,21 @@ it.effect("the eager catalog round-trips and compiles with the MCP SDK", () =>
   Effect.gen(function* () {
     const mcp = yield* McpServer.McpServer;
     const catalog = mcp.tools.map(({ tool }) => tool);
+    const boardTool = catalog.find(({ name }) => name === TEAM_BOARD_TOOL)!;
+    for (const advertised of [boardTool, withCompactAgentCatalog({ ...boardTool })]) {
+      expect(advertised.description).toContain("your next SSHCode tool result");
+      expect(advertised.description).toContain("Don't poll with read.");
+      expect(advertised.description).toContain("Read for missing details.");
+      expect(advertised.description).toContain("Writes include unread posts");
+      expect(advertised.description).toContain("Done releases claims");
+    }
     const expected = catalog.map(({ name }) => name);
     const representativeCalls = {
+      team_board: [
+        {},
+        { post: { kind: "claim", text: "Fix the parser", files: ["src/parser.ts#parse"] } },
+        { post: { kind: "done", text: "Parser fixed", commit: "abc1234" } },
+      ],
       delegate_task: [
         { task: "Review this patch for regressions.", isolation: "worktree", mode: "async" },
         { task: "Read this screenshot.", attachmentPaths: ["screenshots/example.png"] },
@@ -229,6 +391,14 @@ it.effect("the eager catalog round-trips and compiles with the MCP SDK", () =>
         },
       ],
       search_x: [{ query: "from:example changelog", deep: true }],
+      show_card: [
+        {
+          title: "Deploy ready",
+          tone: "good",
+          blocks: [{ text: "All checks passed." }, { progress: { percent: 100, label: "Build" } }],
+          actions: [{ label: "Ship", reply: "Ship it.", style: "primary" }],
+        },
+      ],
       schedule_task: [
         { prompt: "Check the build.", schedule: { type: "interval", everyMs: 3_600_000 } },
         {
@@ -332,6 +502,22 @@ it.effect("replays six Devin and Muse actions with every tool reachable", () =>
     }
     expect(deferredMcpHarness(instances, "antigravity")).toBeUndefined();
     expect(deferredMcpHarness(instances, undefined)).toBeUndefined();
+
+    // Low token mode defers every visible tool behind t3_tool without hiding any tool.
+    const lowWire = rewriteToolsListBody(
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools } }),
+      new Set(["1"]),
+      () => true,
+      withCompactAgentCatalog,
+      deferMcpCatalogLow,
+    );
+    const lowCatalog = ListToolsResultSchema.parse(JSON.parse(lowWire).result).tools;
+    expect(lowCatalog.map(({ name }) => name)).toEqual(["t3_tool"]);
+    const lowIndexed = (lowCatalog[0]!.description ?? "")
+      .split("\n")
+      .slice(1)
+      .map((line) => line.split(": ", 1)[0]);
+    expect(lowIndexed.toSorted()).toEqual(full.map(({ name }) => name).toSorted());
   }).pipe(
     Effect.provide(
       McpHttpServer.layerAgentTools.pipe(
@@ -371,7 +557,32 @@ it.effect("keeps forbidden guidance words out of every tool description", () => 
 
 it.effect("agent context matches the committed budget", () =>
   Effect.gen(function* () {
-    const discovery = agentToolDiscoveryCatalog(() => true);
+    const discovery = agentToolDiscoveryCatalog((name) => name !== TEAM_BOARD_TOOL);
+    const caller = {
+      environmentId: EnvironmentId.make("board-budget"),
+      requestNamespace: "board-budget",
+      issuedAt: 0,
+      capabilities: new Set(["orchestration" as const]),
+      client: undefined,
+      thread: {
+        threadId: ThreadId.make("board-budget"),
+        providerSessionId: "budget",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      },
+    };
+    const policy = { enabled: true, tools: {}, providers: {} };
+    const boardVisible = (siblings: boolean) =>
+      agentToolListVisible(
+        policy,
+        TEAM_BOARD_TOOL,
+        caller,
+        { subagentsEnabled: () => true },
+        undefined,
+        () => siblings,
+      );
+    expect(boardVisible(false)).toBe(false);
+    expect(boardVisible(true)).toBe(true);
+    const bots = yield* listedBytes(true);
     const codex = yield* codexTurn(discovery);
     const repeatedCodex = yield* codexTurn(discovery);
     const contextText = Object.values(codex.additionalContext ?? {})
@@ -399,7 +610,103 @@ it.effect("agent context matches the committed budget", () =>
       ]
         .filter(Boolean)
         .join("\n\n");
+    const excerpt = "That path needs a retry.";
+    const citation = serializeAssistantCitation({
+      version: 1,
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("thread"),
+      messageId: MessageId.make("assistant"),
+      text: excerpt,
+      start: 0,
+      end: excerpt.length,
+      prefix: "",
+      suffix: "",
+      comment: "Please add the retry here.",
+    });
+    const eagerCatalog = yield* toolListBytes(
+      McpHttpServer.layerAgentTools,
+      "input",
+      withCompactAgentCatalog,
+      (name) => name !== "show_card" && name !== TEAM_BOARD_TOOL,
+    );
+    const eagerGemini = yield* toolListBytes(
+      McpHttpServer.layerAgentTools,
+      "input",
+      withCompactGeminiCatalog,
+      (name) => name !== "show_card" && name !== TEAM_BOARD_TOOL,
+    );
+    const deferredBytes = (
+      includeBoard: boolean,
+      transform: ToolsCatalogTransform = deferMcpCatalog,
+    ) =>
+      Effect.gen(function* () {
+        const server = yield* McpServer.McpServer;
+        const visible = server.tools.filter(
+          ({ tool }) => includeBoard || tool.name !== TEAM_BOARD_TOOL,
+        );
+        return utf8Bytes(
+          JSON.stringify(
+            transform(visible.map(({ tool }) => withCompactAgentCatalog({ ...tool }))),
+          ),
+        );
+      }).pipe(
+        Effect.provide(
+          McpHttpServer.layerAgentTools.pipe(
+            Layer.provideMerge(McpServer.McpServer.layer),
+            Layer.provide(toolHandlerServices),
+          ),
+        ),
+      );
+    const ordinaryDeferredBytes = yield* deferredBytes(false);
+    const highDeferred = deferMcpCatalogFor({ low: false, eagerCards: true });
+    const ordinaryHighDeferredBytes = yield* deferredBytes(false, highDeferred);
+    const ordinaryLowDeferredBytes = yield* deferredBytes(false, deferMcpCatalogLow);
+    const liveLowDeferred = deferMcpCatalogFor({
+      low: true,
+      eagerCards: false,
+      eagerTeamBoard: true,
+    });
     const measured = {
+      teamBoardWithoutSiblingsBytes:
+        utf8Bytes(
+          agentToolDiscoveryCatalog((name) => name !== TEAM_BOARD_TOOL || boardVisible(false)),
+        ) - utf8Bytes(discovery),
+      teamBoardDiscoveryAddedBytes:
+        utf8Bytes(
+          agentToolDiscoveryCatalog((name) => name !== TEAM_BOARD_TOOL || boardVisible(true)),
+        ) - utf8Bytes(discovery),
+      teamBoardDeferredCatalogAddedBytes: (yield* deferredBytes(true)) - ordinaryDeferredBytes,
+      teamBoardHighDeferredCatalogAddedBytes:
+        (yield* deferredBytes(true, highDeferred)) - ordinaryHighDeferredBytes,
+      teamBoardLowDeferredCatalogAddedBytes:
+        (yield* deferredBytes(true, liveLowDeferred)) - ordinaryLowDeferredBytes,
+      teamBoardSubagentClauseAddedBytes: utf8Bytes(
+        `${BOARD_NOTICE_PREFIX}${TEAM_BOARD_CLAUSE} ${EMPTY_BOARD_STATE}\n\n`,
+      ),
+      teamBoardToolAddedBytes:
+        (yield* toolListBytes(
+          McpHttpServer.layerAgentTools,
+          "input",
+          withCompactAgentCatalog,
+          (name) => name !== "show_card",
+        )) - eagerCatalog,
+      teamBoardClaudeToolAddedBytes:
+        (yield* toolListBytes(
+          McpHttpServer.layerAgentTools,
+          "input",
+          withTeamBoardToolMeta,
+          () => true,
+        )) - (yield* toolListBytes(McpHttpServer.layerAgentTools, "input")),
+      teamBoardGeminiToolAddedBytes:
+        (yield* toolListBytes(
+          McpHttpServer.layerAgentTools,
+          "input",
+          withCompactGeminiCatalog,
+          (name) => name !== "show_card",
+        )) - eagerGemini,
+      assistantCitationPromptBytes: utf8Bytes(
+        projectComposerContextForProvider({ text: `Use ${citation}`, records: [] }),
+      ),
       subagentOrchestrationBytes: utf8Bytes(T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT),
       subagentAcpBootstrapAddedBytes:
         utf8Bytes(
@@ -446,21 +753,8 @@ it.effect("agent context matches the committed budget", () =>
         utf8Bytes(prompt),
       cursorRepeatedTurnAddedBytes: utf8Bytes(cursorPrompt(2)) - utf8Bytes(prompt),
       openCodeSystemBytes: utf8Bytes(openCodeSystem(false)),
-      deferredMcpCatalogJsonBytes: yield* Effect.gen(function* () {
-        const server = yield* McpServer.McpServer;
-        return utf8Bytes(
-          JSON.stringify(
-            deferMcpCatalog(server.tools.map(({ tool }) => withCompactAgentCatalog({ ...tool }))),
-          ),
-        );
-      }).pipe(
-        Effect.provide(
-          McpHttpServer.layerAgentTools.pipe(
-            Layer.provideMerge(McpServer.McpServer.layer),
-            Layer.provide(toolHandlerServices),
-          ),
-        ),
-      ),
+      deferredMcpCatalogJsonBytes: ordinaryDeferredBytes,
+      deferredMcpCatalogHighTokensJsonBytes: ordinaryHighDeferredBytes,
       openCodeSubagentSystemBytes: utf8Bytes(openCodeSystem(true)),
       mcpToolListJsonBytes: yield* toolListBytes(McpHttpServer.layerAllTools, "input"),
       agentMcpToolListJsonBytes: yield* toolListBytes(McpHttpServer.layerAgentTools, "input"),
@@ -473,11 +767,18 @@ it.effect("agent context matches the committed budget", () =>
         McpHttpServer.layerAgentTools,
         "input",
         withCompactAgentCatalog,
+        (name) => name !== "show_card" && name !== TEAM_BOARD_TOOL,
       ),
       eagerAgentGeminiMcpToolListJsonBytes: yield* toolListBytes(
         McpHttpServer.layerAgentTools,
         "input",
         withCompactGeminiCatalog,
+        (name) => name !== "show_card" && name !== TEAM_BOARD_TOOL,
+      ),
+      highTokensEagerAgentMcpToolListJsonBytes: yield* toolListBytes(
+        McpHttpServer.layerAgentTools,
+        "input",
+        withCompactAgentCatalog,
       ),
       antigravityMcpDiscoveryCatalogBytes: discoveryBytes(
         antigravityMcpDiscoveryInstructions(discovery),
@@ -490,16 +791,87 @@ it.effect("agent context matches the committed budget", () =>
         McpHttpServer.layerAgentTools,
         "output",
       ),
+      // Settings > Bots, counted only while Bots are on with a bot.
+      botInstructionsBytes: botInstructionBytes(false),
+      botInstructionsWithCardsBytes: botInstructionBytes(true),
+      messageBotToolJsonBytes: bots.messageBot,
+      eagerMessageBotToolJsonBytes: bots.messageBotEager,
+      botChatToolsJsonBytes: bots.botChatTools,
+      eagerBotChatToolsJsonBytes: bots.botChatToolsEager,
+      botsOnChatEagerToolListJsonBytes: bots.on.chatEager,
+      botsOnBotChatEagerToolListJsonBytes: bots.on.botEager,
+      ...(yield* Effect.gen(function* () {
+        try {
+          registerAgentBehavior(() => ({ ...DEFAULT_AGENT_BEHAVIOR, tokens: "low" }));
+          const lowClaude = utf8Bytes(claudeSystemAppend());
+          const lowCodexTurn = yield* codexTurn(discovery);
+          expect(lowCodexTurn.additionalContext?.t3_code_tool_catalog).toBeUndefined();
+          const lowCodex = utf8Bytes(
+            Object.values(lowCodexTurn.additionalContext ?? {})
+              .map((entry) => entry.value)
+              .join(""),
+          );
+          const lowAcp =
+            utf8Bytes(
+              t3AcpPromptWithInstructions({
+                prompt,
+                state: t3AcpInstructionState({ interactionMode: "default", hasT3Mcp: true }),
+              }),
+            ) - utf8Bytes(prompt);
+          const lowSubagent = utf8Bytes(orchestrationInstructionsFor(undefined, () => true, true));
+
+          registerAgentBehavior(() => ({ ...DEFAULT_AGENT_BEHAVIOR, tokens: "high" }));
+          const highClaude = utf8Bytes(claudeSystemAppend());
+          const highCodexTurn = yield* codexTurn(discovery);
+          const highCodex = utf8Bytes(
+            Object.values(highCodexTurn.additionalContext ?? {})
+              .filter((entry) => entry !== highCodexTurn.additionalContext?.t3_code_tool_catalog)
+              .map((entry) => entry.value)
+              .join(""),
+          );
+          const highSubagent = utf8Bytes(orchestrationInstructionsFor(undefined, () => true, true));
+
+          return {
+            lowTokenClaudeSystemAppendBytes: lowClaude,
+            lowTokenCodexAdditionalContextBytes: lowCodex,
+            lowTokenAcpBootstrapAddedBytes: lowAcp,
+            lowTokenSubagentOrchestrationBytes: lowSubagent,
+            lowTokenDeferredMcpCatalogJsonBytes: ordinaryLowDeferredBytes,
+            highTokenClaudeSystemAppendBytes: highClaude,
+            highTokenCodexAdditionalContextBytes: highCodex,
+            highTokenSubagentOrchestrationBytes: highSubagent,
+          };
+        } finally {
+          registerAgentBehavior(() => DEFAULT_AGENT_BEHAVIOR);
+        }
+      })),
     };
     const inventory = yield* toolInventory;
     const discoveryNames = discovery.split("\n").map((line) => line.split(" — ")[0]);
-    expect(discoveryNames.toSorted()).toEqual(inventory.tools.map((tool) => tool.name));
+    expect(discoveryNames.toSorted()).toEqual(
+      inventory.tools.map((tool) => tool.name).filter((name) => name !== TEAM_BOARD_TOOL),
+    );
     yield* Effect.promise(() =>
       writeAgentQualityArtifact("context-budget", { measured, ...inventory }),
     );
     expect(measured.eagerAgentMcpToolListJsonBytes).toBeLessThan(30_000);
     expect(measured.eagerAgentGeminiMcpToolListJsonBytes).toBeLessThan(30_000);
+    expect(measured.eagerAgentMcpToolListJsonBytes + measured.teamBoardToolAddedBytes).toBeLessThan(
+      30_700,
+    );
+    expect(
+      measured.eagerAgentGeminiMcpToolListJsonBytes + measured.teamBoardGeminiToolAddedBytes,
+    ).toBeLessThan(30_700);
     expect(measured.deferredMcpCatalogJsonBytes).toBeLessThanOrEqual(10_000);
+    expect(
+      measured.deferredMcpCatalogJsonBytes + measured.teamBoardDeferredCatalogAddedBytes,
+    ).toBeLessThan(10_700);
+    expect(measured.highTokensEagerAgentMcpToolListJsonBytes).toBeLessThan(35_000);
+    expect(measured.lowTokenDeferredMcpCatalogJsonBytes).toBeLessThanOrEqual(4_000);
+    expect(
+      measured.lowTokenDeferredMcpCatalogJsonBytes + measured.teamBoardLowDeferredCatalogAddedBytes,
+    ).toBeLessThanOrEqual(4_000);
+    expect(measured.deferredMcpCatalogHighTokensJsonBytes).toBeLessThan(14_000);
     expect(measured).toEqual(budget);
   }),
 );
@@ -527,10 +899,10 @@ it("keeps removed prompt mechanics in their advertised tool descriptions", () =>
   expect(Tool.getDescription(PreviewSnapshotTool)).toContain("since=snapshotId");
   // Decision rules remain global even though the calls' mechanics live in tools.
   for (const policy of [
-    "Native subagents must support the chosen model",
-    "Worktree isolation requires a Git commit",
+    "Native subagents share your quota and must support the chosen model",
+    '`isolation:"worktree"` (needs a Git commit',
     "original brief, findings, replies and open objections",
-    "Ask with `ask_user`, not in your reply",
+    "Use `ask_user`, not prose",
     "Before ending a turn while your own long work still runs",
   ])
     expect(T3_CODE_ORCHESTRATION_INSTRUCTIONS).toContain(policy);

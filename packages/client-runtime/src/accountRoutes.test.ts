@@ -1,5 +1,5 @@
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   accountsByRoom,
@@ -18,6 +18,9 @@ import {
   groupModelsByMaker,
   rememberChosenModelRoute,
 } from "./modelMakers.ts";
+
+// Reset labels read the viewer's clock; pin one that is not New York's.
+vi.stubEnv("TZ", "America/Los_Angeles");
 
 const NOW = Date.parse("2026-11-17T08:00:00.000Z");
 const model = "claude-fable-5-2";
@@ -313,7 +316,7 @@ describe("accountRoomLabel", () => {
   const standings = accountStandings(providers, { instanceId: "claudeAgent", model }, NOW);
 
   it("names the reset beside the room when given the time", () => {
-    // The fixture resets two days on, at 3 AM Eastern on a Thursday.
+    // The fixture resets two days on, at midnight Pacific starting a Thursday.
     expect(accountRoomLabel(standings.byInstance.get("claudeAgent"), NOW)).toBe(
       "10% left · resets Thu",
     );
@@ -336,9 +339,9 @@ describe("accountRoomLabel", () => {
     expect(accountRoomLabel({ ...out, refusal: "limit" }, NOW)).toBe("At limit · resets Thu");
   });
 
-  it("gives the hour within the day and the date past the week", () => {
-    expect(accountResetLabel("2026-11-17T12:00:00.000Z", NOW)).toBe("7 AM");
-    expect(accountResetLabel("2026-11-17T23:51:00.000Z", NOW)).toBe("6:51 PM");
+  it("gives the hour within the day and the date past the week, on the viewer's clock", () => {
+    expect(accountResetLabel("2026-11-17T12:00:00.000Z", NOW)).toBe("4 AM");
+    expect(accountResetLabel("2026-11-17T23:51:00.000Z", NOW)).toBe("3:51 PM");
     expect(accountResetLabel("2026-11-20T23:51:00.000Z", NOW)).toBe("Fri");
     expect(accountResetLabel("2026-12-10T12:00:00.000Z", NOW)).toBe("Dec 10");
     expect(accountResetLabel("2026-11-17T07:00:00.000Z", NOW)).toBeNull();

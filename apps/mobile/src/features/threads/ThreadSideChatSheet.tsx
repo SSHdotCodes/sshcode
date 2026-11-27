@@ -41,6 +41,7 @@ import { ControlPill } from "../../components/ControlPill";
 import { SelectableMarkdownText } from "../../native/SelectableMarkdownText";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { uuidv4 } from "../../lib/uuid";
+import { sideChatPromptAbout, splitSideChatQuote } from "@t3tools/shared/sideChatQuote";
 import { useThreadSideChat } from "./useThreadSideChat";
 import {
   acknowledgedSideChatsAtom,
@@ -64,6 +65,8 @@ type ThreadSideChatParams = {
   readonly kind: SideChatKind;
   /** The question typed after `/btw` or `/side`; absent when opened from the header. */
   readonly prompt?: string;
+  /** Reply text selected in the chat; the next question is asked about it. */
+  readonly quote?: string;
   readonly messageId?: string;
 };
 
@@ -110,6 +113,7 @@ function ThreadSideChatContent({ route }: StaticScreenProps<ThreadSideChatParams
   const activeAttemptRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [quote, setQuote] = useState(() => route.params.quote?.trim() || null);
   const [submitting, setSubmitting] = useState(false);
   const [initialMessageId] = useState(() => route.params.messageId ?? uuidv4());
   const startedInitialPromptRef = useRef(false);
@@ -180,7 +184,7 @@ function ThreadSideChatContent({ route }: StaticScreenProps<ThreadSideChatParams
     (ended || sideChatAcceptsInput(state));
 
   const start = useCallback(
-    async (prompt: string, messageId?: string) => {
+    async (prompt: string, messageId?: string, typed = prompt) => {
       if (activeAttemptRef.current) return;
       activeAttemptRef.current = true;
       followRef.current.following = true;
@@ -195,9 +199,10 @@ function ThreadSideChatContent({ route }: StaticScreenProps<ThreadSideChatParams
           threadId,
           prompt,
         });
-        setDraft((current) => (current.trim() === prompt ? "" : current));
+        setDraft((current) => (current.trim() === typed ? "" : current));
+        if (typed !== prompt) setQuote(null);
       } catch {
-        setDraft((current) => (current.trim().length > 0 ? current : prompt));
+        setDraft((current) => (current.trim().length > 0 ? current : typed));
         setError("Could not save the question. Your text is still here. Try again.");
       } finally {
         activeAttemptRef.current = false;
@@ -214,10 +219,10 @@ function ThreadSideChatContent({ route }: StaticScreenProps<ThreadSideChatParams
   }, [initialMessageId, initialPrompt, start]);
 
   const send = async () => {
-    const prompt = draft.trim();
+    const question = draft.trim();
     if (!canSend) return;
     void Haptics.selectionAsync();
-    await start(prompt);
+    await start(sideChatPromptAbout(quote, question), undefined, question);
   };
 
   const messages = state?.messages ?? [];
@@ -237,9 +242,11 @@ function ThreadSideChatContent({ route }: StaticScreenProps<ThreadSideChatParams
     ? "Waiting for the answer…"
     : ended
       ? "Ask again to start a new one"
-      : kind === "btw"
-        ? "Ask a side question"
-        : "Message the side chat";
+      : quote !== null
+        ? "Ask about the selection"
+        : kind === "btw"
+          ? "Ask a side question"
+          : "Message the side chat";
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
@@ -334,6 +341,34 @@ function ThreadSideChatContent({ route }: StaticScreenProps<ThreadSideChatParams
           ) : null}
         </ScrollView>
 
+        {quote !== null ? (
+          <View className="mx-4 mt-2 flex-row items-start gap-2 rounded-xl border-s-2 border-border bg-subtle py-1.5 ps-2.5 pe-1">
+            <SymbolView
+              name="text.quote"
+              size={12}
+              tintColorClassName="accent-foreground-muted"
+              type="monochrome"
+              style={{ marginTop: 3 }}
+            />
+            <Text numberOfLines={3} className="min-w-0 flex-1 text-sm text-foreground-muted">
+              {quote}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Remove the selected text"
+              hitSlop={8}
+              onPress={() => setQuote(null)}
+              className="h-6 w-6 items-center justify-center active:opacity-60"
+            >
+              <SymbolView
+                name="xmark"
+                size={11}
+                tintColorClassName="accent-icon"
+                type="monochrome"
+              />
+            </Pressable>
+          </View>
+        ) : null}
         <View
           className="flex-row items-end gap-2 border-t border-border-subtle px-4 pt-2"
           style={{ paddingBottom: Math.max(insets.bottom, 12) }}
@@ -368,6 +403,8 @@ function SideChatUserBubble(props: {
 }) {
   const { harnessThemePreset } = useAppearancePreferences();
   const bubble = harnessThemePreset?.view.userBubble;
+  // A question about selected reply text shows that text quietly above it.
+  const quoted = splitSideChatQuote(props.text);
   return (
     <View
       onLayout={props.onLayout}
@@ -382,8 +419,16 @@ function SideChatUserBubble(props: {
           : undefined
       }
     >
+      {quoted.quote !== null ? (
+        <Text
+          numberOfLines={3}
+          className="mb-1 border-s-2 border-user-bubble-foreground/30 ps-2 text-sm text-user-bubble-foreground-muted"
+        >
+          {quoted.quote}
+        </Text>
+      ) : null}
       <Text selectable className="text-base leading-normal text-user-bubble-foreground">
-        {props.text}
+        {quoted.question}
       </Text>
     </View>
   );

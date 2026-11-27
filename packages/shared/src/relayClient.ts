@@ -22,6 +22,7 @@ import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "./HostProcess.ts";
+import { pruneManagedToolVersions, type ManagedToolProcesses } from "./managedToolRetention.ts";
 
 export const CLOUDFLARED_VERSION = "2026.10.3";
 // Older releases trust the compromised eMudhra CA. Apply the security floor to
@@ -239,6 +240,31 @@ const wrapInstallFailure =
       ),
     );
 
+export const pruneCloudflaredVersions = Effect.fn("cloudflared.pruneManagedVersions")(function* (
+  baseDir: string,
+  platform: NodeJS.Platform,
+  arch: NodeJS.Architecture,
+  options?: { dryRun?: boolean; processes?: Effect.Effect<ManagedToolProcesses | null> },
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const toolsDirectory = path.join(baseDir, "tools");
+  return yield* pruneManagedToolVersions({
+    toolsDirectory,
+    versionsDirectory: path.join(toolsDirectory, "cloudflared"),
+    current: CLOUDFLARED_VERSION,
+    // A newer server can share this home.
+    isVersion: (name) =>
+      parseVersion(name) !== null && compareCloudflaredVersions(name, CLOUDFLARED_VERSION) <= 0,
+    compareVersions: compareCloudflaredVersions,
+    completed: (_, directory) =>
+      fs
+        .exists(path.join(directory, `${platform}-${arch}`, executableFileName(platform)))
+        .pipe(Effect.orElseSucceed(() => false)),
+    ...options,
+  });
+});
+
 export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function* (
   options: CloudflaredRelayClientOptions,
 ): Effect.fn.Return<
@@ -397,24 +423,24 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
     return releaseAsset ? missingStatus : unsupportedStatus;
   }).pipe(Effect.withSpan("cloudflared.resolve"));
 
-  const pruneManagedVersions: RelayClientShape["pruneManagedVersions"] = Effect.gen(function* () {
-    // The newest older release stays: an older server sharing this base dir, or a
-    // rollback after a failed update, may still need it and cannot redownload it.
-    for (const version of (yield* olderManagedVersions).slice(1)) {
-      // A connector from another server sharing this base dir may still run an
-      // older release; Windows refuses to delete it, so the next prune retries.
-      yield* fileSystem.remove(path.join(managedRoot, version), { recursive: true }).pipe(
-        Effect.tap(() => Effect.logInfo("Removed an older managed relay client", { version })),
-        Effect.catch((cause) =>
-          Effect.logDebug("Could not remove an older managed relay client", { version, cause }),
-        ),
-      );
-    }
-  }).pipe(Effect.withSpan("cloudflared.pruneManagedVersions"));
+  const pruneManagedVersions: RelayClientShape["pruneManagedVersions"] = pruneCloudflaredVersions(
+    options.baseDir,
+    platform,
+    arch,
+  ).pipe(
+    Effect.provideService(FileSystem.FileSystem, fileSystem),
+    Effect.provideService(Path.Path, path),
+    Effect.asVoid,
+    Effect.catch(() => Effect.logDebug("Could not prune old relay clients")),
+  );
 
   /** Moves the new binary toward its final path, waiting out a brief Windows lock. */
+  // Node can finish an in-flight rename after interruption. Wait for each attempt before
+  // releasing the install scope, while keeping Windows retry delays interruptible.
+
   const renameWhenUnlocked = (from: string, to: string) =>
     fileSystem.rename(from, to).pipe(
+      Effect.uninterruptible,
       Effect.retry({
         times: ACTIVATE_RETRY_COUNT,
         schedule: Schedule.spaced(ACTIVATE_RETRY_DELAY),
@@ -604,13 +630,16 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
 
       const stagedPath = `${managedPath}.${yield* crypto.randomUUIDv4()}.tmp`;
       yield* report("activating");
+      yield* Effect.addFinalizer(() =>
+        fileSystem.remove(stagedPath, { force: true }).pipe(Effect.ignore),
+      );
       yield* renameWhenUnlocked(executablePath, stagedPath).pipe(
         wrapInstallFailure("write_failed", "Could not stage the relay client."),
       );
       yield* renameWhenUnlocked(stagedPath, managedPath).pipe(
         wrapInstallFailure("write_failed", "Could not activate the relay client."),
-        Effect.ensuring(fileSystem.remove(stagedPath, { force: true }).pipe(Effect.ignore)),
       );
+      yield* pruneManagedVersions;
       return {
         status: "available",
         executablePath: managedPath,

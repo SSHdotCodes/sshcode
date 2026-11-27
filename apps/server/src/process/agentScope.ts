@@ -301,6 +301,11 @@ export const make = Effect.gen(function* () {
       Effect.provideService(HostProcess.Platform, platform),
     );
 
+  // Termux can have a POSIX shell on PATH without having /bin/sh.
+  const shell = (yield* fileSystem.exists("/bin/sh").pipe(Effect.orElseSucceed(() => false)))
+    ? "/bin/sh"
+    : ((yield* resolve("sh", hostEnvironment)) ?? "/bin/sh");
+
   const run = (command: string, args: ReadonlyArray<string>) =>
     runner.run({ command, args, timeout: "5 seconds" }).pipe(Effect.option);
 
@@ -561,7 +566,7 @@ export const make = Effect.gen(function* () {
       // Leave unresolved commands alone so the spawn reports the missing binary.
       if (resolved === null) return { command, args };
       const scope = yield* systemd;
-      if (scope === undefined) return agentScopeCommand({ command: resolved, args });
+      if (scope === undefined) return agentScopeCommand({ command: resolved, args, shell });
       const unit = `t3code-${name}-${NodeCrypto.randomUUID().slice(0, 8)}.scope`;
       if (threadId !== undefined) yield* track(scope.systemctl, threadId, unit);
       const systemdScope: AgentSystemdScope = {
@@ -573,7 +578,10 @@ export const make = Effect.gen(function* () {
         // the unit even when it fails.
         options: threadId === undefined ? [...scope.scopeOptions, "--collect"] : scope.scopeOptions,
       };
-      return { ...agentScopeCommand({ command: resolved, args, scope: systemdScope }), unit };
+      return {
+        ...agentScopeCommand({ command: resolved, args, scope: systemdScope, shell }),
+        unit,
+      };
     }),
     oomKilled,
     stop,

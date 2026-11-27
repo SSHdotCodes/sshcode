@@ -299,6 +299,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     );
   const retention = managedReleaseRetention({
     directory: managedDirectory,
+    toolsDirectory: path.join(options.baseDir, "tools"),
     versionsDirectory: managedDirectory,
     validName: Schema.is(Version),
     active: Effect.suspend(retentionActive),
@@ -308,7 +309,8 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
         Effect.orElseSucceed(() => false),
       ),
   });
-  const prune = retention.prune.pipe(
+  const prune = retention.prune().pipe(
+    Effect.asVoid,
     Effect.catch(() => Effect.logWarning("Could not prune unused Codex releases")),
   );
   const compatibility = Effect.fn("CodexInstallation.compatibility")(function* (version: string) {

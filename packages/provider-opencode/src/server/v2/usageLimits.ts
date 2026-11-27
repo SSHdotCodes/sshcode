@@ -102,14 +102,14 @@ const budgetPercent = (spent: number, limit: number) =>
 
 /** Undefined alone permits the legacy credential reader; null data is authoritative. */
 export const readServerUsageLimits = Effect.fn("OpenCode2Client.usageLimits")(function* (
-  directory: string,
+  directory: string | undefined,
 ) {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const client = HttpClient.withScope(yield* HttpClient.HttpClient);
+  const options =
+    directory === undefined ? undefined : { urlParams: { "location[directory]": directory } };
   return yield* Effect.gen(function* () {
-    const response = yield* client.get("/api/experimental/usage/limits", {
-      urlParams: { "location[directory]": directory },
-    });
+    const response = yield* client.get("/api/experimental/usage/limits", options);
     if (
       response.status === 404 ||
       response.status === 405 ||
@@ -134,23 +134,19 @@ export const readServerUsageLimits = Effect.fn("OpenCode2Client.usageLimits")(fu
     const consoleProviders = budgets.some(
       (budget) => budget.coverage === "all" && budget.per === "set",
     )
-      ? yield* client
-          .get("/api/provider", {
-            urlParams: { "location[directory]": directory },
-          })
-          .pipe(
-            Effect.flatMap(HttpClientResponse.filterStatusOk),
-            Effect.flatMap(readProvidersBody),
-            Effect.map((page) =>
-              page.data
-                .filter(
-                  (provider) =>
-                    provider.integrationID === "opencode" && provider.id !== "opencode-go",
-                )
-                .map((provider) => provider.id),
-            ),
-            Effect.orElseSucceed(() => []),
-          )
+      ? yield* client.get("/api/provider", options).pipe(
+          Effect.flatMap(HttpClientResponse.filterStatusOk),
+          Effect.flatMap(readProvidersBody),
+          Effect.map((page) =>
+            page.data
+              .filter(
+                (provider) =>
+                  provider.integrationID === "opencode" && provider.id !== "opencode-go",
+              )
+              .map((provider) => provider.id),
+          ),
+          Effect.orElseSucceed(() => []),
+        )
       : [];
     const windows: ServerProviderUsageWindow[] = [];
     if (go) {

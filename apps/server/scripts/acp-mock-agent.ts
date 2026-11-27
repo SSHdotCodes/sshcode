@@ -167,7 +167,11 @@ const permissionRequestCount = Math.max(
   1,
   Number(process.env.T3_ACP_PERMISSION_REQUEST_COUNT ?? "1") || 1,
 );
-const sessionId = "mock-session-1";
+// A QA sandbox runs many chats, each with its own mock process. Message ids are scoped by the
+// session id, so a shared one would let the chats overwrite each other's replies.
+const sessionId = qaFixture
+  ? `mock-session-${process.pid}-${process.hrtime.bigint().toString(36)}`
+  : "mock-session-1";
 
 let currentModeId = qaFixture
   ? "code"
@@ -209,6 +213,31 @@ function promptMentions(prompt: AcpSchema.PromptRequest["prompt"], word: string)
   return prompt.some(
     (part) => part.type === "text" && typeof part.text === "string" && part.text.includes(word),
   );
+}
+
+function qaDelegateOptions(prompt: AcpSchema.PromptRequest["prompt"]) {
+  for (const part of prompt) {
+    if (part.type !== "text" || typeof part.text !== "string") continue;
+    const match = /qa:delegate:([A-Za-z][\w-]{0,31}(?:,[A-Za-z][\w-]{0,31}){0,4})(:wait)?/.exec(
+      part.text,
+    );
+    if (match) return { titles: match[1]!.split(","), wait: match[2] !== undefined };
+  }
+  return { titles: ["QA subagent"], wait: false };
+}
+
+/** The words after a fixture keyword, up to the end of its line: "qa:watch thread-1" → "thread-1". */
+function promptArgument(prompt: AcpSchema.PromptRequest["prompt"], word: string): string {
+  for (const part of prompt) {
+    if (part.type !== "text" || typeof part.text !== "string") continue;
+    const at = part.text.indexOf(word);
+    if (at >= 0)
+      return part.text
+        .slice(at + word.length)
+        .split("\n", 1)[0]!
+        .trim();
+  }
+  return "";
 }
 
 function logExit(reason: string): void {
@@ -1770,46 +1799,294 @@ const program = Effect.gen(function* () {
 
       // QA: "qa:secret", "qa:ask" and "qa:delegate" call the app's own tools the way a real
       // agent does, so a UI check can see a secret card, a question card and a subagent.
-      const qaTool = promptMentions(request.prompt, "qa:secret")
+      // "qa:secret-parts" asks for a credential in parts on one card.
+      // "qa:delegate:Sol" names the subagent, "qa:delegate:Sol,Neon,Opus" starts one per name,
+      // and a trailing ":wait" keeps them running 2 min.
+      const qaDelegate = qaDelegateOptions(request.prompt);
+      const qaTool = promptMentions(request.prompt, "qa:secret-parts")
         ? {
             name: "request_secret",
             arguments: {
-              label: "QA deploy token",
-              reason: "The QA fixture asks for a secret to show its card.",
-              clientRequestId: `qa-secret-${promptCount}`,
+              label: "Modal token",
+              reason: "Runs the GPU job on Modal. Create a token in Modal's settings.",
+              fields: [
+                { label: "Token ID", placeholder: "ak-…" },
+                { label: "Token secret", placeholder: "as-…" },
+              ],
+              clientRequestId: `qa-secret-parts-${promptCount}`,
             },
-            said: "Asked for a secret and kept going.",
+            said: "Asked for a secret in parts and kept going.",
           }
-        : promptMentions(request.prompt, "qa:ask")
+        : promptMentions(request.prompt, "qa:secret")
           ? {
-              name: "ask_user",
+              name: "request_secret",
               arguments: {
-                questions: [
-                  {
-                    header: "Fixture",
-                    question: "Which fixture answer should the QA agent take?",
-                    options: [
-                      { label: "First (Recommended)", description: "The recommended answer." },
-                      { label: "Second", description: "The other answer." },
-                    ],
-                    important: true,
-                  },
-                ],
-                clientRequestId: `qa-ask-${promptCount}`,
+                label: "QA deploy token",
+                reason: "The QA fixture asks for a secret to show its card.",
+                clientRequestId: `qa-secret-${promptCount}`,
               },
-              said: "Asked a question and kept going.",
+              said: "Asked for a secret and kept going.",
             }
-          : promptMentions(request.prompt, "qa:delegate")
+          : promptMentions(request.prompt, "qa:ask")
             ? {
-                name: "delegate_task",
+                name: "ask_user",
                 arguments: {
-                  task: "Complete the delegated fixture.",
-                  title: "QA subagent",
-                  clientRequestId: `qa-delegate-${promptCount}`,
+                  questions: [
+                    {
+                      header: "Fixture",
+                      question: "Which fixture answer should the QA agent take?",
+                      options: [
+                        { label: "First (Recommended)", description: "The recommended answer." },
+                        { label: "Second", description: "The other answer." },
+                      ],
+                      important: true,
+                    },
+                  ],
+                  clientRequestId: `qa-ask-${promptCount}`,
                 },
-                said: "Delegated a subagent.",
+                said: "Asked a question and kept going.",
               }
-            : undefined;
+            : promptMentions(request.prompt, "qa:watch")
+              ? {
+                  // Bots: "qa:watch <chat id> [<chat id>…]" in a bot's chat.
+                  name: "watch_chats",
+                  arguments: {
+                    threadIds: promptArgument(request.prompt, "qa:watch")
+                      .split(/\s+/u)
+                      .filter(Boolean),
+                  },
+                  said: "I'll keep an eye on that chat and tell you when it finishes.",
+                  quiet: true,
+                }
+              : promptMentions(request.prompt, "qa:message-bot")
+                ? {
+                    // Bots: another chat tells the bot something.
+                    name: "message_bot",
+                    arguments: {
+                      text:
+                        promptArgument(request.prompt, "qa:message-bot") ||
+                        "The phone build finished. All 12 checks passed.",
+                    },
+                    said: "Told the bot.",
+                    quiet: true,
+                  }
+                : promptMentions(request.prompt, "qa:remember")
+                  ? {
+                      name: "bot_memory",
+                      arguments: {
+                        add:
+                          promptArgument(request.prompt, "qa:remember") || "Prefers short updates.",
+                      },
+                      said: "Got it, I'll remember that.",
+                      quiet: true,
+                    }
+                  : promptMentions(request.prompt, "qa:delegate")
+                    ? {
+                        name: "delegate_task",
+                        arguments: {
+                          task: qaDelegate.wait
+                            ? "Complete the delegated fixture. qa:wait"
+                            : "Complete the delegated fixture.",
+                          title: qaDelegate.titles[0]!,
+                          clientRequestId: `qa-delegate-${promptCount}`,
+                        },
+                        said: "Delegated a subagent.",
+                      }
+                    : promptMentions(request.prompt, "qa:card-inputs")
+                      ? {
+                          name: "show_card",
+                          arguments: {
+                            title: "Tune rollout settings",
+                            subtitle: "Adjust parameters before deploying to production",
+                            tone: "warn",
+                            icon: "spark",
+                            blocks: [
+                              {
+                                text: "Pick a target environment, rollout percentage, and release note. Submitting sends one compact reply.",
+                              },
+                            ],
+                            inputs: [
+                              {
+                                id: "env",
+                                kind: "choice",
+                                label: "Environment",
+                                options: ["Staging", "Canary", "Prod"],
+                                default: "Canary",
+                              },
+                              {
+                                id: "region",
+                                kind: "choice",
+                                label: "Region",
+                                options: ["US East", "US West", "EU Central", "AP Tokyo"],
+                                default: "US East",
+                              },
+                              {
+                                id: "rollout",
+                                kind: "slider",
+                                label: "Traffic share",
+                                min: 0,
+                                max: 100,
+                                step: 10,
+                                unit: "%",
+                                default: 30,
+                              },
+                              {
+                                id: "notify",
+                                kind: "toggle",
+                                label: "Post release alert",
+                                default: true,
+                              },
+                              {
+                                id: "note",
+                                kind: "text",
+                                label: "Release note",
+                                default: "Native cards rollout",
+                              },
+                            ],
+                            submit: "Apply settings",
+                          },
+                          said: "Tune the controls above and submit when ready.",
+                        }
+                      : promptMentions(request.prompt, "qa:card-stream")
+                        ? {
+                            name: "show_card",
+                            streamDelayMs: 6_000,
+                            arguments: {
+                              title: "Overnight pipeline check",
+                              subtitle: "Finished gathering test results",
+                              tone: "good",
+                              icon: "clock",
+                              blocks: [
+                                {
+                                  stats: [
+                                    { label: "Suites", value: "18", delta: "+2" },
+                                    { label: "Pass rate", value: "99.4%", delta: "+0.6%" },
+                                  ],
+                                },
+                                {
+                                  progress: {
+                                    percent: 100,
+                                    label: "Verification complete",
+                                    eta: "Done",
+                                  },
+                                },
+                              ],
+                            },
+                            said: "Pipeline summary is ready.",
+                          }
+                        : promptMentions(request.prompt, "qa:card")
+                          ? {
+                              name: "show_card",
+                              arguments: {
+                                title: "Morning build overview",
+                                subtitle: "4 workflows checked across web, server, and iOS",
+                                tone: "good",
+                                icon: "bot",
+                                blocks: [
+                                  {
+                                    text: "All core checks passed. **Server latency** dropped after yesterday's cache change.",
+                                  },
+                                  {
+                                    stats: [
+                                      { label: "Passed", value: "418", delta: "+14" },
+                                      { label: "Failed", value: "1", delta: "−3", tone: "good" },
+                                      {
+                                        label: "P95 latency",
+                                        value: "84ms",
+                                        delta: "−18ms",
+                                        tone: "good",
+                                      },
+                                      { label: "Coverage", value: "91.2%", delta: "+0.8%" },
+                                    ],
+                                  },
+                                  {
+                                    progress: {
+                                      percent: 76,
+                                      label: "Uploading release artifacts",
+                                      eta: "14s left",
+                                    },
+                                  },
+                                  {
+                                    rows: [
+                                      {
+                                        title: "Server integration",
+                                        detail: "28 tests · 0 regressions",
+                                        status: "done",
+                                        value: "1m 12s",
+                                      },
+                                      {
+                                        title: "iOS simulator build",
+                                        detail: "Compiling React Native bundle",
+                                        status: "running",
+                                        value: "76%",
+                                      },
+                                      {
+                                        title: "Migration check",
+                                        detail: "Awaiting reviewer sign-off",
+                                        status: "waiting",
+                                        value: "2m",
+                                      },
+                                      {
+                                        title: "Nightly fuzz job",
+                                        detail: "1 timeout in worker pool",
+                                        status: "failed",
+                                        value: "4m 05s",
+                                      },
+                                      {
+                                        title: "Artifact prune",
+                                        status: "idle",
+                                        value: "Queued",
+                                      },
+                                    ],
+                                  },
+                                  {
+                                    chart: {
+                                      kind: "bar",
+                                      series: [
+                                        { label: "Builds", points: [14, 19, 17, 24, 28, 22, 31] },
+                                        { label: "Deploys", points: [6, 9, 8, 12, 15, 11, 16] },
+                                      ],
+                                      xLabels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+                                    },
+                                  },
+                                  {
+                                    chart: {
+                                      kind: "line",
+                                      series: [
+                                        {
+                                          label: "Median ms",
+                                          points: [128, 120, 112, 105, 96, 89, 84],
+                                        },
+                                        {
+                                          label: "P95 ms",
+                                          points: [240, 228, 215, 204, 192, 185, 176],
+                                        },
+                                      ],
+                                      xLabels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+                                    },
+                                  },
+                                ],
+                                actions: [
+                                  {
+                                    label: "Ship release",
+                                    reply: "Go ahead and ship this release to staging.",
+                                    style: "primary",
+                                  },
+                                  {
+                                    label: "Re-run fuzz",
+                                    reply: "Re-run the nightly fuzz job once.",
+                                    style: "plain",
+                                  },
+                                  {
+                                    label: "Abort",
+                                    reply: "Abort the release and pause deploys.",
+                                    style: "danger",
+                                  },
+                                ],
+                              },
+                              said: "Let me know how you'd like to proceed.",
+                            }
+                          : undefined;
       if (qaFixture && qaTool !== undefined) {
         if (qaMcpServerId === undefined)
           return yield* AcpError.AcpRequestError.internalError("QA MCP server unavailable");
@@ -1826,31 +2103,48 @@ const program = Effect.gen(function* () {
         yield* agent.client.notifyMcp({ connectionId, method: "notifications/initialized" });
         // Report the delegation as a tool call without output, the way Codex records it, so a
         // UI check can see the row fold into the subagent card.
-        const toolCallId = `qa-tool-${promptCount}`;
-        if (qaTool.name === "delegate_task") {
-          yield* agent.client.sessionUpdate({
-            sessionId: requestedSessionId,
-            update: {
-              sessionUpdate: "tool_call_update",
-              toolCallId,
-              title: qaTool.name,
-              kind: "other",
-              status: "in_progress",
-              rawInput: { server: "t3-code", tool: qaTool.name, arguments: qaTool.arguments },
-              _meta: { is_mcp_tool_call: true },
-            },
+        const calls: ReadonlyArray<Schema.JsonObject> =
+          qaTool.name === "delegate_task"
+            ? qaDelegate.titles.map((title, index) => ({
+                ...qaTool.arguments,
+                title,
+                clientRequestId: `qa-delegate-${promptCount}-${index}`,
+              }))
+            : [qaTool.arguments];
+        let result: unknown = undefined;
+        for (const [index, callArguments] of calls.entries()) {
+          const toolCallId = `qa-tool-${promptCount}-${index}`;
+          if (qaTool.name === "delegate_task" || qaTool.name === "show_card") {
+            yield* agent.client.sessionUpdate({
+              sessionId: requestedSessionId,
+              update: {
+                sessionUpdate: "tool_call_update",
+                toolCallId,
+                title: qaTool.name,
+                kind: "other",
+                status: "in_progress",
+                rawInput: { server: "t3-code", tool: qaTool.name, arguments: callArguments },
+                _meta: { is_mcp_tool_call: true },
+              },
+            });
+          }
+          const toolResult = yield* agent.client.messageMcp({
+            connectionId,
+            method: "tools/call",
+            params: { name: qaTool.name, arguments: callArguments },
           });
-        }
-        const result = yield* agent.client.messageMcp({
-          connectionId,
-          method: "tools/call",
-          params: { name: qaTool.name, arguments: qaTool.arguments },
-        });
-        if (qaTool.name === "delegate_task") {
-          yield* agent.client.sessionUpdate({
-            sessionId: requestedSessionId,
-            update: { sessionUpdate: "tool_call_update", toolCallId, status: "completed" },
-          });
+          result = toolResult;
+          if (qaTool.name === "delegate_task" || qaTool.name === "show_card") {
+            yield* agent.client.sessionUpdate({
+              sessionId: requestedSessionId,
+              update: {
+                sessionUpdate: "tool_call_update",
+                toolCallId,
+                status: "completed",
+                ...(qaTool.name === "show_card" ? { rawOutput: toolResult } : {}),
+              },
+            });
+          }
         }
         yield* agent.client.sessionUpdate({
           sessionId: requestedSessionId,
@@ -1858,11 +2152,113 @@ const program = Effect.gen(function* () {
             sessionUpdate: "agent_message_chunk",
             content: {
               type: "text",
-              text: `${qaTool.said}\n\n${qaTool.name} returned: ${encodeJson(result).slice(0, 600)}`,
+              // Bot fixtures read like a bot's reply; the others show what the tool returned.
+              text:
+                "quiet" in qaTool && qaTool.quiet
+                  ? qaTool.said
+                  : `${qaTool.said}\n\n${qaTool.name} returned: ${encodeJson(result).slice(0, 600)}`,
             },
           },
         });
         yield* agent.client.disconnectMcp({ connectionId });
+        // "qa:delegate:… qa:progress" keeps going: a lead reporting progress over its team.
+        if (qaTool.name !== "delegate_task" || !promptMentions(request.prompt, "qa:progress")) {
+          return yield* finishPrompt(requestedSessionId, "end_turn");
+        }
+      }
+
+      // QA: "qa:progress" reports live progress (Settings > Agents token use High) through four
+      // stages over about two and a half minutes, the way the High instruction asks;
+      // "qa:progress-team" first delegates a subagent that reports its own. "qa:progress-todo"
+      // never reports and only keeps a todo list, for the fallback stages.
+      if (qaFixture && promptMentions(request.prompt, "qa:progress")) {
+        const stages = [
+          { title: "Read the code", minutes: 1 },
+          { title: "Build the server tool", minutes: 2 },
+          { title: "Draw the Mac and phone cards", minutes: 3 },
+          { title: "Take screenshots", minutes: 1 },
+        ];
+        const updates = [
+          "Reading the server and both apps first.",
+          "Read the spec; building the server tool now.",
+          "Tests pass on the server; now building the phone screen.",
+          "Both cards look right; taking screenshots.",
+          "All done.",
+        ];
+        const waits = ["25 seconds", "40 seconds", "50 seconds", "30 seconds"] as const;
+        if (promptMentions(request.prompt, "qa:progress-todo")) {
+          for (let index = 0; index <= stages.length; index++) {
+            yield* agent.client.sessionUpdate({
+              sessionId: requestedSessionId,
+              update: {
+                sessionUpdate: "plan",
+                entries: stages.map((stage, position) => ({
+                  content: stage.title,
+                  priority: "medium",
+                  status:
+                    position < index ? "completed" : position === index ? "in_progress" : "pending",
+                })),
+              },
+            });
+            const wait = waits[index];
+            if (wait !== undefined) yield* Effect.sleep(wait);
+          }
+          return yield* finishPrompt(requestedSessionId, "end_turn");
+        }
+        if (qaMcpServerId === undefined)
+          return yield* AcpError.AcpRequestError.internalError("QA MCP server unavailable");
+        const { connectionId } = yield* agent.client.connectMcp({ serverId: qaMcpServerId });
+        yield* agent.client.messageMcp({
+          connectionId,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "qa-progress", version: "1" },
+          },
+        });
+        yield* agent.client.notifyMcp({ connectionId, method: "notifications/initialized" });
+        if (promptMentions(request.prompt, "qa:progress-team")) {
+          yield* agent.client.messageMcp({
+            connectionId,
+            method: "tools/call",
+            params: {
+              name: "delegate_task",
+              arguments: {
+                task: "qa:progress Build the phone card.",
+                title: "Phone card",
+                clientRequestId: `qa-progress-team-${promptCount}`,
+              },
+            },
+          });
+        }
+        for (let index = 0; index <= stages.length; index++) {
+          yield* agent.client.messageMcp({
+            connectionId,
+            method: "tools/call",
+            params: {
+              name: "report_progress",
+              arguments: {
+                stages: stages.map((stage, position) => ({
+                  title: stage.title,
+                  minutes: stage.minutes,
+                  status: position < index ? "done" : position === index ? "active" : "pending",
+                })),
+                ...(updates[index] === undefined ? {} : { update: updates[index] }),
+              },
+            },
+          });
+          const wait = waits[index];
+          if (wait !== undefined) yield* Effect.sleep(wait);
+        }
+        yield* agent.client.disconnectMcp({ connectionId });
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Reported progress through every stage." },
+          },
+        });
         return yield* finishPrompt(requestedSessionId, "end_turn");
       }
 

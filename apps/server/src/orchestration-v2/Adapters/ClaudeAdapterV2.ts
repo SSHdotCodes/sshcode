@@ -61,12 +61,12 @@ import { AgentScope } from "@t3tools/shared/AgentScope";
 import { envTrampoline, supportsEnvChdir } from "@t3tools/shared/envTrampoline";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
+import { generationSnapshot } from "@t3tools/shared/generationRate";
 import {
-  type GenerationMeter,
-  generationSnapshot,
-  makeGenerationMeter,
-} from "@t3tools/shared/generationRate";
-import { meterClaudeGenerationFrame } from "./ClaudeGeneration.ts";
+  type ClaudeGeneration,
+  makeClaudeGeneration,
+  meterClaudeGenerationFrame,
+} from "./ClaudeGeneration.ts";
 import {
   CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
   formatClaudeResumeCompactionQuestion,
@@ -175,6 +175,7 @@ import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/
 import { splitClaudeToken } from "../../provider/Drivers/ClaudeLogin.ts";
 import {
   SubagentsEnabled,
+  currentAgentBehavior,
   orchestrationInstructionsFor,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
@@ -1612,6 +1613,11 @@ export function makeClaudeQueryOptions(input: {
           ...(typeof querySettings === "object" && querySettings !== null ? querySettings : {}),
           autoCompactWindow: Number(input.settings.autoCompactWindow),
         } as ClaudeSdkSettings);
+  // Settings > Agents Subagents = None turns off Claude Code's native Agent tool too.
+  const disallowedTools =
+    currentAgentBehavior().subagents === "none"
+      ? [...new Set([...(input.disallowedTools ?? []), "Agent"])]
+      : input.disallowedTools;
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
     // T3 names threads; a supplied title skips Claude's redundant naming request.
@@ -1627,7 +1633,7 @@ export function makeClaudeQueryOptions(input: {
     ...threadIdentity,
     ...(input.resumeSessionAt === undefined ? {} : { resumeSessionAt: input.resumeSessionAt }),
     ...(input.allowedTools === undefined ? {} : { allowedTools: [...input.allowedTools] }),
-    ...(input.disallowedTools === undefined ? {} : { disallowedTools: [...input.disallowedTools] }),
+    ...(disallowedTools === undefined ? {} : { disallowedTools: [...disallowedTools] }),
     ...(input.canUseTool === undefined ? {} : { canUseTool: input.canUseTool }),
     ...(input.permissionMode === "bypassPermissions"
       ? { allowDangerouslySkipPermissions: true }
@@ -2728,17 +2734,20 @@ function claudePendingBackgroundTask(input: {
   readonly startedByMonitor: boolean;
   readonly description: string | undefined;
 }): OrchestrationV2PendingBackgroundTask {
-  return {
-    taskId: input.taskId,
-    kind: input.startedByMonitor
-      ? "monitor"
-      : ((input.taskType === null
-          ? undefined
-          : CLAUDE_OPAQUE_BACKGROUND_TASK_KINDS.get(input.taskType)) ?? "background_task"),
-    ...(input.description !== undefined && input.description.trim().length > 0
+  const description =
+    input.description !== undefined && input.description.trim().length > 0
       ? { description: input.description }
-      : {}),
-  };
+      : {};
+  const kind = input.startedByMonitor
+    ? "monitor"
+    : ((input.taskType === null
+        ? undefined
+        : CLAUDE_OPAQUE_BACKGROUND_TASK_KINDS.get(input.taskType)) ?? "background_task");
+  // Claude Code reports every background command's exit to the agent, which starts its
+  // next turn, so the chat waits on it like any other work the agent will hear back from.
+  return kind === "command"
+    ? { taskId: input.taskId, kind, wakesAgent: true, ...description }
+    : { taskId: input.taskId, kind, ...description };
 }
 
 function claudeTaskTypeFromSdkMessage(message: SDKMessage): string | null {
@@ -3785,7 +3794,7 @@ interface ActiveClaudeTurnContext {
   readonly providerTurnOrdinal: number;
   readonly startedAt: DateTime.Utc;
   // Output speed of this turn's root replies (see ClaudeGeneration.ts).
-  readonly generation: GenerationMeter;
+  readonly generation: ClaudeGeneration;
   // A compaction Claude announced (`status: "compacting"`) and has not ended.
   // Its row shows while it runs; the boundary completes that same row.
   compaction: { readonly nativeItemId: string; readonly startedAt: DateTime.Utc } | null;
@@ -3850,7 +3859,7 @@ const claudeFrameArrivals = new WeakMap<SDKMessage, DateTime.Utc>();
 
 /** The turn's output speed, once a root reply has been timed. */
 function claudeGenerationField(context: Pick<ActiveClaudeTurnContext, "generation">) {
-  const generation = generationSnapshot(context.generation);
+  const generation = generationSnapshot(context.generation.meter);
   return generation === undefined ? {} : { generation };
 }
 
@@ -3950,6 +3959,8 @@ interface PendingClaudeSubagentLaunch {
   readonly context?: ActiveClaudeTurnContext;
   readonly model?: string;
   readonly effort?: string;
+  // The Agent call's subagent_type ("Explore", "general-purpose", a custom agent).
+  readonly nativeType?: string;
   // parent_tool_use_id of the subagent whose own Agent call launches this one.
   readonly ownerToolUseId?: string;
 }
@@ -4029,12 +4040,14 @@ function rememberClaudeSubagentLaunch(
         ? context.input.modelSelection.model
         : undefined;
   const effort = firstStringInputField(input, ["effort"]);
+  const nativeType = firstStringInputField(input, ["subagent_type"])?.trim();
   // A model already known (a snapshot's, or an earlier sighting of this
   // call) wins over the requested one.
   const launch: PendingClaudeSubagentLaunch = {
     context: pending.get(toolUseId)?.context ?? context,
     ...(model === undefined || pending.get(toolUseId)?.model !== undefined ? {} : { model }),
     ...(effort === undefined ? {} : { effort }),
+    ...(nativeType ? { nativeType } : {}),
     ...(ownerToolUseId === null ? {} : { ownerToolUseId }),
   };
   rememberPendingClaudeSubagentLaunch(pending, toolUseId, launch);
@@ -6125,6 +6138,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           // The Agent call's effort and the subagent whose own Agent call
           // started this one; read only when this call registers the subagent.
           readonly effort?: string;
+          readonly nativeType?: string;
           readonly owner?: ActiveClaudeSubagent;
           readonly progress?: string;
           /** Raw SDK frame, folded into the coordinator's workflow snapshot. */
@@ -6299,6 +6313,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   ),
                 }
               : {}),
+            ...(input.nativeType === undefined ? {} : { nativeType: input.nativeType }),
             ...(input.progress === undefined ? {} : { progress: input.progress }),
             ...(workflowWithThreads === undefined ? {} : { workflow: workflowWithThreads }),
             ...(input.result === undefined ? {} : { result: input.result }),
@@ -8246,7 +8261,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             )
           ) {
             // A reply ended: publish the turn's rate now, not with the next reply's usage.
-            const generation = generationSnapshot(context.generation);
+            const generation = generationSnapshot(context.generation.meter);
             if (generation !== undefined) {
               yield* emitProviderEvent({
                 type: "provider_turn.updated",
@@ -8797,6 +8812,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               // `meta.name` from the workflow script; only workflow tasks carry it.
               const workflowName = isWorkflow ? text(field(message, "workflow_name")) : undefined;
 
+              // `task_started` also carries `subagent_type` directly, which preserves
+              // the type when a resumed or replayed start has no in-memory launch entry.
+              const nativeType = launch?.nativeType ?? text(message.subagent_type);
+
               yield* updateClaudeSubagentNode({
                 context: registered === undefined ? (launch?.context ?? context) : context,
                 taskId: message.task_id,
@@ -8804,6 +8823,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 ...(message.prompt === undefined ? {} : { prompt: message.prompt }),
                 ...(model === undefined ? {} : { model }),
                 ...(launch?.effort === undefined ? {} : { effort: launch.effort }),
+                ...(nativeType === undefined ? {} : { nativeType }),
                 ...(owner === undefined ? {} : { owner }),
                 ...(isWorkflow
                   ? {
@@ -10345,7 +10365,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               providerTurnId,
               providerTurnOrdinal,
               startedAt,
-              generation: makeGenerationMeter(startedAt),
+              generation: makeClaudeGeneration(startedAt),
               compaction: null,
               itemOrdinals: new Map(),
               assistant: {

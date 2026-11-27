@@ -281,11 +281,17 @@ export class ServerSettingsService extends Context.Service<
 /** Stamp explicit choices under the settings write lock, including a reset to the default. */
 function applySettingsPatch(current: ServerSettings, patch: ServerSettingsPatch) {
   const next = applyServerSettingsPatch(current, patch);
-  if (patch.chatListTabsEnabled === undefined) return Effect.succeed(next);
+  if (patch.chatListTabsEnabled === undefined && patch.agentBehavior === undefined)
+    return Effect.succeed(next);
   return Clock.currentTimeMillis.pipe(
     Effect.map((now) => ({
       ...next,
-      chatListTabsChangedAt: Math.max(now, (current.chatListTabsChangedAt ?? 0) + 1),
+      ...(patch.chatListTabsEnabled === undefined
+        ? {}
+        : { chatListTabsChangedAt: Math.max(now, (current.chatListTabsChangedAt ?? 0) + 1) }),
+      ...(patch.agentBehavior === undefined
+        ? {}
+        : { agentBehaviorChangedAt: Math.max(now, (current.agentBehaviorChangedAt ?? 0) + 1) }),
     })),
   );
 }

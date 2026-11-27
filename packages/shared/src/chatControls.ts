@@ -1,6 +1,6 @@
 /**
  * What a chat has out (monitors, background tasks, subagents, a next run) for
- * its row's status line, the per-chat subagents switch, and the ET day index
+ * its row's status line, the per-chat subagents switch, and the day index
  * the server keeps. The Long-running sidebar section was removed (11-19);
  * the server still stores old overrides, but nothing reads them for placement.
  */
@@ -15,16 +15,16 @@ export const SUBAGENT_ORCHESTRATION_TOOLS = [
 
 export type LongRunningOverride = "include" | "exclude";
 
-const ET_DAY = new Intl.DateTimeFormat("en-CA", {
-  timeZone: "America/New_York",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
+// Made on first use, so days follow this machine's time zone at that moment.
+let localDayFormat: Intl.DateTimeFormat | undefined;
 
-/** Calendar day in America/New_York, `YYYY-MM-DD`. */
-export function etCalendarDay(instantMs: number): string {
-  return ET_DAY.format(instantMs);
+/** Calendar day in this machine's local time zone, `YYYY-MM-DD`. */
+export function localCalendarDay(instantMs: number): string {
+  return (localDayFormat ??= new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })).format(instantMs);
 }
 
 export function isSubagentOrchestrationTool(name: string): boolean {

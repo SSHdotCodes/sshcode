@@ -94,6 +94,56 @@ it.layer(NodeServices.layer)("discoverAntigravitySkills", (it) => {
     }),
   );
 
+  it.effect("discovers a plugin's explicit skill directories and files", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const input = yield* makeWorkspace();
+      const profileDirectory = path.join(input.userHome, "profile");
+      const config = path.join(profileDirectory, "config");
+      const plugin = path.join(config, "plugins", "repo-tools");
+      const defaultPath = yield* writeSkill(
+        path.join(plugin, "skills", "default"),
+        "---\nname: default-skill\n---\n",
+      );
+      const extraPath = yield* writeSkill(
+        path.join(plugin, "extra", "review"),
+        "---\nname: review\n---\n",
+      );
+      const directPath = yield* writeSkill(path.join(plugin, "direct"), "---\nname: lint\n---\n");
+      const manifest = path.join(plugin, ".antigravity-plugin");
+      yield* fileSystem.makeDirectory(manifest);
+      yield* fileSystem.writeFileString(
+        path.join(manifest, "plugin.json"),
+        '{"skills":["extra","direct/SKILL.md"]}',
+      );
+      yield* fileSystem.writeFileString(path.join(plugin, "plugin.json"), '{"skills":"ignored"}');
+      yield* writeSkill(path.join(plugin, "ignored"), "---\nname: ignored\n---\n");
+      const disabled = path.join(config, "plugins", "disabled");
+      yield* writeSkill(path.join(disabled, "skills", "other"), "---\nname: disabled\n---\n");
+      yield* fileSystem.writeFileString(path.join(disabled, "plugin.json"), "{}");
+      yield* fileSystem.writeFileString(
+        path.join(config, "config.json"),
+        '{"plugins":{"disabled":{"enabled":false}}}',
+      );
+
+      const workspace = { ...input, profileDirectory };
+      const skills = yield* discoverAntigravitySkills(workspace);
+      assert.deepEqual(
+        skills.map((skill) => skill.displayName),
+        ["repo-tools:default-skill", "repo-tools:lint", "repo-tools:review"],
+      );
+      assert.deepEqual(
+        skills.map((skill) => [skill.name, skill.path]),
+        [
+          ["default-skill", defaultPath],
+          ["lint", directPath],
+          ["review", extraPath],
+        ],
+      );
+    }),
+  );
+
   it.effect("returns no skills when the native roots are missing", () =>
     Effect.gen(function* () {
       const input = yield* makeWorkspace();

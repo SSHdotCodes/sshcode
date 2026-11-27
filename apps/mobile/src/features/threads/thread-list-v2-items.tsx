@@ -1136,9 +1136,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                   }
                   type="monochrome"
                 />
-                <Text className={cn("text-xs tabular-nums", trailingTextClassName)}>
-                  {snoozeWakeLabelText}
-                </Text>
+                <Text className={cn("text-xs", trailingTextClassName)}>{snoozeWakeLabelText}</Text>
               </View>
             ) : !statusOnDetailLine && rowStatus ? (
               rowStatus
@@ -1146,9 +1144,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               <>
                 {isUnread && !rowStatus ? <UnreadDot /> : null}
                 {timeLabel ? (
-                  <Text className={cn("text-xs tabular-nums", trailingTextClassName)}>
-                    {timeLabel}
-                  </Text>
+                  <Text className={cn("text-xs", trailingTextClassName)}>{timeLabel}</Text>
                 ) : null}
               </>
             )}

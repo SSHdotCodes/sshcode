@@ -12,6 +12,7 @@ import {
   ProviderInstanceId,
   ProviderSessionId,
   ProviderTurnId,
+  type RunId,
   ThreadId,
   TurnItemId,
   ProviderDriverKind,
@@ -765,6 +766,124 @@ describe("orchestration v2 provider switching", () => {
                   },
                 },
                 layerRegistry,
+              ),
+            ),
+          );
+        }),
+      ),
+  );
+
+  it.live.each(["resume", "inline"] as const)(
+    "recovers a dropped Codex prompt through %s",
+    (recovery) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const cwd = yield* checkpointWorkspace("codex-resume-dropped-prompt");
+          const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+          const injectedHistory = yield* Ref.make<ReadonlyArray<unknown>>([]);
+          const interrupted = new Set([1, 2]);
+          const registry = ProviderAdapterRegistry.layerFromAdapters([
+            makeTestAdapter({
+              instanceId: CODEX_MODEL_SELECTION.instanceId,
+              driver: CODEX_DRIVER,
+              capabilities: CodexProviderCapabilitiesV2,
+              modelSelection: CODEX_MODEL_SELECTION,
+              responseByRunOrdinal: {},
+              capturedTurns,
+              ...(recovery === "resume" ? { injectedHistory } : {}),
+              interruptedRunOrdinals: interrupted,
+              droppedPromptRunOrdinals: interrupted,
+            }),
+          ]);
+          yield* Effect.gen(function* () {
+            const orchestrator = yield* Orchestrator.OrchestratorV2;
+            yield* orchestrator.dispatch({
+              type: "thread.create",
+              commandId: CommandId.make("codex-resume:create"),
+              threadId,
+              projectId,
+              createdBy: "user",
+              creationSource: "web",
+              title: "Resume an undelivered prompt",
+              modelSelection: CODEX_MODEL_SELECTION,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: null,
+            });
+            const attachment: ChatAttachment = {
+              type: "image",
+              id: "image",
+              name: "example.png",
+              mimeType: "image/png",
+              sizeBytes: 64,
+            };
+            const original = "Use the attached image.";
+            const send = (ordinal: number, text: string, source?: RunId) =>
+              orchestrator
+                .dispatch({
+                  type: "message.dispatch",
+                  commandId: CommandId.make(`codex-resume:${ordinal}`),
+                  threadId,
+                  messageId: MessageId.make(`codex-resume:${ordinal}`),
+                  text,
+                  attachments: ordinal === 1 ? [attachment] : [],
+                  createdBy: "user",
+                  creationSource: "web",
+                  ...(source === undefined ? {} : { manualContinuationOfRunId: source }),
+                  dispatchMode: { type: "start_immediately" },
+                })
+                .pipe(
+                  Effect.andThen(
+                    orchestrator.streamStoredEvents.pipe(
+                      Stream.filter(
+                        ({ event }) =>
+                          event.type === "run.updated" &&
+                          event.payload.ordinal === ordinal &&
+                          event.payload.status === (ordinal <= 2 ? "interrupted" : "completed"),
+                      ),
+                      Stream.runHead,
+                    ),
+                  ),
+                );
+            yield* send(1, original);
+            const first = (yield* orchestrator.getThreadProjection(threadId)).runs[0]!;
+            const secondPrompt = "Follow a new direction.";
+            if (recovery === "resume") yield* send(2, "Continue where you left off.", first.id);
+            else yield* send(2, secondPrompt);
+            const stopped = yield* orchestrator.getThreadProjection(threadId);
+            const second = stopped.runs[1]!;
+            if (recovery === "inline") assert.isUndefined(stopped.contextHandoffs[0]?.delivery);
+            yield* send(3, "Continue where you left off.", second.id);
+            yield* send(4, "New follow-up.");
+            const turns = yield* Ref.get(capturedTurns);
+            if (recovery === "resume") {
+              assert.deepEqual(
+                turns.map(({ text, attachments }) => [text, attachments]),
+                [
+                  [original, [attachment]],
+                  [original, [attachment]],
+                  [original, [attachment]],
+                  ["New follow-up.", []],
+                ],
+              );
+            } else {
+              for (const turn of turns.slice(1, 3)) {
+                assert.include(turn.text, original);
+                assert.include(turn.text, secondPrompt);
+              }
+              assert.equal(turns[3]?.text, "New follow-up.");
+            }
+            assert.lengthOf(new Set(turns.map(({ nativeThreadId }) => nativeThreadId)), 1);
+            assert.deepEqual(yield* Ref.get(injectedHistory), []);
+          }).pipe(
+            Effect.provide(
+              ProviderReplayHarness.layerWithRegistry(
+                {
+                  name: "codex-resume-dropped-prompt",
+                  runtimePolicyOverride: { cwd },
+                },
+                registry,
               ),
             ),
           );

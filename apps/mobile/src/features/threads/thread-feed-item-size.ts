@@ -23,6 +23,7 @@ export function resolveThreadFeedFixedItemSize(
       return WORK_GROUP_TOGGLE_HEIGHT;
     case "activity-group":
     case "message":
+    case "agent-card":
     case "html-render":
     case "mcp-app":
       return undefined;

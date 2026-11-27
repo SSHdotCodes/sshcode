@@ -2,6 +2,7 @@ import { act, type ReactElement } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AuthSessionState, type EnvironmentId, type ServerInstallation } from "@t3tools/contracts";
+import { SERVER_DOWNLOADS_UNAVAILABLE } from "@t3tools/shared/cliRelease";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/reactivity";
@@ -14,6 +15,7 @@ const testState = vi.hoisted(() => ({
   continueThreadsAfterServerUpdate: false,
   session: null as AsyncResult.AsyncResult<AuthSessionState, Error> | null,
   sessionAtom: Symbol("session"),
+  serverDownloadsPublished: true,
 }));
 
 vi.mock("~/hooks/useCopyToClipboard", () => ({
@@ -46,6 +48,14 @@ vi.mock("~/state/use-atom-command", () => ({
 vi.mock("./ui/toast", () => ({
   toastManager: { add: testState.toast },
 }));
+vi.mock("@t3tools/shared/cliRelease", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@t3tools/shared/cliRelease")>();
+  return {
+    ...actual,
+    serverUpdateUnavailable: (selfUpdate: Parameters<typeof actual.serverUpdateUnavailable>[0]) =>
+      actual.serverUpdateUnavailable(selfUpdate, testState.serverDownloadsPublished),
+  };
+});
 
 import {
   readConfirmDialogState,
@@ -103,6 +113,7 @@ describe("ServerUpdateAction", () => {
     testState.clipboard.mockReset();
     testState.continueThreadsAfterServerUpdate = false;
     testState.session = AsyncResult.success(currentSession);
+    testState.serverDownloadsPublished = true;
   });
 
   it.each([
@@ -163,27 +174,13 @@ describe("ServerUpdateAction", () => {
   });
 
   it.each([
-    [
-      { kind: "npm-global", prefix: "/opt/node" },
-      "npm install --global --prefix '/opt/node' sshcode@0.0.45",
-      "Update command copied",
-      "then restart sshcode",
-    ],
-    [
-      { kind: "npx" },
-      "npx sshcode@0.0.45",
-      "Relaunch command copied",
-      "This does not update an installed sshcode command.",
-    ],
-    [
-      undefined,
-      "npx sshcode@0.0.45",
-      "Relaunch command copied",
-      "This does not update an installed sshcode command.",
-    ],
-  ] satisfies ReadonlyArray<readonly [ServerInstallation | undefined, string, string, string]>)(
-    "copies an honest manual command for %j without invoking remote update",
-    (installation, command, title, guidance) => {
+    [{ kind: "npm-global", prefix: "/opt/node" }],
+    [{ kind: "npx" }],
+    [{ kind: "bunx" }],
+    [undefined],
+  ] satisfies ReadonlyArray<readonly [ServerInstallation | undefined]>)(
+    "copies the checkout rebuild for %j, never an npm command, without invoking remote update",
+    (installation) => {
       const action = ServerUpdateAction({
         environmentId: "env-test" as EnvironmentId,
         serverLabel: "Test server",
@@ -192,11 +189,13 @@ describe("ServerUpdateAction", () => {
         targetVersion: "0.0.45",
       }) as ActionElement;
       action.props.onClick?.();
-      expect(testState.clipboard).toHaveBeenCalledWith(command);
+      expect(testState.clipboard).toHaveBeenCalledWith(
+        "git fetch --tags && git checkout v0.0.45 && vp i && vp run build:desktop",
+      );
       expect(testState.toast).toHaveBeenCalledWith(
         expect.objectContaining({
-          title,
-          description: expect.stringContaining(guidance),
+          title: "Update command copied",
+          description: expect.stringContaining("in the SSHCode checkout on Test server"),
         }),
       );
       expect(testState.updateServer).not.toHaveBeenCalled();
@@ -264,6 +263,21 @@ describe("ServerUpdateAction", () => {
     );
 
     expect(markup).toContain("Update the desktop app on that machine to update this server.");
+    expect(markup).not.toContain("<button");
+  });
+
+  it("says why a server that downloads its update cannot update while releases carry no download", () => {
+    testState.serverDownloadsPublished = false;
+    const markup = renderToStaticMarkup(
+      <ServerUpdateAction
+        environmentId={"env-test" as EnvironmentId}
+        serverLabel="Test server"
+        selfUpdate="boot-service"
+        targetVersion="0.0.31"
+      />,
+    );
+
+    expect(markup).toContain(SERVER_DOWNLOADS_UNAVAILABLE.replaceAll("'", "&#x27;"));
     expect(markup).not.toContain("<button");
   });
 
@@ -379,7 +393,16 @@ describe("ServerUpdatesAction", () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     testState.updateServer.mockReset();
     testState.toast.mockReset();
+    testState.serverDownloadsPublished = true;
     resetConfirmDialogForTests();
+  });
+
+  it("leaves servers that download their update alone while releases carry no download", async () => {
+    testState.serverDownloadsPublished = false;
+    const button = await mount();
+
+    expect(button.props.disabled).toBe(true);
+    expect(testState.updateServer).not.toHaveBeenCalled();
   });
   afterEach(async () => {
     await act(async () => {

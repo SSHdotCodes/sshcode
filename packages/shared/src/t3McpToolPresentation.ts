@@ -13,6 +13,8 @@ export type T3McpToolSummaryAction =
   | "monitor-stop"
   | "monitor-list"
   | "model-preferences"
+  | "progress-report"
+  | "team-board"
   | "capabilities"
   | "usage-limits"
   | "delegate"
@@ -78,7 +80,11 @@ export type T3McpToolSummaryAction =
   | "device"
   | "workflow"
   | "html-preview"
-  | "html-render";
+  | "html-render"
+  | "bot-memory"
+  | "bot-watch"
+  | "bot-message"
+  | "card";
 
 export interface T3McpToolDefinition {
   readonly displayName: string;
@@ -146,6 +152,8 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   ),
   debug_log: tool(["Capture", "Capturing", "Captured", "debug logs"], "debug-log"),
   model_preferences: tool(["Read", "Reading", "Read", "model preferences"], "model-preferences"),
+  report_progress: tool(["Report", "Reporting", "Reported", "progress"], "progress-report"),
+  team_board: tool(["Use", "Using", "Used", "the team board"], "team-board"),
   usage_limits: tool(["Check", "Checking", "Checked", "provider usage limits"], "usage-limits"),
   delegate_task: tool(["Delegate", "Delegating", "Delegated", "a child task"], "delegate"),
   council: tool(["Consult", "Consulting", "Consulted", "other models"], "council"),
@@ -181,6 +189,13 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   list_api_keys: tool(["List", "Listing", "Listed", "API keys"], "secret-request"),
   prepare_api_key: tool(["Prepare", "Preparing", "Prepared", "an API key"], "secret-request"),
   request_secret: tool(["Ask for", "Asking for", "Asked for", "a secret"], "secret-request"),
+  bot_memory: tool(["Update", "Updating", "Updated", "its memory"], "bot-memory"),
+  watch_chats: tool(["Watch", "Watching", "Watching", "chats"], "bot-watch"),
+  unwatch_chats: tool(
+    ["Stop watching", "Stopping watching", "Stopped watching", "chats"],
+    "bot-watch",
+  ),
+  message_bot: tool(["Message", "Messaging", "Messaged", "the bot"], "bot-message"),
   create_threads: tool(["Create", "Creating", "Created", "chats"], "thread-create"),
   t3_thread_start: tool(["Start", "Starting", "Started", "a chat"], "thread-create"),
   t3_thread_list: tool(["List", "Listing", "Listed", "chats"], "thread-list"),
@@ -414,6 +429,7 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   t3_thread_send_attachments: tool(["Send", "Sending", "Sent", "attachments"], "attachment-send"),
   html_preview: tool(["Preview", "Previewing", "Previewed", "an HTML page"], "html-preview"),
   html_render: tool(["Render", "Rendering", "Rendered", "an HTML page"], "html-render"),
+  show_card: tool(["Show", "Showing", "Showed", "a card"], "card"),
 };
 
 /**
@@ -472,10 +488,27 @@ function resolveT3McpToolName(value: string): string | null {
   return longest;
 }
 
+const resolvedToolIds = new Map<string, string | null>();
+const MAX_RESOLVED_TOOL_IDS = 512;
+
 /** The bare T3 tool name (`html_render`) for any provider's spelling of it. */
 export function resolveT3McpToolId(toolName: string | null | undefined): string | null {
-  const name = toolName == null ? null : resolveT3McpToolName(toolName);
-  return name !== null && Object.hasOwn(T3_MCP_TOOLS, name) ? name : null;
+  if (toolName == null) return null;
+  if (T3_MCP_TOOL_NAMES.has(toolName)) return toolName;
+  const cached = resolvedToolIds.get(toolName);
+  if (cached !== undefined) return cached;
+
+  const name = resolveT3McpToolName(toolName);
+  const id = name !== null && T3_MCP_TOOL_NAMES.has(name) ? name : null;
+  // Rows reuse tool names, including generic ones, while rendering several labels per call.
+  if (toolName.length <= 256) {
+    resolvedToolIds.set(toolName, id);
+    if (resolvedToolIds.size > MAX_RESOLVED_TOOL_IDS) {
+      const oldest = resolvedToolIds.keys().next();
+      if (!oldest.done) resolvedToolIds.delete(oldest.value);
+    }
+  }
+  return id;
 }
 
 export const T3_MCP_DISPATCH_TOOL = "t3_tool";
@@ -523,8 +556,8 @@ export function resolveT3McpToolDefinition(
   toolName: string | null | undefined,
   input?: unknown,
 ): T3McpToolDefinition | null {
-  const name = toolName == null ? null : resolveT3McpToolName(toolName);
-  if (name === null || !Object.hasOwn(T3_MCP_TOOLS, name)) return null;
+  const name = resolveT3McpToolId(toolName);
+  if (name === null) return null;
   const fields = asSummaryInput(input);
   if (name === "schedule_task" && fields?.scheduledTaskId !== undefined)
     return T3_MCP_TOOLS.update_scheduled_task!;

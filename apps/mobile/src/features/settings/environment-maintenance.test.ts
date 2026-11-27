@@ -104,11 +104,25 @@ describe("environment maintenance access", () => {
   );
 
   it("requires remote desktop update support for desktop hosts", () => {
-    expect(supportsEnvironmentUpdate({})).toBe(false);
-    expect(supportsEnvironmentUpdate({ serverSelfUpdate: "respawn" })).toBe(true);
-    expect(supportsEnvironmentUpdate({ serverSelfUpdate: "desktop-managed" })).toBe(false);
+    expect(supportsEnvironmentUpdate({}, true)).toBe(false);
+    expect(supportsEnvironmentUpdate({ serverSelfUpdate: "respawn" }, true)).toBe(true);
+    expect(supportsEnvironmentUpdate({ serverSelfUpdate: "desktop-managed" }, true)).toBe(false);
     expect(
-      supportsEnvironmentUpdate({ serverSelfUpdate: "desktop-managed", desktopAppUpdate: true }),
+      supportsEnvironmentUpdate(
+        { serverSelfUpdate: "desktop-managed", desktopAppUpdate: true },
+        true,
+      ),
+    ).toBe(true);
+  });
+
+  it("offers only the desktop app's own update while releases carry no server download", () => {
+    expect(supportsEnvironmentUpdate({ serverSelfUpdate: "respawn" }, false)).toBe(false);
+    expect(supportsEnvironmentUpdate({ serverSelfUpdate: "boot-service" }, false)).toBe(false);
+    expect(
+      supportsEnvironmentUpdate(
+        { serverSelfUpdate: "desktop-managed", desktopAppUpdate: true },
+        false,
+      ),
     ).toBe(true);
   });
 

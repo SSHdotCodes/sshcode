@@ -1,3 +1,4 @@
+import { botsActive, holdBotRoutine } from "../bots/botsRuntime.ts";
 import {
   CommandId,
   MessageId,
@@ -68,6 +69,8 @@ import {
 import { constantTimeEquals, verifyWebhookSignature } from "./webhookVerification.ts";
 
 /** Path prefix of the environment route that receives webhook requests. */
+import { withLocalTracing } from "@t3tools/shared/relayTracing";
+
 export const WEBHOOK_ROUTE_PREFIX = "/api/hooks";
 /** Deliveries kept per task; older ones are pruned on insert. */
 const WEBHOOK_DELIVERY_RETENTION = 50;
@@ -1035,7 +1038,19 @@ export const layer = Layer.effect(
               ((yield* threadManagement.hasReceipt(commandId, { acceptedOnly: true })) ||
                 (!(yield* threadManagement.hasReceipt(deliveryCommandId, { acceptedOnly: true })) &&
                   (yield* targetIsEmpty())));
-            if (targetThreadId !== null && !prepareTarget) return yield* sendToTarget();
+            if (targetThreadId !== null) {
+              // A paused bot holds its routines and gets them as one note when resumed;
+              // while Bots are off, saved bots' routines must not run at all.
+              const hold = holdBotRoutine(targetThreadId, prompt);
+              if (hold !== null && (yield* hold))
+                return yield* taskError(
+                  botsActive() ? "Held: the bot is paused." : "Skipped: Bots are off.",
+                  { taskId: active.id },
+                );
+            }
+            if (targetThreadId !== null && !prepareTarget) {
+              return yield* sendToTarget();
+            }
             return yield* threadLaunch
               .launch({
                 commandId,
@@ -1852,7 +1867,13 @@ export const layer = Layer.effect(
           Effect.sync(() => {
             if (reserved) delivering.delete(delivery.deliveryId);
           }),
-      ).pipe(Effect.forkIn(serviceScope, { startImmediately: true }), Effect.asVoid);
+      ).pipe(
+        // A relay-delivered webhook is traced to the relay; the run it starts is local
+        // work whose spans carry workspace paths (upstream #42450).
+        withLocalTracing,
+        Effect.forkIn(serviceScope, { startImmediately: true }),
+        Effect.asVoid,
+      );
     };
 
     const recoverDeliveries = Effect.gen(function* () {

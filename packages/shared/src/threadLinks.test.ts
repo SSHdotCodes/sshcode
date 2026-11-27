@@ -63,6 +63,29 @@ describe("thread links", () => {
     expect(formatThreadLink("t1", " ] ")).toBe("[t1](t3-thread://v1/t1)");
   });
 
+  const after = "See [old](t3-thread://v1/t1)";
+  const hidden = "[literal](t3-thread://v1/in-code)";
+  it.each(
+    [
+      ["```ts", 'const fence = "```";', hidden, "```", after],
+      ["> ```ts", '> const fence = "```";', `> ${hidden}`, "> ```", `> ${after}`],
+      ["> ```", ` > ${hidden}`, "> ```", after],
+      ["- ```bash", "  echo hi", "  ```", "", after],
+      ["- > ```md", `  > ${hidden}`, "  > ```", "", after],
+      ["1. Run:", "", "    ```bash", '    echo "```"', `    ${hidden}`, "    ```", "", after],
+      ["````md", "```", hidden, "````", after],
+      ["Use ~~~ to mark it.", after],
+      ["```" + hidden + "``` then", after],
+      ["Use ```example", hidden, "end``` then", after],
+      ["Stray ` tick", "", after, "and `code`"],
+      ["Stray ` tick", `# ${after}`, "and `code`"],
+      ["Stray ` tick", `- ${after}`, "and `code`"],
+      ["Use `example", "```" + hidden + "`", after],
+    ].map((lines) => [lines.join("\n")]),
+  )("relabels only the link outside code in %j", (markdown) => {
+    expect(relabelThreadLinks(markdown, () => "New")).toBe(markdown.replace("[old]", "[New]"));
+  });
+
   it("relabels links with the current title and leaves unknown threads alone", () => {
     const titles = new Map([["renamed", "Fix [the] build\nnow"]]);
     expect(

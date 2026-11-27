@@ -133,7 +133,7 @@ const runUninstall = Effect.fn("cli.uninstall.run")(function* (input: {
     yield* Console.log(`Nothing to remove: sshcode is not installed for ${input.baseDir}.`);
     if (!(yield* HostProcess.IsExecutable)) {
       yield* Console.log(
-        "  This sshcode runs from a Node script, so it was installed by npm or built from source. Remove it the same way (`npm uninstall -g sshcode`, or delete the checkout).",
+        "  This sshcode runs from a Node script, such as a source checkout. Remove it the same way you installed it, for example by deleting the checkout.",
       );
     }
     return;

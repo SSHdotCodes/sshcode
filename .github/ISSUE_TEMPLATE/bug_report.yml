@@ -17,7 +17,7 @@ body:
       options:
         - Desktop app
         - iPhone or Android app
-        - Web app or `npx sshcode`
+        - Web app or `sshcode serve`
         - Server or an agent provider
         - Build, CI, or release tooling
         - Docs

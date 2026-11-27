@@ -127,6 +127,7 @@ import * as ScheduledTaskShells from "../scheduledTasks/ScheduledTaskShells.ts";
 import * as ChatTabs from "../sessionBoxes/chatTabs.ts";
 import { lookupBoxNaming } from "../sessionBoxes/boxNamerCache.ts";
 import { appMonitorCount } from "../monitors/appMonitorCounts.ts";
+import { shellLiveProgress } from "../liveProgress/liveProgressStore.ts";
 import { threadHtmlRenderAttachmentIds } from "../attachmentStore.ts";
 import {
   decodeThreadHistoryCursor,
@@ -2344,6 +2345,10 @@ export function threadShellFromProjection(
     ].flatMap((id) => children?.get(id)?.runs ?? []),
   };
   const pendingBackgroundTasks = derivePendingBackgroundWork(backgroundInput);
+  const longRunningWork = withAppMonitors(
+    longRunningWorkForShell(backgroundInput),
+    projection.thread.id,
+  );
   return {
     createdBy: projection.thread.createdBy,
     creationSource: projection.thread.creationSource,
@@ -2412,6 +2417,10 @@ export function threadShellFromProjection(
         }
       : {}),
     currentStep: shellCurrentStep(projection.turnItems, activityRun?.id ?? null),
+    ...shellLiveProgress(
+      projection.thread.id,
+      activityRun !== null || (longRunningWork?.runningSubagentCount ?? 0) > 0,
+    ),
     replyAttention: shellReplyAttention(projection.turnItems, latestRun),
     replyPreview: shellReplyPreview(projection.turnItems, latestRun, activityRun?.id ?? null),
     ...shellBoxNaming(
@@ -2441,10 +2450,7 @@ export function threadShellFromProjection(
       ? { blockedOnThreadWait: true as const }
       : {}),
     pendingBackgroundTasks: [...pendingBackgroundTasks],
-    longRunningWork: withAppMonitors(
-      longRunningWorkForShell(backgroundInput),
-      projection.thread.id,
-    ),
+    longRunningWork,
     nextScheduledRunAt: stores?.shellSchedules?.nextRunAt(projection.thread.id) ?? null,
     providerInstanceHistory: providerInstanceHistoryForShell({
       threadId: projection.thread.id,
@@ -2739,6 +2745,10 @@ function shellFromState(input: {
       ? { createdChatPreview: input.boxes.createdChatPreviewByThreadId.get(input.state.thread.id)! }
       : {}),
     currentStep: activeRunId === null ? null : (input.boxes?.stepByRunId.get(activeRunId) ?? null),
+    ...shellLiveProgress(
+      input.state.thread.id,
+      activeRunId !== null || (input.state.longRunningWork?.runningSubagentCount ?? 0) > 0,
+    ),
     replyAttention:
       input.state.latestRunStatus !== "completed" || latestRunId === null
         ? null
@@ -2847,7 +2857,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const rankingProviders = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
     // Past activity is indexed once, after startup settles. The SQLite driver is
     // synchronous, so even this scan must stay off the startup path. Hour buckets
-    // map exactly onto America/New_York days (its offsets are whole hours), and
+    // map onto this machine's local days (exactly where its offsets are whole hours), and
     // every user message starts a run, so runs alone carry the history. Later
     // activity is recorded from timestamps already on the shell.
     const indexActivity = Effect.gen(function* () {
@@ -5766,7 +5776,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               SELECT payload_json FROM orchestration_v2_projection_messages
               WHERE thread_id = ${threadId} AND (
                 message_id IN (SELECT json_extract(payload_json, '$.userMessageId') FROM orchestration_v2_projection_runs
-                  WHERE thread_id = ${threadId} AND run_id = ${runId})
+                  WHERE thread_id = ${threadId} AND run_id IN (
+                    ${runId},
+                    (SELECT json_extract(payload_json, '$.promptRecoveryOfRunId')
+                     FROM orchestration_v2_projection_runs WHERE thread_id = ${threadId} AND run_id = ${runId})
+                  ))
                 OR (role = 'user' AND lower(trim(json_extract(payload_json, '$.text'), ${javascriptTrimWhitespace})) = '/compact')
               ) ORDER BY created_at ASC, message_id ASC
             `;
@@ -5861,7 +5875,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       }).pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
 
     const getThreadProjection: ProjectionStoreV2Shape["getThreadProjection"] = (threadId) =>
-      readProjection(threadId, new Set());
+      sql.withTransaction(readProjection(threadId, new Set())).pipe(
+        // Full projections can read thousands of historical rows. Keep the reads
+        // in one snapshot on the reader without blocking the server or its writer.
+        NodeSqliteClient.readOnly,
+        Effect.mapError((cause) =>
+          isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
+            ? cause
+            : new ProjectionStoreReadError({ threadId, cause }),
+        ),
+      );
 
     const getRuntimeRecoveryProjection: ProjectionStoreV2Shape["getRuntimeRecoveryProjection"] = (
       threadId,
@@ -5897,6 +5920,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   OR run.run_id = (
                     SELECT latest.run_id FROM orchestration_v2_projection_runs AS latest
                     WHERE latest.thread_id = ${threadId}
+                      AND NOT (latest.status = 'cancelled'
+                        AND json_extract(latest.payload_json, '$.startedAt') IS NULL)
                     ORDER BY latest.ordinal DESC LIMIT 1
                   )
                   -- Retain the latest run for each provider thread with lost
@@ -5908,6 +5933,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       WHERE ended.thread_id = ${threadId}
                         AND ended.provider_thread_id = roster.provider_thread_id
                         AND ended.status NOT IN ('queued', 'rolled_back')
+                        AND NOT (ended.status = 'cancelled'
+                          AND json_extract(ended.payload_json, '$.startedAt') IS NULL)
                       ORDER BY ended.completed_at IS NULL DESC, ended.completed_at DESC,
                         ended.ordinal DESC
                       LIMIT 1
@@ -7259,7 +7286,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       sql
         .withTransaction(
           Effect.gen(function* () {
-            const projection = yield* getThreadProjection(threadId);
+            const projection = yield* readProjection(threadId, new Set());
             const rows = yield* sql<{ readonly snapshot_sequence: number | null }>`
             SELECT MAX(sequence) AS snapshot_sequence
             FROM orchestration_events

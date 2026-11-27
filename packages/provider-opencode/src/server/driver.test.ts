@@ -205,13 +205,43 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
       // Like a real remote OpenCode 2 server: a directory it does not have is a 404.
       const server = HttpClient.make((request) => {
         const url = new URL(request.url);
-        if (url.pathname !== "/api/model" && url.pathname !== "/api/provider") {
+        if (
+          url.pathname !== "/api/model" &&
+          url.pathname !== "/api/provider" &&
+          url.pathname !== "/api/experimental/usage/limits"
+        ) {
           return replay.execute(request);
         }
         const directory = Option.getOrUndefined(
           UrlParams.getFirst(request.urlParams, "location[directory]"),
         );
         const known = directory === undefined || directory === "/srv/remote";
+        if (url.pathname === "/api/experimental/usage/limits" && known) {
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json({
+                location: { directory: "/srv/remote" },
+                data: {
+                  workspace: { id: "remote", usageURL: "https://opencode.ai/console/remote" },
+                  budgets: [
+                    {
+                      id: "budget",
+                      limit: 20,
+                      spent: 10,
+                      scope: "combined",
+                      per: "set",
+                      coverage: "all",
+                      models: [],
+                      shared: true,
+                      resetsAt: 1793491200000,
+                    },
+                  ],
+                },
+              }),
+            ),
+          );
+        }
         const body = known
           ? url.pathname === "/api/model"
             ? catalog(directory)
@@ -249,7 +279,9 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
       const settled = yield* instance.snapshot.streamChanges.pipe(
         Stream.filter(
           (snapshot) =>
-            snapshot.installed && (snapshot.status === "ready" || snapshot.status === "error"),
+            snapshot.installed &&
+            (snapshot.status === "error" ||
+              (snapshot.status === "ready" && snapshot.usageLimits !== undefined)),
         ),
         Stream.take(1),
         Stream.runCollect,
@@ -265,6 +297,10 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
       assert.deepStrictEqual(
         snapshot?.models.map((model) => [model.slug, model.subProvider]),
         [["opencode/big-pickle", "OpenCode Zen"]],
+      );
+      assert.deepEqual(
+        snapshot?.usageLimits?.windows.map((window) => window.usedPercent),
+        [50],
       );
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );

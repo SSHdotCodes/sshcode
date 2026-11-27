@@ -1,9 +1,11 @@
 import {
+  DEFAULT_AGENT_BEHAVIOR,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
   ServerConfigStreamEvent,
+  ServerProviderUpdatedPayload,
   ServerSettingsPatch,
   type ServerConfig,
   type ServerProvider,
@@ -24,7 +26,13 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import { syncedChatListTabsEnabled } from "../../../packages/client-runtime/src/state/chatTabs.ts";
 import {
+  agentBehaviorPatch,
+  agentBehaviorSyncPatch,
+  syncedAgentBehavior,
+} from "../../../packages/client-runtime/src/state/agentBehavior.ts";
+import {
   providerCatalogDigest,
+  providerRefreshReply,
   serverConfigTransport,
   serverSettingsConfigUpdates,
 } from "./serverConfigTransport.ts";
@@ -62,6 +70,52 @@ const withSnapshots: ServerProvider = {
     { ...matchingSnapshot, cwd: "/workspace/four", slashCommands: [] },
   ],
 };
+
+it("keeps legacy refresh replies and trims the two opt-in reply shapes", () => {
+  const heavy: ServerProvider = {
+    ...provider,
+    slashCommands: Array.from({ length: 250 }, (_, index) => ({
+      name: `command-${index}`,
+      description: "d".repeat(400),
+    })),
+    skills: Array.from({ length: 200 }, (_, index) => ({
+      name: `skill-${index}`,
+      description: "d".repeat(500),
+      path: `/home/user/.claude/skills/skill-${index}/SKILL.md`,
+      enabled: true,
+    })),
+    workspaceSnapshots: withSnapshots.workspaceSnapshots!.slice(0, 2),
+  };
+  const providers = [heavy, { ...provider, instanceId: ProviderInstanceId.make("other-claude") }];
+  const target = { instanceId: heavy.instanceId, cwd: matchingSnapshot.cwd };
+  const encode = Schema.encodeSync(Schema.fromJsonString(ServerProviderUpdatedPayload));
+  const legacy = providerRefreshReply(providers, {});
+  const omitted = providerRefreshReply(providers, { omitProviders: true });
+  const workspaceOnly = providerRefreshReply(providers, {
+    ...target,
+    omitProviders: true,
+    workspaceSnapshotOnly: true,
+  });
+  expect(legacy.providers).toEqual(providers);
+  expect(providerRefreshReply(providers, { ...target, omitProviders: true })).toEqual(legacy);
+  expect(omitted).toEqual({ providers: [] });
+  expect(workspaceOnly.providers).toEqual([
+    {
+      ...heavy,
+      models: [],
+      skills: [],
+      slashCommands: [],
+      workspaceSnapshots: [matchingSnapshot],
+    },
+  ]);
+  const legacyJson = encode(legacy);
+  const omittedJson = encode(omitted);
+  const workspaceJson = encode(workspaceOnly);
+  expect(Buffer.byteLength(legacyJson)).toBeGreaterThan(230_000);
+  expect(Buffer.byteLength(omittedJson)).toBe(16);
+  expect(Buffer.byteLength(workspaceJson)).toBeLessThan(1024);
+});
+
 const config: ServerConfig = {
   environment: {
     environmentId: EnvironmentId.make("test"),
@@ -174,6 +228,66 @@ it.effect(
           Layer.provideMerge(Layer.fresh(SqlitePersistence.layerMemory)),
           Layer.provideMerge(
             ServerConfigService.layerTest(process.cwd(), { prefix: "chat-list-tabs-sync-" }),
+          ),
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
+);
+
+it.effect(
+  "stamps Settings > Agents writes so a phone seeing several servers shows the latest",
+  () =>
+    Effect.gen(function* () {
+      const service = yield* ServerSettingsService.ServerSettingsService;
+      const changes = serverSettingsConfigUpdates(yield* service.subscribeChanges);
+      let state = applyServerConfigProjection(
+        Option.none(),
+        decodeWire(
+          encodeWire({
+            version: 1,
+            type: "snapshot",
+            config: { ...config, settings: yield* service.getSettings },
+          }),
+        ),
+      );
+      const shown = () => syncedAgentBehavior(new Map([["mac", Option.getOrThrow(state).config]]));
+      const receive = changes.pipe(
+        Stream.runHead,
+        Effect.map((update) => {
+          state = applyServerConfigProjection(
+            state,
+            decodeWire(encodeWire(Option.getOrThrow(update))),
+          );
+        }),
+      );
+      expect(shown()).toEqual(DEFAULT_AGENT_BEHAVIOR);
+      // The Mac moves one slider on its own server; the phone writes all five everywhere.
+      yield* service.updateSettings(decodeSettingsPatch(agentBehaviorPatch("tokens", "high")));
+      yield* receive;
+      const first = (yield* service.getSettings).agentBehaviorChangedAt ?? 0;
+      expect(first).toBeGreaterThan(0);
+      expect(shown()).toEqual({ ...DEFAULT_AGENT_BEHAVIOR, tokens: "high" });
+      yield* service.updateSettings(
+        decodeSettingsPatch(agentBehaviorSyncPatch(shown()!, "subagents", "none")),
+      );
+      yield* receive;
+      expect(shown()).toEqual({ ...DEFAULT_AGENT_BEHAVIOR, tokens: "high", subagents: "none" });
+      const settings = yield* service.getSettings;
+      expect(settings.agentBehaviorChangedAt).toBeGreaterThan(first);
+      // A write that touches nothing in Settings > Agents keeps the stamp.
+      yield* service.updateSettings(decodeSettingsPatch({ subagentGrading: false }));
+      expect((yield* service.getSettings).agentBehaviorChangedAt).toBe(
+        settings.agentBehaviorChangedAt,
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        ServerSettingsService.layer.pipe(
+          Layer.provide(ServerSecretStore.layer),
+          Layer.provideMerge(Layer.fresh(SqlitePersistence.layerMemory)),
+          Layer.provideMerge(
+            ServerConfigService.layerTest(process.cwd(), { prefix: "agent-behavior-sync-" }),
           ),
           Layer.provideMerge(NodeServices.layer),
         ),

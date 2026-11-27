@@ -2,12 +2,39 @@
 
 import { Menu as MenuPrimitive } from "@base-ui/react/menu";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 
 import { cn } from "~/lib/utils";
 import { buttonVariants } from "./button";
 
-const Menu = MenuPrimitive.Root;
+const mountedMenuActions = new Set<MenuPrimitive.Root.Actions>();
+
+export function closeOpenMenus() {
+  for (const actions of mountedMenuActions) actions.close();
+}
+
+function Menu({ actionsRef, ...props }: MenuPrimitive.Root.Props) {
+  const internalActionsRef = React.useRef<MenuPrimitive.Root.Actions | null>(null);
+
+  React.useEffect(() => {
+    const actions = internalActionsRef.current;
+    if (!actions) return;
+    mountedMenuActions.add(actions);
+    return () => {
+      mountedMenuActions.delete(actions);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (actionsRef === undefined) return;
+    actionsRef.current = internalActionsRef.current;
+    return () => {
+      actionsRef.current = null;
+    };
+  }, [actionsRef]);
+
+  return <MenuPrimitive.Root actionsRef={internalActionsRef} {...props} />;
+}
 
 function MenuTrigger({ className, children, ...props }: MenuPrimitive.Trigger.Props) {
   return (

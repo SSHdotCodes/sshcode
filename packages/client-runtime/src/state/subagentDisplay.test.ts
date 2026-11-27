@@ -8,6 +8,9 @@ import {
   subagentCardDetail,
   subagentDetailPreview,
   subagentSpeed,
+  isResearchSubagent,
+  researchReportPreview,
+  researchSources,
 } from "./subagentDisplay.js";
 
 describe("subagentGroupSummary", () => {
@@ -287,5 +290,46 @@ describe("subagentSpeed", () => {
   it("reads an ACP Speed's fast choice as fast", () => {
     expect(subagentSpeed({ options: [{ id: "speed", value: "fast" }] })).toBe("fast");
     expect(subagentSpeed({ options: [{ id: "speed", value: "standard" }] })).toBeNull();
+  });
+});
+
+describe("research subagents", () => {
+  it("recognizes delegated research and provider research agents", () => {
+    expect(isResearchSubagent({ role: "research" })).toBe(true);
+    expect(isResearchSubagent({ nativeType: "Explore" })).toBe(true);
+    expect(isResearchSubagent({ nativeType: "explorer" })).toBe(true);
+    expect(isResearchSubagent({ nativeType: "web-fetch" })).toBe(true);
+    expect(isResearchSubagent({ nativeType: "deep-researcher" })).toBe(true);
+    expect(isResearchSubagent({ role: "implementation", nativeType: "general-purpose" })).toBe(
+      false,
+    );
+    expect(isResearchSubagent({})).toBe(false);
+  });
+
+  it("lists each cited site once, in order, and counts distinct pages", () => {
+    const report = [
+      "Per [the docs](https://docs.x.com/x-api/getting-started/pricing), reads cost $0.005.",
+      "See https://www.docs.x.com/x-api/posts/search/introduction.",
+      "And [xAI](https://docs.x.ai/developers/tools/x-search) plus https://docs.x.ai/developers/pricing.",
+      "Repeat: https://docs.x.com/x-api/getting-started/pricing",
+    ].join("\n");
+    expect(researchSources(report)).toEqual({
+      sites: [
+        { url: "https://docs.x.com/x-api/getting-started/pricing", site: "docs.x.com" },
+        { url: "https://docs.x.ai/developers/tools/x-search", site: "docs.x.ai" },
+      ],
+      pages: 4,
+    });
+    expect(researchSources(null)).toEqual({ sites: [], pages: 0 });
+  });
+
+  it("previews a report as plain text", () => {
+    expect(
+      researchReportPreview(
+        "## Findings\n\n- **Full-archive** search is on [pay-per-use](https://docs.x.com/a).\n| a | b |\n---\nProfiles cost `$0.010`.",
+      ),
+    ).toBe("Findings Full-archive search is on pay-per-use. Profiles cost $0.010.");
+    expect(researchReportPreview("x".repeat(400), 20)).toBe(`${"x".repeat(20)}…`);
+    expect(researchReportPreview("   ")).toBeNull();
   });
 });

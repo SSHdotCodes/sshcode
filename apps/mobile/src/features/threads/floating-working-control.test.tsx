@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
-import { act, createElement, useState, type ReactNode } from "react";
+import { act, createElement, useLayoutEffect, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
@@ -9,9 +9,26 @@ const readiness = vi.hoisted(() => ({
   requested: [] as (string | null)[],
 }));
 
+// The width native layout would report for a measured text; null reports nothing.
+const textLayout = vi.hoisted(() => ({ width: null as number | null }));
+
 vi.mock("react-native", () => ({
-  View: ({ children }: { children: ReactNode }) => createElement("div", null, children),
-  Text: ({ children }: { children: ReactNode }) => createElement("span", null, children),
+  View: ({ children, testID }: { children: ReactNode; testID?: string }) =>
+    createElement("div", { "data-testid": testID }, children),
+  Text: ({
+    children,
+    onLayout,
+  }: {
+    children: ReactNode;
+    onLayout?: (event: { nativeEvent: { layout: { width: number } } }) => void;
+  }) => {
+    useLayoutEffect(() => {
+      if (onLayout && textLayout.width !== null) {
+        onLayout({ nativeEvent: { layout: { width: textLayout.width } } });
+      }
+    });
+    return createElement("span", null, children);
+  },
   Pressable: ({ children }: { children: ReactNode }) => createElement("button", null, children),
   useWindowDimensions: () => ({ width: 390, height: 844 }),
 }));
@@ -56,6 +73,16 @@ vi.mock("./HeldBackgroundWork", () => ({
 }));
 vi.mock("./thread-work-log", () => ({ ShimmeringWorkContent: () => null }));
 vi.mock("./use-visible-second-clock", () => ({ useVisibleSecondClock: () => 0 }));
+vi.mock("./LiveProgress", async () => {
+  const { liveProgressCard } = await import("@t3tools/shared/liveProgress");
+  return {
+    LiveProgressBar: ({ fraction }: { fraction: number | null }) =>
+      createElement("div", { "data-progress-bar": fraction === null ? "sweep" : "fill" }),
+    // The card at the moment of the report, so the test needs no clock.
+    useLiveProgressCard: (progress: Parameters<typeof liveProgressCard>[0] | undefined) =>
+      progress === undefined ? null : liveProgressCard(progress, progress.reportedAt),
+  };
+});
 vi.mock("../../components/HarnessMascot", async () => {
   const { createContext, use } = await import("react");
   const { harnessMascotForDriver } = await import("@t3tools/shared/harnessMascots");
@@ -78,11 +105,16 @@ vi.mock("../../components/HarnessMascot", async () => {
 });
 
 import { HarnessMascotDriver, HarnessMascotAgentId } from "../../components/HarnessMascot";
-import { FloatingWorkingControl } from "./floating-working-control";
+import {
+  compactWorkingLabel,
+  FloatingWorkingControl,
+  teamBoardCapsuleLabel,
+} from "./floating-working-control";
 
 let root: Root;
 let host: HTMLDivElement;
 beforeEach(() => {
+  textLayout.width = null;
   readiness.ready = new Set(["grok"]);
   readiness.requested = [];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -209,4 +241,133 @@ it("keeps a held-only bar visible with queue actions and no working claim", () =
   expect(host.textContent).toContain("Held: Discord levels · since Oct 27, 2026");
   expect(host.textContent).toContain("ResumeRemove");
   expect(host.textContent).not.toMatch(/Working|Running|Waiting on/);
+});
+
+it("swaps the rate for time left and draws a bar when the agent reports progress", () => {
+  const renderWorking = (progress?: { value: never; onPress: () => void }) =>
+    act(() =>
+      root.render(
+        <FloatingWorkingControl
+          colorScheme="light"
+          mascotState="idle"
+          mascotMoment={null}
+          status={{
+            kind: "working",
+            startedAt: "2026-11-26T23:00:00.000Z",
+            ...(progress === undefined ? {} : { progress }),
+          }}
+          devicePreview={null}
+          browserPreview={null}
+          showScrollToEnd={false}
+          onScrollToEnd={() => {}}
+          agents={null}
+          onOpenAgents={() => {}}
+          queuedCount={0}
+          onOpenQueue={() => {}}
+        />,
+      ),
+    );
+  renderWorking();
+  expect(host.textContent).toBe("Working 0s");
+  expect(host.querySelector("[data-progress-bar]")).toBeNull();
+  const at = Date.UTC(2026, 10, 26, 23, 2);
+  renderWorking({
+    value: {
+      source: "report",
+      startedAt: at - 120_000,
+      reportedAt: at,
+      stages: [{ title: "Build", status: "active", minutes: 8, startedAt: at }],
+      updates: [],
+    } as never,
+    onPress: () => {},
+  });
+  expect(host.textContent).toBe("Working 0s · 8 min left");
+  expect(host.querySelector("[data-progress-bar]")?.getAttribute("data-progress-bar")).toBe("fill");
+});
+
+it("shortens the team board label as other capsule segments join it", () => {
+  const board = { postCount: 6, overlapCount: 1 };
+  expect(teamBoardCapsuleLabel(board, { beside: null })).toEqual({
+    lead: "Team board · 6 posts",
+    overlaps: " · 1 overlap",
+  });
+  expect(teamBoardCapsuleLabel(board, { beside: "segments" })).toEqual({
+    lead: "6 posts",
+    overlaps: " · 1 overlap",
+  });
+  // Beside the working status and its live progress, only the counts stay.
+  expect(teamBoardCapsuleLabel(board, { beside: "status" })).toEqual({
+    lead: "6",
+    overlaps: " · 1",
+  });
+  expect(teamBoardCapsuleLabel({ postCount: 1, overlapCount: 0 }, { beside: null })).toEqual({
+    lead: "Team board · 1 post",
+    overlaps: null,
+  });
+});
+
+it("keeps the compact working text whole or drops it to elapsed alone", () => {
+  const label = (fullWidth: number | null) =>
+    compactWorkingLabel({ elapsed: "57s", detail: "3 min left", width: 120, fullWidth });
+  expect(label(110)).toBe("57s · 3 min left");
+  expect(label(120)).toBe("57s · 3 min left");
+  // Too wide, or not measured yet: elapsed alone, never "57s · 3 mi…".
+  expect(label(121)).toBe("57s");
+  expect(label(null)).toBe("57s");
+  expect(
+    compactWorkingLabel({ elapsed: "57s", detail: undefined, width: 0, fullWidth: null }),
+  ).toBe("57s");
+});
+
+it("beside team board counts, shows elapsed and time left without Working while they fit", () => {
+  const at = Date.UTC(2026, 10, 26, 23, 2);
+  const renderBoard = () =>
+    act(() =>
+      root.render(
+        <FloatingWorkingControl
+          colorScheme="light"
+          mascotState="idle"
+          mascotMoment={null}
+          status={{
+            kind: "working",
+            startedAt: "2026-11-26T23:00:00.000Z",
+            progress: {
+              value: {
+                source: "report",
+                startedAt: at - 120_000,
+                reportedAt: at,
+                stages: [{ title: "Build", status: "active", minutes: 3, startedAt: at }],
+                updates: [],
+              } as never,
+              onPress: () => {},
+            },
+          }}
+          teamBoard={{ postCount: 6, overlapCount: 1, unread: false, onPress: () => {} }}
+          devicePreview={null}
+          browserPreview={null}
+          showScrollToEnd={false}
+          onScrollToEnd={() => {}}
+          agents={null}
+          onOpenAgents={() => {}}
+          queuedCount={0}
+          onOpenQueue={() => {}}
+        />,
+      ),
+    );
+  // What a person sees: everything but the hidden measuring twin.
+  const shown = () => {
+    const copy = host.cloneNode(true) as HTMLElement;
+    copy.querySelector('[data-testid="working-label-measure"]')?.remove();
+    return copy.textContent;
+  };
+  renderBoard();
+  expect(shown()).toBe("0s6 · 1");
+  textLayout.width = 120;
+  renderBoard();
+  expect(shown()).toBe("0s · 3 min left6 · 1");
+  // The whole compact text no longer fits beside the counts: elapsed alone.
+  textLayout.width = 400;
+  renderBoard();
+  expect(shown()).toBe("0s6 · 1");
+  expect(shown()).not.toContain("Working");
 });

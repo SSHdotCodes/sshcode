@@ -144,6 +144,46 @@ describe("buildPendingNewTasks", () => {
     expect(tasks.map((task) => task.title)).toEqual(["2 photos", "Why is blurry?"]);
   });
 
+  it("titles attachment-only and image-chip queued creations consistently with drafts", () => {
+    const image = (id: string) =>
+      ({
+        type: "image",
+        id,
+        uri: `file:///${id}.jpg`,
+        mimeType: "image/jpeg",
+        name: `${id}.jpg`,
+        sizeBytes: 1,
+      }) as unknown as QueuedThreadMessage["attachments"][number];
+    const chip = (id: string) =>
+      formatComposerContextReference({
+        kind: "image",
+        contextId: toComposerContextId(id),
+        label: `${id}.jpg`,
+      });
+    const tasks = buildPendingNewTasks({
+      queuedMessages: [
+        {
+          ...queuedCreation("empty-photo", "2026-09-05T12:00:00.000Z"),
+          text: "",
+          attachments: [image("a")],
+        },
+        {
+          ...queuedCreation("chip-photos", "2026-09-05T11:00:00.000Z"),
+          text: `${chip("ctx-a")} ${chip("ctx-b")} `,
+          attachments: [image("a"), image("b")],
+        },
+        {
+          ...queuedCreation("words-photo", "2026-09-05T10:00:00.000Z"),
+          text: `Why is ${chip("ctx-a")} blurry?`,
+          attachments: [image("a")],
+        },
+      ],
+      drafts: {},
+    });
+
+    expect(tasks.map((task) => task.title)).toEqual(["1 photo", "2 photos", "Why is blurry?"]);
+  });
+
   it("orders queued creations newest first and skips existing-thread messages", () => {
     const tasks = buildPendingNewTasks({
       queuedMessages: [

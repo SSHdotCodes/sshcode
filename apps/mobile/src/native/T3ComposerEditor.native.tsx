@@ -182,7 +182,12 @@ export function ComposerEditor({
             ? props.context?.records.find((record) => record.contextId === token.contextId)
             : undefined;
         return {
-          type: token.type === "model" || token.type === "link" ? "skill" : token.type,
+          type:
+            token.type === "model" || token.type === "link"
+              ? "skill"
+              : token.type === "citation"
+                ? "context"
+                : token.type,
           source: token.source,
           start: token.start,
           end: token.end,
@@ -193,7 +198,9 @@ export function ComposerEditor({
               ? (skillLabels.get(token.value) ?? token.value)
               : token.type === "context"
                 ? `${token.label}${props.context?.records.some((record) => record.contextId === token.contextId) ? "" : " · unavailable"}`
-                : basename(token.value),
+                : token.type === "citation"
+                  ? token.value
+                  : basename(token.value),
           detail: token.type === "context" ? composerChipSizeSuffix(record) : "",
           // Only a mention wears per-filetype artwork. An attachment chip keeps the tinted
           // monochrome glyph web draws for it: coloured artwork ignores the chip's accent and

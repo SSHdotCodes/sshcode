@@ -472,7 +472,8 @@ const decodeHostSetup = (reason: string): PreviewStreamHostSetup => {
       return { need: value.need, command: value.command };
     }
   } catch {}
-  return { need: "sandbox", command: "sudo npx sshcode browser setup" };
+  // An older server sent no command; the plain one never asks npm for a package.
+  return { need: "sandbox", command: "sudo sshcode browser setup" };
 };
 
 /** What a viewer tells the person; `command` is shown beside it, ready to copy. */

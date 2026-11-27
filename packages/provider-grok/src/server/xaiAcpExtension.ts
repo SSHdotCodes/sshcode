@@ -120,6 +120,7 @@ export interface XAiAcpSubagentUpdate {
   readonly prompt: string;
   readonly title: string | null;
   readonly model: string | null;
+  readonly nativeType?: string;
   readonly status: "running" | "completed" | "failed";
   readonly childSessionId: string | null;
   readonly result: string | null;
@@ -1046,11 +1047,15 @@ export function extractXAiAcpSubagentUpdate(
     status = "running";
   }
 
+  const nativeType =
+    nonEmptyString(rawInput?.subagent_type) ?? nonEmptyString(rawInput?.subagentType);
+
   return {
     nativeTaskId: toolCall.toolCallId,
     prompt: nonEmptyString(rawInput?.prompt) ?? "",
     title: nonEmptyString(rawInput?.description) ?? null,
     model: nonEmptyString(rawInput?.model) ?? null,
+    ...(nativeType === undefined ? {} : { nativeType }),
     status,
     childSessionId,
     result: asyncSpawnAck ? null : legacyResult,

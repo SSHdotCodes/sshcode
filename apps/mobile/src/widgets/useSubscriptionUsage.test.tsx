@@ -192,7 +192,10 @@ describe("useSubscriptionUsage", () => {
       await vi.advanceTimersByTimeAsync(WIDGET_REFRESH_INTERVAL);
     });
     expect(harness.refreshProviders).toHaveBeenCalledTimes(1);
-    expect(harness.refreshProviders).toHaveBeenCalledWith({ environmentId: ENV_ID, input: {} });
+    expect(harness.refreshProviders).toHaveBeenCalledWith({
+      environmentId: ENV_ID,
+      input: { omitProviders: true },
+    });
   });
 
   it("defers stale usage refreshes until WIDGET_REFRESH_SETTLE_MS after the shell goes live", async () => {

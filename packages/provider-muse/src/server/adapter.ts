@@ -647,6 +647,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         const nativeTaskRef = item.childSessionId
           ? nativeRef(item.childSessionId)
           : nativeRef(item.subagentId ?? item.itemId);
+        const nativeType = item.role?.trim();
         const subagent: OrchestrationV2Subagent = {
           id: base.nodeId,
           threadId: base.threadId,
@@ -662,6 +663,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
           prompt,
           title,
           model: null,
+          ...(nativeType ? { nativeType } : {}),
           status,
           result,
           startedAt: base.startedAt,

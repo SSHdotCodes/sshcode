@@ -13,6 +13,7 @@ import {
   recordComposerRecentUse,
   type ComposerRecentPathsByWorkspace,
 } from "@t3tools/client-runtime/composer-command-recency";
+import { useWithoutBotThreads } from "../bots/state";
 import { useThreadPickerShells } from "../../state/entities";
 import { formatModelLink } from "@t3tools/shared/modelLinks";
 import {
@@ -703,7 +704,11 @@ export function useComposerCommandMenu({
     };
     void refreshProviders({
       environmentId,
-      input: { instanceId: selectedProviderInstanceId, cwd: projectCwd },
+      input: {
+        instanceId: selectedProviderInstanceId,
+        cwd: projectCwd,
+        workspaceSnapshotOnly: true,
+      },
     }).then((result) => {
       const refreshed =
         result._tag === "Success" &&
@@ -756,8 +761,10 @@ export function useComposerCommandMenu({
     trigger?.kind === "chat" ? chatMentionSearchQuery(trigger.query) : "",
   );
 
-  const threadPickerShells = useThreadPickerShells(trigger?.kind === "path");
-  const mentionShells = threadPickerShells.length > 0 ? threadPickerShells : threadShells;
+  // Bot home chats stay out of chat pickers, as they stay out of every chat list.
+  const chatShells = useWithoutBotThreads(threadShells);
+  const threadPickerShells = useWithoutBotThreads(useThreadPickerShells(trigger?.kind === "path"));
+  const mentionShells = threadPickerShells.length > 0 ? threadPickerShells : chatShells;
 
   const items = useMemo<ComposerCommandItem[]>(() => {
     if (!trigger) return [];
@@ -814,7 +821,7 @@ export function useComposerCommandMenu({
           id: `skill:${skill.name}`,
           type: "skill" as const,
           skill,
-          label: `/${skill.name}`,
+          label: `/${skill.displayName ?? skill.name}`,
           description: skill.shortDescription ?? skill.description ?? "",
         }));
 
@@ -914,7 +921,7 @@ export function useComposerCommandMenu({
     if (trigger.kind === "chat") {
       return environmentId
         ? rankComposerChatMentions({
-            shells: threadShells,
+            shells: chatShells,
             environmentId,
             excludeThreadId: currentThreadId,
             query: trigger.query,
@@ -970,7 +977,7 @@ export function useComposerCommandMenu({
     currentThreadId,
     environmentId,
     otherEnvironmentLabel,
-    threadShells,
+    chatShells,
     hasThread,
     hasCompactableConversation,
     onUpdateInteractionMode,

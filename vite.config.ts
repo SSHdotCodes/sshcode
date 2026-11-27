@@ -385,6 +385,7 @@ export default defineConfig({
           "apps/mobile/src/features/threads/NewTaskContextPickerScreens.tsx",
           "apps/mobile/src/features/threads/ThreadQueueControl.tsx",
           "apps/mobile/src/features/threads/ThreadAgentsSheet.tsx",
+          "apps/mobile/src/features/threads/ThreadProgressSheet.tsx",
           "apps/mobile/src/features/review/ReviewCommentCard.tsx",
           "apps/mobile/src/features/threads/ThreadSettingsSheet.tsx",
           "apps/mobile/src/features/threads/git/GitOverviewSheet.tsx",
@@ -394,9 +395,10 @@ export default defineConfig({
           "apps/mobile/src/native/T3ComposerEditor.ios.tsx",
           "apps/mobile/src/native/T3ComposerEditor.native.tsx",
           "apps/mobile/src/native/SelectableMarkdownText.tsx",
-          // SVG fills and strokes for the workflow drawing cannot take a className.
+          // SVG fills and strokes for the workflow drawing and cards cannot take a className.
           "apps/mobile/src/features/workflows/WorkflowSketch.tsx",
           "apps/mobile/src/features/workflows/WorkflowMarks.tsx",
+          "apps/mobile/src/features/threads/AgentCard.tsx",
         ],
         rules: {
           "t3code/no-mobile-uniwind-theme-escape-hatches": ["error", { allowUniwindTheme: true }],

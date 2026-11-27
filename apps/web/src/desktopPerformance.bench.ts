@@ -20,7 +20,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import { describe, expect, test } from "vite-plus/test";
 
-import { searchSidebarThreads } from "./components/Sidebar.logic";
+import { rankSidebarSearchResults } from "./components/Sidebar.logic";
 import {
   deriveMessagesTimelineRows,
   deriveMessagesTimelineRowsWithState,
@@ -200,7 +200,11 @@ describe("desktop large-data performance", () => {
     );
     measure(`sidebar:sort:${count}`, () => sortThreads(threads, "updated_at"), 10);
     measure(`sidebar:active:${count}`, () => sortActiveThreadsByOrderKey(threads), 10);
-    measure(`sidebar:search:${count}`, () => searchSidebarThreads(threads, "chat 9"), 10);
+    measure(
+      `sidebar:search:${count}`,
+      () => rankSidebarSearchResults({ known: threads, matches: [], query: "chat 9" }),
+      10,
+    );
     const siblingShare = sessionBoxSiblingShare(threads.map((thread) => thread.title));
     const faces = sessionBoxFacesFor(threads);
     let now = Date.UTC(2026, 8, 4);

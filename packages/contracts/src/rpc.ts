@@ -9,6 +9,12 @@ import {
 import { ModelRankings, ModelRankingsSaveError } from "./modelRankings.ts";
 import { ComputerUseError, ComputerUseStatus } from "./computerUse.ts";
 import { AgentToolsState } from "./agentTools.ts";
+import {
+  TeamBoardError,
+  TeamBoardPostInput,
+  TeamBoardSnapshot,
+  TeamBoardSubscribeInput,
+} from "./teamBoard.ts";
 import { OutsideAgentsCommand, OutsideAgentsError, OutsideAgentsState } from "./outsideAgents.ts";
 import { CasualVoiceRequest, CasualVoiceReply, CasualVoiceError } from "./casualVoice.ts";
 import { ModelManagerError, ModelManagerReply, ModelManagerRequest } from "./modelManager.ts";
@@ -221,6 +227,7 @@ import {
   WorkflowsError,
   WorkflowsState,
 } from "./workflows.ts";
+import { BotOperation, BotOperationResult, BotsError, BotsState } from "./bots.ts";
 import {
   SideChatError,
   SideChatOpenInput,
@@ -508,6 +515,8 @@ export const WS_METHODS = {
   notesMutate: "notes.mutate",
   subagentRankingsSubscribe: "subagentRankings.subscribe",
   subagentRankingsToggleThumb: "subagentRankings.toggleThumb",
+  teamBoardSubscribe: "teamBoard.subscribe",
+  teamBoardPost: "teamBoard.post",
   sharedSkillsList: "sharedSkills.list",
   sharedSkillsCommand: "sharedSkills.command",
 
@@ -516,6 +525,10 @@ export const WS_METHODS = {
   workflowsMutate: "workflows.mutate",
   workflowsCompile: "workflows.compile",
   workflowsStart: "workflows.start",
+
+  // Bots
+  botsSubscribe: "bots.subscribe",
+  botsMutate: "bots.mutate",
 
   // Provider methods
   providerUploadFeedback: "provider.uploadFeedback",
@@ -773,6 +786,10 @@ const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, 
      * Background status refreshes must not open agent sessions. */
     refreshModels: Schema.optional(Schema.Boolean),
     clearOutOfCredit: Schema.optional(Schema.Boolean),
+    /** Return an empty provider list after refreshing, except for a targeted workspace refresh. */
+    omitProviders: Schema.optional(Schema.Boolean),
+    /** With `instanceId` and `cwd`, return only that provider's snapshot for that workspace. */
+    workspaceSnapshotOnly: Schema.optional(Schema.Boolean),
   }),
   success: ServerProviderUpdatedPayload,
   error: Schema.Union([EnvironmentAuthorizationError, ProviderSetupError]),
@@ -1634,6 +1651,18 @@ const WsSubagentRankingsToggleThumbRpc = Rpc.make(WS_METHODS.subagentRankingsTog
   error: Schema.Union([SubagentRankingsError, EnvironmentAuthorizationError]),
 });
 
+const WsTeamBoardSubscribeRpc = Rpc.make(WS_METHODS.teamBoardSubscribe, {
+  payload: TeamBoardSubscribeInput,
+  success: TeamBoardSnapshot,
+  error: Schema.Union([TeamBoardError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsTeamBoardPostRpc = Rpc.make(WS_METHODS.teamBoardPost, {
+  payload: TeamBoardPostInput,
+  error: Schema.Union([TeamBoardError, EnvironmentAuthorizationError]),
+});
+
 const WsSharedSkillsListRpc = Rpc.make(WS_METHODS.sharedSkillsList, {
   payload: Schema.Struct({}),
   success: SharedSkillsList,
@@ -1668,6 +1697,19 @@ const WsWorkflowsStartRpc = Rpc.make(WS_METHODS.workflowsStart, {
   payload: WorkflowStartRequest,
   success: WorkflowStartResult,
   error: Schema.Union([WorkflowsError, EnvironmentAuthorizationError]),
+});
+
+const WsBotsSubscribeRpc = Rpc.make(WS_METHODS.botsSubscribe, {
+  payload: Schema.Struct({}),
+  success: BotsState,
+  error: Schema.Union([EnvironmentAuthorizationError, BotsError]),
+  stream: true,
+});
+
+const WsBotsMutateRpc = Rpc.make(WS_METHODS.botsMutate, {
+  payload: BotOperation,
+  success: BotOperationResult,
+  error: Schema.Union([BotsError, EnvironmentAuthorizationError]),
 });
 
 const WsSideChatOpenRpc = Rpc.make(WS_METHODS.sideChatOpen, {
@@ -2568,10 +2610,14 @@ const WsWorkspaceRpcGroup = RpcGroup.make(
   WsNotesMutateRpc,
   WsSubagentRankingsSubscribeRpc,
   WsSubagentRankingsToggleThumbRpc,
+  WsTeamBoardSubscribeRpc,
+  WsTeamBoardPostRpc,
   WsSharedSkillsListRpc,
   WsSharedSkillsCommandRpc,
   WsWorkflowsSubscribeRpc,
   WsWorkflowsMutateRpc,
+  WsBotsSubscribeRpc,
+  WsBotsMutateRpc,
   WsWorkflowsCompileRpc,
   WsWorkflowsStartRpc,
   WsSideChatOpenRpc,

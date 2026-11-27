@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -59,7 +60,7 @@ describe("withRelayClientTracing", () => {
     }),
   );
 
-  it.effect("preserves nested error causes in exported relay spans", () => {
+  it.effect("exports nested error types without their messages or frames", () => {
     const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }));
     const layerHttpClient = FetchHttpClient.layer.pipe(
       Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchFn)),
@@ -76,8 +77,9 @@ describe("withRelayClientTracing", () => {
         client: "test",
       },
     ).pipe(Layer.provide(layerHttpClient));
-    const rootCause = new Error("relay socket closed");
+    const rootCause = new TypeError("relay socket closed on studio-mac.local");
     const failure = new Error("relay request failed", { cause: rootCause });
+    failure.stack = "Error: relay request failed\n    at connect (/home/user/private.mjs:12:34)";
     const layerTracedApplication = Layer.effectDiscard(
       Effect.fail(failure).pipe(
         Effect.withSpan("relay.failed-operation"),
@@ -92,8 +94,8 @@ describe("withRelayClientTracing", () => {
         Effect.sync(() => {
           expect(fetchFn).toHaveBeenCalledOnce();
           const payload = new TextDecoder().decode(fetchFn.mock.calls[0]?.[1]?.body as Uint8Array);
-          expect(payload).toContain("relay request failed");
-          expect(payload).toContain("relay socket closed");
+          expect(payload).toContain("Caused by: TypeError");
+          expect(payload).not.toMatch(/relay request failed|studio-mac|private\.mjs/);
           expect(payload).toContain('"key":"service.name","value":{"stringValue":"relay-test"}');
           expect(payload).toContain('"key":"service.namespace","value":{"stringValue":"t3code"}');
         }),
@@ -145,5 +147,53 @@ describe("withLocalTracing", () => {
 
       expect(localSpans).toEqual(["sql.execute"]);
     }),
+  );
+});
+
+// Upstream #42356: no machine addresses, log events, or operator resource attributes, and an
+// opt-out that turns off at flush drops batches already queued.
+it.effect.each([true, false])("filters relay exports at flush (%s)", (enabledAtFlush) => {
+  const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }));
+  let enabled = true;
+  return Effect.logWarning("private error detail").pipe(
+    Effect.withSpan("relay.request", {
+      attributes: {
+        "url.full": "http://studio-mac.local:3773/api/threads?cursor=secret",
+        "url.path": "/api/threads",
+        "url.query": "cursor=secret",
+        "server.address": "studio-mac.local",
+        "server.port": 3773,
+      },
+    }),
+    withRelayClientTracing,
+    Effect.andThen(Effect.sync(() => (enabled = enabledAtFlush))),
+    Layer.effectDiscard,
+    Layer.provide(
+      RelayTracing.layer(
+        { tracesUrl: "https://traces.example.com", tracesDataset: "relay", tracesToken: "token" },
+        { serviceName: "t3code-test", runtime: "node", client: "test" },
+        { isEnabled: () => enabled },
+      ),
+    ),
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchFn)),
+    Layer.provide(
+      ConfigProvider.layer(
+        ConfigProvider.fromEnvRecord({ OTEL_RESOURCE_ATTRIBUTES: "host.name=private-host" }),
+      ),
+    ),
+    Layer.build,
+    Effect.scoped,
+    Effect.andThen(
+      Effect.sync(() => {
+        expect(fetchFn).toHaveBeenCalledTimes(Number(enabledAtFlush));
+        if (!enabledAtFlush) return;
+        const sent = new TextDecoder().decode(fetchFn.mock.calls[0]?.[1]?.body as Uint8Array);
+        expect(sent).toContain("/api/threads");
+        expect(sent).not.toMatch(
+          /studio-mac|cursor=secret|server\.port|private error detail|private-host/,
+        );
+      }),
+    ),
   );
 });

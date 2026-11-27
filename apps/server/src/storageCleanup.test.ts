@@ -1935,10 +1935,17 @@ describe("storage cleanup reports and local file policies", () => {
       }),
     ),
   );
-  it.live("aggregates expired artifacts and rotated logs while retaining current logs", () =>
+  it.live("aggregates expired artifacts and rotated logs through an aliased server base", () =>
     runCleanupTest(
       Effect.gen(function* () {
-        const { service, fs, config, enableFiles, disable } = yield* cleanupFixture();
+        const fs = yield* FileSystem.FileSystem;
+        const base = yield* fs.makeTempDirectoryScoped();
+        const aliasParent = yield* fs.makeTempDirectoryScoped();
+        const alias = `${aliasParent}/storage`;
+        yield* fs.symlink(base, alias);
+        const { service, config, enableFiles, disable } = yield* cleanupFixture().pipe(
+          Effect.provide(ServerConfig.layerTest(process.cwd(), alias)),
+        );
         disable();
         enableFiles();
         yield* fs.makeDirectory(config.browserArtifactsDir, { recursive: true });
@@ -1975,6 +1982,15 @@ describe("storage cleanup reports and local file policies", () => {
         expect(yield* fs.exists(config.logsDir + "/server.log")).toBe(true);
         expect(yield* fs.exists(config.logsDir + "/server.log.1")).toBe(false);
         expect(yield* fs.exists(config.logsDir + "/server.log.2")).toBe(false);
+
+        const outside = yield* fs.makeTempDirectoryScoped();
+        const outsideFile = `${outside}/outside.png`;
+        yield* fs.writeFileString(outsideFile, "capture");
+        yield* fs.utimes(outsideFile, 1, 1);
+        yield* fs.remove(config.browserArtifactsDir, { recursive: true });
+        yield* fs.symlink(outside, config.browserArtifactsDir);
+        expect((yield* service.runNow).bytesFreed).toBe(0);
+        expect(yield* fs.exists(outsideFile)).toBe(true);
       }),
     ),
   );

@@ -4,7 +4,10 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import { readAntigravityChildrenAtWork } from "./AntigravityChildWork.ts";
+import {
+  readAntigravityChildImages,
+  readAntigravityChildrenAtWork,
+} from "./AntigravityChildWork.ts";
 
 const writeJson = (filePath: string, value: unknown) =>
   Effect.gen(function* () {
@@ -205,5 +208,102 @@ describe("readAntigravityChildrenAtWork", () => {
 
       assert.deepEqual(active, []);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+});
+
+describe("readAntigravityChildImages", () => {
+  it.effect(
+    "lists the pictures each launched child saved, in order, inside the parent folder",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const dataDirectory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-ag-child-images-",
+        });
+        const root = yield* fileSystem.realPath(dataDirectory);
+        const sessionId = "parent-session";
+        const artifacts = path.join(root, "brain", sessionId);
+        const subagents = path.join(artifacts, ".system_generated", "subagents");
+        yield* writeJson(path.join(subagents, "child-feast.json"), { id: "child-feast" });
+        yield* writeJson(path.join(subagents, "child-turkey.json"), { id: "child-turkey" });
+        for (const [child, call] of [
+          ["child-feast", "call-feast"],
+          ["child-turkey", "call-turkey"],
+        ] as const) {
+          yield* writeJson(
+            path.join(root, "brain", child, ".system_generated", "messages", "launch.json"),
+            launchEnvelope(sessionId, call),
+          );
+        }
+        const step = (child: string, index: number, text: string) =>
+          Effect.gen(function* () {
+            const directory = path.join(
+              root,
+              "brain",
+              child,
+              ".system_generated",
+              "steps",
+              `${index}`,
+            );
+            yield* fileSystem.makeDirectory(directory, { recursive: true });
+            yield* fileSystem.writeFileString(path.join(directory, "output.txt"), text);
+          });
+        const outside = path.join(root, "elsewhere.png");
+        const outsideDirectory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-ag-child-images-outside-",
+        });
+        for (const name of ["feast.jpg", "feast_v2.jpg", "feast_final.jpg", "turkey.jpg"]) {
+          yield* fileSystem.writeFileString(path.join(artifacts, name), "image");
+        }
+        yield* fileSystem.writeFileString(outside, "image");
+        const outsideOutput = path.join(outsideDirectory, "output.txt");
+        yield* fileSystem.writeFileString(
+          outsideOutput,
+          `Generated image is saved at ${path.join(artifacts, "turkey.jpg")}`,
+        );
+        const linkedStep = path.join(
+          root,
+          "brain",
+          "child-feast",
+          ".system_generated",
+          "steps",
+          "1",
+        );
+        yield* fileSystem.makeDirectory(linkedStep, { recursive: true });
+        yield* fileSystem.symlink(outsideOutput, path.join(linkedStep, "output.txt"));
+        yield* step(
+          "child-feast",
+          2,
+          `Generated image is saved at ${path.join(artifacts, "feast.jpg")}`,
+        );
+        yield* step(
+          "child-feast",
+          10,
+          `Generated image is saved at ${path.join(artifacts, "feast_final.jpg")}`,
+        );
+        yield* step(
+          "child-feast",
+          4,
+          `Generated image is saved at ${path.join(artifacts, "feast_v2.jpg")}`,
+        );
+        yield* step("child-feast", 6, `Generated image is saved at ${outside}`);
+        yield* step("child-feast", 8, "Looks good; sending it back.");
+        yield* step(
+          "child-turkey",
+          2,
+          `Generated image is saved at ${path.join(artifacts, "turkey.jpg")}`,
+        );
+
+        const read = (nativeTaskId: string) =>
+          readAntigravityChildImages({ dataDirectory, sessionId, nativeTaskId, fileSystem, path });
+        assert.deepStrictEqual(yield* read("call-feast"), [
+          path.join(artifacts, "feast.jpg"),
+          path.join(artifacts, "feast_v2.jpg"),
+          path.join(artifacts, "feast_final.jpg"),
+        ]);
+        assert.deepStrictEqual(yield* read("call-turkey"), [path.join(artifacts, "turkey.jpg")]);
+        assert.deepStrictEqual(yield* read("call-unknown"), []);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

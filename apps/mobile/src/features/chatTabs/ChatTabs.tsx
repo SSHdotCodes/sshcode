@@ -102,14 +102,15 @@ export function HomeChatTabs(props: {
     })),
     { key: CLAUDE_RC_TAB, name: "Terminal", status: null as "attention" | "working" | null },
   ];
-  return (
+  const pinned = props.trailing != null;
+  const list = (
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
       // A scroll view grows by default: above an empty list it took half the screen, pushing
       // the empty state down and leaving the chips' divider stranded mid-screen.
-      className="grow-0"
-      contentContainerClassName="gap-1.5 px-4 pb-1.5 pt-1"
+      className="shrink grow-0"
+      contentContainerClassName={cn("gap-1.5 pb-1.5 pl-4 pt-1", pinned ? "pr-2" : "pr-4")}
       accessibilityRole="tablist"
     >
       {chips.map((chip) => {
@@ -152,8 +153,15 @@ export function HomeChatTabs(props: {
           </Pressable>
         );
       })}
-      {props.trailing}
     </ScrollView>
+  );
+  if (!pinned) return list;
+  // Shortcuts (Overview) stay pinned at the trailing edge; the chips scroll under them.
+  return (
+    <View className="flex-row items-start">
+      {list}
+      <View className="h-8 flex-row items-center gap-1.5 pr-4 mt-1">{props.trailing}</View>
+    </View>
   );
 }
 

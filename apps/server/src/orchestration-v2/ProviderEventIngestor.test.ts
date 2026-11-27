@@ -322,7 +322,7 @@ it.effect("records accepted billed turn usage once without billing the context w
       inputTokens: 40,
       cachedInputTokens: 30,
       outputTokens: 10,
-      model: modelSelection.model,
+      model: "custom:codex",
       mixedModels: false,
       runtimeMode: "full-access",
       interactionMode: "default",

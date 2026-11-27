@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { sessionPermissionsUnavailableMessage } from "@t3tools/shared/authScopeOptions";
+import { serverUpdateUnavailable } from "@t3tools/shared/cliRelease";
 import { AsyncResult } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
 import { Alert, View } from "react-native";
@@ -267,7 +268,8 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                       <Text className="text-sm text-foreground-muted">
                         {capabilities?.serverSelfUpdate === "desktop-managed"
                           ? "Update the desktop app on this machine."
-                          : "Update and restart the server on this machine."}
+                          : (serverUpdateUnavailable(capabilities?.serverSelfUpdate) ??
+                            "Update and restart the server on this machine.")}
                       </Text>
                     ) : null}
                   </View>

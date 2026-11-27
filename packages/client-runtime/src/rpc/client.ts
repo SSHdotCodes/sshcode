@@ -53,11 +53,13 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.claudeRcWatch
   | typeof WS_METHODS.terminalHandoffStatus
   | typeof WS_METHODS.subagentRankingsSubscribe
+  | typeof WS_METHODS.teamBoardSubscribe
   | typeof WS_METHODS.harnessDefaultsSubscribe
   | typeof WS_METHODS.outsideAgentsSubscribe
   | typeof WS_METHODS.workflowsSubscribe
   | typeof WS_METHODS.notesSubscribe
   | typeof WS_METHODS.workflowsSubscribe
+  | typeof WS_METHODS.botsSubscribe
   | typeof WS_METHODS.sideChatSubscribe
   | typeof WS_METHODS.codexAuthCallbackSubscribe
   | typeof WS_METHODS.providerAuthSubscribe

@@ -85,6 +85,7 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import {
   SubagentsEnabled,
+  currentAgentBehavior,
   t3OrchestrationSystemPrompt,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
@@ -538,6 +539,10 @@ const sessionRules = (
   ...(policy.interactionMode === "plan" ? [rule("edit", "deny")] : []),
   ...paths,
   ...mcpRules(mcpServerName),
+  // Settings > Agents Subagents = None turns off OpenCode's native subagent tool too.
+  ...(currentAgentBehavior().subagents === "none"
+    ? [rule("subagent", "deny"), rule("task", "deny")]
+    : []),
 ];
 
 const sameRules = (left: ReadonlyArray<Rule> | undefined, right: ReadonlyArray<Rule>) =>
@@ -1460,6 +1465,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           prompt: call.prompt,
           title: call.title,
           model: call.model,
+          ...(call.agent === undefined ? {} : { nativeType: call.agent }),
           status: call.status,
           result: call.result,
           startedAt: call.startedAt,
@@ -1895,6 +1901,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         ...turn.providerTurn,
         status: terminal.status,
         completedAt,
+        ...(terminal.status === "interrupted" && turn.unsent
+          ? { promptDropped: true as const }
+          : {}),
         turnTokenUsage: turnTokenUsage(turn, terminal.status),
         ...(lastStep === undefined
           ? {}

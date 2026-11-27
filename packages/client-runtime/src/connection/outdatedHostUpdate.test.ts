@@ -5,6 +5,7 @@ import {
   WS_METHODS,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import { SERVER_DOWNLOADS_UNAVAILABLE, ServerDownloadsPublished } from "@t3tools/shared/cliRelease";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -185,6 +186,7 @@ describe("updateOutdatedHost", () => {
               }),
             ),
             Layer.succeed(HttpClient.HttpClient, httpClient),
+            Layer.succeed(ServerDownloadsPublished, true),
             Layer.succeed(Socket.WebSocketConstructor, (url) => {
               // The host relaunches on a compatible protocol once the update lands.
               const socket = new OutdatedHostSocket(url, () => {
@@ -206,11 +208,17 @@ describe("updateOutdatedHost", () => {
     }),
   );
 
-  it.effect("refuses a host that cannot update itself without opening a socket", () =>
+  it.effect.each([
+    { name: "cannot update itself", serverSelfUpdate: undefined, published: true },
+    { name: "downloads its update", serverSelfUpdate: "boot-service" as const, published: false },
+  ])("refuses a host that $name without opening a socket", ({ serverSelfUpdate, published }) =>
     Effect.gen(function* () {
       const manual = {
         ...descriptor(undefined, "0.0.45"),
-        capabilities: { repositoryIdentity: true },
+        capabilities: {
+          repositoryIdentity: true,
+          ...(serverSelfUpdate === undefined ? {} : { serverSelfUpdate }),
+        },
       };
       let opened = false;
       const error = yield* Effect.flip(
@@ -268,10 +276,12 @@ describe("updateOutdatedHost", () => {
               opened = true;
               throw new Error("unused");
             }),
+            Layer.succeed(ServerDownloadsPublished, published),
           ),
         ),
       );
       expect(error).toMatchObject({ _tag: "OutdatedHostUpdateError" });
+      if (!published) expect(error.message).toBe(SERVER_DOWNLOADS_UNAVAILABLE);
       expect(opened).toBe(false);
     }),
   );

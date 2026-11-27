@@ -30,7 +30,25 @@ vi.mock("../ui/select", () => ({
   SelectValue: "div",
 }));
 vi.mock("../ui/sidebar", () => ({ SidebarInset: "div" }));
-vi.mock("../ui/toggle-group", () => ({ Toggle: "button", ToggleGroup: "div" }));
+vi.mock("../ui/toggle-group", async () => {
+  const React = await import("react");
+  return {
+    ToggleGroup: ({ children, onValueChange, ...props }: any) =>
+      React.createElement(
+        "div",
+        props,
+        React.Children.map(children, (child: any) =>
+          React.isValidElement(child)
+            ? React.cloneElement(child, {
+                onClick: () => onValueChange?.([(child.props as any).value]),
+              } as any)
+            : child,
+        ),
+      ),
+    Toggle: ({ value, ...props }: any) =>
+      React.createElement("button", { type: "button", "data-value": value, ...props }),
+  };
+});
 vi.mock("../WorkspaceBreadcrumb", () => ({
   WorkspaceBreadcrumb: "div",
   WorkspaceBreadcrumbItem: "div",
@@ -381,3 +399,79 @@ describe("UsagePage partial totals", () => {
 });
 
 // @vitest-environment jsdom
+
+describe("UsagePage time breakdown costs", () => {
+  it("shows a dash for a day whose usage is entirely unpriced", async () => {
+    const summary = {
+      ...environments[0]!.summary,
+      buckets: [
+        {
+          provider: "claude" as const,
+          model: "unpriced-model",
+          day: UsageDay.make("2026-11-26"),
+          totals: {
+            uncachedInputTokens: 200,
+            cachedInputTokens: 0,
+            cacheCreationTokens: 0,
+            outputTokens: 0,
+            reasoningTokens: 0,
+          },
+          costUsd: 0,
+          cacheSavingsUsd: 0,
+          costSource: "unpriced" as const,
+          records: 1,
+          unpricedRecords: 1,
+          sessions: 1,
+        },
+      ],
+      sources: [
+        {
+          fingerprint: {
+            hostId: "test",
+            provider: "claude" as const,
+            resolvedHomePath: "/work",
+            volumeId: "test",
+          },
+          status: "ok" as const,
+          scannedFiles: 1,
+          skippedFiles: 0,
+          malformedRecords: 0,
+          distinctSessions: 1,
+          message: null,
+        },
+      ],
+    };
+    const usageEnvironments = [{ ...environments[0]!, summary }];
+    const merged = mergeUsage(usageEnvironments, USAGE_CONTRACT_VERSION);
+    testState.useUsage.mockImplementation((window: UsageSummaryInput) => ({
+      merged,
+      environments: usageEnvironments,
+      selectedEnvironments: usageEnvironments,
+      shown: { merged, window },
+      isPartial: false,
+      refresh: vi.fn(),
+    }));
+    saveUsagePagePreferences({ metric: "cost", windowDays: 30 });
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const renderer = createRoot(container);
+    await act(() => renderer.render(<UsagePage />));
+
+    const dayToggle = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Day",
+    )!;
+    await act(() => dayToggle.click());
+
+    const dayRow = [...container.querySelectorAll("tbody tr")].find((row) =>
+      row.textContent?.includes("Nov 26"),
+    )!;
+    expect(dayRow.textContent).toContain("–");
+    expect(dayRow.textContent).not.toContain("$0.00");
+
+    await act(() => renderer.unmount());
+    container.remove();
+    window.localStorage.removeItem("t3code:usage-page-preferences:v1");
+    vi.unstubAllGlobals();
+  });
+});

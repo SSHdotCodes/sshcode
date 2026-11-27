@@ -6,12 +6,14 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { McpSchema, McpServer } from "effect/ai";
 import { FetchHttpClient } from "effect/http";
+import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vite-plus/test";
 
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as ProviderInstanceRegistry from "../../../provider/ProviderInstanceRegistry.ts";
 import * as ApiKeyStore from "../../../secrets/ApiKeyStore.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import fixture from "../../../xPost/fixtures/syndication-media.json" with { type: "json" };
 
@@ -94,6 +96,7 @@ it.effect("reads without a thread or approval, returning text first and opt-in M
       Effect.provide(
         McpHttpServer.layerXPostToolkit.pipe(
           Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provide(ServerSettings.layerTest()),
           Layer.provide(noSavedKey),
           Layer.provide(Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({})),
         ),
@@ -105,8 +108,10 @@ it.effect("reads without a thread or approval, returning text first and opt-in M
   }),
 );
 
-it.effect("deep searches go straight to Grok for read-only callers and return posts as text", () =>
+it.effect("read-only deep searches fall back to Grok when the archive returns no posts", () =>
   Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse("2026-11-26T00:00:00.000Z"));
+    const query = "from:xai grok until:2026-11-01";
     const queries: string[] = [];
     const fetch = vi.fn<typeof globalThis.fetch>(
       async () => new Response(encodeJson({ meta: { result_count: 0 } })),
@@ -117,13 +122,14 @@ it.effect("deep searches go straight to Grok for read-only callers and return po
       expect(tool?.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true });
       const found = yield* server.callTool({
         name: "search_x",
-        arguments: { query: "  from:xai grok  ", deep: true },
+        arguments: { query: `  ${query}  `, deep: true },
       });
-      expect(fetch.mock.calls.length).toBe(0);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(new URL(String(fetch.mock.calls[0]?.[0])).pathname).toBe("/2/tweets/search/all");
       expect(found.isError).toBe(false);
       expect(found.content).toEqual([{ type: "text", text: "@xai · a post" }]);
       expect(found.structuredContent).toEqual({ posts: "@xai · a post" });
-      expect(queries).toEqual(["from:xai grok"]);
+      expect(queries).toEqual([query]);
       const blank = yield* server.callTool({ name: "search_x", arguments: { query: "  " } });
       expect(blank.isError).toBe(true);
       expect(queries).toHaveLength(1);
@@ -131,6 +137,7 @@ it.effect("deep searches go straight to Grok for read-only callers and return po
       Effect.provide(
         McpHttpServer.layerXPostToolkit.pipe(
           Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provide(ServerSettings.layerTest()),
           Layer.provide(
             Layer.mock(ApiKeyStore.ApiKeyStore)({
               shared: () => Effect.succeed(Redacted.make("fixture")),

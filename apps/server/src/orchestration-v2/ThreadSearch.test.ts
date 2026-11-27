@@ -643,7 +643,7 @@ it.layer(layerTest)("ThreadSearch", (it) => {
       assert.isTrue(frames[1]?.complete);
       assert.deepEqual(
         frames[1]?.matches.map((match) => match.threadId),
-        [named, discussed],
+        [discussed, named],
       );
       const modelResults = yield* search.search({ query: "gpt 5", mode: "keyword" });
       assert.equal(
@@ -944,4 +944,60 @@ it.effect("keeps the repair watermark when a changed body fails decoding", () =>
     yield* search.repair;
     assert.lengthOf((yield* search.search({ query: "afterword", mode: "keyword" })).matches, 1);
   }).pipe(Effect.provide(repairLayer)),
+);
+
+it.effect(
+  "re-syncs live events after rebuild, excludes bot home chats, and refreshes unsettle activity",
+  () =>
+    Effect.gen(function* () {
+      const search = yield* ThreadSearch.ThreadSearch;
+      const project = ProjectId.make("rebuild-live-project");
+      const main = ThreadId.make("rebuild-main-thread");
+      const bot = ThreadId.make("thread:bot:helper-home");
+      yield* createProject(project);
+      yield* commitSearchEvent(thread(main, project));
+      yield* commitSearchEvent(thread(bot, project));
+      yield* commitSearchEvent(message(main, "before-rebuild", "user", "prebuildtoken"));
+      yield* commitSearchEvent(message(bot, "bot-msg", "user", "prebuildtoken secretbot"));
+      yield* search.backfillBatch;
+
+      // Bot home chats never appear in search results or totalMessages.
+      const initial = yield* search.search({ query: "prebuildtoken", mode: "keyword" });
+      assert.deepEqual(
+        initial.matches.map((m) => m.threadId),
+        [main],
+      );
+      assert.lengthOf((yield* search.search({ query: "secretbot", mode: "keyword" })).matches, 0);
+      assert.equal((yield* search.status).totalMessages, 1);
+
+      // After rebuild, a live message.updated event must re-sync threads instead of dropping the write.
+      yield* search.rebuild;
+      const postRebuildMsg = message(main, "after-rebuild", "user", "postrebuildtoken", {
+        minute: 10,
+      });
+      yield* commitSearchEvent(postRebuildMsg);
+      yield* search.handle(postRebuildMsg);
+      const afterLive = yield* search.search({ query: "postrebuildtoken", mode: "keyword" });
+      assert.deepEqual(
+        afterLive.matches.map((m) => m.messageId),
+        [MessageId.make("after-rebuild")],
+      );
+
+      // thread.unsettled updates activityAt for a known thread cleanly.
+      const unsettled: OrchestrationV2DomainEvent = {
+        ...thread(main, project),
+        id: EventId.make("unsettle-main"),
+        type: "thread.unsettled",
+        occurredAt: at(30),
+        payload: {
+          ...thread(main, project).payload,
+          unsettledAt: at(30),
+          updatedAt: at(30),
+        },
+      };
+      yield* commitSearchEvent(unsettled);
+      yield* search.handle(unsettled);
+      const afterUnsettle = yield* search.search({ query: "postrebuildtoken", mode: "keyword" });
+      assert.equal(afterUnsettle.matches[0]?.activityAt, DateTime.formatIso(at(30)));
+    }).pipe(Effect.provide(repairLayer)),
 );

@@ -42,11 +42,14 @@ export function serializeComposerFileLink(path: string): string {
   return `[${label}](${destination})`;
 }
 
+const DRIVE_OR_ROOTED_PATH_PATTERN = /^(?:[a-z]:[\\/]|[\\/])/i;
+const URI_SCHEME_PREFIX_PATTERN = /^[a-z][a-z\d+.-]*:/i;
+
 function needsDotSlashPrefix(path: string, encoded: string): boolean {
   return (
     path.length > 0 &&
-    !/^(?:[a-z][a-z\d+.-]*:|[\\/])/i.test(path) &&
-    !parseMarkdownFileLink(encoded)
+    !DRIVE_OR_ROOTED_PATH_PATTERN.test(path) &&
+    (URI_SCHEME_PREFIX_PATTERN.test(path) || !parseMarkdownFileLink(encoded))
   );
 }
 

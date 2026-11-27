@@ -56,7 +56,7 @@ export function SubagentNotificationRow(props: {
           subagent={snapshot}
           statusLabel={event.statusLabel}
           elapsed={
-            <AppText className="text-xs tabular-nums text-foreground-muted">
+            <AppText className="text-xs text-foreground-muted">
               {formatTranscriptTimestamp(DateTime.formatIso(item.startedAt ?? item.updatedAt))}
             </AppText>
           }

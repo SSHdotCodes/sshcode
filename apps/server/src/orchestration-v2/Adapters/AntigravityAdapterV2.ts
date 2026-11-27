@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import type { SelfInvocation } from "@t3tools/shared/nodeRuntime";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -29,7 +30,12 @@ import {
   type AntigravityMediaSpawner,
   type AntigravityAcpRuntimeInput,
 } from "../../provider/acp/AntigravityAcpSupport.ts";
-import { readAntigravityChildrenAtWork } from "../../provider/acp/AntigravityChildWork.ts";
+import {
+  readAntigravityChildImages,
+  readAntigravityChildrenAtWork,
+  readAntigravitySubagentTranscript,
+} from "../../provider/acp/AntigravityChildWork.ts";
+import { watchAntigravityNativeTurnError } from "../../provider/acp/AntigravityNativeTurnError.ts";
 import { readAntigravityClientTextFile } from "../../provider/acp/AntigravityClientFiles.ts";
 import {
   antigravityApprovalOptions,
@@ -38,6 +44,7 @@ import {
   antigravitySubagentInput,
   antigravitySubagentOutput,
   antigravitySwarmWorker,
+  ANTIGRAVITY_IMAGE_GENERATOR_TYPE,
   classifyAntigravitySubagentToolCall,
   extractAntigravityUserInputQuestion,
   isAntigravityOpenCommand,
@@ -144,6 +151,12 @@ const extractAntigravitySubagentUpdate: NonNullable<AcpAdapterV2Flavor["extractS
       "Antigravity subagent batch",
     title: input.title ?? "Antigravity subagent batch",
     model: input.model ?? null,
+    // agy's Model defaults to "inherit", the parent's model, and agy tells the agent to pass it.
+    // Its image generator runs Google's image model whatever the chat runs.
+    ...(input.model === undefined && input.typeName !== ANTIGRAVITY_IMAGE_GENERATOR_TYPE
+      ? { inheritParentModel: true }
+      : {}),
+    ...(input.typeName === undefined ? {} : { nativeType: input.typeName }),
     status,
     childSessionId: null,
     result: status === "failed" ? (antigravitySubagentOutput(toolCall) ?? null) : null,
@@ -289,6 +302,33 @@ export function makeAntigravityAcpAdapterFlavor(
               }
               return [];
             }),
+          readSubagentTranscript: (input) =>
+            Effect.gen(function* () {
+              for (const dataDirectory of options.childWorkDirectories ?? []) {
+                const entries = yield* readAntigravitySubagentTranscript({
+                  ...input,
+                  dataDirectory,
+                  fileSystem: options.fileSystem,
+                  path: options.path,
+                });
+                if (entries.length > 0) return entries;
+              }
+              return [];
+            }),
+          subagentImages: (input) =>
+            Effect.gen(function* () {
+              if (input.nativeType !== ANTIGRAVITY_IMAGE_GENERATOR_TYPE) return [];
+              for (const dataDirectory of options.childWorkDirectories ?? []) {
+                const images = yield* readAntigravityChildImages({
+                  ...input,
+                  dataDirectory,
+                  fileSystem: options.fileSystem,
+                  path: options.path,
+                });
+                if (images.length > 0) return images;
+              }
+              return [];
+            }),
         }),
     // A finished background command or timer wakes the agent with no prompt open: it streams a
     // reply and asks for permissions, and no prompt response ever ends that reply.
@@ -334,6 +374,28 @@ export function makeAntigravityAcpAdapterFlavor(
     },
     approvalOptions: antigravityApprovalOptions,
     promptStopFailure: (input) => Effect.succeed(antigravityPromptStopFailure(input)),
+    watchPromptFailure: (sessionId) =>
+      Effect.gen(function* () {
+        const readError = yield* watchAntigravityNativeTurnError({
+          sessionId,
+          dataDirectories: options.childWorkDirectories ?? [],
+          fileSystem: options.fileSystem,
+          path: options.path,
+        });
+        return (result) =>
+          Effect.gen(function* () {
+            if (result.stopReason !== "end_turn" && result.stopReason !== "refusal")
+              return undefined;
+            const message = yield* readError;
+            if (message === undefined) return undefined;
+            return antigravityPromptStopFailure({
+              stopReason: "error",
+              error: { code: -32603, message },
+              replyText: undefined,
+              now: yield* DateTime.now,
+            });
+          });
+      }),
     extractPermissionQuestion: (request) => {
       const question = extractAntigravityUserInputQuestion(request);
       if (question === undefined) return undefined;
@@ -342,6 +404,8 @@ export function makeAntigravityAcpAdapterFlavor(
         respond: (answers) => makeAntigravityUserInputResponse(request, answers),
       };
     },
+    // ask_question sends a generic form message and puts each question in its field title.
+    useElicitationFieldTitleAsQuestion: true,
     normalizeToolCall: normalizeAntigravityToolCall,
     trackAgentStoppedTools: makeAntigravityStoppedTools,
     extractSubagentUpdate: extractAntigravitySubagentUpdate,

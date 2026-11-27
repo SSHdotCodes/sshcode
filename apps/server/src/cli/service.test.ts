@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { SERVER_DOWNLOADS_UNAVAILABLE, ServerDownloadsPublished } from "@t3tools/shared/cliRelease";
 import * as NetService from "@t3tools/shared/Net";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
@@ -17,6 +18,7 @@ import {
   offerServiceDuringOnboarding,
   reconcileService,
   recoverServiceOnboardingOffer,
+  requireServerDownloads,
   serviceCommand,
 } from "./service.ts";
 
@@ -161,6 +163,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("service commands
           "--base-dir",
           baseDir,
         ]).pipe(
+          Effect.provideService(ServerDownloadsPublished, true),
           Effect.provideService(HostProcess.Environment, {}),
           Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
           Effect.flip,
@@ -190,6 +193,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("service commands
         baseDir,
         "--allow-downgrade",
       ]).pipe(
+        Effect.provideService(ServerDownloadsPublished, true),
         Effect.provideService(HostProcess.Environment, {}),
         Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
       );
@@ -197,7 +201,54 @@ it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("service commands
       expect(installOptions).toEqual([{ allowDowngrade: true }]);
     }),
   );
+
+  it.effect.each(["install", "update"] as const)(
+    "%s refuses before any work while releases carry no server download",
+    (command) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-cli-test-" });
+        const baseDir = `${tempDir}/home`;
+        const { service, installOptions } = makeTestService({
+          ...status,
+          installed: false,
+          current: false,
+        });
+        vi.spyOn(BootService, "layer").mockReturnValue(
+          Layer.succeed(BootService.BootService, service),
+        );
+
+        const error = yield* Command.runWith(serviceCommand, { version: packageJson.version })([
+          command,
+          "--base-dir",
+          baseDir,
+        ]).pipe(
+          Effect.provideService(ServerDownloadsPublished, false),
+          Effect.provideService(HostProcess.Environment, {}),
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
+          Effect.flip,
+        );
+
+        expect(error).toMatchObject({
+          _tag: "UserError",
+          userMessage: SERVER_DOWNLOADS_UNAVAILABLE,
+        });
+        expect(installOptions).toEqual([]);
+        expect(yield* fs.exists(baseDir)).toBe(false);
+      }),
+  );
 });
+
+it.effect("requires the server download only while releases do not carry it", () =>
+  Effect.gen(function* () {
+    yield* requireServerDownloads.pipe(Effect.provideService(ServerDownloadsPublished, true));
+    const error = yield* requireServerDownloads.pipe(
+      Effect.provideService(ServerDownloadsPublished, false),
+      Effect.flip,
+    );
+    expect(error.userMessage).toBe(SERVER_DOWNLOADS_UNAVAILABLE);
+  }),
+);
 
 it.effect.each([
   { name: "a new service", state: { ...status, installed: false, current: false } },
@@ -241,6 +292,7 @@ it.effect("leaves a newer service unchanged during onboarding without prompting"
     });
 
     const ready = yield* offerServiceDuringOnboarding.pipe(
+      Effect.provideService(ServerDownloadsPublished, true),
       Effect.provideService(BootService.BootService, service),
       Effect.provideService(Terminal.Terminal, terminal),
       Effect.provide(NodeServices.layer),
@@ -249,6 +301,35 @@ it.effect("leaves a newer service unchanged during onboarding without prompting"
     expect(ready).toBe(false);
     expect(installOptions).toEqual([]);
   }),
+);
+
+it.effect(
+  "skips the background offer without prompting while releases carry no server download",
+  () =>
+    Effect.gen(function* () {
+      const terminal = Terminal.make({
+        columns: Effect.succeed(80),
+        rows: Effect.succeed(24),
+        readInput: Effect.die("Onboarding must not offer a service it cannot install."),
+        readLine: Effect.die("Onboarding must not offer a service it cannot install."),
+        display: () => Effect.die("Onboarding must not offer a service it cannot install."),
+      });
+      const offer = (serviceStatus: BootService.BootServiceStatus) => {
+        const { service, installOptions } = makeTestService(serviceStatus);
+        return offerServiceDuringOnboarding.pipe(
+          Effect.provideService(ServerDownloadsPublished, false),
+          Effect.provideService(BootService.BootService, service),
+          Effect.provideService(Terminal.Terminal, terminal),
+          Effect.provide(NodeServices.layer),
+          Effect.map((ready) => ({ ready, installOptions })),
+        );
+      };
+
+      const fresh = yield* offer({ ...status, installed: false, current: false });
+      expect(fresh).toEqual({ ready: false, installOptions: [] });
+      // A service that is already set up keeps working.
+      expect((yield* offer(status)).ready).toBe(true);
+    }),
 );
 
 it.effect("keeps onboarding successful when a newer version appears before install", () =>

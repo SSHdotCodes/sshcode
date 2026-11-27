@@ -22,6 +22,8 @@ vi.mock("./presentation", () => ({
   }),
 }));
 vi.mock("./pull-requests", () => ({ composerPullRequests: {} }));
+// Server state loads native modules; these queries never read it.
+vi.mock("./server", () => ({ serverEnvironment: {} }));
 vi.mock("./projects", () => ({
   projectEnvironment: { searchEntries: mocks.searchEntries },
 }));

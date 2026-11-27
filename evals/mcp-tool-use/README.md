@@ -33,13 +33,15 @@ node evals/mcp-tool-use/run.ts --runner codex-cli --model "$EVAL_MODEL" --effort
   --baseline "$RESULTS/codex-baseline/results.jsonl" --stop-on-regression
 ```
 
-This runs the installed `codex exec --ephemeral` against a loopback-only mock MCP server and a disposable fixture directory. It ignores user config, rules and plugins, and configures only the mock server. The mock serves the branch's model-facing names, descriptions and input schemas. Calls are recorded and answered from case mocks/default synthetic results. Model-facing schemas are real; mock results are partial fixtures, not full production-service responses.
+This runs the installed `codex exec --ephemeral` with a fresh Git fixture per sample and a loopback-only mock MCP server. It ignores user config, rules and plugins. The mock serves the branch's model-facing names, descriptions and input schemas. It records calls and returns synthetic results, including for `delegate_task`. Native subagent spawning is disabled.
 
-`--sandbox read-only` permits reads outside the working directory. The runner instead supplies a command-line-only read-only permission profile: minimal system runtime paths plus the fixture are readable, writes and command networking are denied. A local probe must confirm inside reads succeed while outside reads and writes fail. No harness config file is edited. Fixture scripts must be synthetic, especially commands returned by key tools.
+The workspace-write permission profile allows changes to the fixture and reads of minimal system runtime paths. Shell networking is disabled. The macOS profile explicitly denies the system scratch directories, with the fixture as the writable workspace. Scratch space for shell commands lives inside the fixture. Fixture scripts must be synthetic, especially commands returned by key tools.
 
-The result includes the exact CLI arguments, returned tool lists, native command calls, CLI events and the difference in the session-directory inventory before/after the run. `--ephemeral` must leave no new session files. Check Codex quota outside the runner between batches; stop runs at the maintainer's limit. The runner has no access to the live SSHCode MCP server. Native shell commands run against the fixture under the permission profile; prior conversation turns are rendered as synthetic history in the prompt.
+The result includes CLI arguments, returned tool lists, native command calls and CLI events. Prior conversation turns are rendered as synthetic history in the prompt.
 
-Fixture files are read-only, synthetic absolute paths are translated inside the fixture, and its Git repository has no remotes. CLI logs and SQLite runtime state use a separate disposable directory. Credential and SSHCode connection variables are removed from the child environment. The CLI handles its normal authentication; the runner never reads credentials. Native commands are real, so API shell mocks and simulated web responses do not replace their output on this path.
+Set `CODEX_HOME` to a separate CLI profile already signed in to ChatGPT. The CLI checks the login before the run and uses the subscription account. For allowance-only runs, confirm available quota and that the account has no flexible usage credits before starting. The runner passes the CLI a minimal environment and leaves authentication to Codex.
+
+Synthetic absolute paths resolve inside the fixture. Its Git repository has no remotes. Logs and SQLite state live in a sibling directory. Both directories are removed at the end of the sample. The CLI executes native commands directly.
 
 ## Sampling and inspection
 

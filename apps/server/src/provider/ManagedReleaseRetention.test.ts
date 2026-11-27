@@ -45,7 +45,7 @@ it.live(
       yield* retention.withLock(
         Effect.gen(function* () {
           yield* retention.rememberRollback("2", "4");
-          yield* retention.prune;
+          yield* retention.prune();
         }),
       );
       expect(yield* fs.exists(`${directory}/4`)).toBe(true);
@@ -67,12 +67,12 @@ it.live("leases protect older versions across independent instances until releas
       completed: () => Effect.succeed(true),
     });
     expect(yield* other.withLock(other.hasLeases)).toBe(true);
-    yield* other.withLock(other.prune);
+    yield* other.withLock(other.prune());
     expect(yield* fs.exists(`${directory}/1`)).toBe(true);
     expect(yield* fs.exists(`${directory}/2`)).toBe(false);
     yield* release();
     expect(yield* other.withLock(other.hasLeases)).toBe(false);
-    yield* other.withLock(other.prune);
+    yield* other.withLock(other.prune());
     expect(yield* fs.exists(`${directory}/1`)).toBe(false);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
@@ -86,7 +86,7 @@ it.live(
       yield* fs.symlink(`${directory}/4`, `${directory}/5`);
       yield* fs.makeDirectory(`${directory}/.leases/1`, { recursive: true });
       yield* fs.writeFileString(`${directory}/.leases/1/unknown-owner`, "");
-      yield* retention.withLock(retention.prune);
+      yield* retention.withLock(retention.prune());
       expect(yield* fs.exists(`${directory}/0`)).toBe(true);
       expect(yield* fs.readLink(`${directory}/5`)).toBe(`${directory}/4`);
       expect(yield* fs.exists(`${directory}/1`)).toBe(true);
@@ -123,7 +123,7 @@ it.live("keeps a lease owned by another process, then reclaims it after that pro
           child.kill();
         }),
     );
-    yield* retention.withLock(retention.prune);
+    yield* retention.withLock(retention.prune());
     expect(yield* fs.exists(`${directory}/1`)).toBe(true);
     yield* Effect.promise(
       () =>
@@ -132,7 +132,7 @@ it.live("keeps a lease owned by another process, then reclaims it after that pro
           child.send("exit");
         }),
     );
-    yield* retention.withLock(retention.prune);
+    yield* retention.withLock(retention.prune());
     expect(yield* fs.exists(`${directory}/1`)).toBe(false);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

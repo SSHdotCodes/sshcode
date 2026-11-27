@@ -17,17 +17,19 @@ export function TimelineSystemDivider(props: {
   const content = (
     <>
       {Icon ? <Icon className="size-3 shrink-0" /> : null}
-      <span className="font-medium">{props.label}</span>
+      <span className="shrink-0 font-medium">{props.label}</span>
       {props.detail ? (
-        <span
-          className={cn(
-            "inline-flex min-w-0 items-center opacity-70",
-            typeof props.detail === "string" && "max-w-80 truncate",
-          )}
-        >
-          {props.showDetailSeparator === false ? null : "·\u00a0"}
-          {props.detail}
-        </span>
+        typeof props.detail === "string" ? (
+          <span className="block min-w-0 max-w-80 truncate opacity-70">
+            {props.showDetailSeparator === false ? null : "·\u00a0"}
+            {props.detail}
+          </span>
+        ) : (
+          <span className="inline-flex min-w-0 items-center opacity-70">
+            {props.showDetailSeparator === false ? null : "·\u00a0"}
+            {props.detail}
+          </span>
+        )
       ) : null}
     </>
   );

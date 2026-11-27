@@ -615,7 +615,9 @@ export const AntigravityDriver: ProviderDriver<
                 detail: isAntigravitySignInRequiredError(cause)
                   ? "Sign in to Antigravity in provider settings before refreshing models."
                   : cause._tag === "ProviderSetupError" &&
-                      (cause.operation === "configure" || cause.operation === "start")
+                      (cause.operation === "configure" ||
+                        cause.operation === "resolve" ||
+                        cause.operation === "start")
                     ? cause.detail
                     : refreshFailureDetail(cause),
                 cause,
@@ -634,7 +636,7 @@ export const AntigravityDriver: ProviderDriver<
         snapshotForCwd: (cwd) =>
           !enabled
             ? provider.snapshot.getSnapshot
-            : discoverAntigravitySkills({ cwd, userHome }).pipe(
+            : discoverAntigravitySkills({ cwd, userHome, profileDirectory }).pipe(
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, path),
                 Effect.flatMap((skills) => provider.snapshotForCwd(cwd, skills)),

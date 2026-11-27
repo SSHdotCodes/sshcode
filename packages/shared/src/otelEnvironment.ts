@@ -103,6 +103,10 @@ const flag = (
 const T3CODE_TRUE = ["true", "yes", "on", "1", "y"];
 const T3CODE_FALSE = ["false", "no", "off", "0", "n"];
 
+/** The cross-tool `DO_NOT_TRACK=1` convention turns off product analytics and relay tracing. */
+export const isDoNotTrackSet = (env: Readonly<Record<string, string | undefined>>) =>
+  T3CODE_TRUE.includes(env.DO_NOT_TRACK?.trim().toLowerCase() ?? "");
+
 const RESOURCE_ATTRIBUTES = "OTEL_RESOURCE_ATTRIBUTES";
 
 interface ResourceAttributes {

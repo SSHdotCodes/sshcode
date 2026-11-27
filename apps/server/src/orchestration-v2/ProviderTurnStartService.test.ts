@@ -1,6 +1,10 @@
 import { AcpRequestError } from "effect-acp/errors";
 import { CodexAppServerRequestError } from "effect-codex-app-server/errors";
 import * as ChatControls from "../sessionBoxes/chatControls.ts";
+import {
+  expandAssistantCitationsForProvider,
+  serializeAssistantCitation,
+} from "@t3tools/shared/assistantCitations";
 import { expandDebugCommand } from "@t3tools/shared/debugCommand";
 import * as TerminalHandoffState from "./TerminalHandoffState.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -9,6 +13,7 @@ import { it as effectIt } from "@effect/vitest";
 import {
   CheckpointScopeId,
   ContextTransferId,
+  EnvironmentId,
   MessageId,
   NodeId,
   ProviderSessionId,
@@ -16,6 +21,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSetupError,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   RunAttemptId,
   RunId,
   ThreadId,
@@ -1586,6 +1592,43 @@ effectIt.effect("projects the debug workflow only for the provider turn", () =>
   }),
 );
 
+effectIt.effect("rejects oversized citation expansion before provider startup", () =>
+  Effect.gen(function* () {
+    const excerpt = "\u0001".repeat(8_000);
+    const citation = serializeAssistantCitation({
+      version: 1,
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("thread"),
+      messageId: MessageId.make("assistant"),
+      text: excerpt,
+      start: 0,
+      end: excerpt.length,
+      prefix: "",
+      suffix: "",
+    });
+    const text = `${"x".repeat(80_000)}${citation}`;
+    expect(text.length).toBeLessThan(PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+    expect(expandAssistantCitationsForProvider(text).length).toBeGreaterThan(
+      PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+    );
+    const harness = makeLocalCommandHarness({ text });
+
+    yield* harness.start;
+
+    expect(harness.open).not.toHaveBeenCalled();
+    expect(harness.startRootRun).not.toHaveBeenCalled();
+    const projection = harness.projection();
+    expect(projection.runs.at(-1)?.status).toBe("failed");
+    expect(projection.turnItems).toMatchObject([
+      {
+        type: "error",
+        failure: { class: "validation_error", message: expect.stringContaining("120,000") },
+      },
+    ]);
+    expect(projection.messages[0]?.text).toBe(text);
+  }),
+);
+
 effectIt.effect("sends one back-on notice after turning subagents off and on", () =>
   Effect.gen(function* () {
     const chatControls = ChatControls.make().store;
@@ -1608,5 +1651,42 @@ effectIt.effect("sends one back-on notice after turning subagents off and on", (
       "Subagents are back on for this chat.\nContinue.",
     );
     expect(chatControls.consumeSubagentNotice(threadId, true)).toBe(false);
+  }),
+);
+
+effectIt.effect("keeps the native restart input and leaves the board notice pending", () =>
+  Effect.gen(function* () {
+    const from = RunId.make("interrupted-run");
+    const input = {
+      threadId: ThreadId.make("sibling-chat"),
+      runId: RunId.make("continuation"),
+      message: { text: "Continue" },
+    };
+    const acknowledgements: boolean[] = [];
+    const board = {
+      reserveNotices: () => ({
+        text: "Pending board notice",
+        notices: [],
+        finish: (received: boolean) =>
+          Effect.sync(() => {
+            acknowledgements.push(received);
+          }),
+      }),
+    };
+    const resumed = yield* ProviderTurnStart.startTurnWithBoardNotices(
+      { ...input, restartContinuationOfRunId: from },
+      Effect.succeed,
+      board,
+    );
+    expect(resumed.restartContinuationOfRunId).toBe(from);
+    expect(resumed.message.text).toBe("Continue");
+    expect(acknowledgements).toEqual([]);
+    const prompted = yield* ProviderTurnStart.startTurnWithBoardNotices(
+      input,
+      Effect.succeed,
+      board,
+    );
+    expect(prompted.message.text).toBe("Pending board notice\n\nContinue");
+    expect(acknowledgements).toEqual([true]);
   }),
 );

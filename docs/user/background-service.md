@@ -3,9 +3,11 @@
 On Linux and macOS, SSHCode can run as a service for your user so you do not need
 to keep a terminal open.
 
+Not available yet: SSHCode's releases don't include the server download this needs, so run the server from a source checkout instead.
+
 ## Manage the service
 
-Install the `sshcode` CLI first ([Install SSHCode](./install.md#command-line)), then
+Install the `sshcode` CLI first ([Install SSHCode](./install.md#the-sshcode-command)), then
 run these commands on the machine that will host SSHCode:
 
 | Task                            | Command                     |
@@ -16,7 +18,7 @@ run these commands on the machine that will host SSHCode:
 | Restart                         | `sshcode service restart`   |
 | Stop and remove from startup    | `sshcode service uninstall` |
 
-To connect a device to the background service, run `t3 pair` on the host.
+To connect a device to the background service, run `sshcode pair` on the host.
 
 Uninstalling the service leaves your projects, threads, and settings intact.
 Running `sshcode service install` again repairs a service that `sshcode service status`

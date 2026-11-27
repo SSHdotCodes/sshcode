@@ -16,6 +16,7 @@ export type {
   MarkdownLinkCustomization,
   NativeMarkdownTextStyle,
   SelectableMarkdownSkill,
+  SelectableMarkdownTextProps,
 } from "./SelectableMarkdownText.types";
 
 export function SelectableMarkdownText(props: SelectableMarkdownTextProps) {

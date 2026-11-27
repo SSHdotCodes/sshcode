@@ -4,9 +4,11 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   apiKeyCustomExpiry,
   apiKeyExpiryFromDays,
+  secretAnswerNoticeIds,
   secretRequestAnswerInput,
   secretRequestDisplay,
   secretRequestFailureMessage,
+  secretRequestInputs,
   secretRequestPrivacyNote,
   type SecretRequestItem,
 } from "./secretRequest.ts";
@@ -51,8 +53,8 @@ describe("secretRequestDisplay", () => {
 
 describe("secretRequestAnswerInput", () => {
   it("refuses a blank save and trims the value the server will store", () => {
-    expect(secretRequestAnswerInput(item, { type: "save", secret: "   " })).toBeNull();
-    expect(secretRequestAnswerInput(item, { type: "save", secret: " whsec_1 " })).toEqual({
+    expect(secretRequestAnswerInput(item, { type: "save", values: ["   "] })).toBeNull();
+    expect(secretRequestAnswerInput(item, { type: "save", values: [" whsec_1 "] })).toEqual({
       threadId: item.threadId,
       turnItemId: item.id,
       answer: { type: "save", secret: "whsec_1" },
@@ -62,6 +64,69 @@ describe("secretRequestAnswerInput", () => {
       turnItemId: item.id,
       answer: { type: "decline" },
     });
+  });
+});
+
+describe("a credential in parts", () => {
+  const fields = [{ label: "Token ID", placeholder: "ak-…" }, { label: "Token secret" }];
+  const inParts = { ...item, label: "Modal token", fields };
+
+  it("draws one labelled input per part, and one named by the card otherwise", () => {
+    expect(secretRequestInputs(inParts)).toEqual([
+      { label: "Token ID", placeholder: "ak-…" },
+      { label: "Token secret", placeholder: "Paste the secret" },
+    ]);
+    expect(secretRequestInputs({ label: "GitHub token", placeholder: "ghp_…" })).toEqual([
+      { label: "GitHub token", placeholder: "ghp_…" },
+    ]);
+  });
+
+  it("sends every part in order, and only once each has a value", () => {
+    expect(
+      secretRequestAnswerInput(inParts, { type: "save", values: [" ak-1 ", "as-2"] })?.answer,
+    ).toEqual({ type: "save", secrets: ["ak-1", "as-2"] });
+    expect(secretRequestAnswerInput(inParts, { type: "save", values: ["ak-1", " "] })).toBeNull();
+    expect(secretRequestAnswerInput(inParts, { type: "save", values: ["ak-1"] })).toBeNull();
+    // A card without parts keeps the shape every server understands.
+    expect(secretRequestAnswerInput(item, { type: "save", values: ["ak-1", "as-2"] })).toBeNull();
+  });
+
+  it("says how many parts were saved on its one row", () => {
+    expect(secretRequestDisplay({ secretStatus: "saved", fields }, "local")).toEqual({
+      kind: "answered",
+      outcome: "saved",
+      label: "Both parts saved privately",
+    });
+    expect(secretRequestDisplay({ secretStatus: "declined", fields }, "local")).toMatchObject({
+      label: "Declined",
+    });
+  });
+});
+
+describe("secretAnswerNoticeIds", () => {
+  // As stored: the answer notice is a notification row whose id encodes its message id.
+  const card = (id: string) => ({ item: { type: "secret_request", id } });
+  const notice = (cardId: string) => ({
+    item: {
+      type: "notification",
+      id: `turn-item:message:${encodeURIComponent(`message:secret-request-answer:${cardId}`)}`,
+    },
+  });
+  const cardId = "turn-item:secret-request:thread%3A1:modal";
+
+  it("hides the notice of a card in the same list, saved or declined", () => {
+    const items = [card(cardId), notice(cardId), notice("turn-item:secret-request:other")];
+    expect([...secretAnswerNoticeIds(items as never)]).toEqual([notice(cardId).item.id]);
+  });
+
+  it("keeps a notice whose card is not loaded, and every other notification", () => {
+    const resumed = {
+      item: {
+        type: "notification",
+        id: `turn-item:message:${encodeURIComponent("message:restart-continuation:run-1")}`,
+      },
+    };
+    expect(secretAnswerNoticeIds([notice(cardId), resumed] as never).size).toBe(0);
   });
 });
 
@@ -81,7 +146,7 @@ it("keeps scope and expiry in the private answer, accepts never, and validates c
   expect(
     secretRequestAnswerInput(item, {
       type: "save",
-      secret: " obviously-fake ",
+      values: [" obviously-fake "],
       scope: "all",
       expiresAt: null,
     })?.answer,

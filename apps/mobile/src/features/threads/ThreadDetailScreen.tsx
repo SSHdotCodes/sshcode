@@ -1,3 +1,6 @@
+import { botComposerPlaceholder } from "@t3tools/client-runtime/state/bots";
+import { BotEmptyState, BotsOffBar } from "../bots/BotChat";
+import { useBotForThread, useParkedBotForThread } from "../bots/state";
 import { useThreadVisit } from "./use-thread-visit";
 import { NewChatBackdrop, ThreadEmbers } from "./NewChatBackdrop";
 import { chatBackdropMood } from "@t3tools/client-runtime/new-chat-dashboard";
@@ -27,6 +30,9 @@ import { useTurnMascotMoments } from "./useTurnMascotState";
 import { playThreadFeedback, useThreadFeedback, type ThreadFeedbackRun } from "./useThreadFeedback";
 import { prepareMessageQuote } from "./messageQuote";
 import { useAtomValue } from "@effect/atom-react";
+import { teamBoardPill } from "@t3tools/client-runtime/state/team-board";
+import { Atom } from "effect/reactivity";
+import { teamBoardEnvironment } from "../../state/teamBoard";
 import { useChildThreadInputs, useThreadReportedModelSelection } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
 import { useNavigation } from "@react-navigation/native";
@@ -56,6 +62,7 @@ import type {
   RuntimeRequestId,
   ScopedThreadRef,
   ServerConfig as T3ServerConfig,
+  TeamBoardSnapshot,
   ThreadId,
   TurnItemId,
   UsageLimitsReport,
@@ -81,12 +88,21 @@ import {
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
   MessageId,
+  sideChatKindForDriver,
 } from "@t3tools/contracts";
 import { delegatedChildQuestionIsForParent } from "./delegatedChildQuestion";
 import type { QueuedRunEdit } from "../../state/queued-run-edit";
 import type { FollowUpBehavior } from "../../lib/followUpBehavior";
 import type { ActiveTurnComposerAction } from "@t3tools/client-runtime/state/composer-dispatch";
 import * as Haptics from "expo-haptics";
+import type { AssistantCitation } from "@t3tools/contracts";
+import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
+import { voiceInputBlocksSubmission } from "@t3tools/client-runtime/voice-input";
+import { composerPromptLengthMessage } from "../../lib/composerContext";
+import {
+  captureComposerDraftInsertion,
+  insertComposerDraftText,
+} from "../../state/use-composer-drafts";
 import {
   memo,
   useCallback,
@@ -222,6 +238,7 @@ export interface ThreadDetailScreenProps {
   readonly onMediaJumpHandled?: ((sequence: number) => void) | undefined;
   readonly pendingHandoff?: HandoffEndpoints | null;
   readonly activityRun: ThreadFeedLatestRun | null;
+  readonly runs?: ReadonlyArray<import("../../lib/threadActivity").ThreadFeedRunTiming> | undefined;
   readonly avatarRuns?:
     | ReadonlyArray<Pick<OrchestrationV2Run, "id" | "providerInstanceId" | "modelSelection">>
     | undefined;
@@ -398,6 +415,8 @@ const USER_INPUT_TOGGLE_TIMING = {
   easing: Easing.out(Easing.cubic),
   reduceMotion: ReduceMotion.System,
 };
+const NO_TEAM_BOARD = Atom.make<TeamBoardSnapshot | null>(null);
+const NO_TEAM_BOARD_SEEN = Atom.make<string | null>(null);
 const DETAIL_CARD_EASING = Easing.out(Easing.cubic);
 const DETAIL_CARD_ENTER_QUICK = FadeInDown.duration(180)
   .easing(DETAIL_CARD_EASING)
@@ -410,6 +429,12 @@ const DETAIL_CARD_EXIT = FadeOut.duration(130).reduceMotion(ReduceMotion.System)
 
 export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: ThreadDetailScreenProps) {
   const usesNativeWorkspaceColumns = useNativeWorkspaceColumnsSupported();
+  // A bot's home chat reads like a conversation with it; everything else stays the same.
+  const bot = useBotForThread(props.environmentId, props.selectedThread.id);
+  // A kept bot's chat while Bots are off: readable, but a bar stands in for the composer and
+  // nothing (starters, cards, queue) sends to it. Turning Bots on restores it in place.
+  const parkedBot = useParkedBotForThread(props.environmentId, props.selectedThread.id);
+  const chatBot = bot ?? parkedBot;
   const navigation = useNavigation();
   const { session: voiceInputSession } = useGlobalVoiceInput();
   const reportedModelSelection = useThreadReportedModelSelection(props.selectedThreadDetailRef);
@@ -656,6 +681,30 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       threadId: props.selectedThread.id,
     });
   };
+  // Summaries subscribe only for a lead with two or more local app-owned subagents.
+  const boardRef = props.selectedThreadDetailRef;
+  const boardSummary = useAtomValue(
+    boardRef === null ? NO_TEAM_BOARD : teamBoardEnvironment.summaryAtom(boardRef),
+  );
+  const boardSeen = useAtomValue(
+    boardRef === null ? NO_TEAM_BOARD_SEEN : teamBoardEnvironment.seenAtom(boardRef),
+  );
+  const boardPill = teamBoardPill(boardSummary, boardSeen);
+  const openTeamBoard = () => {
+    Keyboard.dismiss();
+    navigation.navigate("ThreadTeamBoard", {
+      environmentId: props.environmentId,
+      threadId: props.selectedThread.id,
+    });
+  };
+  const liveProgress = props.selectedThread.source.liveProgress;
+  const openProgressSheet = () => {
+    Keyboard.dismiss();
+    navigation.navigate("ThreadProgress", {
+      environmentId: props.environmentId,
+      threadId: props.selectedThread.id,
+    });
+  };
   const floatingStatus = ((): FloatingWorkingStatus | null => {
     const connectionStatus = connectionFloatingStatus({
       connectionError: connectionRetrying ? retryConnectionError : props.connectionError,
@@ -706,6 +755,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         kind: "working",
         startedAt: props.activeWorkStartedAt,
         ...(props.runningGeneration === undefined ? {} : { generation: props.runningGeneration }),
+        ...(liveProgress === undefined
+          ? {}
+          : { progress: { value: liveProgress, onPress: openProgressSheet } }),
       };
     }
     if (pendingBackgroundWork !== null && contentPresentationKind === "ready") {
@@ -755,6 +807,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     (mascotMoment !== null && mascotMoment.kind !== "waiting") ||
     queuedCount > 0 ||
     agentsSegment !== null ||
+    boardPill !== null ||
     devicePreviews.length > 0 ||
     browserTabs.tabs.length > 0 ||
     props.connectionStateLabel !== "connected" ||
@@ -1358,6 +1411,60 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     [changeDraftMessage],
   );
 
+  // Like the Mac's Cite: the citation lands at the composer's caret as a chip, then the
+  // composer takes focus so the keyboard is up for the comment or question.
+  const composerDraftKey = props.composerDraftKey;
+  const isSavingQueuedEdit = props.isSavingQueuedEdit;
+  const handleCiteAssistantText = useCallback(
+    (citation: AssistantCitation) => {
+      if (composerDraftKey === null || isSavingQueuedEdit) return;
+      if (
+        voiceInputSession.ownerKey === composerDraftKey &&
+        voiceInputBlocksSubmission(voiceInputSession.controller.currentState)
+      ) {
+        Alert.alert("Dictation is running", "Stop dictating, then cite the text again.");
+        return;
+      }
+      const target = captureComposerDraftInsertion(composerDraftKey);
+      const before = target.start > 0 && !/\s/.test(target.text[target.start - 1]!) ? " " : "";
+      const after = /^\s/.test(target.text.slice(target.end)) ? "" : " ";
+      const value = `${before}${serializeAssistantCitation(citation)}${after}`;
+      const text = target.text.slice(0, target.start) + value + target.text.slice(target.end);
+      const tooLong = composerPromptLengthMessage(text);
+      if (tooLong) {
+        Alert.alert("Couldn't add the quote", tooLong);
+        return;
+      }
+      insertComposerDraftText(composerDraftKey, value, target);
+      const caret = target.start + value.length;
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
+      requestAnimationFrame(() => {
+        composerEditorRef.current?.focus();
+        composerEditorRef.current?.setSelection({ start: caret, end: caret });
+      });
+    },
+    [composerDraftKey, isSavingQueuedEdit, voiceInputSession],
+  );
+
+  // Like the Mac's "Ask about this": the side chat opens with the selection quoted above its
+  // box, waiting for the question.
+  const sideChatKind = sideChatKindForDriver(agentProvider?.driver);
+  const sideChatEnvironmentId = props.environmentId;
+  const sideChatThreadId = props.selectedThread.id;
+  const handleAskAboutText = useCallback(
+    (text: string) => {
+      if (sideChatKind === null || !text.trim()) return;
+      Keyboard.dismiss();
+      navigation.navigate("ThreadSideChat", {
+        environmentId: String(sideChatEnvironmentId),
+        threadId: String(sideChatThreadId),
+        kind: sideChatKind,
+        quote: text,
+      });
+    },
+    [navigation, sideChatEnvironmentId, sideChatKind, sideChatThreadId],
+  );
+
   // Gliding to the end from far up renders every row it passes at once, a 200-400 ms stall
   // right after the tap. Landing instantly instead leaves the rows above unmeasured, so the
   // next fling back up stutters. Jump to about one screen above the end, then glide the rest.
@@ -1495,6 +1602,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   ? undefined
                   : handleQuoteMessage
               }
+              onCiteAssistantText={
+                isProviderSubagent || composerSlotHidden || !props.canOperateThread
+                  ? undefined
+                  : handleCiteAssistantText
+              }
+              onAskAboutText={
+                isProviderSubagent || sideChatKind === null || !props.canOperateThread
+                  ? undefined
+                  : handleAskAboutText
+              }
               contentPresentation={props.contentPresentation}
               showLoadingPlaceholder={showLoadingPlaceholder}
               agentLabel={agentLabel}
@@ -1503,7 +1620,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               threadTitle={props.selectedThread.title}
               draftKey={props.composerDraftKey}
               canOperateMessage={
-                props.canOperateThread && !isProviderSubagent && !composerSlotHidden
+                props.canOperateThread &&
+                !isProviderSubagent &&
+                !composerSlotHidden &&
+                parkedBot === null
               }
               supportsRollback={
                 agentProvider !== undefined && agentProvider.supportsConversationRollback !== false
@@ -1516,8 +1636,26 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               rewindInProgress={rewinding}
               onRewindingChange={setRewinding}
               latestRun={props.activityRun}
+              runs={props.runs}
               activeWorkStartedAt={props.activeWorkStartedAt}
               runlessWorkActive={props.runlessWorkActive ?? false}
+              botChat={chatBot !== null}
+              emptyState={
+                chatBot === null ? undefined : (
+                  <BotEmptyState
+                    entry={chatBot}
+                    disabled={!props.canOperateThread}
+                    onStarter={
+                      parkedBot !== null
+                        ? null
+                        : (starter) => {
+                            props.onChangeDraftMessage(starter);
+                            void handleSendMessage();
+                          }
+                    }
+                  />
+                )
+              }
               listRef={listRef}
               freeze={freeze}
               anchorMessageId={anchorMessageId}
@@ -1614,6 +1752,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   onOpenAgents={openAgentsSheet}
                   queuedCount={queuedCount}
                   queueHeld={queueHeld}
+                  teamBoard={
+                    discord || boardPill === null ? null : { ...boardPill, onPress: openTeamBoard }
+                  }
                   onOpenQueue={() => {
                     Keyboard.dismiss();
                     navigation.navigate("ThreadQueue", {
@@ -1747,7 +1888,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
 
                 {/* Keep the same editor visible through question transitions. */}
                 <View style={composerSlotHidden ? { display: "none" } : undefined}>
-                  {isProviderSubagent || parentAnswersQuestion ? (
+                  {isProviderSubagent || parentAnswersQuestion || parkedBot !== null ? (
                     <View
                       className="self-center px-3 pt-1.5"
                       style={{
@@ -1756,7 +1897,18 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                         paddingBottom: composerBottomInset + 6,
                       }}
                     >
-                      {parentAnswersQuestion ? (
+                      {parkedBot !== null ? (
+                        <BotsOffBar
+                          entry={parkedBot}
+                          onOpenSettings={() =>
+                            navigation.navigate("SettingsSheet", {
+                              screen: "SettingsContent",
+                              // Keep Settings beneath Bots so the sheet has a way back and out.
+                              params: { screen: "SettingsBots", initial: false },
+                            })
+                          }
+                        />
+                      ) : parentAnswersQuestion ? (
                         <DelegatedQuestionBar
                           onOpenParent={
                             props.selectedThread.lineage.parentThreadId === null
@@ -1822,7 +1974,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                         draftMessage={props.draftMessage}
                         draftAttachments={props.draftAttachments}
                         placeholder={
-                          props.activePendingUserInput ? "Or type your own answer…" : "Reply…"
+                          props.activePendingUserInput
+                            ? "Or type your own answer…"
+                            : bot !== null
+                              ? botComposerPlaceholder(bot.bot.name)
+                              : "Reply…"
                         }
                         pendingAnswer={
                           props.activePendingUserInput && !parentAnswersQuestion

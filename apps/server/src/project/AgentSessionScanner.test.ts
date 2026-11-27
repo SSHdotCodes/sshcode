@@ -1243,7 +1243,7 @@ it.layer(layerTest)("AgentSessionScanner", (it) => {
       }),
     );
 
-    it.effect("excludes sandboxes reached through a symlink into the worktrees dir", () =>
+    it.effect("excludes sandboxes when both the recorded cwd and configured base are aliases", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
@@ -1257,14 +1257,20 @@ it.layer(layerTest)("AgentSessionScanner", (it) => {
         const worktreeCwd = path.join(configBaseDir, "worktrees", "t3code", "wt-3");
         yield* fileSystem.makeDirectory(worktreeCwd, { recursive: true });
         const symlinkCwd = path.join(linkParent, "innocent-project");
+        const symlinkBase = path.join(linkParent, "configured-base");
         yield* fileSystem.symlink(worktreeCwd, symlinkCwd);
+        yield* fileSystem.symlink(configBaseDir, symlinkBase);
         yield* writeTranscript({
           filePath: path.join(claudeHomePath, "projects", "-slug", "a.jsonl"),
           contents: claudeSessionLine(symlinkCwd),
           mtimeMs: Date.parse("2026-01-01T00:00:00.000Z"),
         });
 
-        const result = yield* runScan({ claudeHomePath, codexHomePath, configBaseDir });
+        const result = yield* runScan({
+          claudeHomePath,
+          codexHomePath,
+          configBaseDir: symlinkBase,
+        });
 
         expect(result.candidates).toEqual([]);
       }),

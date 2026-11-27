@@ -17,6 +17,9 @@ describe("commandProgramName", () => {
     ["/bin/bash --rcfile /tmp/config -c 'git status'", "git"],
     ["sh -ec 'node scripts/check.js'", "node"],
     ["fish --command 'rg --files'", "rg"],
+    ['bash -lc -- "printf ok"', "printf"],
+    // fish runs `--` itself as the script; "printf ok" is a positional argument
+    ['fish -c -- "printf ok"', "--"],
     ["zsh -lc 'CI=1 env -u DEBUG sudo -u root vp test run'", "vp"],
     ["env CI=1 /bin/zsh -lc '\"/Applications/My Tools/bin/check\" --verbose'", "check"],
     ["bash -lc \"zsh -c 'git status'\"", "git"],
@@ -47,6 +50,7 @@ describe("commandProgramName", () => {
   it.each([
     "",
     "zsh -lc",
+    "bash -c --",
     "zsh -lc ''",
     "zsh -lc 'git status",
     "zsh -lc 'env'",
@@ -537,6 +541,16 @@ describe("commands recorded from each provider", () => {
   });
 });
 
+describe("commandDisplayText with shell option terminators", () => {
+  it.each([
+    ['bash -lc -- "printf ok"', "printf ok"],
+    ['fish -c -- "printf ok"', 'fish -c -- "printf ok"'],
+    ['bash -c -- "printf ok" arg0', 'bash -c -- "printf ok" arg0'],
+  ])("shows %j as %j", (input, expected) => {
+    expect(commandDisplayText(input)).toBe(expected);
+  });
+});
+
 describe("commandDisplayText with redacted Codex commands", () => {
   // Codex replaces secrets in command text before sending it
   // (codex-rs/secrets/src/sanitizer.rs). Usually the quoting survives.
@@ -564,6 +578,15 @@ describe("commandDisplayText control characters", () => {
     ["echo bell\u0007 delete\u007f", "echo bell␇ delete␡"],
     ["printf 'a\\tb'\r\necho done", "printf 'a\\tb'\r\necho done"],
     ["cat <<'EOF'\n\tindented\nEOF", "cat <<'EOF'\n\tindented\nEOF"],
+  ])("shows %j as %j", (input, expected) => {
+    expect(commandDisplayText(input)).toBe(expected);
+  });
+});
+
+describe("commandDisplayText with shell executable casing", () => {
+  it.each([
+    ['Bash.exe -lc "git status"', "git status"],
+    ['"C:\\Program Files\\Git\\bin\\Bash.exe" -lc "rg foo"', "rg foo"],
   ])("shows %j as %j", (input, expected) => {
     expect(commandDisplayText(input)).toBe(expected);
   });

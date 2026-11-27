@@ -22,6 +22,7 @@ interface MarkdownRendererOptions {
 // An element and the hast it keeps hold about 20 bytes per source character, so ~10 MB.
 const MAX_CACHED_CHARS = 500_000;
 const rendered = new Map<string, ReactElement>();
+const markdownUrlAttributes = Object.entries(urlAttributes);
 let cachedChars = 0;
 let nextRendererId = 0;
 
@@ -65,7 +66,7 @@ export function createMarkdownRenderer({
         return;
       }
       if (child.type === "element") {
-        for (const [key, tags] of Object.entries(urlAttributes)) {
+        for (const [key, tags] of markdownUrlAttributes) {
           if (
             Object.hasOwn(child.properties, key) &&
             (tags === null || tags.includes(child.tagName))

@@ -242,8 +242,12 @@ delete it like other inline context. Copying, reloading, and restoring a
 with its quote, and sending tells the agent which words were quoted and which comment you wrote.
 The quoted text and comment count toward the message limit.
 
-Mobile displays saved quotes and comments, but does not create citations or
-navigate to their sources.
+On iPhone, long-press an assistant response, adjust the selection, and choose
+**Cite** to put the quote at the composer cursor. If the passage appears more than once
+and the app can't tell which one you selected, it asks. Tap the quote's chip to add a
+comment, remove it, or choose **Show in chat** to jump to the source. Sent quotes appear
+as cards in your message; tap one to read it in full. Choose **Side chat** instead of
+**Cite** to ask a side question about the selection without changing your draft.
 
 ## Recall a sent prompt
 

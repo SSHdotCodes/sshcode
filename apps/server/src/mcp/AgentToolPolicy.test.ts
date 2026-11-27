@@ -1,9 +1,11 @@
 import { XPostToolkit } from "./toolkits/xPost/tools.ts";
+import { CardToolkit } from "./toolkits/cards/tools.ts";
 import { setWorkflowsBetaEnabled } from "../workflows/workflowsBeta.ts";
 import { WorkflowToolkit } from "./toolkits/workflows/tools.ts";
 import { DebugToolkit } from "./toolkits/debug/tools.ts";
 import { QaSandbox } from "../preview/QaSandbox.ts";
 import { ModelPreferencesToolkit } from "./toolkits/modelPreferences/tools.ts";
+import { ProgressToolkit } from "./toolkits/progress/tools.ts";
 import { ComputerToolkit } from "./toolkits/computer/tools.ts";
 import { expect, it } from "@effect/vitest";
 import {
@@ -102,15 +104,20 @@ const previewLayer = (tools: Readonly<Record<string, boolean>> = {}) =>
   );
 
 const agentToolListVisible = (
-  ...args: Parameters<typeof listVisible> extends [...infer A, unknown] ? A : never
-) => listVisible(...args, chatControls);
+  policy: Parameters<typeof listVisible>[0],
+  name: Parameters<typeof listVisible>[1],
+  scope: Parameters<typeof listVisible>[2],
+  behavior?: Parameters<typeof listVisible>[4],
+) => listVisible(policy, name, scope, chatControls, behavior);
 
 it("derives the agent catalog from the registered toolkits", () => {
   const names = agentToolCatalog.map((tool) => tool.name);
   expect(names).toEqual([
     ...namesIn(OrchestratorToolkit),
+    ...namesIn(CardToolkit),
     ...namesIn(WorkflowToolkit),
     ...namesIn(ModelPreferencesToolkit),
+    ...namesIn(ProgressToolkit),
     ...namesIn(XPostToolkit),
     ...namesIn(DebugToolkit),
     ...namesIn(PendingRequestToolkit),

@@ -25,6 +25,7 @@ import {
   formatSearchToolLabel,
 } from "@t3tools/shared/toolActivity";
 import type { HtmlRenderReference } from "@t3tools/shared/htmlRender";
+import { cardFromToolItem, type AgentCardToolPresentation } from "@t3tools/shared/cards";
 import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
 import { monitorNotificationLabel } from "@t3tools/client-runtime/work-log/monitor-notification";
 import { resumedRestartNoticeIds } from "@t3tools/client-runtime/work-log/restart-notice";
@@ -149,6 +150,16 @@ export type TimelineEntry = (
       readonly createdAt: string;
       readonly runId: RunId | null;
       readonly htmlRender: HtmlRenderReference;
+    }
+  | {
+      /** A native interactive card rendered from a `show_card` tool call. */
+      readonly id: string;
+      readonly kind: "agent-card";
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly sourceThreadId: ThreadId;
+      readonly itemId: TurnItemId;
+      readonly card: AgentCardToolPresentation;
     }
   | {
       /** An MCP App a completed tool call captured, hosted where the call happened. */
@@ -736,6 +747,21 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
         kind: "proposed-plan",
         createdAt,
         proposedPlan,
+        ...attemptMetadata,
+      });
+      continue;
+    }
+
+    const agentCard = item.type === "dynamic_tool" ? cardFromToolItem(item) : undefined;
+    if (agentCard !== undefined) {
+      entries.push({
+        id: item.id,
+        kind: "agent-card",
+        createdAt,
+        runId: item.runId,
+        sourceThreadId: row.sourceThreadId,
+        itemId: row.sourceItemId,
+        card: agentCard,
         ...attemptMetadata,
       });
       continue;

@@ -1,7 +1,6 @@
 import { useNowMinuteMs } from "../../hooks/useNowMinute";
 import { accountPinAfterPick } from "@t3tools/client-runtime/account-routes";
 import { scheduledMessageUnavailableReason } from "@t3tools/client-runtime/scheduled-message";
-import { scheduledMessageLocalDateTime } from "@t3tools/client-runtime/scheduled-message";
 import { useAtomValue } from "@effect/atom-react";
 import {
   CopyIcon,
@@ -67,9 +66,9 @@ import { readEnvironmentScope } from "~/state/session";
 import { useSettingsScope } from "./SettingsScopeContext";
 import {
   SCHEDULED_TASK_WEEKDAY_LABELS as WEEKDAY_LABELS,
+  createEmptyDraft,
   relativeLabel,
   scheduleLabel,
-  WEBHOOK_SIGNATURE_DEFAULTS,
   matchesScheduledTaskScope,
   scheduleFromDraft,
   scheduledTaskModelSelection,
@@ -115,34 +114,6 @@ const WORKSPACE_MODE_LABELS: Record<WorkspaceMode, string> = {
   worktree: "Create a new worktree",
   root: "Use the project checkout",
   existing_worktree: "Use a specific checkout",
-};
-
-const EMPTY_DRAFT: DraftState = {
-  editingId: null,
-  title: "",
-  prompt: "",
-  enabled: true,
-  scheduleMode: "fixed",
-  intervalMinutes: "15",
-  timeOfDay: "09:00",
-  onceAt: scheduledMessageLocalDateTime(Date.now() + 3_600_000),
-  prepareWorkspace: false,
-  weekdays: new Set([1, 2, 3, 4, 5]),
-  projectId: "",
-  threadId: "",
-  workspaceMode: "worktree",
-  baseRef: "main",
-  startFromOrigin: true,
-  existingWorktreePath: "",
-  modelKey: "",
-  accountPinned: false,
-  runtimeMode: "full-access",
-  interactionMode: "default",
-  baseModelSelection: null,
-  signatureEnabled: false,
-  ...WEBHOOK_SIGNATURE_DEFAULTS,
-  signatureSecret: "",
-  maxDeliveryAgeMinutes: "",
 };
 
 /** Labelled field: a caption sitting above its control. */
@@ -922,7 +893,7 @@ function ScheduledTaskEditorDialog({
     label: "scheduled task upsert",
   });
   const [draft, setDraft] = useState<DraftState>(() =>
-    task ? taskToDraft(task) : { ...EMPTY_DRAFT, projectId: projects[0]?.id ?? "" },
+    task ? taskToDraft(task) : createEmptyDraft(projects[0]?.id ?? ""),
   );
   const [saving, setSaving] = useState(false);
   const submissionPending = useRef(false);

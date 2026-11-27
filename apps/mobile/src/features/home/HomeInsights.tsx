@@ -5,6 +5,7 @@
  * colour. Everything but the week's work comes from data the phone already holds; that
  * one asks the server only once the section is on screen.
  */
+import { useWithoutBotThreads } from "../bots/state";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
 import { PROVIDER_DISPLAY_NAMES, type UsageProviderKind } from "@t3tools/contracts";
@@ -180,7 +181,7 @@ export function useHarnessResolver() {
  * chats (a turn finishing, a title) change nothing Insights shows.
  */
 export function useHomeInsights() {
-  const threads = useThreadShells();
+  const threads = useWithoutBotThreads(useThreadShells());
   const resolver = useHarnessResolver();
   const now = Date.now();
   const today = localDayOrdinal(now);
@@ -1174,7 +1175,10 @@ export const HomeInsights = memo(function HomeInsights({ revealed }: { revealed:
     navigation.navigate(
       ...([
         "SettingsSheet",
-        { screen: "SettingsContent", params: { screen: "SettingsUsage", params: { tab } } },
+        {
+          screen: "SettingsContent",
+          params: { screen: "SettingsUsage", initial: false, params: { tab } },
+        },
       ] as never),
     );
   if (!revealed) {

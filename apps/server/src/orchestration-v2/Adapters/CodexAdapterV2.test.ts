@@ -1,6 +1,7 @@
 import * as NodeOS from "node:os";
 
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
+import { registerAgentBehavior } from "@t3tools/provider-core/server/orchestrationInstructions";
 import {
   makeProviderTextDeltaCoalescer,
   type ProviderTextDeltaUpdate,
@@ -11,6 +12,7 @@ import {
   CheckpointId,
   ContextHandoffId,
   CodexSettings,
+  DEFAULT_AGENT_BEHAVIOR,
   EnvironmentId,
   MessageId,
   type ModelSelection,
@@ -789,6 +791,17 @@ describe("CodexAdapterV2 process spawning", () => {
         },
       },
     );
+
+    try {
+      registerAgentBehavior(() => ({ ...DEFAULT_AGENT_BEHAVIOR, subagents: "none" }));
+      const noneParams = CodexAdapterV2.codexThreadRuntimeParams({
+        chatId: threadId,
+        mcpSession,
+      });
+      assert.equal(noneParams.config["agents.enabled"], false);
+    } finally {
+      registerAgentBehavior(() => DEFAULT_AGENT_BEHAVIOR);
+    }
   });
 
   it.effect("resolves Windows command shims through the shared spawn policy", () =>
@@ -4020,6 +4033,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 item: { type: "reasoning", id: "reasoning-2", summary: [], content: [] },
                 startedAtMs: 12_100,
               },
+            ],
+            [
+              12_150,
+              "item/reasoning/summaryTextDelta",
+              { itemId: "reasoning-2", summaryIndex: 0, delta: "A summary" },
             ],
             [
               12_200,

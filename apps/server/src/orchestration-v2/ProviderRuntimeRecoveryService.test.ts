@@ -908,9 +908,19 @@ it.effect(
       turnItems: [
         {
           id: TurnItemId.make("turn_item_recovery_cancel"),
+          type: "assistant_message",
           runId,
           nodeId: rootNodeId,
           status: "running",
+          streaming: true,
+        },
+        {
+          id: TurnItemId.make("turn_item_recovery_reasoning"),
+          type: "reasoning",
+          runId,
+          nodeId: rootNodeId,
+          status: "running",
+          streaming: true,
         },
       ],
     } as unknown as OrchestrationV2ThreadProjection;
@@ -969,6 +979,7 @@ it.effect(
           ["provider-turn.updated", "cancelled"],
           ["message.updated", null],
           ["turn-item.updated", "cancelled"],
+          ["turn-item.updated", "cancelled"],
           ["turn-item.updated", "completed"],
           ["provider-thread.updated", "idle"],
           ["provider-session.updated", "stopped"],
@@ -976,6 +987,16 @@ it.effect(
       );
       const messageEvent = events.find((event) => event.type === "message.updated");
       assert.isFalse(messageEvent?.type === "message.updated" && messageEvent.payload.streaming);
+      const textItems = events.flatMap((event) =>
+        event.type === "turn-item.updated" &&
+        (event.payload.type === "assistant_message" || event.payload.type === "reasoning")
+          ? [[event.payload.type, event.payload.streaming]]
+          : [],
+      );
+      assert.deepEqual(textItems, [
+        ["assistant_message", false],
+        ["reasoning", false],
+      ]);
       const notice = events.find(
         (event) => event.type === "turn-item.updated" && event.payload.type === "system_notice",
       );

@@ -2,7 +2,7 @@ import { ApiKeyExpiryPicker } from "./ApiKeyExpiryPicker";
 import { useAtomValue } from "@effect/atom-react";
 import type { ApiKeyScope } from "@t3tools/contracts";
 import {
-  SECRET_REQUEST_DEFAULT_PLACEHOLDER,
+  secretRequestInputs,
   secretRequestPrivacyNote,
   secretRequestAnswerInput,
   secretRequestDisplay,
@@ -15,7 +15,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
 import { useRef, useState } from "react";
-import { Pressable, View, type ColorValue } from "react-native";
+import { Pressable, View, type ColorValue, type TextInputInstance } from "react-native";
 
 import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
@@ -70,6 +70,10 @@ function PendingSecretRequestForm(props: {
   readonly iconColor: ColorValue;
 }) {
   const { item } = props;
+  const inputs = secretRequestInputs(item);
+  // A credential in parts gets a small label over each of its stacked inputs.
+  const inParts = item.fields !== undefined;
+  const inputRefs = useRef<Array<TextInputInstance | null>>([]);
   const answer = useAtomCommand(serverEnvironment.answerSecretRequest, {
     label: "answer secret request",
     // The failure cause holds the request; keep it out of the console.
@@ -87,18 +91,20 @@ function PendingSecretRequestForm(props: {
       ? openedAt + 30 * 86_400_000
       : item.apiKey.suggestedExpiresAt,
   );
-  const [secret, setSecret] = useState("");
+  const [values, setValues] = useState<ReadonlyArray<string>>(() => inputs.map(() => ""));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Submit then a tap can both run before a re-render; this guard is synchronous.
   const inFlight = useRef(false);
 
-  const send = async (
-    reply: { readonly type: "save"; readonly secret: string } | { readonly type: "decline" },
-  ) => {
+  const send = async (reply: { readonly type: "save" } | { readonly type: "decline" }) => {
     const input = secretRequestAnswerInput(
       item,
-      reply.type === "save" && item.apiKey !== undefined ? { ...reply, scope, expiresAt } : reply,
+      reply.type === "decline"
+        ? reply
+        : item.apiKey !== undefined
+          ? { type: "save", values, scope, expiresAt }
+          : { type: "save", values },
     );
     if (input === null || inFlight.current || !allowed) return;
     if (
@@ -119,7 +125,7 @@ function PendingSecretRequestForm(props: {
     });
     if (result._tag === "Success") {
       // The card switches to its answered row once the item updates.
-      setSecret("");
+      setValues(inputs.map(() => ""));
       setRevealed(false);
       return;
     }
@@ -141,22 +147,42 @@ function PendingSecretRequestForm(props: {
           <Text className="font-sans text-sm leading-5 text-foreground-muted">{item.reason}</Text>
         ) : null}
       </View>
-      <TextInput
-        accessibilityLabel={item.label}
-        placeholder={item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
-        value={secret}
-        onChangeText={setSecret}
-        editable={!submitting && allowed}
-        secureTextEntry={!revealed}
-        autoCorrect={false}
-        autoCapitalize="none"
-        autoComplete="off"
-        textContentType="none"
-        importantForAutofill="no"
-        spellCheck={false}
-        returnKeyType="done"
-        onSubmitEditing={() => void send({ type: "save", secret })}
-      />
+      {inputs.map((input, index) => {
+        const last = index === inputs.length - 1;
+        return (
+          // oxlint-disable-next-line react/no-array-index-key -- A card's parts never reorder.
+          <View key={index} className={inParts ? "gap-1.5" : undefined}>
+            {inParts ? (
+              <Text className="font-sans text-xs text-foreground-muted">{input.label}</Text>
+            ) : null}
+            <TextInput
+              ref={(node) => {
+                inputRefs.current[index] = node;
+              }}
+              accessibilityLabel={inParts ? input.label : item.label}
+              placeholder={input.placeholder}
+              value={values[index] ?? ""}
+              onChangeText={(value) =>
+                setValues((current) => current.map((old, at) => (at === index ? value : old)))
+              }
+              editable={!submitting && allowed}
+              secureTextEntry={!revealed}
+              autoCorrect={false}
+              autoCapitalize="none"
+              autoComplete="off"
+              textContentType="none"
+              importantForAutofill="no"
+              spellCheck={false}
+              // Return moves to the next part and keeps the keyboard up; the last one saves.
+              returnKeyType={last ? "done" : "next"}
+              submitBehavior={last ? "blurAndSubmit" : "submit"}
+              onSubmitEditing={() =>
+                last ? void send({ type: "save" }) : inputRefs.current[index + 1]?.focus()
+              }
+            />
+          </View>
+        );
+      })}
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={revealed ? "Hide key" : "Reveal key"}
@@ -210,10 +236,10 @@ function PendingSecretRequestForm(props: {
         disabled={
           submitting ||
           !allowed ||
-          secret.trim().length === 0 ||
+          values.some((value) => value.trim().length === 0) ||
           (item.apiKey !== undefined && expiresAt !== null && expiresAt <= openedAt)
         }
-        onPress={() => void send({ type: "save", secret })}
+        onPress={() => void send({ type: "save" })}
       />
       <View className="flex-row items-center justify-between gap-2">
         <View className="flex-1 flex-row items-center gap-1.5">

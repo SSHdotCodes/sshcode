@@ -21,6 +21,7 @@ import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { UseInAnotherAppDialogHost } from "../components/mcp/UseInAnotherAppDialog";
 import { CommandPalette } from "../components/CommandPalette";
 import { CustomSnoozeDialogHost } from "../components/CustomSnoozeDialog";
+import { BotDialogsHost } from "../components/bots/SendToBotDialog";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { KeybindingsConfigWarning } from "../components/KeybindingsConfigWarning";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
@@ -220,6 +221,7 @@ function RootRouteView() {
           <FontAppearanceSync />
           <ProviderAuthCallbackCoordinator />
           <CustomSnoozeDialogHost />
+          <BotDialogsHost />
           <UseInAnotherAppDialogHost />
           <CommandPalette>
             <AppSidebarLayout>
@@ -282,6 +284,7 @@ function RootRouteView() {
           <ReopenClosedViewShortcut />
           <ConfirmDialogHost />
           <CustomSnoozeDialogHost />
+          <BotDialogsHost />
           <UseInAnotherAppDialogHost />
           <SlowRpcRequestToastCoordinator />
           <PermissionUpdateNotice />

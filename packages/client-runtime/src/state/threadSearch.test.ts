@@ -12,6 +12,7 @@ import { expect, it } from "vite-plus/test";
 import {
   createThreadSearchResultsAtomFamily,
   makeThreadSearchKey,
+  threadSearchContextTerms,
   threadSearchMatchKey,
 } from "./threadSearch.ts";
 
@@ -207,4 +208,92 @@ it("appends another page without replacing earlier results or duplicating chats"
   } finally {
     registry.dispose();
   }
+});
+
+it("orders about matches and passing mentions across environments and later pages", () => {
+  const hit = (id: string, about: boolean, activityAt: string) => ({
+    threadId: ThreadId.make(id),
+    projectId: ProjectId.make("project"),
+    source: "user" as const,
+    snippet: "BetterWright",
+    messageCreatedAt: null,
+    about,
+    activityAt,
+  });
+  const archivePage = {
+    names: { score: 1, archived: 0, updatedAt: "", threadId: ThreadId.make("old-title") },
+  };
+  const envOld = Atom.make(
+    AsyncResult.success<OrchestrationSearchThreadsResult>({
+      matches: [hit("old-title", true, "2026-10-20T12:00:00.000Z")],
+      nextCursor: archivePage,
+    }),
+  );
+  const envRecent = Atom.make(
+    AsyncResult.success<OrchestrationSearchThreadsResult>({
+      matches: [
+        hit("wanted", true, "2026-11-25T12:00:00.000Z"),
+        hit("fifteen-minutes", false, "2026-11-27T11:45:00.000Z"),
+      ],
+    }),
+  );
+  const more = Atom.make(
+    AsyncResult.success<OrchestrationSearchThreadsResult>({
+      matches: [hit("nine-minutes", false, "2026-11-27T11:51:00.000Z")],
+    }),
+  );
+  const family = createThreadSearchResultsAtomFamily({
+    getSearchAtom: (id, _query, cursor) => (cursor ? more : id === envA ? envOld : envRecent),
+    labelPrefix: "test:search-tiers",
+  });
+  const registry = AtomRegistry.make();
+  try {
+    const search = family(makeThreadSearchKey([envA, envB], "betterwright"));
+    const unmount = registry.mount(search);
+    const ids = () => registry.get(search).matches.map((match) => match.threadId);
+    expect(ids()).toEqual(["wanted", "old-title", "fifteen-minutes"]);
+    registry.get(search).pagination?.loadMore();
+    expect(ids()).toEqual(["wanted", "old-title", "nine-minutes", "fifteen-minutes"]);
+    unmount();
+  } finally {
+    registry.dispose();
+  }
+});
+
+it("uses scratch folder words, and project names only for a real repository", () => {
+  const scratch = { title: "No project", workspaceRoot: "/Users/me/.t3/scratch" };
+  expect(
+    threadSearchContextTerms(
+      {
+        title: "Review Pi Prompt Parts Change",
+        worktreePath: "/Users/me/.t3/scratch/2026-11-25-https-github-com-betterwright-c44ee162",
+      },
+      scratch,
+    ),
+  ).toEqual(["Review Pi Prompt Parts Change", "https-github-com-betterwright"]);
+  expect(
+    threadSearchContextTerms(
+      {
+        title: "Fix search",
+        worktreePath: "/Users/me/code/app-worktrees/search-order",
+        branch: "t3/search",
+      },
+      {
+        title: "sshcode",
+        workspaceRoot: "/Users/me/code/sshcode",
+        repositoryIdentity: {
+          canonicalKey: "github.com/sshdotcodes/sshcode",
+          displayName: "sshcode",
+        },
+      } as Parameters<typeof threadSearchContextTerms>[1],
+    ),
+  ).toEqual([
+    "Fix search",
+    "search-order",
+    "t3/search",
+    "sshcode",
+    "sshcode",
+    "github.com/sshdotcodes/sshcode",
+    "sshcode",
+  ]);
 });

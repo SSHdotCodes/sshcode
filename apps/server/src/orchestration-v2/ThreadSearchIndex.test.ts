@@ -18,12 +18,119 @@ const threads = ["one", "two", "three"].map((threadId) => ({
   projectId: "project",
   title: `Chat ${threadId}`,
   archived: threadId === "three",
+  activityAt: threadId === "two" ? "2026-10-27T02:00:00.000Z" : "2026-10-27T01:00:00.000Z",
 }));
 
-it.effect("continues beyond the message window and stops at the last posting", () =>
+it.effect("finds chats about BetterWright above newer passing mentions across pages", () =>
   Effect.gen(function* () {
     const index = yield* openSearchIndex(":memory:");
-    yield* index.syncThreads(threads);
+    const cases = [
+      ["old-title", "Review and Fix BetterWright Issues", "2026-10-20T12:00:00.000Z"],
+      ["prompt-parts", "Review Pi Prompt Parts Change", "2026-11-25T12:00:00.000Z"],
+      ["chromium", "Update BetterChromium Security Fixes", "2026-11-01T12:00:00.000Z"],
+      ["workspace-only", "Workspace check", "2026-10-19T12:00:00.000Z"],
+      ["one-day", "Follow up", "2026-11-26T12:00:00.000Z"],
+      ["nine-minutes", "Investigate formatting", "2026-11-27T11:51:00.000Z"],
+      ["fifteen-minutes", "Review releases", "2026-11-27T11:45:00.000Z"],
+    ];
+    yield* index.syncThreads(
+      cases.map(([threadId, title, activityAt]) => ({
+        threadId: threadId!,
+        projectId: "project",
+        title: title!,
+        archived: false,
+        activityAt: activityAt!,
+        context:
+          threadId === "prompt-parts" || threadId === "workspace-only"
+            ? ["https-github-com-betterwright-betterwright"]
+            : [],
+        firstUserMessageId: `${threadId}:opening`,
+      })),
+    );
+    yield* index.upsert([
+      doc("nine-minutes:mention", "nine-minutes", "A reference to BetterWright in passing."),
+      doc(
+        "prompt-parts:opening",
+        "prompt-parts",
+        "https://github.com/BetterWright/BetterWright/pull/23",
+      ),
+      doc("chromium:opening", "chromium", "Check the BetterWright release for this change."),
+      doc("fifteen-minutes:mention", "fifteen-minutes", "BetterWright BetterWright BetterWright"),
+      doc("one-day:mention", "one-day", "See BetterWright for an example."),
+    ]);
+    const first = yield* index.keyword("betterwright", 3);
+    assert.deepEqual(
+      first.matches.map((match) => match.threadId),
+      ["prompt-parts", "chromium", "old-title"],
+    );
+    assert.equal(first.matches[0]?.messageId, "prompt-parts:opening");
+    const second = yield* index.keyword("betterwright", 3, first.nextCursor);
+    assert.deepEqual(
+      second.matches.map((match) => match.threadId),
+      ["workspace-only", "nine-minutes", "fifteen-minutes"],
+    );
+    const third = yield* index.keyword("betterwright", 3, second.nextCursor);
+    assert.deepEqual(
+      third.matches.map((match) => match.threadId),
+      ["one-day"],
+    );
+    assert.isUndefined(third.nextCursor);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("ignores a workspace name most chats share when ranking chats about a term", () =>
+  Effect.gen(function* () {
+    const index = yield* openSearchIndex(":memory:");
+    const scratch = Array.from({ length: 30 }, (_, i) => ({
+      threadId: `scratch-${i}`,
+      projectId: "project",
+      title: `Scratch chat ${i}`,
+      archived: false,
+      activityAt: `2026-11-27T10:${String(i).padStart(2, "0")}:00.000Z`,
+      context: ["No project", "scratch"],
+      firstUserMessageId: null,
+    }));
+    yield* index.syncThreads([
+      ...scratch,
+      {
+        threadId: "titled",
+        projectId: "project",
+        title: "Project cleanup",
+        archived: false,
+        activityAt: "2026-11-01T12:00:00.000Z",
+        context: ["No project", "scratch"],
+        firstUserMessageId: null,
+      },
+      {
+        threadId: "mention",
+        projectId: "project",
+        title: "Follow up",
+        archived: false,
+        activityAt: "2026-11-20T12:00:00.000Z",
+        context: ["No project", "scratch"],
+        firstUserMessageId: null,
+      },
+    ]);
+    yield* index.upsert([doc("mention:reply", "mention", "The project layout is fine.")]);
+    const result = yield* index.keyword("project", 10);
+    assert.deepEqual(
+      result.matches.map((match) => match.threadId),
+      ["titled", "mention"],
+    );
+    assert.deepEqual(
+      result.matches.map((match) => match.about),
+      [true, false],
+    );
+  }).pipe(Effect.scoped),
+);
+
+it.effect("finds an old posting for the most active chat despite a prolific older chat", () =>
+  Effect.gen(function* () {
+    const index = yield* openSearchIndex(":memory:");
+    yield* index.syncThreads([
+      { ...threads[0]!, activityAt: "2026-10-29T00:00:00.000Z" },
+      ...threads.slice(1),
+    ]);
     yield* index.upsert([
       doc("older", "one", "distinctivekeyword"),
       ...Array.from({ length: 1536 }, (_, index) =>
@@ -31,22 +138,22 @@ it.effect("continues beyond the message window and stops at the last posting", (
       ),
       doc("prefix", "three", "distinctivekeywords"),
     ]);
-    const first = yield* index.keyword("distinctivekeyword");
+    const first = yield* index.keyword("distinctivekeyword", 1);
     assert.deepEqual(
       first.matches.map((hit) => hit.threadId),
-      [ThreadId.make("two")],
+      [ThreadId.make("one")],
     );
-    assert.isDefined(first.nextCursor?.exact);
+    assert.isDefined(first.nextCursor);
     const second = yield* index.keyword("distinctivekeyword", 50, first.nextCursor);
     assert.deepEqual(
       second.matches.map((hit) => hit.threadId),
-      [ThreadId.make("one"), ThreadId.make("three")],
+      [ThreadId.make("two"), ThreadId.make("three")],
     );
     assert.isUndefined(second.nextCursor);
   }).pipe(Effect.scoped),
 );
 
-it.effect("retrieves an old exact phrase ahead of more than a window of loose prefixes", () =>
+it.effect("retrieves a recent prefix before an old exact phrase across pages", () =>
   Effect.gen(function* () {
     const index = yield* openSearchIndex(":memory:");
     yield* index.syncThreads(threads);
@@ -57,13 +164,13 @@ it.effect("retrieves an old exact phrase ahead of more than a window of loose pr
       ),
     ]);
     const result = yield* index.keyword("red green blue", 1);
-    assert.equal(result.matches[0]?.messageId, "exact");
+    assert.equal(result.matches[0]?.threadId, "two");
     const more = yield* index.keyword("red green blue", 1, result.nextCursor);
-    assert.equal(more.matches[0]?.threadId, "two");
+    assert.equal(more.matches[0]?.messageId, "exact");
   }).pipe(Effect.scoped),
 );
 
-it.effect("ranks an exact message above a one-edit title match", () =>
+it.effect("preserves one-edit corrections alongside literal message matches", () =>
   Effect.gen(function* () {
     const index = yield* openSearchIndex(":memory:");
     yield* index.syncThreads([{ ...threads[0]!, title: "Apply changes" }, threads[1]!]);
@@ -103,19 +210,16 @@ it.effect("continues title results without offering an empty message page", () =
     let page = yield* index.keyword("chat", 1);
     for (let indexOfPage = 0; indexOfPage < threads.length; indexOfPage++) {
       ids.push(page.matches[0]?.threadId);
-      assert.isUndefined(page.nextCursor?.words);
+      assert.lengthOf(page.matches, 1);
       if (!page.nextCursor) break;
       page = yield* index.keyword("chat", 1, page.nextCursor);
     }
-    assert.deepEqual(
-      ids,
-      threads.map(({ threadId }) => ThreadId.make(threadId)),
-    );
+    assert.deepEqual(ids, [ThreadId.make("two"), ThreadId.make("one"), ThreadId.make("three")]);
     assert.isUndefined(page.nextCursor);
   }).pipe(Effect.scoped),
 );
 
-it.effect("ranks phrases, unordered words, identifiers and paths, grouping by chat", () =>
+it.effect("finds phrases, unordered words, identifiers and paths, grouping by chat", () =>
   Effect.gen(function* () {
     const index = yield* openSearchIndex(":memory:");
     yield* index.syncThreads(threads);
@@ -155,13 +259,13 @@ it.effect("finds named chats before message hits and explains model and spelling
         title: "Archive resolver",
         model: "muse-wonder-full",
         harness: "Claude Code",
-        updatedAt: "2026-10-27T00:00:00.000Z",
+        activityAt: "2026-10-27T00:00:00.000Z",
       },
       {
         ...threads[1]!,
         title: "Archive resolver",
         model: "gpt-5.4",
-        updatedAt: "2026-10-28T00:00:00.000Z",
+        activityAt: "2026-10-28T00:00:00.000Z",
       },
       { ...threads[2]!, title: "Release notes" },
     ]);
@@ -326,4 +430,64 @@ it.effect("splits long messages with overlap and returns a bounded matching snip
     assert.include(result.matches[0]?.snippet ?? "", "secret");
     assert.isAtMost(result.matches[0]?.snippet.length ?? 0, 240);
   }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "handles limit 0 cleanly and pages identical-timestamp tiers without drops or duplicates",
+  () =>
+    Effect.gen(function* () {
+      const index = yield* openSearchIndex(":memory:");
+      const sameTime = "2026-11-27T12:00:00.000Z";
+      yield* index.syncThreads([
+        {
+          threadId: "about-b",
+          projectId: "project",
+          title: "Phoenix migration",
+          archived: false,
+          activityAt: sameTime,
+          context: Array.from({ length: 40 }, (_, i) => `ctx-${i}-${"x".repeat(300)}`),
+        },
+        {
+          threadId: "about-a",
+          projectId: "project",
+          title: "Phoenix rollout",
+          archived: false,
+          activityAt: sameTime,
+        },
+        {
+          threadId: "mention-b",
+          projectId: "project",
+          title: "General",
+          archived: false,
+          activityAt: sameTime,
+        },
+        {
+          threadId: "mention-a",
+          projectId: "project",
+          title: "Notes",
+          archived: false,
+          activityAt: sameTime,
+        },
+      ]);
+      yield* index.upsert([
+        doc("m-b", "mention-b", "Mentioned phoenix in passing"),
+        doc("m-a", "mention-a", "Another phoenix mention"),
+      ]);
+
+      // limit 0 must return an empty page with no nextCursor instead of throwing.
+      const zero = yield* index.keyword("phoenix", 0);
+      assert.deepEqual(zero.matches, []);
+      assert.isUndefined(zero.nextCursor);
+
+      // Page size 1 walks both tiers in exact (about DESC, activityAt DESC, threadId ASC) order.
+      const seen: string[] = [];
+      let page = yield* index.keyword("phoenix", 1);
+      for (let step = 0; step < 6; step++) {
+        seen.push(...page.matches.map((m) => m.threadId));
+        if (!page.nextCursor) break;
+        page = yield* index.keyword("phoenix", 1, page.nextCursor);
+      }
+      assert.deepEqual(seen, ["about-a", "about-b", "mention-a", "mention-b"]);
+      assert.isUndefined(page.nextCursor);
+    }).pipe(Effect.scoped),
 );

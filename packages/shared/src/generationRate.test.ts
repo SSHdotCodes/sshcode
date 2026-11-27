@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 
-import { RunAttemptId, RunId } from "@t3tools/contracts";
+import { ProviderDriverKind, RunAttemptId, RunId } from "@t3tools/contracts";
 
 import {
   combineGenerations,
@@ -236,5 +236,46 @@ describe("run rates", () => {
     expect(
       combineGenerations([generation("decode", 400, 2_000, "2026-11-20T12:00:01.000Z"), newest]),
     ).toEqual(newest);
+  });
+
+  it("uses the stored prompt window for a legacy ACP rate that counted hidden reasoning", () => {
+    const runId = RunId.make("run-neon");
+    const attemptId = RunAttemptId.make("attempt-neon");
+    const endedAt = DateTime.formatIso(at(21_818));
+    const persistedTurn = {
+      runAttemptId: attemptId,
+      nativeTurnRef: {
+        driver: ProviderDriverKind.make("antigravity"),
+        nativeId: "neon-turn",
+        strength: "weak",
+      },
+      startedAt: at(0),
+      generation: {
+        basis: "decode",
+        outputTokens: 349,
+        generatingMs: 725,
+        replies: 1,
+        totalOutputTokens: 349,
+        lastReply: { outputTokens: 349, generatingMs: 725, endedAt },
+        updatedAt: endedAt,
+      },
+      turnTokenUsage: {
+        inputTokens: 1_000,
+        outputTokens: 349,
+        reasoningTokens: 258,
+        usageScope: "main_agent",
+        usageStatus: "complete",
+        hasSubagents: false,
+      },
+    } as const;
+    const attempts = [{ id: attemptId, runId }];
+
+    const corrected = generationsByRun(attempts, [persistedTurn]).get(runId);
+    expect(corrected).toMatchObject({ basis: "end-to-end", generatingMs: 21_818 });
+    expect(formatGenerationRate(corrected)).toBe("~16 tok/s");
+    expect(formatGenerationRate(persistedTurn.generation)).toBe("481 tok/s");
+
+    const withoutStart = generationsByRun(attempts, [{ ...persistedTurn, startedAt: null }]);
+    expect(withoutStart.has(runId)).toBe(false);
   });
 });

@@ -740,8 +740,10 @@ export const makeClaudeWorkspaceSnapshots = Effect.fn("makeClaudeWorkspaceSnapsh
     cwd: string,
   ): Effect.fn.Return<ProviderWorkspaceSnapshot, never, FileSystem.FileSystem | Path.Path> {
     if (!claudeSettings.enabled) return machineSnapshot;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const cwdExists = yield* fileSystem.exists(cwd).pipe(Effect.orElseSucceed(() => true));
     const skills = yield* discoverClaudeSkills(claudeSettings, cwd, environment);
-    const slashCommands = yield* Cache.get(commands, cwd);
+    const slashCommands = cwdExists ? yield* Cache.get(commands, cwd) : undefined;
     return {
       ...machineSnapshot,
       skills,
@@ -750,7 +752,7 @@ export const makeClaudeWorkspaceSnapshots = Effect.fn("makeClaudeWorkspaceSnapsh
         CLAUDE_BTW_SLASH_COMMAND,
         ...(slashCommands ?? []),
       ]),
-      slashCommandsPending: slashCommands === undefined,
+      slashCommandsPending: cwdExists && slashCommands === undefined,
     };
   });
   return { snapshot, invalidate: Cache.invalidateAll(commands) };

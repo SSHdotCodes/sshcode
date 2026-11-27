@@ -1095,7 +1095,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             Effect.andThen(
               Effect.suspend(() => {
                 item.flushScheduled = false;
-                return item.completed ? Effect.void : emitStreamItem(turn, item, true);
+                // Gemini sends an empty text part on tool-use steps; publishing it would leave an empty message.
+                return item.completed || item.text.length === 0
+                  ? Effect.void
+                  : emitStreamItem(turn, item, true);
               }),
             ),
             Effect.forkIn(scope),
@@ -1333,6 +1336,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               prompt: task,
               title: agent,
               model: recordString(result, "model") ?? null,
+              nativeType: agent,
               status,
               ...progress,
               result: resultText,

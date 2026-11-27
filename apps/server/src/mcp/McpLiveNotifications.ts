@@ -21,6 +21,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import type * as McpInvocationContext from "./McpInvocationContext.ts";
+import type { ThreadId } from "@t3tools/contracts";
 
 /** Matches Effect's own MCP SSE comment interval. */
 export const MCP_SSE_KEEPALIVE = "15 seconds";
@@ -84,6 +85,7 @@ interface LiveSession {
   readonly protocolVersion: string;
   readonly requestNamespace: string;
   readonly environmentId: string;
+  readonly threadId: ThreadId | undefined;
   listener: Queue.Queue<Uint8Array> | undefined;
   /** Clock millis of the last bind, resume, or disconnect. */
   seenAt: number;
@@ -98,10 +100,7 @@ interface LiveNotificationsOptions {
 
 export type SessionAccess = "absent" | "owned" | "foreign";
 
-const sameScope = (
-  session: LiveSession,
-  scope: McpInvocationContext.McpInvocationScope,
-): boolean =>
+const sameScope = (session: LiveSession, scope: McpInvocationContext.McpInvocationScope): boolean =>
   session.requestNamespace === scope.requestNamespace &&
   session.environmentId === scope.environmentId;
 
@@ -154,6 +153,9 @@ export class McpLiveNotifications extends Context.Service<
 
     /** Wake every idle listener. In-flight POSTs are notified separately. */
     readonly publishToolsListChanged: Effect.Effect<void>;
+    readonly publishToolsListChangedFor: (
+      threadIds: ReadonlyArray<ThreadId>,
+    ) => Effect.Effect<void>;
 
     /**
      * Completes when a listener stream finishes and its slot is cleared.
@@ -286,6 +288,7 @@ const make = (options: LiveNotificationsOptions) =>
             protocolVersion: input.protocolVersion,
             requestNamespace: input.scope.requestNamespace,
             environmentId: input.scope.environmentId,
+            threadId: input.scope.thread?.threadId,
             listener: undefined,
             seenAt,
             order: ++nextOrder,
@@ -367,21 +370,27 @@ const make = (options: LiveNotificationsOptions) =>
         return { sessionId, protocolVersion: decision.protocolVersion, events };
       });
 
-    const publishToolsListChanged = Effect.sync(() => {
-      const queues: Array<Queue.Queue<Uint8Array>> = [];
-      for (const session of sessions.values()) {
-        if (session.listener !== undefined) queues.push(session.listener);
-      }
-      return queues;
-    }).pipe(
-      Effect.flatMap((queues) =>
-        Effect.forEach(
-          queues,
-          (queue) => Queue.offer(queue, listChangedFrame).pipe(Effect.ignoreCause),
-          { discard: true },
+    const publishList = (targets?: ReadonlySet<ThreadId>) =>
+      Effect.sync(() => {
+        const queues: Array<Queue.Queue<Uint8Array>> = [];
+        for (const session of sessions.values()) {
+          if (
+            session.listener !== undefined &&
+            (targets === undefined ||
+              (session.threadId !== undefined && targets.has(session.threadId)))
+          )
+            queues.push(session.listener);
+        }
+        return queues;
+      }).pipe(
+        Effect.flatMap((queues) =>
+          Effect.forEach(
+            queues,
+            (queue) => Queue.offer(queue, listChangedFrame).pipe(Effect.ignoreCause),
+            { discard: true },
+          ),
         ),
-      ),
-    );
+      );
 
     yield* sweep.pipe(Effect.repeat(Schedule.spaced(options.idleTtl)), Effect.forkScoped);
 
@@ -390,7 +399,8 @@ const make = (options: LiveNotificationsOptions) =>
       endSession,
       authorizeExistingSession,
       listen,
-      publishToolsListChanged,
+      publishToolsListChanged: publishList(),
+      publishToolsListChangedFor: (threadIds) => publishList(new Set(threadIds)),
       awaitListenerReleased: Queue.take(releases),
     });
   });

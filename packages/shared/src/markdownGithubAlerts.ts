@@ -18,7 +18,7 @@ interface MarkdownAstNode {
   children?: MarkdownAstNode[];
 }
 
-const GITHUB_ALERT_MARKER = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:\r?\n|$)/i;
+export const GITHUB_ALERT_MARKER = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:\r\n|\r|\n|$)/i;
 
 function readGithubAlert(node: MarkdownAstNode): void {
   if (node.type !== "blockquote") return;
@@ -34,7 +34,7 @@ function readGithubAlert(node: MarkdownAstNode): void {
   // Whether the marker's own line ended inside this text node. Without it, an empty remainder
   // is ambiguous: `[!NOTE]\n**bold**` parses as [text "[!NOTE]\n", strong] — next-line content
   // in a sibling — while `[!NOTE]*aside*` parses the same way minus the newline.
-  const markerEndsItsLine = match[0].endsWith("\n");
+  const markerEndsItsLine = /[\r\n]$/.test(match[0]);
   if (remainder.length > 0) {
     // The quote continues on the next line inside the same text node: keep the paragraph,
     // shed the marker line.

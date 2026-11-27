@@ -349,15 +349,14 @@ const refreshDevinUserStatusCache = Effect.fn("refreshDevinUserStatusCache")(fun
   if (Result.isFailure(inspected) || inspected.success.status !== "ready") {
     return undefined;
   }
-  const resolved = yield* Effect.result(
-    catalog.resolve(input.settings, input.cwd, stripAcpBridgeEnvironment(input.environment)),
-  );
-  if (Result.isFailure(resolved)) {
-    return undefined;
-  }
-
   return yield* Effect.scoped(
     Effect.gen(function* () {
+      const resolved = yield* Effect.result(
+        catalog.resolve(input.settings, input.cwd, stripAcpBridgeEnvironment(input.environment)),
+      );
+      if (Result.isFailure(resolved)) {
+        return undefined;
+      }
       const runtimeContext = yield* Layer.build(
         AcpSessionRuntime.layer({
           spawn: unscopedAcpSpawn(resolved.success.spawn),

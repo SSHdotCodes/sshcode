@@ -1,4 +1,5 @@
 import { EnvironmentId, type ServerSelfUpdateCapability } from "@t3tools/contracts";
+import { SERVER_DOWNLOADS_UNAVAILABLE } from "@t3tools/shared/cliRelease";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -8,6 +9,7 @@ import {
   collectUpdateEverythingResult,
   describeUpdateCapsule,
   describeUpdateEverything,
+  gateServerDownloads,
   getUpdateEverythingToastView,
   resolveUpdateRunMachineStatus,
   runUpdateEverything,
@@ -91,6 +93,7 @@ describe("collectServerUpdateTargets", () => {
         machine("manual", "0.0.40", undefined),
       ],
       "0.0.50",
+      true,
     );
 
     expect(targets.map((target) => [target.serverLabel, target.targetVersion])).toEqual([
@@ -105,6 +108,65 @@ describe("collectServerUpdateTargets", () => {
       ["busy", "already updating"],
       ["manual", "needs a manual update"],
     ]);
+  });
+
+  it("skips servers that download their update while releases carry no server download", () => {
+    const { targets, skipped } = collectServerUpdateTargets(
+      [
+        machine("service", "0.0.40", "boot-service"),
+        machine("respawn", "0.0.40", "respawn"),
+        machine("other-desktop", "0.0.40", "desktop-managed"),
+      ],
+      "0.0.50",
+      false,
+    );
+
+    expect(targets.map((target) => target.serverLabel)).toEqual(["other-desktop"]);
+    expect(skipped.map((entry) => [entry.label, entry.reason])).toEqual([
+      ["service", SERVER_DOWNLOADS_UNAVAILABLE],
+      ["respawn", SERVER_DOWNLOADS_UNAVAILABLE],
+    ]);
+  });
+});
+
+describe("gateServerDownloads", () => {
+  const machines = [
+    machine("linux-service", "0.0.40", "boot-service"),
+    machine("mac-service", "0.0.40", "boot-service", {
+      serverConfig: {
+        ...machine("mac-service", "0.0.40", "boot-service").serverConfig!,
+        environment: {
+          ...machine("mac-service", "0.0.40", "boot-service").serverConfig!.environment,
+          platform: { os: "darwin", arch: "arm64" },
+        },
+      },
+    }),
+    machine("odd-service", "0.0.40", "boot-service", {
+      serverConfig: {
+        ...machine("odd-service", "0.0.40", "boot-service").serverConfig!,
+        environment: {
+          ...machine("odd-service", "0.0.40", "boot-service").serverConfig!.environment,
+          platform: { os: "unknown", arch: "other" },
+        },
+      },
+    }),
+    machine("desktop", "0.0.40", "desktop-managed"),
+  ];
+  const { targets } = collectServerUpdateTargets(machines, "0.0.50", true);
+
+  it("offers a download only for a platform whose archive the release has", () => {
+    const assets = new Set(["SHA256SUMS", "t3-0.0.50-darwin-arm64.tar.gz"]);
+    const { servers, skipped } = gateServerDownloads(machines, targets, assets, "0.0.50");
+    expect(servers.map((server) => server.serverLabel)).toEqual(["mac-service", "desktop"]);
+    expect(skipped.map((entry) => [entry.label, entry.reason])).toEqual([
+      ["linux-service", "GitHub has no SSHCode 0.0.50 server download for it yet"],
+      ["odd-service", "not yet confirmed that GitHub has an SSHCode 0.0.50 server download for it"],
+    ]);
+  });
+
+  it("keeps only desktop-managed servers while the release is unknown", () => {
+    const { servers } = gateServerDownloads(machines, targets, null, "0.0.50");
+    expect(servers.map((server) => server.serverLabel)).toEqual(["desktop"]);
   });
 });
 

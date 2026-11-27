@@ -55,6 +55,8 @@ const withService = <A, E>(
     readonly committedFailures?: number;
     readonly apiKey?: boolean;
     readonly settingsWrite?: boolean;
+    /** Asks for a credential in parts. */
+    readonly fields?: ReadonlyArray<{ readonly label: string }>;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -129,6 +131,7 @@ const withService = <A, E>(
                 reason: "Used as GH_TOKEN.",
                 ...(options.apiKey ? { apiKey: { name: "FAKE_API_KEY" } } : {}),
                 ...(options.delivery === undefined ? {} : { delivery: options.delivery }),
+                ...(options.fields === undefined ? {} : { fields: options.fields }),
                 secretStatus,
               },
             ],
@@ -575,7 +578,98 @@ it.effect(
     ),
 );
 
+const MODAL_FIELDS = [{ label: "Token ID" }, { label: "Token secret" }];
+
+it.effect("a card in parts saves one one-use ref per field, in order, and names each", () =>
+  withService(
+    ({ service, dispatched }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save", secrets: ["ak-fake-id", "as-fake-secret"] },
+        });
+        const record = dispatched[0];
+        if (record?.type !== "secret_request.record") return assert.fail("no record");
+        assert.deepEqual(record.fields, MODAL_FIELDS);
+        assert.equal(record.secretStatus, "saved");
+        assert.notInclude(JSON.stringify(dispatched), "fake-id");
+        assert.notInclude(JSON.stringify(dispatched), "fake-secret");
+
+        const refs = yield* Effect.forEach([0, 1], (part) =>
+          service.savedRef({ threadId, turnItemId, part }).pipe(Effect.map(Option.getOrThrow)),
+        );
+        assert.notEqual(refs[0], refs[1]);
+        assert.equal(
+          record.answerNotice,
+          `The user saved "GitHub token". Token ID secretRef: ${refs[0]}. Token secret secretRef: ${refs[1]}`,
+        );
+        assert.equal(yield* service.consume({ ref: refs[0]!, projectId }), "ak-fake-id");
+        assert.equal(yield* service.consume({ ref: refs[1]!, projectId }), "as-fake-secret");
+      }),
+    { fields: MODAL_FIELDS },
+  ),
+);
+
+it.effect("a card in parts is declined from any app but saved only with every part", () =>
+  withService(
+    ({ service, stored, dispatched }) =>
+      Effect.gen(function* () {
+        // What an app from before fields sends: one value for the whole card.
+        for (const answer of [
+          { type: "save" as const, secret: "ak-fake-id" },
+          { type: "save" as const, secrets: ["ak-fake-id"] },
+        ]) {
+          const refused = yield* service.answer({ threadId, turnItemId, answer }).pipe(Effect.flip);
+          assert.equal(refused.reason, "load_failed");
+        }
+        assert.deepEqual(valuesOf(stored), []);
+        assert.lengthOf(dispatched, 0);
+        yield* service.answer({ threadId, turnItemId, answer: { type: "decline" } });
+        assert.include(dispatched[0] as object, {
+          secretStatus: "declined",
+          answerNotice: 'The user declined "GitHub token".',
+        });
+      }),
+    { fields: MODAL_FIELDS },
+  ),
+);
+
 const SECRET_FILE_TTL_MS = 24 * 60 * 60 * 1000;
+
+it.effect("a file card in parts writes one private file per field and lists them in order", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "secret-files-test-" });
+    yield* withService(
+      ({ service, stored, dispatched }) =>
+        Effect.gen(function* () {
+          yield* service.answer({
+            threadId,
+            turnItemId,
+            answer: { type: "save", secrets: ["ak-fake-id", "as-fake-secret"] },
+          });
+          const files = yield* Effect.forEach([0, 1], (part) =>
+            service.saveToFile({ threadId, turnItemId, part }),
+          );
+          assert.equal(yield* fs.readFileString(files[0]!), "ak-fake-id");
+          assert.equal(yield* fs.readFileString(files[1]!), "as-fake-secret");
+          assert.deepEqual(valuesOf(stored), []);
+          const deletedAt = yield* service.fileDeletedAt(files[0]!);
+          const record = dispatched[0];
+          assert.equal(
+            record?.type === "secret_request.record" ? record.answerNotice : undefined,
+            `The user saved "GitHub token". Token ID file: ${files[0]}. Token secret file: ${files[1]}. Read them inside commands, never print them. They are deleted ${deletedAt} (24 hours); a key needed longer uses request_api_key.`,
+          );
+          const beyond = yield* service
+            .saveToFile({ threadId, turnItemId, part: 2 })
+            .pipe(Effect.flip);
+          assert.equal(beyond.reason, "not_a_file_request");
+        }),
+      { delivery: "file", directory, fields: MODAL_FIELDS },
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
 
 it.effect("a file request moves its value to an owner-only file, once", () =>
   Effect.gen(function* () {

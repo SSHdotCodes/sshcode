@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import { PREVIEW_STREAM_HOST_SETUP_CLOSE_CODE } from "@t3tools/contracts";
+
 import { createPreviewStreamClient, type PreviewStreamControl } from "./serverBrowserStream.ts";
 
 class FakeSocket extends EventTarget {
@@ -168,6 +170,29 @@ describe("preview stream downloads", () => {
       fileName: "a b.csv",
       sizeBytes: 3,
       url: "http://preview.test/api/preview-stream/download?threadId=thread&tabId=tab&id=d1&wsTicket=ticket",
+    });
+  });
+});
+
+describe("preview stream host setup", () => {
+  beforeEach(() => vi.stubGlobal("WebSocket", FakeSocket));
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("asks an older server's host for the plain setup command, never an npm package", () => {
+    const onHostSetup = vi.fn();
+    createPreviewStreamClient(target, {
+      onFrame: vi.fn(),
+      onHostSetup,
+      onViewport: vi.fn(),
+      onConnectedChange: vi.fn(),
+      onUnauthorized: vi.fn(),
+    });
+    FakeSocket.current.dispatchEvent(
+      new CloseEvent("close", { code: PREVIEW_STREAM_HOST_SETUP_CLOSE_CODE, reason: "" }),
+    );
+    expect(onHostSetup).toHaveBeenCalledExactlyOnceWith({
+      need: "sandbox",
+      command: "sudo sshcode browser setup",
     });
   });
 });

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 
 import {
   QUIET_TURN_AFTER_MS,
   msUntilQuietTurn,
   quietTurnLabel,
-  etCalendarDay,
+  localCalendarDay,
   subagentBackgroundWaitLabel,
   isSubagentOrchestrationTool,
   longRunningFactsForShell,
@@ -16,21 +17,24 @@ import {
   SUBAGENT_ORCHESTRATION_TOOLS,
 } from "./chatControls.ts";
 
-/** 2026-11-06 is EST (UTC-5). Midnight in New York is 05:00 UTC. */
-const EST_MIDNIGHT = Date.parse("2026-11-06T05:00:00.000Z");
-/** 2026-07-06 is EDT (UTC-4). Midnight in New York is 04:00 UTC. */
-const EDT_MIDNIGHT = Date.parse("2026-07-06T04:00:00.000Z");
+// Activity days follow this machine's clock; pin one that is not New York's.
+vi.stubEnv("TZ", "America/Los_Angeles");
 
-describe("et calendar days", () => {
-  it("splits EST and EDT midnights", () => {
-    expect(etCalendarDay(EST_MIDNIGHT - 1)).toBe("2026-11-05");
-    expect(etCalendarDay(EST_MIDNIGHT)).toBe("2026-11-06");
-    expect(etCalendarDay(EDT_MIDNIGHT - 1)).toBe("2026-07-05");
-    expect(etCalendarDay(EDT_MIDNIGHT)).toBe("2026-07-06");
+/** 2026-11-06 is PST (UTC-8). Midnight in Los Angeles is 08:00 UTC. */
+const PST_MIDNIGHT = Date.parse("2026-11-06T08:00:00.000Z");
+/** 2026-07-06 is PDT (UTC-7). Midnight in Los Angeles is 07:00 UTC. */
+const PDT_MIDNIGHT = Date.parse("2026-07-06T07:00:00.000Z");
+
+describe("local calendar days", () => {
+  it("splits standard and daylight-saving midnights", () => {
+    expect(localCalendarDay(PST_MIDNIGHT - 1)).toBe("2026-11-05");
+    expect(localCalendarDay(PST_MIDNIGHT)).toBe("2026-11-06");
+    expect(localCalendarDay(PDT_MIDNIGHT - 1)).toBe("2026-07-05");
+    expect(localCalendarDay(PDT_MIDNIGHT)).toBe("2026-07-06");
   });
 
   it("counts one calendar day once", () => {
-    expect(etCalendarDay(EST_MIDNIGHT)).toBe(etCalendarDay(EST_MIDNIGHT + 60 * 60 * 1000));
+    expect(localCalendarDay(PST_MIDNIGHT)).toBe(localCalendarDay(PST_MIDNIGHT + 60 * 60 * 1000));
   });
 });
 

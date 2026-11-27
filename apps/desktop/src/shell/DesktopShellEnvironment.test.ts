@@ -358,12 +358,14 @@ describe("DesktopShellEnvironment", () => {
             PATH: "/home/linuxbrew/.linuxbrew/bin:/usr/bin",
             SSH_AUTH_SOCK: "/tmp/secretive.sock",
             T3CODE_TELEMETRY_ENABLED: "false",
+            DO_NOT_TRACK: "1",
           }),
       });
 
       assert.equal(env.PATH, "/home/linuxbrew/.linuxbrew/bin:/usr/bin");
       assert.equal(env.SSH_AUTH_SOCK, "/tmp/secretive.sock");
       assert.equal(env.T3CODE_TELEMETRY_ENABLED, "false");
+      assert.equal(env.DO_NOT_TRACK, "1");
     }),
   );
 

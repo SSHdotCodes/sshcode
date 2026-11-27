@@ -105,6 +105,39 @@ it("expands a SSHCode notice to the prompt the agent got", () => {
   expect(activity?.getFullDetail()).toBe("Continue where you left off.");
 });
 
+it("draws a saved secret's notice only as its card's row", () => {
+  const card = {
+    ...base("turn-item:secret-request:thread-1:modal-token", "2026-06-20T00:00:01.000Z", 1),
+    type: "secret_request",
+    label: "Modal token",
+    reason: "Runs the GPU job",
+    fields: [{ label: "Token ID" }, { label: "Token secret" }],
+    secretStatus: "saved",
+  } as OrchestrationV2TurnItem;
+  // As stored: the notice row's id encodes the message the server sent the agent.
+  const notice = {
+    ...base(
+      `turn-item:message:${encodeURIComponent(`message:secret-request-answer:${card.id}`)}`,
+      "2026-06-20T00:00:03.000Z",
+      2,
+    ),
+    type: "notification",
+    source: { kind: "system" },
+    outcome: "completed",
+    summary: 'The user saved "Modal token".',
+  } as OrchestrationV2TurnItem;
+  const itemIds = (items: ReadonlyArray<OrchestrationV2TurnItem>) =>
+    buildThreadFeed(items.map((item, index) => projected(item, index))).flatMap((entry) =>
+      entry.type === "activity-group"
+        ? entry.activities.map((activity) => activity.projectedItem.item.id)
+        : [],
+    );
+
+  expect(itemIds([card, notice])).toEqual([card.id]);
+  // Without its card in the feed, the notice is the only record and keeps its row.
+  expect(itemIds([notice])).toEqual([notice.id]);
+});
+
 it("labels file searches with the adapter title and its search target", () => {
   const item: OrchestrationV2TurnItem = {
     ...base("file-search", "2026-06-20T00:00:03.000Z", 2),
@@ -1223,6 +1256,81 @@ describe("buildThreadFeed", () => {
       new Set(),
     );
     expect(entries.find((entry) => entry.type === "run-fold")?.label).toBe("Worked for 341ms");
+  });
+
+  it("keeps earlier runs' timings, stopped labels, and failed unfolding after a newer run starts", () => {
+    const run2 = RunId.make("run-2");
+    const run3 = RunId.make("run-3");
+    const run4 = RunId.make("run-4");
+    const feed = buildThreadFeed([
+      projected(userMessage("2026-06-20T00:00:00.000Z"), 0),
+      projected(command("2026-06-20T00:05:00.050Z"), 1),
+      projected(assistantMessage("2026-06-20T00:05:00.198Z"), 2),
+      projected(
+        {
+          ...userMessage("2026-06-20T00:06:00.000Z"),
+          id: TurnItemId.make("u-2"),
+          runId: run2,
+          messageId: MessageId.make("m-u2"),
+        },
+        3,
+      ),
+      projected(
+        { ...command("2026-06-20T00:06:05.000Z"), id: TurnItemId.make("c-2"), runId: run2 },
+        4,
+      ),
+      projected(
+        {
+          ...userMessage("2026-06-20T00:07:00.000Z"),
+          id: TurnItemId.make("u-3"),
+          runId: run3,
+          messageId: MessageId.make("m-u3"),
+        },
+        5,
+      ),
+      projected(
+        { ...command("2026-06-20T00:07:02.000Z"), id: TurnItemId.make("c-3"), runId: run3 },
+        6,
+      ),
+    ]);
+    const entries = deriveThreadFeedPresentation(
+      feed,
+      {
+        runId: run4,
+        status: "running",
+        startedAt: "2026-06-20T00:08:00.000Z",
+        completedAt: null,
+      },
+      new Set(),
+      new Set(),
+      "2026-06-20T00:08:00.000Z",
+      false,
+      [
+        {
+          id: runId,
+          status: "completed",
+          startedAt: DateTime.makeUnsafe("2026-06-20T00:05:00.000Z"),
+          completedAt: DateTime.makeUnsafe("2026-06-20T00:05:00.198Z"),
+        },
+        {
+          id: run2,
+          status: "interrupted",
+          startedAt: DateTime.makeUnsafe("2026-06-20T00:06:00.000Z"),
+          completedAt: DateTime.makeUnsafe("2026-06-20T00:06:47.000Z"),
+        },
+        {
+          id: run3,
+          status: "failed",
+          startedAt: DateTime.makeUnsafe("2026-06-20T00:07:00.000Z"),
+          completedAt: DateTime.makeUnsafe("2026-06-20T00:07:03.000Z"),
+        },
+      ],
+    );
+    const folds = entries.filter((entry) => entry.type === "run-fold");
+    expect(folds).toEqual([
+      expect.objectContaining({ runId, label: "Worked for 198ms" }),
+      expect.objectContaining({ runId: run2, label: "You stopped after 47s" }),
+    ]);
   });
 
   it("uses the last work entry rather than the start of a grouped historical turn", () => {

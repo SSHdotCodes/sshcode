@@ -144,7 +144,9 @@ const resolveClaudeChatsHome = Effect.fn("resolveClaudeChatsHome")(function* (
     .pipe(Effect.orElseSucceed(() => undefined));
   if (target === undefined) return homePath;
   const projects = path.resolve(homePath, target);
-  return path.basename(projects) === "projects" ? path.dirname(projects) : homePath;
+  if (path.basename(projects) !== "projects") return homePath;
+  const sharedHome = path.dirname(projects);
+  return yield* fileSystem.realPath(sharedHome).pipe(Effect.orElseSucceed(() => sharedHome));
 });
 
 export const makeClaudeContinuationGroupKey = Effect.fn("makeClaudeContinuationGroupKey")(

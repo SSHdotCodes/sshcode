@@ -100,6 +100,10 @@ describe("orchestrator MCP tool guidance", () => {
       OrchestratorToolkit.tools.orchestrator_capabilities.description ?? "",
       "usage_limits",
     );
+    assert.include(
+      OrchestratorToolkit.tools.orchestrator_capabilities.description ?? "",
+      "recentFailure",
+    );
     const schema = Tool.getJsonSchema(tool) as {
       readonly type?: unknown;
       readonly required?: readonly string[];
@@ -174,7 +178,8 @@ describe("orchestrator MCP tool guidance", () => {
   it("publishes delegation hints on the encoded strings agents actually receive", () => {
     const schema = JSON.stringify(Tool.getJsonSchema(DelegateTaskTool));
     for (const guidance of [
-      "Self-contained subagent brief",
+      "Self-contained subagent brief (goal, files/base, constraints, verification).",
+      "Task kind: implementation, research, review, design, test, or general.",
       "Absolute checkout path to use or copy",
       "Exact model id from orchestrator_capabilities",
       "Instance id from orchestrator_capabilities",
@@ -247,5 +252,16 @@ describe("orchestrator MCP tool guidance", () => {
       "clientRequestId",
     ]);
     assert.include(ThreadUpdateTool.description ?? "", "Workspace and branch unsupported");
+  });
+
+  it("discourages polling in task_status and t3_thread_wait and avoids 'helper' wording", () => {
+    assert.include(
+      OrchestratorToolkit.tools.task_status.description ?? "",
+      "Don't poll running tasks",
+    );
+    assert.include(OrchestratorToolkit.tools.t3_thread_wait.description ?? "", "Prefer wakes");
+    for (const tool of Object.values(OrchestratorToolkit.tools)) {
+      assert.notInclude((tool.description ?? "").toLowerCase(), "helper", tool.name);
+    }
   });
 });

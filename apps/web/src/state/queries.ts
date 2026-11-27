@@ -9,6 +9,7 @@ import {
   type EnvironmentThreadSearchMatch,
   type ThreadSearchResultsState,
 } from "@t3tools/client-runtime/state/thread-search";
+import { createVisibleThreadSearchResultsAtomFamily } from "@t3tools/client-runtime/state/bots";
 import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
 import type {
   EnvironmentId,
@@ -28,6 +29,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { useFilesystemReadAccess } from "./filesystem";
 import { orchestrationEnvironment } from "./orchestration";
+import { botThreadIdsAtom } from "./threads";
 import { isPaginatedBranchesNextPagePending } from "./paginatedBranches";
 import { projectContentSearch, projectEnvironment } from "./projects";
 import { useEnvironmentQuery } from "./query";
@@ -50,12 +52,18 @@ const EMPTY_THREAD_SEARCH_ATOM = Atom.make<ThreadSearchResultsState>({
   failed: false,
 }).pipe(Atom.withLabel("web:thread-search:empty"));
 
-const threadSearchResultsAtom = createThreadSearchResultsAtomFamily({
+const serverThreadSearchResultsAtom = createThreadSearchResultsAtomFamily({
   getSearchAtom: (environmentId, query, cursor) =>
     orchestrationEnvironment.threadSearch({
       environmentId,
       input: { query, ...(cursor ? { cursor } : {}) },
     }),
+  labelPrefix: "web:thread-search",
+});
+// Bot home chats show only in the Bots area, so search leaves them out like the lists do.
+const threadSearchResultsAtom = createVisibleThreadSearchResultsAtomFamily({
+  resultsAtom: serverThreadSearchResultsAtom,
+  hiddenThreadIdsAtom: botThreadIdsAtom,
   labelPrefix: "web:thread-search",
 });
 

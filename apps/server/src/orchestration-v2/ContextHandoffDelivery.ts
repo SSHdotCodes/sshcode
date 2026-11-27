@@ -200,7 +200,8 @@ export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextH
     return {
       context: renderHistory(selected.messages, selected.context),
       delivered: persist("inline"),
-      unsent: Effect.forEach(pending, (handoff) => input.persist(withBrief(handoff)), {
+      // The rollback can outlive startup. Retain these records and their writer.
+      unsent: Effect.forEach(pending.map(withBrief), input.persist, {
         discard: true,
       }),
       briefIncluded,

@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { scheduledMessageLocalDateTime } from "@t3tools/client-runtime/scheduled-message";
 import {
   DEFAULT_SERVER_SETTINGS,
   type ServerConfig,
@@ -370,4 +371,18 @@ it("round trips a one-shot instant and its persisted draft workspace intent", ()
       schedule: { ...draft, onceAt: "2027-01-16T09:30" },
     }),
   ).toBe(true);
+});
+
+it("computes the default one-shot timestamp from the current time rather than module load time", () => {
+  const later = Date.parse("2030-06-15T12:00:00.000Z");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(later);
+  try {
+    const expected = scheduledMessageLocalDateTime(later + 3_600_000);
+    expect(createDraft(null, null).schedule.onceAt).toBe(expected);
+    expect(
+      scheduleDraftForTask({ schedule: { type: "fixed_time", timeOfDay: "09:00" } }).onceAt,
+    ).toBe(expected);
+  } finally {
+    clock.mockRestore();
+  }
 });

@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, RunId } from "@t3tools/contracts";
 import { sessionBoxName } from "@t3tools/shared/sessionBoxes";
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
@@ -30,6 +30,47 @@ describe("what a working chat says it is doing", () => {
     expect(sessionBoxStepText("thinking", { itemType: "compaction" })).toBe("Compacting the chat");
     expect(sessionBoxStepText("running", { itemType: "dynamic_tool" })).toBe("Using a tool");
     expect(sessionBoxStepText("reading", { itemType: "dynamic_tool" })).toBe("Reading files");
+  });
+});
+
+describe("a working chat that reports its stages", () => {
+  const progress = (
+    stages: ReadonlyArray<{ title: string; status: "done" | "active" | "pending" }>,
+  ) => ({
+    source: "report" as const,
+    startedAt: now - 60_000,
+    reportedAt: now,
+    stages,
+    updates: [],
+  });
+  const working = (liveProgress?: ReturnType<typeof progress>) =>
+    presentSessionBoxCached(
+      presentThreadShell(environmentId, {
+        ...v2ThreadShell,
+        title,
+        status: "running",
+        latestRunId: RunId.make("run-stages"),
+        activeRunId: RunId.make("run-stages"),
+        ...(liveProgress ? { liveProgress } : {}),
+      }),
+      { now, unseen: false },
+    );
+
+  it("shows the stage it is on instead of its latest step", () => {
+    expect(working().status).toBe("Thinking");
+    expect(
+      working(
+        progress([
+          { title: "Read the code", status: "done" },
+          { title: "Draw the phone cards", status: "active" },
+          { title: "Take screenshots", status: "pending" },
+        ]),
+      ).status,
+    ).toBe("Draw the phone cards");
+  });
+
+  it("falls back to the step when no stage is active", () => {
+    expect(working(progress([{ title: "Read the code", status: "done" }])).status).toBe("Thinking");
   });
 });
 

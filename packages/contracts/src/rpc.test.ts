@@ -3,7 +3,7 @@ import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 
 import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
-import { WsRpcGroup, WsServerRpcGroups, WsSubscribeServerConfigRpc } from "./rpc.ts";
+import { WS_METHODS, WsRpcGroup, WsServerRpcGroups, WsSubscribeServerConfigRpc } from "./rpc.ts";
 
 const decodeConfigSubscription = Schema.decodeSync(WsSubscribeServerConfigRpc.payloadSchema);
 const decodeLegacyConfigSubscription = Schema.decodeExit(Schema.Struct({}));
@@ -43,6 +43,27 @@ describe("subscribeServerConfig payload compatibility", () => {
 });
 
 describe("WebSocket RPC contracts", () => {
+  it("keeps provider refresh reply options compatible with older peers", () => {
+    const rpc = WsRpcGroup.requests.get(WS_METHODS.serverRefreshProviders);
+    if (rpc === undefined) throw new Error("server.refreshProviders is not registered");
+    const decodeCurrent = Schema.decodeUnknownSync(rpc.payloadSchema);
+    const decodeLegacy = Schema.decodeUnknownSync(
+      Schema.Struct({
+        instanceId: Schema.optional(Schema.String),
+        cwd: Schema.optional(Schema.String),
+      }),
+    );
+    const target = { instanceId: "claude", cwd: "/workspace" };
+    const widget = { omitProviders: true };
+    const menu = { ...target, workspaceSnapshotOnly: true };
+    expect(decodeCurrent({})).toEqual({});
+    expect(decodeCurrent(target)).toEqual(target);
+    expect(decodeCurrent(widget)).toEqual(widget);
+    expect(decodeCurrent(menu)).toEqual(menu);
+    expect(decodeLegacy(widget)).toEqual({});
+    expect(decodeLegacy(menu)).toEqual(target);
+  });
+
   it("partitions server handlers without changing their RPC definitions", () => {
     const serverRpcs = WsServerRpcGroups.flatMap((group) => [...group.requests.values()]);
 

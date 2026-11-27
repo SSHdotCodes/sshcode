@@ -275,6 +275,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     );
   const retention = managedReleaseRetention({
     directory: managedDirectory,
+    toolsDirectory: path.join(options.baseDir, "tools"),
     versionsDirectory,
     validName: Schema.is(ReleaseId),
     active: Effect.suspend(retentionActive),
@@ -284,7 +285,8 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
         Effect.orElseSucceed(() => false),
       ),
   });
-  const prune = retention.prune.pipe(
+  const prune = retention.prune().pipe(
+    Effect.asVoid,
     Effect.catch(() => Effect.logWarning("Could not prune unused Antigravity releases")),
   );
 

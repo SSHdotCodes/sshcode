@@ -1,4 +1,5 @@
 import {
+  OrchestrationV2LiveProgress,
   OrchestrationV2ThreadShell,
   ThreadPullRequestLink,
   type OrchestrationProjectShell,
@@ -10,6 +11,7 @@ import * as Schema from "effect/Schema";
 
 const sameThreadShell = Schema.toEquivalence(OrchestrationV2ThreadShell);
 const sameLinks = Schema.toEquivalence(Schema.UndefinedOr(Schema.Array(ThreadPullRequestLink)));
+const sameLiveProgress = Schema.toEquivalence(Schema.UndefinedOr(OrchestrationV2LiveProgress));
 
 /** Whether two rows' pull request links are equal, including both absent. */
 export function sameThreadPullRequests(
@@ -86,7 +88,7 @@ export interface MergeShellSnapshotOptions {
  *
  * Enrichment snapshots (options present) only patch repository identity for
  * matching current projects and box fields (`boxName`, `latestRequest`, `boxFace`, `chatTab`,
- * long-running placement, activity, and the subagents switch) for
+ * long-running placement, activity, the subagents switch and live progress) for
  * matching current threads. They never replace projects, threads, archives,
  * or sequence, regardless of the incoming snapshot sequence.
  */
@@ -120,7 +122,8 @@ export function mergeShellSnapshotProjects(
                   named.boxFace === thread.boxFace &&
                   sameChatTab(named.chatTab, thread.chatTab) &&
                   sameComparison(named.comparison, thread.comparison) &&
-                  sameChatControls(named, thread))
+                  sameChatControls(named, thread) &&
+                  sameLiveProgress(named.liveProgress, thread.liveProgress))
                 ? thread
                 : {
                     ...thread,
@@ -140,6 +143,8 @@ export function mergeShellSnapshotProjects(
                       : { longRunningWork: named.longRunningWork }),
                     subagentsEnabled: named.subagentsEnabled !== false,
                     firstSubagentAsk: named.firstSubagentAsk,
+                    // Progress reports (token use High) change no transcript; omitted clears it.
+                    liveProgress: named.liveProgress,
                   };
             }),
       projects: previous.projects.map((project) => {

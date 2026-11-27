@@ -1,5 +1,6 @@
 import {
   IsoDateTime,
+  OrchestrationV2AppThread,
   isHelperThreadId,
   MODEL_MANAGER_THREAD_ID_PREFIX,
   OVERVIEW_THREAD_ID_PREFIX,
@@ -23,12 +24,17 @@ import * as Exit from "effect/Exit";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
+import { isKnownBotThread } from "@t3tools/provider-core/server/orchestrationInstructions";
+import { compareThreadSearchOrder, threadSearchFolderName } from "@t3tools/shared/threadSearch";
+import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
+import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as ServerConfig from "../config.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
@@ -53,12 +59,28 @@ export class ThreadSearchError extends Schema.TaggedError<ThreadSearchError>()(
     return `Thread search ${this.operation} failed.`;
   }
 }
-const ThreadRow = Schema.Struct({
+const SearchActivityRow = Schema.Struct({
   threadId: ThreadId,
+  activityAt: IsoDateTime,
+  firstUserMessageId: Schema.NullOr(MessageId),
+});
+const SearchThreadContext = Schema.fromJsonString(
+  Schema.Struct({
+    branch: OrchestrationV2AppThread.fields.branch,
+    worktreePath: OrchestrationV2AppThread.fields.worktreePath,
+    pullRequests: OrchestrationV2AppThread.fields.pullRequests,
+    linkedPullRequest: OrchestrationV2AppThread.fields.linkedPullRequest,
+    branchPullRequest: OrchestrationV2AppThread.fields.branchPullRequest,
+  }),
+);
+const ThreadRow = Schema.Struct({
+  ...SearchActivityRow.fields,
   projectId: ProjectId,
   title: Schema.String,
   archived: Schema.Number,
-  updatedAt: IsoDateTime,
+  projectTitle: Schema.String,
+  workspaceRoot: Schema.String,
+  context: SearchThreadContext,
   model: Schema.NullOr(Schema.String),
   providerInstanceId: Schema.NullOr(Schema.String),
 });
@@ -84,11 +106,15 @@ const defaultHarnessLabels = new Map<string, string>(
 );
 const searchEvents = new Set<OrchestrationV2DomainEvent["type"]>([
   "message.updated",
+  "run.created",
   "run.updated",
   "thread.created",
   "thread.deleted",
   "thread.archived",
   "thread.unarchived",
+  "thread.unsettled",
+  "thread.pull-request-link-updated",
+  "thread.pull-request-synced",
   "thread.metadata-updated",
   "thread.model-selection-updated",
   "thread.provider-switched",
@@ -116,6 +142,12 @@ export class ThreadSearch extends Context.Service<
     readonly start: () => Effect.Effect<void, never, Scope.Scope | EventSink.EventSinkV2>;
   }
 >()("t3/orchestration-v2/ThreadSearch") {}
+
+const BOT_THREAD_ID_PREFIX = "thread:bot:";
+const isExcludedSearchThreadId = (threadId: string) =>
+  isHelperThreadId(threadId) ||
+  threadId.startsWith(BOT_THREAD_ID_PREFIX) ||
+  isKnownBotThread(threadId);
 
 // Search finds the chats a person works in. A subagent chat repeats its lead's words (the
 // brief, the report) and is opened from the lead's card, so its hits were noise; leaving
@@ -146,6 +178,29 @@ const hiddenSearchMessage = (sql: SqlClient.SqlClient) => sql`EXISTS (
     )
 )`;
 
+// The same activity fields as the chat list. Held queue entries do not replace
+// the displayed run, and pinning or renaming does not replace actual activity.
+const searchActivityColumns = (sql: SqlClient.SqlClient) => sql`
+  COALESCE(NULLIF(max(
+    COALESCE(json_extract(t.payload_json, '$.unsettledAt'), ''),
+    COALESCE((SELECT m.updated_at FROM orchestration_v2_projection_messages m
+      WHERE m.thread_id = t.thread_id AND m.role = 'user'
+      ORDER BY m.updated_at DESC, m.message_id DESC LIMIT 1), ''),
+    COALESCE(r.requested_at, ''), COALESCE(json_extract(r.payload_json, '$.startedAt'), ''),
+    COALESCE(r.completed_at, '')
+  ), ''), t.updated_at, t.created_at) AS activityAt,
+  (SELECT m.message_id FROM orchestration_v2_projection_messages m
+    WHERE m.thread_id = t.thread_id AND m.role = 'user' AND m.streaming = 0
+      AND COALESCE(json_extract(m.payload_json, '$.createdBy'), 'user') = 'user' AND NOT ${hiddenSearchMessage(sql)}
+    ORDER BY m.created_at, m.message_id LIMIT 1) AS firstUserMessageId`;
+const joinSearchActivityRun = (sql: SqlClient.SqlClient) => sql`
+  LEFT JOIN orchestration_v2_projection_runs r ON r.run_id = (
+    SELECT candidate.run_id FROM orchestration_v2_projection_runs candidate
+    WHERE candidate.thread_id = t.thread_id
+      AND NOT (candidate.status = 'queued' AND json_extract(candidate.payload_json, '$.queueHeld') IS 1)
+    ORDER BY candidate.ordinal DESC, candidate.run_id DESC LIMIT 1
+  )`;
+
 /** One rowid window of searchable messages, before embedding or index writes. */
 export const readSearchBackfillBatch = (sql: SqlClient.SqlClient, cursor: number) => sql`
   SELECT m.rowid AS "rowId", m.message_id AS "messageId", m.thread_id AS "threadId",
@@ -165,6 +220,7 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const config = yield* ServerConfig.ServerConfig;
   const policy = yield* BackgroundPolicy.BackgroundPolicy;
+  const enrichment = yield* Effect.serviceOption(ProjectEnrichmentService.ProjectEnrichmentService);
   const filename = path.join(config.stateDir, "search-index-v1.sqlite");
   const configPath = path.join(config.stateDir, "search-index-config.json");
   yield* fs.makeDirectory(config.stateDir, { recursive: true }).pipe(Effect.orDie);
@@ -196,23 +252,72 @@ export const make = Effect.gen(function* () {
   const read = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(NodeSqliteClient.readOnly);
   const visibleThread = visibleSearchThread(sql);
   const hiddenMessage = hiddenSearchMessage(sql);
+  const refreshActivity = (threadId: ThreadId) =>
+    read(sql`SELECT t.thread_id AS threadId, ${searchActivityColumns(sql)}
+      FROM orchestration_v2_projection_threads t ${joinSearchActivityRun(sql)}
+      WHERE t.thread_id = ${threadId}`).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(SearchActivityRow))),
+      Effect.flatMap(([row]) => (row ? index.updateActivity(row) : Effect.void)),
+    );
   const refreshThreads = Effect.gen(function* () {
     const rows = yield* read(
       sql`SELECT t.thread_id AS "threadId", t.project_id AS "projectId", t.title,
-        t.archived_at IS NOT NULL AS archived, t.updated_at AS "updatedAt",
+        t.archived_at IS NOT NULL AS archived, ${searchActivityColumns(sql)},
+        p.title AS projectTitle, p.workspace_root AS workspaceRoot,
+        json_object(
+          'branch', json_extract(t.payload_json, '$.branch'),
+          'worktreePath', json_extract(t.payload_json, '$.worktreePath'),
+          'pullRequests', COALESCE(t.payload_json -> '$.pullRequests', '[]' -> '$'),
+          'linkedPullRequest', json_extract(t.payload_json, '$.linkedPullRequest'),
+          'branchPullRequest', json_extract(t.payload_json, '$.branchPullRequest')
+        ) AS context,
         json_extract(t.payload_json, '$.modelSelection.model') AS model,
         COALESCE(t.provider_instance_id, t.default_provider) AS "providerInstanceId"
         FROM orchestration_v2_projection_threads t
         JOIN projection_projects p ON p.project_id = t.project_id
+        ${joinSearchActivityRun(sql)}
         WHERE t.deleted_at IS NULL AND p.deleted_at IS NULL AND ${visibleThread}
-        ORDER BY t.updated_at DESC`,
+        ORDER BY activityAt DESC`,
     ).pipe(Effect.flatMap(decodeThreads));
+    const repositoryByRoot = new Map<string, string[]>();
+    if (Option.isSome(enrichment)) {
+      for (const root of new Set(rows.map((row) => row.workspaceRoot))) {
+        const { repositoryIdentity } = yield* enrichment.value.getAvailable(root);
+        if (repositoryIdentity) {
+          repositoryByRoot.set(
+            root,
+            [
+              repositoryIdentity.canonicalKey,
+              repositoryIdentity.origin?.canonicalKey,
+              repositoryIdentity.displayName,
+            ].filter((term): term is string => !!term),
+          );
+        }
+      }
+    }
     yield* index.syncThreads(
       rows
-        .filter((t) => !isHelperThreadId(t.threadId))
+        .filter((t) => !isExcludedSearchThreadId(t.threadId))
         .map((t) => ({
-          ...t,
+          threadId: t.threadId,
+          projectId: t.projectId,
+          title: t.title,
+          activityAt: t.activityAt,
+          firstUserMessageId: t.firstUserMessageId,
           archived: !!t.archived,
+          // Project names count only for a real repository (see threadSearchContextTerms).
+          context: [
+            ...(repositoryByRoot.has(t.workspaceRoot)
+              ? [t.projectTitle, path.basename(t.workspaceRoot)]
+              : []),
+            ...(repositoryByRoot.get(t.workspaceRoot) ?? []),
+            t.context.worktreePath
+              ? threadSearchFolderName(path.basename(t.context.worktreePath))
+              : null,
+            t.context.branch,
+            ...threadPullRequestSearchTerms(t.context),
+          ].filter((term): term is string => !!term),
+          model: t.model,
           harness: t.providerInstanceId
             ? (defaultHarnessLabels.get(t.providerInstanceId) ??
               t.providerInstanceId.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " "))
@@ -220,7 +325,7 @@ export const make = Effect.gen(function* () {
         })),
     );
     const nextThreads = new Set(
-      rows.filter((t) => !isHelperThreadId(t.threadId)).map((t) => String(t.threadId)),
+      rows.filter((t) => !isExcludedSearchThreadId(t.threadId)).map((t) => String(t.threadId)),
     );
     if (repairSequence !== undefined)
       for (const id of nextThreads) if (!knownThreads.has(id)) restoredThreads.add(id);
@@ -231,7 +336,7 @@ export const make = Effect.gen(function* () {
     read(
       sql<{
         count: number;
-      }>`SELECT count(*) AS count FROM orchestration_v2_projection_messages m JOIN orchestration_v2_projection_threads t ON t.thread_id=m.thread_id JOIN projection_projects p ON p.project_id=t.project_id WHERE t.deleted_at IS NULL AND p.deleted_at IS NULL AND t.thread_id NOT GLOB ${`${MODEL_MANAGER_THREAD_ID_PREFIX}*`} AND t.thread_id NOT GLOB ${`${OVERVIEW_THREAD_ID_PREFIX}*`} AND m.streaming=0 AND m.role IN ('user','assistant') AND ${visibleThread}`,
+      }>`SELECT count(*) AS count FROM orchestration_v2_projection_messages m JOIN orchestration_v2_projection_threads t ON t.thread_id=m.thread_id JOIN projection_projects p ON p.project_id=t.project_id WHERE t.deleted_at IS NULL AND p.deleted_at IS NULL AND t.thread_id NOT GLOB ${`${MODEL_MANAGER_THREAD_ID_PREFIX}*`} AND t.thread_id NOT GLOB ${`${OVERVIEW_THREAD_ID_PREFIX}*`} AND t.thread_id NOT GLOB ${`${BOT_THREAD_ID_PREFIX}*`} AND m.streaming=0 AND m.role IN ('user','assistant') AND ${visibleThread}`,
     ).pipe(Effect.map((rows) => rows[0]?.count ?? 0)),
     Exit.match({ onSuccess: () => Duration.infinity, onFailure: () => Duration.zero }),
   );
@@ -252,6 +357,8 @@ export const make = Effect.gen(function* () {
     cursor = 0;
     backfillComplete = false;
     repairSequence = undefined;
+    knownThreads.clear();
+    streamingMessages.clear();
     restoredThreads.clear();
   });
   const backfillBatch = mutex
@@ -386,7 +493,7 @@ export const make = Effect.gen(function* () {
     index.keyword(input.query, input.limit, input.cursor).pipe(
       Effect.map((result) => ({
         ...result,
-        matches: result.matches.filter((match) => !isHelperThreadId(match.threadId)),
+        matches: result.matches.filter((match) => !isExcludedSearchThreadId(match.threadId)),
       })),
     );
   const searchWithBudget = (
@@ -419,16 +526,30 @@ export const make = Effect.gen(function* () {
         }
       }
       const semantic = vector ? yield* index.semantic(vector, 50) : { matches: [] };
-      const keywordIds = new Set(keyword.matches.map((match) => match.threadId));
+      const keywordById = new Map(keyword.matches.map((match) => [match.threadId, match]));
       let semanticSlots = limit - keyword.matches.length;
+      // The worker returns the eligible semantic chats in activity order.
+      const semanticMatches = semantic.matches.filter(
+        (match) =>
+          !isExcludedSearchThreadId(match.threadId) &&
+          (keywordById.has(match.threadId) || semanticSlots-- > 0),
+      );
+      const matches = fuseSearchResults(
+        input.query,
+        keyword.matches,
+        semanticMatches,
+        keyword.matches.length + semanticMatches.length,
+      ).map((match) => {
+        // Ranking belongs to the chat. Keep its topic match when fusion picks a different excerpt.
+        const about = keywordById.get(match.threadId)?.about;
+        return about === undefined || match.about === about ? match : { ...match, about };
+      });
       return {
         ...keyword,
-        matches: fuseSearchResults(
-          input.query,
-          keyword.matches,
-          semantic.matches.filter((match) => !isHelperThreadId(match.threadId)),
-          keyword.matches.length + semantic.matches.length,
-        ).filter((match) => keywordIds.has(match.threadId) || semanticSlots-- > 0),
+        matches: matches.sort(
+          (left, right) =>
+            compareThreadSearchOrder(left, right) || left.threadId.localeCompare(right.threadId),
+        ),
       };
     }).pipe(Effect.mapError(mapError));
   const search: ThreadSearch["Service"]["search"] = (input) =>
@@ -440,7 +561,7 @@ export const make = Effect.gen(function* () {
         : Stream.fromEffect(index.names(input.query, input.limit)).pipe(
             Stream.mapError(mapError),
             Stream.map((result) => ({
-              matches: result.matches.filter((match) => !isHelperThreadId(match.threadId)),
+              matches: result.matches.filter((match) => !isExcludedSearchThreadId(match.threadId)),
               complete: false,
             })),
             Stream.filter((result) => result.matches.length > 0),
@@ -472,12 +593,14 @@ export const make = Effect.gen(function* () {
         Effect.gen(function* () {
           if (event.type === "message.updated") {
             const m = event.payload;
-            if (isHelperThreadId(m.threadId)) return;
+            if (isExcludedSearchThreadId(m.threadId)) return;
             if (m.streaming || (m.role !== "user" && m.role !== "assistant")) {
               if (!streamingMessages.has(m.id)) {
                 yield* index.removeMessage(m.id);
                 streamingMessages.add(m.id);
               }
+              if (m.role === "user" && knownThreads.has(m.threadId))
+                yield* refreshActivity(m.threadId);
               return;
             }
             streamingMessages.delete(m.id);
@@ -493,7 +616,9 @@ export const make = Effect.gen(function* () {
                 updatedAt: DateTime.formatIso(m.updatedAt),
               },
             ]);
-          } else if (event.type === "run.updated") {
+            if (m.role === "user") yield* refreshActivity(m.threadId);
+          } else if (event.type === "run.updated" || event.type === "run.created") {
+            if (knownThreads.has(event.threadId)) yield* refreshActivity(event.threadId);
             if (event.payload.status !== "rolled_back" && event.payload.status !== "cancelled")
               return;
             const hidden = yield* read(sql<{ messageId: string }>`
@@ -501,6 +626,9 @@ export const make = Effect.gen(function* () {
               WHERE m.run_id = ${event.payload.id} AND ${hiddenMessage}
             `);
             for (const row of hidden) yield* index.removeMessage(row.messageId);
+          } else if (event.type === "thread.unsettled") {
+            if (knownThreads.has(event.threadId)) yield* refreshActivity(event.threadId);
+            else yield* refreshThreads;
           } else if (event.type.startsWith("thread.")) yield* refreshThreads;
         }),
       )
@@ -512,6 +640,8 @@ export const make = Effect.gen(function* () {
         cursor = 0;
         backfillComplete = false;
         repairSequence = undefined;
+        knownThreads.clear();
+        streamingMessages.clear();
         restoredThreads.clear();
         queryVectors.clear();
         retryEmbeddingsAt = 0;
@@ -528,6 +658,15 @@ export const make = Effect.gen(function* () {
         Stream.runForEach(({ event }) => handle(event).pipe(Effect.ignore)),
         Effect.forkScoped,
       );
+      if (Option.isSome(enrichment)) {
+        const changes = yield* enrichment.value.subscribeChanges;
+        yield* Stream.fromSubscription(changes).pipe(
+          Stream.filter((change) => change.repositoryIdentityResolved),
+          Stream.debounce("250 millis"),
+          Stream.runForEach(() => mutex.withPermits(1)(refreshThreads).pipe(Effect.ignore)),
+          Effect.forkScoped,
+        );
+      }
       yield* mutex.withPermits(1)(refreshThreads).pipe(Effect.ignore, Effect.forkScoped);
       yield* Effect.forever(
         Effect.gen(function* () {

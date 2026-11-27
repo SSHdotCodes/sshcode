@@ -454,6 +454,8 @@ export const mergeProviderSnapshot = (
   if (
     keepCachedReadiness &&
     nextProvider.refreshing &&
+    // A pending discovery probe can already know the new installed version.
+    (nextProvider.version === null || nextProvider.version === previousProvider.version) &&
     nextProvider.nativeSessions === undefined &&
     previousProvider.enabled &&
     previousProvider.installed &&

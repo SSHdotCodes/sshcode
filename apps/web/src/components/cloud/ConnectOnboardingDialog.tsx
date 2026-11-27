@@ -87,7 +87,9 @@ function ConfiguredConnectOnboardingDialog() {
   const [openForAccount, setOpenForAccount] = useState<string | null>(null);
   const [step, setStep] = useState<OnboardingStep>("devices");
   const [exposeEnvironment, setExposeEnvironment] = useState(true);
-  const [publishAgentActivity, setPublishAgentActivity] = useState(true);
+  // Opt-in: publishing sends project and chat titles to T3's relay, and only phone builds
+  // with push (not personal-team builds) can use them.
+  const [publishAgentActivity, setPublishAgentActivity] = useState(false);
   const [dontShowAgain, setDontShowAgain] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const prefilledFromLinkStateRef = useRef(false);
@@ -138,7 +140,7 @@ function ConfiguredConnectOnboardingDialog() {
     setRequestedAccount(null);
     prefilledFromLinkStateRef.current = false;
     setExposeEnvironment(true);
-    setPublishAgentActivity(true);
+    setPublishAgentActivity(false);
     setDontShowAgain(false);
     setStep(canManageRelay && controller.linkState.target !== null ? "publish" : "devices");
     setOpenForAccount(requestedAccount);
@@ -166,7 +168,7 @@ function ConfiguredConnectOnboardingDialog() {
     }
   }, [controller, isSignedIn, openForAccount, requestedAccount, userId]);
 
-  // Toggles default on, but an environment that is already linked should show
+  // The tunnel defaults on and publishing off, but an environment that is already linked should show
   // its actual configuration instead of silently proposing to rewrite it.
   // Only when the link belongs to the account being onboarded, though — after
   // an account switch the cached link state can still describe the previous
@@ -374,7 +376,7 @@ function PublishStep({
         />
         <OnboardingToggleRow
           title="Publish agent activity"
-          description="Send activity from this environment to your mobile clients for push notifications and Live Activities."
+          description="Send project and chat titles and status through T3's relay, for push notifications and Live Activities on phone builds that support push. Leave off if your phone app is a personal build."
           checked={publishAgentActivity}
           disabled={disabled}
           onCheckedChange={onPublishAgentActivityChange}

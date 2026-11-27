@@ -54,7 +54,7 @@ const MENTION_TOKEN_REGEX = /(^|\s)@(?:"((?:\\.|[^"\\])*)"|([^\s@"[][^\s@"]*))(?
  */
 const MAX_FILE_LINK_LABEL_LENGTH = 512;
 const FILE_LINK_TOKEN_REGEX = new RegExp(
-  `(^|\\s)\\[((?:\\\\.|[^\\]\\\\]){0,${MAX_FILE_LINK_LABEL_LENGTH}})\\]\\(([^)\\s]+)\\)(?=\\s)`,
+  `(^|\\s)\\[((?:\\\\.|[^[\\]\\\\]){0,${MAX_FILE_LINK_LABEL_LENGTH}})\\]\\(([^)\\s]+)\\)(?=\\s)`,
   "g",
 );
 const URI_SCHEME_REGEX = /^[A-Za-z][A-Za-z0-9+.-]*:/;
@@ -71,16 +71,19 @@ function collectMentionTokens(text: string): ComposerInlineToken[] {
     const prefix = match[1] ?? "";
     const label = (match[2] ?? "").replace(/\\(.)/g, "$1");
     const encodedPath = match[3] ?? "";
+    if (encodedPath.startsWith("//")) {
+      continue;
+    }
     let path = encodedPath;
     try {
       path = decodeURIComponent(encodedPath);
     } catch {
       // Preserve malformed source rather than dropping a user-authored token.
     }
+    const hasExternalScheme = URI_SCHEME_REGEX.test(path) && !WINDOWS_DRIVE_PATH_REGEX.test(path);
     path = composerFileLinkPath(encodedPath, path);
     const separatorIndex = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
     const basename = separatorIndex >= 0 ? path.slice(separatorIndex + 1) : path;
-    const hasExternalScheme = URI_SCHEME_REGEX.test(path) && !WINDOWS_DRIVE_PATH_REGEX.test(path);
     if (!path || hasExternalScheme || label !== basename) {
       continue;
     }
@@ -99,7 +102,8 @@ function collectMentionTokens(text: string): ComposerInlineToken[] {
     const fullMatch = match[0];
     const prefix = match[1] ?? "";
     const quotedPath = match[2];
-    const path = quotedPath !== undefined ? quotedPath.replace(/\\(.)/g, "$1") : (match[3] ?? "");
+    const path =
+      quotedPath !== undefined ? quotedPath.replace(/\\(["\\])/g, "$1") : (match[3] ?? "");
     if (!path || (quotedPath === undefined && SCOPED_PACKAGE_REFERENCE_REGEX.test(path))) {
       continue;
     }
@@ -154,5 +158,15 @@ export function collectComposerInlineTokens(
     }
   }
 
-  return [...matches].sort((left, right) => left.start - right.start);
+  const sorted = [...matches].sort(
+    (left, right) => left.start - right.start || right.end - left.end,
+  );
+  const resolved: ComposerInlineToken[] = [];
+  let cursor = 0;
+  for (const token of sorted) {
+    if (token.start < cursor) continue;
+    resolved.push(token);
+    cursor = token.end;
+  }
+  return resolved;
 }

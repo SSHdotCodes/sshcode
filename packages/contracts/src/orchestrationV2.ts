@@ -2,6 +2,7 @@ import { ProviderCredentialRecovery } from "./providerCredential.ts";
 import { ApiKeyRequest } from "./apiKey.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import { withRecordIdTable } from "./orchestrationV2IdTable.ts";
+import { OrchestrationV2LiveProgress } from "./liveProgress.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaAST from "effect/SchemaAST";
@@ -670,6 +671,8 @@ export const OrchestrationV2Run = Schema.Struct({
   providerRetryContinuationOfRunId: Schema.optional(RunId),
   /** Links server-generated restart continuations to the interrupted run. */
   restartContinuationOfRunId: Schema.optional(RunId),
+  /** A manual Resume that re-sends a previously dropped user prompt. */
+  promptRecoveryOfRunId: Schema.optional(RunId),
   /** A user-requested account continuation, including a move back to the original instance. */
   accountMoveContinuation: Schema.optional(Schema.Literal(true)),
   /** The delegated task this run answers, including a follow-up in an existing child thread. */
@@ -930,6 +933,10 @@ export const OrchestrationV2Subagent = Schema.Struct({
   title: Schema.NullOr(Schema.String),
   model: Schema.NullOr(Schema.String),
   modelSelection: Schema.optional(ModelSelection),
+  /** A provider's own subagent kind, when it has one (agy's "image-generator"). */
+  nativeType: Schema.optional(TrimmedNonEmptyString),
+  /** Absolute paths of the pictures the subagent made, in the order it made them. */
+  imagePaths: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   // Parent-wake policy for app-owned tasks: "always" offers a continuation on
   // every terminal (async delegations; queue_after_active sequences it behind
   // a live parent run), "settled_only" offers only when the parent has no
@@ -1349,6 +1356,8 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
   ]),
   /** This provider turn cannot accept native steering. */
   steeringUnavailable: Schema.optionalKey(Schema.Literal(true)),
+  /** The provider interrupted this turn before recording its user message. */
+  promptDropped: Schema.optionalKey(Schema.Literal(true)),
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
   tokenUsage: Schema.optional(OrchestrationV2ProviderTurnTokenUsage),
@@ -1655,6 +1664,13 @@ const OrchestrationV2ProviderFailureMessage = TrimmedNonEmptyString.check(
 );
 const OrchestrationV2ProviderFailureCode = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
 
+export const GoogleAccountVerificationUrl = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(4096),
+  Schema.isPattern(
+    /^https:\/\/accounts\.google\.com\/(?:v3\/)?signin\/continue\?[^\s\p{Cc}\\#]+$/u,
+  ),
+);
+
 /**
  * Transport-safe failure information suitable for persistence and display.
  * Producers must redact credentials before constructing this value. The
@@ -1667,6 +1683,7 @@ export const OrchestrationV2ProviderFailure = Schema.Struct({
   retryable: Schema.NullOr(Schema.Boolean),
   /** Reported reset time; absent when the provider cannot name one. */
   resetAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  verificationUrl: Schema.optionalKey(GoogleAccountVerificationUrl),
   /** The provider's rejected usage-window ids, when it names them. */
   usageLimitWindowIds: Schema.optionalKey(
     Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
@@ -1753,6 +1770,13 @@ export type OrchestrationV2SecretRequestStatus = typeof OrchestrationV2SecretReq
 /** `file`: the value goes to an owner-only file the agent's shell commands can read. */
 export const OrchestrationV2SecretRequestDelivery = Schema.Literal("file");
 
+/** One part of a credential asked for on one card, such as a key ID beside its secret. */
+export const OrchestrationV2SecretRequestField = Schema.Struct({
+  label: TrimmedNonEmptyString,
+  placeholder: Schema.optional(Schema.String),
+});
+export type OrchestrationV2SecretRequestField = typeof OrchestrationV2SecretRequestField.Type;
+
 /**
  * A secret an agent asked the user for. The value never passes through
  * orchestration: the item carries only what was asked and how it was answered.
@@ -1764,6 +1788,8 @@ const OrchestrationV2SecretRequestFields = {
   placeholder: Schema.optional(Schema.String),
   apiKey: Schema.optional(ApiKeyRequest),
   delivery: Schema.optional(OrchestrationV2SecretRequestDelivery),
+  /** A credential in parts: one value per field, in order. Absent for one value. */
+  fields: Schema.optional(Schema.Array(OrchestrationV2SecretRequestField)),
   secretStatus: OrchestrationV2SecretRequestStatus,
 } as const;
 
@@ -2351,6 +2377,11 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
    */
   currentStep: Schema.optional(Schema.NullOr(OrchestrationV2ThreadShellStep)),
   /**
+   * Stages, time left and short updates while the chat works, only when Settings > Agents token
+   * use is High. Omitted otherwise and by servers that predate it.
+   */
+  liveProgress: Schema.optional(OrchestrationV2LiveProgress),
+  /**
    * What the final reply of the latest finished run asks of the user, from a small
    * local classifier. Omitted by servers that predate it.
    */
@@ -2381,7 +2412,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   chatTab: Schema.optional(Schema.NullOr(ChatTabRef)),
   /** Manual Long-running placement. Absent means the automatic rule. */
   longRunningOverride: Schema.optional(Schema.NullOr(Schema.Literals(["include", "exclude"]))),
-  /** Distinct America/New_York days with a run or a user-authored message. Omitted at zero. */
+  /** Distinct server-local days with a run or a user-authored message. Omitted at zero. */
   activityDayCount: Schema.optional(Schema.Number),
   /** Latest of those instants. Omitted when the chat has none. */
   activityLastAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -3238,6 +3269,8 @@ export const OrchestrationV2MessageDispatchCommand = Schema.Struct({
   usageLimitRecoveryRequestId: Schema.optional(CommandId),
   /** Resolve untargeted delivery against the server's serialized thread state. */
   deliveryIntent: Schema.optional(Schema.Literals(["auto", "steer", "restart"])),
+  /** Internal notices may use native steering only, without starting or interrupting a turn. */
+  steerExistingOnly: Schema.optional(Schema.Boolean),
   delegatedCompletion: Schema.optional(
     Schema.Struct({
       parentRunId: RunId,
@@ -3810,6 +3843,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     placeholder: Schema.optional(Schema.String),
     apiKey: Schema.optional(ApiKeyRequest),
     delivery: Schema.optional(OrchestrationV2SecretRequestDelivery),
+    fields: Schema.optional(Schema.Array(OrchestrationV2SecretRequestField)),
     secretStatus: OrchestrationV2SecretRequestStatus,
     /** Handle-only notice, committed to the outbox with the answer. Never the value. */
     answerNotice: Schema.optional(Schema.String),

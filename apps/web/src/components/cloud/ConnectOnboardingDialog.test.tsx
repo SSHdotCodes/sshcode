@@ -168,6 +168,27 @@ afterEach(async () => {
 });
 
 describe("ConnectOnboardingDialog", () => {
+  it("starts a new link with agent activity publishing off", async () => {
+    testState.linkStateData = {
+      linked: false,
+      cloudUserId: null,
+      relayUrl: null,
+      relayIssuer: null,
+      publishAgentActivity: false,
+    };
+    await renderDialog();
+    await signIn("account-a");
+
+    const toggles = renderer!.root.findAll(
+      (node) => node.type === "button" && node.props.role === "switch",
+    );
+    expect(toggles.map((toggle) => toggle.props["aria-checked"])).toEqual([true, false]);
+    await act(() => continueButton().props.onClick());
+    expect(testState.reconcile).toHaveBeenCalledWith(
+      expect.objectContaining({ managedTunnel: true, publish: false }),
+    );
+  });
+
   it("prefills only from the account being onboarded", async () => {
     testState.linkStateData = linkedState("account-a", true, true);
     await renderDialog();

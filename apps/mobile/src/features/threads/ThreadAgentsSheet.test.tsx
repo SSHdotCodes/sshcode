@@ -79,6 +79,8 @@ vi.mock("../discord/DiscordMembers", () => ({
 vi.mock("../../components/AndroidScreenHeader", () => ({ AndroidSheetHeader: () => null }));
 // Thumbs load native symbols and server state; this sheet test covers rows and navigation.
 vi.mock("./SubagentGradeBadge", () => ({ SubagentGradeBadge: () => null }));
+// The board chip reads state that opens native storage; these rows have no team board.
+vi.mock("./TeamBoardPresenceChip", () => ({ TeamBoardPresenceChip: () => null }));
 // The form and footer have their own inputs and native keyboard state; the sheet places them.
 vi.mock("./NewSubagentForm", () => ({
   AgentsFooter: ({ onNewSubagent }: { onNewSubagent: () => void }) => (

@@ -1,3 +1,4 @@
+import { useWithoutBotThreads } from "../bots/state";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigation } from "@react-navigation/native";
 import { PROVIDER_DISPLAY_NAMES } from "@t3tools/contracts";
@@ -172,7 +173,7 @@ export function WorkspaceStatusAccessory(props: {
   const insets = useSafeAreaInsets();
   const { visible, items, connection, ringChoices, combinedRings } = useStatusAccessoryState();
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
-  const threads = useNavigationThreadShells();
+  const threads = useWithoutBotThreads(useNavigationThreadShells());
   const previewCounts = useAtomValue(shellPreviewPresentation.countsAtom);
   // The rings pool windows by the minute too, so they share the countdown's clock.
   const now = useMinuteClock(statusAccessoryItemsNeedClock(items));
@@ -335,13 +336,13 @@ export function WorkspaceStatusAccessory(props: {
   const openUsage = () =>
     navigation.navigate("SettingsSheet", {
       screen: "SettingsContent",
-      params: { screen: "SettingsUsage" },
+      params: { screen: "SettingsUsage", initial: false },
     });
   const openSettings = () => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     navigation.navigate("SettingsSheet", {
       screen: "SettingsContent",
-      params: { screen: "SettingsStatusAccessory" },
+      params: { screen: "SettingsStatusAccessory", initial: false },
     });
   };
 

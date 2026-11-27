@@ -585,31 +585,9 @@ function shouldRetainDecodedRecord(
   );
 }
 
-/**
- * SSHCode runs its own agent sessions inside disposable worktrees. Their
- * transcripts look exactly like user sessions, but re-importing the app's own
- * sandboxes as projects is never right. Matches this server's configured
- * worktrees directory plus the conventional `.t3/worktrees` layout, which
- * also catches sandboxes from other T3 homes on the same machine. Separators
- * are normalized (and, on Windows, case folded) so the prefix match holds
- * there too. Callers check both the recorded spelling and its realpath so a
- * symlink into the worktrees directory cannot bypass the filter.
- */
 function normalizeForWorktreeMatch(value: string, caseFold: boolean): string {
   const normalized = `${value.replaceAll("\\", "/")}/`;
   return caseFold ? normalized.toLowerCase() : normalized;
-}
-
-function isT3ManagedWorktree(
-  candidatePath: string,
-  worktreesDir: string,
-  caseFold: boolean,
-): boolean {
-  const normalized = normalizeForWorktreeMatch(candidatePath, caseFold);
-  return (
-    normalized.startsWith(normalizeForWorktreeMatch(worktreesDir, caseFold)) ||
-    normalized.includes("/.t3/worktrees/")
-  );
 }
 
 /** Extract `cwd` from a session-meta record, tolerating the shapes each CLI writes. */
@@ -875,17 +853,31 @@ export const make = Effect.gen(function* () {
     path.join(homeDir, "Documents", "Codex"),
   ];
 
-  const isExcludedProjectPath = (candidatePath: string) =>
-    excludedProjectRoots.has(normalizeProjectPathForComparison(candidatePath)) ||
-    excludedProjectAncestors.some((ancestor) =>
-      normalizeForWorktreeMatch(candidatePath, foldWorktreeCase).startsWith(
-        normalizeForWorktreeMatch(ancestor, foldWorktreeCase),
-      ),
-    ) ||
-    normalizeForWorktreeMatch(candidatePath, foldWorktreeCase).startsWith(
-      normalizeForWorktreeMatch(baseDir, foldWorktreeCase),
-    ) ||
-    isT3ManagedWorktree(candidatePath, worktreesDir, foldWorktreeCase);
+  const projectPathExclusion = Effect.gen(function* () {
+    // Both the configured roots and recorded session paths can use filesystem aliases.
+    const realBaseDir = yield* fileSystem
+      .realPath(baseDir)
+      .pipe(Effect.orElseSucceed(() => baseDir));
+    const realWorktreesDir = yield* fileSystem
+      .realPath(worktreesDir)
+      .pipe(Effect.orElseSucceed(() => worktreesDir));
+    const excludedPrefixes = [
+      ...excludedProjectAncestors,
+      baseDir,
+      realBaseDir,
+      worktreesDir,
+      realWorktreesDir,
+    ].map((ancestor) => normalizeForWorktreeMatch(ancestor, foldWorktreeCase));
+
+    return (candidatePath: string) => {
+      const normalized = normalizeForWorktreeMatch(candidatePath, foldWorktreeCase);
+      return (
+        excludedProjectRoots.has(normalizeProjectPathForComparison(candidatePath)) ||
+        excludedPrefixes.some((prefix) => normalized.startsWith(prefix)) ||
+        normalized.includes("/.t3/worktrees/")
+      );
+    };
+  });
 
   const listDirectory = (directory: string) =>
     fileSystem.readDirectory(directory).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
@@ -1439,6 +1431,7 @@ export const make = Effect.gen(function* () {
   const scan: AgentSessionScanner["Service"]["scan"] = Effect.gen(function* () {
     const { candidates: raw, truncated } = yield* collectCandidates();
     cachedCandidates = raw;
+    const isExcludedProjectPath = yield* projectPathExclusion;
 
     // Filesystem identity merges symlinks and case aliases without collapsing
     // distinct case-sensitive directories.
@@ -1569,6 +1562,7 @@ export const make = Effect.gen(function* () {
   ) {
     const root = path.resolve(expandHomePath(workspaceRoot, homeDir));
     const realRoot = yield* fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root));
+    const isExcludedProjectPath = yield* projectPathExclusion;
     if (isExcludedProjectPath(root) || isExcludedProjectPath(realRoot)) return Stream.empty;
     const rootIdentity = yield* directoryIdentity(root);
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);

@@ -1,5 +1,6 @@
 import { CommandId, MessageId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -23,6 +24,11 @@ export const MONITOR_IDLE_WAKE_INTERVAL_MS = 120_000;
 const MONITOR_EXIT_GRACE_MS = 2_000;
 /** Detail kept when held outputs are delivered together; the latest lines win. */
 const MAX_COMBINED_DETAIL = 8_000;
+const deliveryRetry = Schedule.exponential("2 seconds").pipe(
+  Schedule.modifyDelay(({ duration }) =>
+    Effect.succeed(Duration.min(duration, Duration.minutes(1))),
+  ),
+);
 
 interface MonitorDeliveryState {
   lastDeliveredAt: number | null;
@@ -92,6 +98,12 @@ export const layer = Layer.effectDiscard(
       if (events.length === 0) return Effect.void;
       const event = combineEvents(events);
       const key = `${event.generation}:${event.monitorId}:${event.sequence}`;
+      const terminal = event.notification.outcome !== "updated";
+      const rejected = (error: { readonly _tag: string }) =>
+        Effect.logWarning("Monitor notification was permanently rejected", {
+          monitorId: event.monitorId,
+          errorClass: error._tag,
+        });
       // The ids are fixed per event, so a retry after an unclear failure can't post twice.
       const send = Effect.suspend(() => {
         if (!monitors.canDeliver(event)) return Effect.void;
@@ -109,22 +121,29 @@ export const layer = Layer.effectDiscard(
             createdBy: "agent",
             creationSource: "server",
           })
-          .pipe(Effect.asVoid);
+          .pipe(
+            Effect.asVoid,
+            Effect.catchTags({
+              OrchestratorCommandPreviouslyRejectedError: rejected,
+              OrchestratorCommandIdConflictError: rejected,
+            }),
+          );
       });
-      // Retire delivered or invalidated events. A failure retries in the background
-      // (off the delivery lock) and stays saved for replay if retries are exhausted.
+      // Keep retrying exits off the delivery lock. A transient outage must not
+      // leave a finished monitor keeping its thread open until the next restart.
       return send.pipe(
         Effect.andThen(acknowledgeAll),
         Effect.catchCause(() =>
           Effect.sleep("2 seconds").pipe(
             Effect.andThen(send),
-            Effect.retry({ schedule: Schedule.exponential("2 seconds"), times: 5 }),
+            Effect.retry({ schedule: deliveryRetry, ...(terminal ? {} : { times: 5 }) }),
             Effect.andThen(acknowledgeAll),
             Effect.catchCause((cause) =>
-              Effect.logWarning("Monitor notification delivery failed; kept for replay", {
+              Effect.logWarning("Monitor notification delivery failed", {
                 monitorId: event.monitorId,
+                terminal,
                 cause,
-              }),
+              }).pipe(Effect.andThen(terminal ? Effect.void : acknowledgeAll)),
             ),
             Effect.forkIn(scope),
             Effect.asVoid,

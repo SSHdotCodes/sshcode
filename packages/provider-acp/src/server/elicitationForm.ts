@@ -180,6 +180,7 @@ function typedAnswer(
 export function parseElicitationForm(
   requestedSchema: unknown,
   message: string,
+  options?: { readonly useFieldTitleAsQuestion?: boolean },
 ): ElicitationForm | undefined {
   const schema = unknownRecord(requestedSchema);
   const required = new Set(
@@ -201,36 +202,37 @@ export function parseElicitationForm(
     fields.set(id, parsed.field);
     parsedFields.push({ id, property, options: parsed.options });
   }
-  // An optional `<id>__other` text field (OMP's ask dialog) follows an optional single
-  // choice `<id>`: ask them as one question and send custom text to the companion.
+  // An optional `<id>__other` or `<id>_other` text field is the free-text answer to optional
+  // single choice `<id>`: ask them as one question and send custom text to the companion.
   // Multi-select keeps both fields, since it can answer with options and text.
   const companions = new Map<string, string>();
   for (const [id, field] of fields) {
-    const companionId = `${id}__other`;
-    if (
-      field.kind === "choice" &&
-      fields.get(companionId)?.kind === "text" &&
-      !required.has(id) &&
-      !required.has(companionId)
-    ) {
+    if (field.kind !== "choice" || required.has(id)) continue;
+    const companionId = [`${id}__other`, `${id}_other`].find(
+      (candidate) => fields.get(candidate)?.kind === "text" && !required.has(candidate),
+    );
+    if (companionId !== undefined) {
       companions.set(id, companionId);
     }
   }
   const folded = new Set(companions.values());
   const questions: OrchestrationV2UserInputQuestion[] = [];
-  for (const { id, property, options } of parsedFields) {
+  for (const { id, property, options: questionOptions } of parsedFields) {
     if (folded.has(id)) continue;
     const kind = fields.get(id)?.kind;
+    const title = text(property.title);
+    const description = text(property.description);
+    const titleAsQuestion = options?.useFieldTitleAsQuestion && description === undefined;
     questions.push({
       id,
-      header: text(property.title) ?? `Question ${questions.length + 1}`,
-      question: text(property.description) ?? message,
-      options,
+      header: (titleAsQuestion ? undefined : title) ?? `Question ${questions.length + 1}`,
+      question: description ?? (titleAsQuestion ? title : undefined) ?? message,
+      options: questionOptions,
       ...(kind === "text" || kind === "number" || companions.has(id)
         ? {}
         : { allowCustomAnswer: false }),
       ...(kind === "multiChoice" ? { multiSelect: true } : {}),
-      ...(kind === "text" && !required.has(id) ? { required: false } : {}),
+      ...((kind === "text" || kind === "number") && !required.has(id) ? { required: false } : {}),
     });
   }
   return {

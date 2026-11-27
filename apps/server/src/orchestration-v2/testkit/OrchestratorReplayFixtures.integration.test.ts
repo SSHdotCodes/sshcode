@@ -30,6 +30,7 @@ import {
   MuseOrchestratorReplayHarness,
 } from "../Adapters/MuseAdapterV2.testkit.ts";
 import { PiOrchestratorReplayHarness } from "../Adapters/PiAdapterV2.testkit.ts";
+import { nativeContextState } from "../nativeContextState.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { provideDeterministicTestRuntime } from "./DeterministicRuntime.ts";
 import { ORCHESTRATOR_REPLAY_FIXTURES } from "./fixtures/index.ts";
@@ -338,6 +339,39 @@ describe("orchestrator replay fixtures", () => {
       buildInput: provider.buildInput ?? fixture.buildInput,
       driver: provider,
       measure: true,
+    }),
+  );
+
+  it.effect.each([true, false])("recovers a Codex prompt after Stop (received: %s)", (received) =>
+    Effect.gen(function* () {
+      const fixture = ORCHESTRATOR_REPLAY_FIXTURES.find(({ name }) => name === "turn_interrupt")!;
+      const driver = fixture.providers.find(({ driver }) => driver === "codex")!;
+      const result = yield* runFixtureProviderWithRegisteredHarness({
+        fixtureName: fixture.name,
+        buildInput: fixture.buildInput,
+        driver,
+        transformTranscript: (transcript) => ({
+          ...transcript,
+          entries: transcript.entries.filter(
+            (entry) =>
+              received ||
+              entry.type !== "emit_inbound" ||
+              (entry.label !== "item/started" && entry.label !== "item/completed"),
+          ),
+        }),
+      });
+      const projection = [...result.projections.values()][0]!;
+      const stopped = projection.runs[0]!;
+      const providerThread = projection.providerThreads[0]!;
+      assert.equal(projection.providerTurns[0]?.promptDropped, received ? undefined : true);
+      // The same native session's next send uses this selection to build its recovery handoff.
+      const next = nativeContextState({
+        projection,
+        providerThread,
+        nativeThreadId: providerThread.nativeThreadRef?.nativeId,
+        run: { ...stopped, ordinal: stopped.ordinal + 1 },
+      });
+      assert.deepEqual([...next.missedRunIds], received ? [] : [stopped.id]);
     }),
   );
 

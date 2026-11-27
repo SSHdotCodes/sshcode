@@ -9,7 +9,7 @@ import { AgentsFooter, NewSubagentForm } from "./NewSubagentForm";
 
 const state = vi.hoisted(() => ({
   session: null as ExistingThreadSettingsRouteSession | null,
-  config: new Map([["env", { providers: [] }]]),
+  config: new Map<string, { providers: never[]; settings?: unknown }>([["env", { providers: [] }]]),
   shell: { latestRun: null, subagentsEnabled: false },
   canOperate: true,
   command: vi.fn(async () => ({ _tag: "Success" })),
@@ -94,11 +94,20 @@ vi.mock("../../components/ProviderIcon", () => ({ ProviderIcon: () => null }));
 vi.mock("../../components/ThemedSwitch", () => ({
   ThemedSwitch: ({
     value,
+    disabled,
     onValueChange,
   }: {
     value: boolean;
+    disabled?: boolean;
     onValueChange: (value: boolean) => void;
-  }) => <button role="switch" aria-checked={value} onClick={() => onValueChange(!value)} />,
+  }) => (
+    <button
+      role="switch"
+      aria-checked={value}
+      disabled={disabled}
+      onClick={() => onValueChange(!value)}
+    />
+  ),
 }));
 
 it("follows another device turning subagents off after this phone turned them on", async () => {
@@ -127,6 +136,36 @@ it("follows another device turning subagents off after this phone turned them on
     expect(toggle.getAttribute("aria-checked")).toBe("false");
   } finally {
     act(() => root.unmount());
+  }
+});
+
+it("shows the switch off and locked while Settings > Agents has subagents at None", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  state.shell = { latestRun: null, subagentsEnabled: true };
+  state.config = new Map([
+    ["env", { providers: [], settings: { agentBehavior: { subagents: "none" } } }],
+  ]);
+  state.command.mockClear();
+  try {
+    act(() =>
+      root.render(
+        <AgentsFooter
+          environmentId={EnvironmentId.make("env")}
+          threadId={ThreadId.make("thread")}
+          onNewSubagent={() => {}}
+        />,
+      ),
+    );
+    const toggle = container.querySelector<HTMLButtonElement>('[role="switch"]')!;
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(container.textContent).toContain("Off in Settings › Agents");
+    await act(async () => toggle.click());
+    expect(state.command).not.toHaveBeenCalled();
+  } finally {
+    act(() => root.unmount());
+    state.config = new Map([["env", { providers: [] }]]);
   }
 });
 

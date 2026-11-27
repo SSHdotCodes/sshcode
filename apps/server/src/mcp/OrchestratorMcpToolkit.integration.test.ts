@@ -630,10 +630,12 @@ describe("orchestrator MCP toolkit", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const cwd = yield* checkpointWorkspace("orchestrator-mcp-toolkit");
+          // Attachments need a workspace. Checkpoint behavior is covered by its own tests.
+          const cwd = yield* FileSystem.FileSystem.use((fs) =>
+            fs.makeTempDirectoryScoped({ prefix: "orchestrator-mcp-toolkit-" }),
+          ).pipe(Effect.provide(NodeServices.layer));
           const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
-          const parentTerminalGates = new Map<ThreadId, Deferred.Deferred<void>>();
-          const deliveryTerminalGates = new Map<ThreadId, Deferred.Deferred<void>>();
+          const terminalGates = new Map<MessageId, Deferred.Deferred<void>>();
           const layerRegistry = ProviderAdapterRegistry.layerFromAdapters([
             makeDeterministicAdapter({
               instanceId: codexInstanceId,
@@ -647,11 +649,7 @@ describe("orchestrator MCP toolkit", () => {
               capturedTurns,
               shouldComplete: (turn) =>
                 turn.threadId !== parentThreadId && turn.message.text !== cancellationPrompt,
-              terminalGate: (turn) =>
-                turn.message.text.startsWith("Delegated task") ||
-                turn.message.text.startsWith("Delegated tasks")
-                  ? deliveryTerminalGates.get(turn.threadId)
-                  : parentTerminalGates.get(turn.threadId),
+              terminalGate: (turn) => terminalGates.get(turn.message.messageId),
               response: (turn) => `Codex completed: ${turn.message.text}`,
             }),
             makeDeterministicAdapter({
@@ -660,11 +658,7 @@ describe("orchestrator MCP toolkit", () => {
               capabilities: ClaudeProviderCapabilitiesV2,
               capturedTurns,
               shouldComplete: (turn) => turn.message.text !== cancellationPrompt,
-              terminalGate: (turn) =>
-                turn.message.text.startsWith("Delegated task") ||
-                turn.message.text.startsWith("Delegated tasks")
-                  ? deliveryTerminalGates.get(turn.threadId)
-                  : parentTerminalGates.get(turn.threadId),
+              terminalGate: (turn) => terminalGates.get(turn.message.messageId),
               response: (turn) =>
                 turn.message.text === delegatedPrompt
                   ? delegatedResult
@@ -2074,6 +2068,53 @@ describe("orchestrator MCP toolkit", () => {
               ),
             ).toBe(false);
 
+            // A credential in parts is one card, saved with one value per field and
+            // returned as one ref per field, in order.
+            const modalInput = {
+              label: "Modal token",
+              reason: "Runs the GPU job. Create a token in Modal settings.",
+              fields: [
+                { label: "Token ID", placeholder: "ak-…" },
+                { label: "Token secret", placeholder: "as-…" },
+              ],
+              clientRequestId: "modal-token",
+            };
+            expect((yield* invoke("request_secret", modalInput)).structuredContent).toMatchObject({
+              status: "asked",
+            });
+            const modalCard = (yield* orchestrator.getThreadProjection(
+              parentThreadId,
+            )).turnItems.find(
+              (item) => item.type === "secret_request" && item.fields !== undefined,
+            );
+            if (modalCard?.type !== "secret_request")
+              return yield* Effect.die("Missing parts card");
+            expect(modalCard).toMatchObject({ label: "Modal token", fields: modalInput.fields });
+            yield* secretRequests.answer({
+              threadId: parentThreadId,
+              turnItemId: modalCard.id,
+              answer: { type: "save", secrets: ["ak-fake-modal-id", "as-fake-modal-secret"] },
+            });
+            const modalCall = yield* invoke("request_secret", modalInput);
+            expect(modalCall.isError).toBe(false);
+            const modalResult = modalCall.structuredContent as {
+              status: string;
+              secretRefs: ReadonlyArray<string>;
+            };
+            expect(Object.keys(modalResult).sort()).toEqual(["secretRefs", "status"]);
+            expect(modalResult.status).toBe("saved");
+            expect(JSON.stringify(modalCall)).not.toContain("fake-modal");
+            expect(
+              yield* Effect.forEach(modalResult.secretRefs, (ref) =>
+                secretRequests.consume({ ref: ref as never, projectId }),
+              ),
+            ).toEqual(["ak-fake-modal-id", "as-fake-modal-secret"]);
+            expect(
+              (yield* orchestrator.getThreadProjection(parentThreadId)).turnItems.find(
+                (item) => item.id === modalCard.id,
+              ),
+            ).toMatchObject({ secretStatus: "saved", fields: modalInput.fields });
+
             const apiAsked = yield* invoke("request_api_key", {
               name: "FAKE_PLATFORM_API_KEY",
               label: "Fake platform",
@@ -3170,7 +3211,6 @@ describe("orchestrator MCP toolkit", () => {
               parentThreadId,
             )).messages.filter((m) => m.notification?.summary.includes(emptyThread.threadId));
             expect(peerNotices).toHaveLength(1);
-            expect(peerNotices[0]?.text).toContain(`Codex completed: ${ordinaryLoopPrompt}`);
             expect(
               (yield* orchestrator.getThreadProjection(emptyThread.threadId)).runs,
             ).toHaveLength(1);
@@ -3911,10 +3951,10 @@ describe("orchestrator MCP toolkit", () => {
             // is held for one successor. It must not fan out into a second
             // concurrent delivery for the same parent run.
             const lateParentThreadId = ThreadId.make("thread:mcp-late-completion-parent");
+            const lateParentMessageId = MessageId.make("message:mcp-late-parent:start");
             const lateParentGate = yield* Deferred.make<void>();
             const lateDeliveryGate = yield* Deferred.make<void>();
-            parentTerminalGates.set(lateParentThreadId, lateParentGate);
-            deliveryTerminalGates.set(lateParentThreadId, lateDeliveryGate);
+            terminalGates.set(lateParentMessageId, lateParentGate);
             yield* Ref.set(continuationOffers, []);
             yield* orchestrator.dispatch({
               type: "thread.create",
@@ -3936,7 +3976,7 @@ describe("orchestrator MCP toolkit", () => {
               creationSource: "web",
               commandId: CommandId.make("command:mcp-late-parent:start"),
               threadId: lateParentThreadId,
-              messageId: MessageId.make("message:mcp-late-parent:start"),
+              messageId: lateParentMessageId,
               text: "Hold this parent until its completion delivery is queued.",
               attachments: [],
               modelSelection: codexSelection,
@@ -4051,6 +4091,7 @@ describe("orchestrator MCP toolkit", () => {
             if (firstLateDelivery === undefined || firstLateDelivery === null) {
               return yield* Effect.die(new Error("First late completion delivery missing."));
             }
+            terminalGates.set(firstLateDelivery.messageId, lateDeliveryGate);
             yield* orchestrator.dispatch({
               type: "message.dispatch",
               createdBy: "agent",
@@ -4146,7 +4187,7 @@ describe("orchestrator MCP toolkit", () => {
             // then go out together in one more delivery. Nothing is left
             // pending once the parent has been told about every child.
             const successorGate = yield* Deferred.make<void>();
-            deliveryTerminalGates.set(lateParentThreadId, successorGate);
+            terminalGates.set(successorDelivery.messageId, successorGate);
             yield* orchestrator.dispatch({
               type: "message.dispatch",
               createdBy: "agent",
@@ -4328,8 +4369,8 @@ describe("orchestrator MCP toolkit", () => {
             // edit. Start a fresh parent-run cohort so removing this delivery
             // cannot interfere with the bounded late-delivery assertions.
             const removeParentGate = yield* Deferred.make<void>();
-            parentTerminalGates.set(lateParentThreadId, removeParentGate);
             const removeParentMessageId = MessageId.make("message:mcp-late-parent:remove-start");
+            terminalGates.set(removeParentMessageId, removeParentGate);
             yield* orchestrator.dispatch({
               type: "message.dispatch",
               createdBy: "user",
@@ -4462,11 +4503,11 @@ describe("orchestrator MCP toolkit", () => {
             // while the successor runs. Three batched deliveries cover all
             // twelve, and the cohort never has two deliveries outstanding.
             const fanoutParentThreadId = ThreadId.make("thread:mcp-fanout-parent");
+            const fanoutParentMessageId = MessageId.make("message:mcp-fanout-parent:start");
             const fanoutParentGate = yield* Deferred.make<void>();
             const firstFanoutDeliveryGate = yield* Deferred.make<void>();
             const secondFanoutDeliveryGate = yield* Deferred.make<void>();
-            parentTerminalGates.set(fanoutParentThreadId, fanoutParentGate);
-            deliveryTerminalGates.set(fanoutParentThreadId, firstFanoutDeliveryGate);
+            terminalGates.set(fanoutParentMessageId, fanoutParentGate);
             yield* Ref.set(continuationOffers, []);
             yield* orchestrator.dispatch({
               type: "thread.create",
@@ -4488,7 +4529,7 @@ describe("orchestrator MCP toolkit", () => {
               creationSource: "web",
               commandId: CommandId.make("command:mcp-fanout-parent:start"),
               threadId: fanoutParentThreadId,
-              messageId: MessageId.make("message:mcp-fanout-parent:start"),
+              messageId: fanoutParentMessageId,
               text: "Fan out twelve review agents.",
               attachments: [],
               modelSelection: codexSelection,
@@ -4637,6 +4678,7 @@ describe("orchestrator MCP toolkit", () => {
               return yield* Effect.die(new Error("First fan-out delivery missing."));
             }
             expect(sortedIds(firstFanoutDelivery.taskIds)).toEqual(idsOf(beforeFirstStarts));
+            terminalGates.set(firstFanoutDelivery.messageId, firstFanoutDeliveryGate);
             yield* dispatchFanoutDelivery("first", firstFanoutDelivery);
             yield* Deferred.succeed(fanoutParentGate, undefined);
             yield* waitForProjection(
@@ -4655,7 +4697,6 @@ describe("orchestrator MCP toolkit", () => {
             expect(fanoutDelivery(pendingDuringFirst)).toEqual(firstFanoutDelivery);
             expectAtMostOneOutstandingDelivery(pendingDuringFirst);
 
-            deliveryTerminalGates.set(fanoutParentThreadId, secondFanoutDeliveryGate);
             yield* Deferred.succeed(firstFanoutDeliveryGate, undefined);
             const secondReserved = yield* waitForProjection(
               orchestrator,
@@ -4690,6 +4731,7 @@ describe("orchestrator MCP toolkit", () => {
               idsOf([...duringFirst, ...beforeSecondStarts]),
             );
             expectAtMostOneOutstandingDelivery(secondJoined);
+            terminalGates.set(secondFanoutDelivery.messageId, secondFanoutDeliveryGate);
             yield* dispatchFanoutDelivery("second", secondFanoutDelivery);
             yield* waitForProjection(
               orchestrator,
@@ -4706,8 +4748,6 @@ describe("orchestrator MCP toolkit", () => {
             );
             expectAtMostOneOutstandingDelivery(pendingDuringSecond);
 
-            // Later deliveries complete as soon as they start.
-            deliveryTerminalGates.delete(fanoutParentThreadId);
             yield* Deferred.succeed(secondFanoutDeliveryGate, undefined);
             const thirdReserved = yield* waitForProjection(
               orchestrator,

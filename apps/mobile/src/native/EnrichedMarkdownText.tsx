@@ -40,6 +40,7 @@ import { mayRenderMath } from "../lib/mathDetection";
 import { MermaidDiagramView, renderMermaidDiagram } from "./MermaidDiagram";
 import { copyTextWithHaptic } from "../lib/copyTextWithHaptic";
 import { UserMessageDisclosure } from "./UserMessageDisclosure";
+import { nativeSelectionOccurrence } from "../lib/assistantCitationSelection";
 import { canMeasureUserMessageLines } from "./userMessageDisclosure.logic";
 import {
   ENRICHED_INLINE_FILE_LINK_REGEX,
@@ -389,6 +390,47 @@ export function MobileEnrichedMarkdownText(
         : undefined,
     [documentAssets, fileContextMenu, performMenuAction, modelContextMenu, recognizedLinks],
   );
+  const { onCiteSelection, onAskAboutSelection, messageActions } = props;
+  // Built per render like the message actions; the native view keys callbacks by title.
+  const selectionMenuItems = [
+    ...(onCiteSelection
+      ? [
+          {
+            text: "Cite",
+            icon: "text.quote",
+            onPress: ({
+              text,
+              selection,
+            }: {
+              text: string;
+              selection: { start: number; end: number };
+            }) =>
+              onCiteSelection({
+                text,
+                occurrence: nativeSelectionOccurrence(
+                  markdown,
+                  { text, ...selection },
+                  {
+                    isPill: (url) => Object.hasOwn(linkPillContent, url),
+                    text: linkRecognition.text,
+                    inlineCode: linkRecognition.inlineCode,
+                  },
+                ),
+              }),
+          },
+        ]
+      : []),
+    ...(onAskAboutSelection
+      ? [
+          {
+            text: "Side chat",
+            icon: "bubble.left.and.bubble.right",
+            onPress: ({ text }: { text: string }) => onAskAboutSelection(text),
+          },
+        ]
+      : []),
+    ...(messageActions?.map((action) => ({ ...action })) ?? []),
+  ];
   const selectionClipboard = useMemo(() => {
     const fragment = decodeComposerContextFragment(props.contextClipboardFragment);
     if (!fragment) return undefined;
@@ -563,9 +605,9 @@ export function MobileEnrichedMarkdownText(
           ellipsizeMode={hasLineLimit ? "clip" : undefined}
           selectable={!props.displayOnly && !measuring}
           contextMenuItems={
-            props.displayOnly || measuring
+            props.displayOnly || measuring || selectionMenuItems.length === 0
               ? undefined
-              : props.messageActions?.map((action) => ({ ...action }))
+              : selectionMenuItems
           }
           selectionClipboard={selectionClipboard}
           selectionColor={props.textStyle.selectionColor}

@@ -17,6 +17,7 @@ import {
   pendingRestartCancelledBackgroundWork,
   restartCancelledBackgroundWorkNote,
   restartContinuationNote,
+  rosterTaskWakesAgent,
   runOutcome,
   withDriverShellWake,
 } from "./RestartBackgroundNote.ts";
@@ -261,4 +262,16 @@ it("treats a cancelled shell as awaited only when its driver wakes the agent on 
     runOutcome({ status: "completed", restartCancelledBackgroundWork: [shell] }),
     "completed",
   );
+});
+
+it("knows which roster work starts its agent's next turn when it ends", () => {
+  const command = { taskId: "bash-1", kind: "command" as const, description: "npm test" };
+  // Claude reports every background command's exit; Codex does not resume for one.
+  assert.isTrue(rosterTaskWakesAgent(command, "claudeAgent"));
+  assert.isFalse(rosterTaskWakesAgent(command, "codex"));
+  // An adapter can mark a command that resumes its agent.
+  assert.isTrue(rosterTaskWakesAgent({ ...command, wakesAgent: true }, "acpRegistry"));
+  for (const kind of ["monitor", "subagent", "background_task"] as const) {
+    assert.isTrue(rosterTaskWakesAgent({ taskId: "task-1", kind }, "codex"));
+  }
 });

@@ -161,6 +161,20 @@ export function withDriverShellWake(work: Work, driver: string | null | undefine
     : work;
 }
 
+/** Whether the end of this roster work starts the agent's next turn by itself. */
+export function rosterTaskWakesAgent(
+  task: OrchestrationV2PendingBackgroundTask,
+  driver: string | null | undefined,
+): boolean {
+  const work = cancelledRosterTaskWork(task);
+  return isAwaitedWork(
+    withDriverShellWake(
+      task.kind === "command" && task.wakesAgent === true ? { ...work, wakesAgent: true } : work,
+      driver,
+    ),
+  );
+}
+
 /**
  * A run's status as its waiter should read it: a delegating parent,
  * `task_status`, or `t3_thread_wait`. A turn that ended to wait on work the

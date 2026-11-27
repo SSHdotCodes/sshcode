@@ -99,15 +99,17 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         const path = yield* Path.Path;
         const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "claude-linked-home-" });
         const main = path.join(root, "main");
+        const mainAlias = path.join(root, "main-alias");
         const linked = path.join(root, "second");
         yield* fileSystem.makeDirectory(path.join(main, "projects", "repo"), { recursive: true });
+        yield* fileSystem.symlink(main, mainAlias);
         yield* fileSystem.makeDirectory(path.join(main, "skills"), { recursive: true });
         yield* fileSystem.writeFileString(path.join(main, "projects", "repo", "chat.jsonl"), "{}");
         yield* fileSystem.writeFileString(path.join(main, "settings.json"), "{}");
         // The main folder's identity and caches must never be linked.
         yield* fileSystem.writeFileString(path.join(main, ".claude.json"), "{}");
         yield* fileSystem.makeDirectory(path.join(main, "cache"), { recursive: true });
-        const environment = { CLAUDE_CONFIG_DIR: main };
+        const environment = { CLAUDE_CONFIG_DIR: mainAlias };
         const config = { homePath: linked, shareMainFolder: true };
 
         // Off, or without a folder of its own: nothing is made.
@@ -129,7 +131,7 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         ).toBe("{}");
         // Same chats, so a chat may move between the two providers.
         const mainKey = yield* makeClaudeContinuationGroupKey({ homePath: "" }, environment);
-        expect(mainKey).toBe(`claude:home:${main}`);
+        expect(mainKey).toBe(`claude:home:${yield* fileSystem.realPath(main)}`);
         expect(yield* makeClaudeContinuationGroupKey(config, environment)).toBe(mainKey);
 
         // A later start links what the main folder gained and keeps the rest.

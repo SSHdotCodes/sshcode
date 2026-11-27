@@ -328,42 +328,42 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
       const workspace = yield* h.fs.makeTempDirectoryScoped();
       const modelSelection = { instanceId: h.instance.instanceId, model: "gemini-test-low" };
 
-        // The agy CLI rejects `yolo` and `auto_edit`; it stays in `default` and T3 answers its requests.
-        h.controls.selected = {
-          ...(yield* h.makeExecutable("runtime cli", { initialMode: "auto_edit" })),
-          harnessPath: null,
-        };
-        for (const runtimeMode of ["full-access", "auto-accept-edits"] as const) {
-          const requestsBefore = (yield* h.readRequests).length;
-          const cliThreadId = ThreadId.make(`thread-antigravity-cli-${runtimeMode}`);
-          const cliPolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-            runtimeMode,
-            interactionMode: "default",
-            cwd: workspace,
-          });
-          const cliSession = yield* h.instance.orchestrationAdapter.openSession({
-            threadId: cliThreadId,
-            providerSessionId: ProviderSessionId.make(`provider-session-cli-${runtimeMode}`),
-            modelSelection,
-            runtimePolicy: cliPolicy,
-          });
-          yield* cliSession.ensureThread({
-            threadId: cliThreadId,
-            modelSelection,
-            runtimePolicy: cliPolicy,
-          });
-          expect(h.launches.at(-1)?.args).toEqual(["acp"]);
-          expect(
-            (yield* h.readRequests)
-              .slice(requestsBefore)
-              .filter(
-                (request) =>
-                  request.method === "session/set_config_option" &&
-                  request.params?.configId === "mode",
-              )
-              .map((request) => request.params?.value),
-          ).toEqual(["default"]);
-        }
+      // The agy CLI rejects `yolo` and `auto_edit`; it stays in `default` and T3 answers its requests.
+      h.controls.selected = {
+        ...(yield* h.makeExecutable("runtime cli", { initialMode: "auto_edit" })),
+        harnessPath: null,
+      };
+      for (const runtimeMode of ["full-access", "auto-accept-edits"] as const) {
+        const requestsBefore = (yield* h.readRequests).length;
+        const cliThreadId = ThreadId.make(`thread-antigravity-cli-${runtimeMode}`);
+        const cliPolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode,
+          interactionMode: "default",
+          cwd: workspace,
+        });
+        const cliSession = yield* h.instance.orchestrationAdapter.openSession({
+          threadId: cliThreadId,
+          providerSessionId: ProviderSessionId.make(`provider-session-cli-${runtimeMode}`),
+          modelSelection,
+          runtimePolicy: cliPolicy,
+        });
+        yield* cliSession.ensureThread({
+          threadId: cliThreadId,
+          modelSelection,
+          runtimePolicy: cliPolicy,
+        });
+        expect(h.launches.at(-1)?.args).toEqual(["acp"]);
+        expect(
+          (yield* h.readRequests)
+            .slice(requestsBefore)
+            .filter(
+              (request) =>
+                request.method === "session/set_config_option" &&
+                request.params?.configId === "mode",
+            )
+            .map((request) => request.params?.value),
+        ).toEqual(["default"]);
+      }
     }).pipe(Effect.scoped),
   );
 
@@ -424,7 +424,6 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
         yield* h.assertClosed;
       }).pipe(Effect.scoped),
   );
-
 
   it.effect.skipIf(windowsHost)(
     "preserves the Node install message when starting a standalone provider",
@@ -664,7 +663,7 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
       const before = yield* h.instance.snapshot.getSnapshot;
       h.controls.failResolution = true;
       const error = yield* h.refresh().pipe(Effect.flip);
-      expect(error.detail).toContain("previous model list is unchanged");
+      expect(error.detail).toBe("Fixture resolution failed.");
       const after = yield* h.instance.snapshot.getSnapshot;
       expect(after.models).toEqual(before.models);
       expect(after.auth).toEqual(before.auth);

@@ -24,9 +24,9 @@ the database.
 
 Its triage CLI version (called "Installed version" in older context files) is only
 the version of the `sshcode` that ran `sshcode triage`. It is often not the build the bug
-happened on: `npx sshcode triage` runs whatever `sshcode` npm resolves, while the user may
-run the desktop app, the background service, or a nightly. The server process line
-gives the local server's version when the server recorded one.
+happened on: the user may run the desktop app, a source checkout, or the background
+service. The server process line gives the local server's version when the server
+recorded one.
 
 ## 3. Check for a newer playbook
 
@@ -50,7 +50,7 @@ one subdirectory per commit hash:
     git clone --depth 1 --filter=blob:none --branch <release-tag> \
       https://github.com/SSHdotCodes/sshcode <source-cache-dir>/<hash>
 
-If the tag does not exist (nightly builds), clone `main` instead, and treat file
+If the tag does not exist (source builds), clone `main` instead, and treat file
 and line references as approximate: the user's build may not match `main`
 exactly. If the target directory already exists from an earlier triage run,
 reuse it instead of cloning again. Before cloning, delete other entries in the
@@ -65,8 +65,8 @@ Diagnosis grounded in source beats guessing.
 First establish the shape of the install, because the same symptom points at
 different code depending on it:
 
-- How is SSHCode running on this machine: `npx sshcode serve` in a terminal, the
-  background service, or the desktop app?
+- How is SSHCode running on this machine: `sshcode serve` from a source checkout,
+  the background service, or the desktop app?
 - Which surface is the user connecting from: the website (app.t3.codes), the
   desktop app against a local server, the desktop app against a remote server,
   or the mobile app?

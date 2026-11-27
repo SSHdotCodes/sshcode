@@ -1,101 +1,24 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, expect, it } from "@effect/vitest";
+import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import {
-  formatCliCommand,
+  resolveCliCommand,
   resolveRootCliCommand,
   resolveServerInstallation,
 } from "./invocation.ts";
 
-it("formats package runner commands from their cache entry paths", () => {
-  for (const [entryPath, expected] of [
-    ["/home/theo/.npm/_npx/abc123/node_modules/sshcode/dist/bin.mjs", "npx sshcode serve"],
-    [
-      "C:\\Users\\theo\\AppData\\Local\\npm-cache\\_npx\\abc\\node_modules\\sshcode\\dist\\bin.mjs",
-      "npx sshcode serve",
-    ],
-    ["/home/theo/.cache/pnpm/dlx/abc/node_modules/sshcode/dist/bin.mjs", "pnpm dlx sshcode serve"],
-    [
-      "/home/theo/.local/share/pnpm/.pnpm/dlx/abc/node_modules/sshcode/dist/bin.mjs",
-      "pnpm dlx sshcode serve",
-    ],
-    [
-      "C:\\Users\\theo\\AppData\\Local\\pnpm-cache\\dlx\\abc\\node_modules\\sshcode\\dist\\bin.mjs",
-      "pnpm dlx sshcode serve",
-    ],
-    ["/home/theo/.bun/install/cache/sshcode@0.0.31/dist/bin.mjs", "bunx sshcode serve"],
-    ["/tmp/bunx-1000-t3@latest/node_modules/sshcode/dist/bin.mjs", "bunx sshcode serve"],
-    [
-      "C:\\Users\\theo\\AppData\\Local\\Temp\\bunx-0-t3@latest\\node_modules\\sshcode\\dist\\bin.mjs",
-      "bunx sshcode serve",
-    ],
-  ] as const) {
-    assert.equal(formatCliCommand({ subcommand: "serve", entryPath, version: "0.0.31" }), expected);
-  }
-});
-
-it("treats stable installs as direct invocations", () => {
-  for (const entryPath of [
-    "/usr/local/lib/node_modules/sshcode/dist/bin.mjs",
-    "/home/theo/Code/work/t3code/apps/server/dist/bin.mjs",
-    "/home/theo/.t3/runtime/0.0.31/node_modules/sshcode/dist/bin.mjs",
-    "",
-  ]) {
-    assert.equal(
-      formatCliCommand({ subcommand: "serve", entryPath, version: "0.0.31" }),
-      "sshcode serve",
+it.effect("never names a package runner or the npm package", () =>
+  Effect.gen(function* () {
+    expect(yield* resolveCliCommand("serve")).toBe("sshcode serve");
+    expect(yield* resolveCliCommand("service restart", ["--base-dir", "/srv/my home"])).toBe(
+      "sshcode service restart --base-dir '/srv/my home'",
     );
-  }
-});
-
-it("re-suggests the prerelease channel only for prerelease builds", () => {
-  for (const [version, expected] of [
-    ["0.0.31-nightly.20260729", "npx sshcode@nightly serve"],
-    ["0.0.31-preview.20260729.1", "npx sshcode@preview serve"],
-    ["0.0.31-foo-preview.20260729.1", "npx sshcode serve"],
-    ["0.0.31", "npx sshcode serve"],
-  ] as const) {
-    assert.equal(
-      formatCliCommand({
-        subcommand: "serve",
-        entryPath: "/home/theo/.npm/_npx/abc123/node_modules/sshcode/dist/bin.mjs",
-        version,
-      }),
-      expected,
-    );
-  }
-});
-
-it("formats serve suggestions to match the launching command", () => {
-  assert.equal(
-    formatCliCommand({
-      subcommand: "serve",
-      entryPath: "/home/theo/.npm/_npx/abc/node_modules/sshcode/dist/bin.mjs",
-      version: "0.0.31-nightly.20260729",
-    }),
-    "npx sshcode@nightly serve",
-  );
-  assert.equal(
-    formatCliCommand({
-      subcommand: "serve",
-      entryPath: "/tmp/bunx-1000-t3@latest/node_modules/sshcode/dist/bin.mjs",
-      version: "0.0.31",
-    }),
-    "bunx sshcode serve",
-  );
-  assert.equal(
-    formatCliCommand({
-      subcommand: "serve",
-      entryPath: "/usr/local/lib/node_modules/sshcode/dist/bin.mjs",
-      version: "0.0.31-nightly.20260729",
-    }),
-    "sshcode serve",
-  );
-});
+  }),
+);
 
 it.layer(NodeServices.layer)("root CLI commands", (it) => {
   /** `sudo sshcode browser setup` as this process would render it, with `sshcode` on PATH or not. */
@@ -125,15 +48,17 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
 
   it.effect("keeps a user-installed Node reachable when the command runs under sudo", () =>
     Effect.gen(function* () {
+      // A run from npx's cache still gets the plain command, never `npx sshcode`:
+      // the name is not ours on npm.
       const npx = "/home/theo/.npm/_npx/abc/node_modules/sshcode/dist/bin.mjs";
       // sudo's secure_path already has a system Node.
       expect(yield* rootCommand({ node: "/usr/bin/node", entry: npx })).toBe(
-        "sudo npx sshcode browser setup",
+        "sudo sshcode browser setup",
       );
       // nvm, fnm, and tarball installs are dropped by sudo's PATH reset.
       expect(
         yield* rootCommand({ node: "/home/theo/.nvm/versions/node/v24/bin/node", entry: npx }),
-      ).toBe('sudo env "PATH=$PATH" npx sshcode browser setup');
+      ).toBe('sudo env "PATH=$PATH" sshcode browser setup');
       expect(
         yield* rootCommand({
           node: "/home/theo/.local/node/bin/node",
@@ -227,7 +152,7 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
       );
       expect(yield* resolve).toBeNull();
       yield* fs.symlink(entry, globalBin);
-      expect(yield* resolve).toEqual({ kind: "npm-global", prefix });
+      expect(yield* resolve).toEqual({ kind: "npm-global", prefix: yield* fs.realPath(prefix) });
       yield* fs.remove(globalBin);
       yield* fs.writeFileString(globalBin, "an unrelated sshcode command");
       expect(yield* resolve).toBeNull();
@@ -259,9 +184,10 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
         Effect.provideService(HostProcess.IsExecutable, true),
         Effect.provideService(HostProcess.Platform, "linux"),
       );
+      const canonicalPrefix = yield* fs.realPath(prefix);
       for (const [version, expected] of [
         ["0.0.44", null],
-        ["0.0.45", { kind: "npm-global", prefix }],
+        ["0.0.45", { kind: "npm-global", prefix: canonicalPrefix }],
       ]) {
         yield* fs.writeFileString(
           path.join(path.dirname(entry), "package.json"),

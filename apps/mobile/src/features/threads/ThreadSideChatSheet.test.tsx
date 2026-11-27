@@ -115,6 +115,7 @@ vi.mock("../files/FileMarkdownPreview", () => ({
 }));
 
 import { ThreadSideChatSheet } from "./ThreadSideChatSheet";
+import { sideChatPromptAbout } from "@t3tools/shared/sideChatQuote";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { acknowledgedSideChatsAtom, pendingSends } from "../../state/pending-sends";
 
@@ -129,12 +130,12 @@ const initialState: SideChatState = {
 };
 let host: HTMLDivElement;
 let root: Root;
-function render() {
+function render(params: { readonly quote?: string } = {}) {
   act(() =>
     root.render(
       <RegistryContext.Provider value={appAtomRegistry}>
         <ThreadSideChatSheet
-          route={{ params: { environmentId: "environment", threadId, kind: "side" } }}
+          route={{ params: { environmentId: "environment", threadId, kind: "side", ...params } }}
         />
       </RegistryContext.Provider>,
     ),
@@ -189,6 +190,21 @@ it("admits only one question while saving and clears its input only after it is 
   expect(host.textContent).toContain("one question");
   expect(host.textContent).toContain("Waiting for network");
   expect(host.querySelector<HTMLButtonElement>("[aria-label=Send]")!.disabled).toBe(true);
+});
+
+it("asks about selected reply text the way the Mac does, then drops the quote", async () => {
+  act(() => root.unmount());
+  root = createRoot(host);
+  render({ quote: "  the cited passage\nover two lines " });
+  expect(host.textContent).toContain("the cited passage");
+  type("why this?");
+  await act(async () => send());
+  const sent = harness.enqueue.mock.calls[0]![0] as PendingSend;
+  expect(sent).toMatchObject({
+    prompt: sideChatPromptAbout("the cited passage\nover two lines", "why this?"),
+  });
+  expect(host.querySelector("textarea")?.value).toBe("");
+  expect(host.querySelector("[aria-label='Remove the selected text']")).toBeNull();
 });
 
 it("keeps the text editable if the pending question cannot be saved", async () => {

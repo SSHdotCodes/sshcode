@@ -140,6 +140,24 @@ describe("truncateTraceAttributes", () => {
     assert.equal(attributes.error.stack, stack);
   });
 
+  it.each([
+    ["a pair straddling the limit", "q".repeat(199)],
+    ["a pair ending at the limit", `${"q".repeat(198)}😀`],
+  ])("never splits a surrogate pair with %s", (_, head) => {
+    const nestedHead = `${"n".repeat(300)}${head}`;
+    const truncated = truncateTraceAttributes({
+      "db.query.text": `${head}😀${"x".repeat(1_000)}`,
+      error: { stack: `${nestedHead}😀${"x".repeat(1_000)}` },
+    });
+
+    const query = truncated["db.query.text"] as string;
+    const stack = (truncated["error"] as { stack: string }).stack;
+    assert.equal(query, `${head}…[truncated]`);
+    assert.equal(stack, `${nestedHead}…[truncated]`);
+    assert.isTrue(query.isWellFormed());
+    assert.isTrue(stack.isWellFormed());
+  });
+
   it("returns the same reference when nothing exceeds the limits", () => {
     const attributes = { short: "ok", nested: { fine: "also ok" } };
     assert.equal(truncateTraceAttributes(attributes), attributes);

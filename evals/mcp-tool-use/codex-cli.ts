@@ -1,14 +1,64 @@
 // @effect-diagnostics nodeBuiltinImport:off -- dev-only harness boundary; never imported by the app.
+import { requireInstructionsApplied, withInstructionsOverride } from "./instructionsOverride.ts";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeHttp from "node:http";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Effect from "effect/Effect";
 import { buildCodexAdditionalContext } from "../../apps/server/src/provider/CodexDeveloperInstructions.ts";
 import type { McpToolUseCase, SampleRun } from "./run.ts";
 
 type Definition = { name: string; description: string; inputSchema: unknown };
 type Call = SampleRun["calls"][number];
+
+// On macOS, :minimal grants process access to system scratch unless explicitly denied.
+const scratchDenials =
+  Effect.runSync(HostProcess.Platform) === "darwin"
+    ? ',"/private/tmp"="deny","/private/var/tmp"="deny"'
+    : "";
+export const codexSandboxArgs = [
+  "-c",
+  'default_permissions="eval"',
+  "-c",
+  `permissions.eval.filesystem={":minimal"="read",":workspace_roots"="write"${scratchDenials}}`,
+  "-c",
+  "permissions.eval.network.enabled=false",
+];
+
+const authStore = 'cli_auth_credentials_store="file"';
+
+/** Pass only the environment Codex needs for its installed binary and ChatGPT login. */
+const cliEnvironment = (codexHome: string, tempDir: string) => ({
+  PATH: process.env.PATH,
+  HOME: NodeOS.homedir(),
+  CODEX_HOME: codexHome,
+  TMPDIR: tempDir,
+});
+
+export const requireChatGptLogin = async () => {
+  const configured = process.env.CODEX_HOME;
+  const forbidden = [".codex", ".claude", ".t3"].map((name) =>
+    NodePath.join(NodeOS.homedir(), name),
+  );
+  const allowed = (path: string) =>
+    !forbidden.some((root) => path === root || path.startsWith(root + NodePath.sep));
+  if (!configured || !NodePath.isAbsolute(configured) || !allowed(NodePath.resolve(configured))) {
+    throw new Error("Set CODEX_HOME to a separate Codex home already signed in to ChatGPT.");
+  }
+  const codexHome = await NodeFSP.realpath(configured);
+  if (!allowed(codexHome)) throw new Error("CODEX_HOME must be outside the live harness homes.");
+  const status = NodeChildProcess.spawnSync("codex", ["-c", authStore, "login", "status"], {
+    env: cliEnvironment(codexHome, NodeOS.tmpdir()),
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  if (status.status !== 0 || !/^Logged in using ChatGPT$/m.test(status.stderr ?? "")) {
+    throw new Error("The eval requires an existing Codex ChatGPT subscription login.");
+  }
+  return codexHome;
+};
 
 /** No user config, plugins, external MCP servers, or session rollouts in an eval run. */
 export const codexArgs = (input: {
@@ -19,6 +69,8 @@ export const codexArgs = (input: {
   instructions: string;
   tools?: ReadonlyArray<string>;
   runtimeDirectory?: string;
+  /** Keep Codex's native multi-agent mode & `<multi_agent_mode>` prompt on (matches production). */
+  nativeAgents?: boolean;
 }) => [
   "--no-daemon",
   "exec",
@@ -35,12 +87,13 @@ export const codexArgs = (input: {
   input.fixture,
   "-c",
   `model_reasoning_effort=${JSON.stringify(input.effort)}`,
+  ...codexSandboxArgs,
   "-c",
-  'default_permissions="eval"',
+  'model_provider="openai"',
   "-c",
-  'permissions.eval.filesystem={":minimal"="read",":workspace_roots"="read"}',
+  authStore,
   "-c",
-  "permissions.eval.network.enabled=false",
+  'forced_login_method="chatgpt"',
   "-c",
   'approval_policy="never"',
   "-c",
@@ -59,6 +112,13 @@ export const codexArgs = (input: {
   "features.apps=false",
   "-c",
   "features.plugins=false",
+  "-c",
+  "features.shell_snapshot=false",
+  ...(input.nativeAgents === true
+    ? []
+    : ["-c", "agents.enabled=false", "-c", "features.multi_agent_v2=false"]),
+  "-c",
+  'web_search="disabled"',
   "-c",
   `mcp_servers={t3-code={url=${JSON.stringify(input.url)},required=true}}`,
   ...(input.tools ?? []).flatMap((name) => [
@@ -99,11 +159,6 @@ export const fixturePaths = (fixture: string) => {
     return translate;
   };
   return { intoFixture: translator(pairs), fromFixture: translator(pairs.map(([a, b]) => [b, a])) };
-};
-
-const sessions = async () => {
-  const dir = NodePath.join(NodeOS.homedir(), ".codex", "sessions");
-  return new Set(await NodeFSP.readdir(dir, { recursive: true }).catch(() => []));
 };
 
 /** Binds only loopback; port zero still must avoid the live app's reserved tunnel ranges. */
@@ -176,29 +231,32 @@ export const listenMock = async (
   }
 };
 
-/** Runs the installed harness with branch-owned context and a synthetic filesystem. */
-export const runCliSample = async (
-  testCase: McpToolUseCase,
-  options: {
-    model: string;
-    effort: string;
-    fixtureRoot: string;
-    definitions: ReadonlyArray<Definition>;
-    answer: (name: string, input: unknown) => Promise<unknown>;
-  },
+type CliFixture = {
+  fixture: string;
+  tempDirectory: string;
+  runtimeDirectory: string;
+  world: Record<string, unknown>;
+  paths: ReturnType<typeof fixturePaths>;
+};
+
+/** Gives one sample a fresh Git repository and keeps CLI state outside its workspace. */
+export const withCliFixture = async <A>(
+  fixtureRoot: string,
+  syntheticWorld: McpToolUseCase["setup"]["world"],
+  use: (sample: CliFixture) => Promise<A>,
 ) => {
-  const fixture = await NodeFSP.mkdtemp(NodePath.join(options.fixtureRoot, `${testCase.id}-`));
-  const runtimeDirectory = await NodeFSP.mkdtemp(
-    NodePath.join(options.fixtureRoot, "codex-runtime-"),
+  await NodeFSP.mkdir(fixtureRoot, { recursive: true });
+  const sampleDirectory = await NodeFSP.mkdtemp(
+    NodePath.join(await NodeFSP.realpath(fixtureRoot), "mcp-tool-use-"),
   );
-  const paths = fixturePaths(fixture);
-  const calls: Array<Call> = [];
-  const mock = await listenMock(options.definitions, async (name, input) => {
-    calls.push({ step: calls.length, tool: name, input });
-    return paths.intoFixture(await options.answer(name, paths.fromFixture(input)));
-  });
   try {
-    const world = paths.intoFixture(testCase.setup.world ?? {}) as Record<string, unknown>;
+    const fixture = NodePath.join(sampleDirectory, "workspace");
+    const tempDirectory = NodePath.join(fixture, ".tmp");
+    const runtimeDirectory = NodePath.join(sampleDirectory, "runtime");
+    await NodeFSP.mkdir(fixture);
+    await NodeFSP.mkdir(runtimeDirectory);
+    const paths = fixturePaths(fixture);
+    const world = paths.intoFixture(syntheticWorld ?? {}) as Record<string, unknown>;
     const files = world.files;
     if (files && typeof files === "object" && !Array.isArray(files)) {
       for (const [name, content] of Object.entries(files)) {
@@ -209,7 +267,7 @@ export const runCliSample = async (
         await NodeFSP.writeFile(
           target,
           typeof content === "string" ? content : JSON.stringify(content),
-          { mode: typeof content === "string" && content.startsWith("#!") ? 0o555 : 0o444 },
+          { mode: typeof content === "string" && content.startsWith("#!") ? 0o755 : 0o644 },
         );
       }
     }
@@ -245,14 +303,46 @@ export const runCliSample = async (
     ]);
     git(["add", "."]);
     git(["commit", "--quiet", "--allow-empty", "-m", "Seed synthetic evaluation world"]);
+    await NodeFSP.mkdir(tempDirectory, { recursive: true });
+    return await use({ fixture, tempDirectory, runtimeDirectory, world, paths });
+  } finally {
+    await NodeFSP.rm(sampleDirectory, { recursive: true, force: true });
+  }
+};
+
+type CliSampleOptions = {
+  model: string;
+  effort: string;
+  fixtureRoot: string;
+  codexHome: string;
+  definitions: ReadonlyArray<Definition>;
+  answer: (name: string, input: unknown) => Promise<unknown>;
+  nativeAgents?: boolean;
+};
+
+const runFixtureSample = async (
+  testCase: McpToolUseCase,
+  options: CliSampleOptions,
+  { fixture, tempDirectory, runtimeDirectory, world, paths }: CliFixture,
+) => {
+  const calls: Array<Call> = [];
+  const mock = await listenMock(options.definitions, async (name, input) => {
+    calls.push({ step: calls.length, tool: name, input });
+    return paths.intoFixture(await options.answer(name, paths.fromFixture(input)));
+  });
+  try {
     const context = Object.values(
       buildCodexAdditionalContext(
         { model: options.model, reasoningEffort: options.effort },
-        { browser: options.definitions.some((tool) => tool.name === "preview_open"), device: true },
+        {
+          browser: options.definitions.some((tool) => tool.name === "preview_open"),
+          device: true,
+        },
       ),
     )
-      .map((entry) => entry.value)
+      .map((entry) => withInstructionsOverride(entry.value))
       .join("\n\n");
+    requireInstructionsApplied([context]);
     const args = codexArgs({
       ...options,
       fixture,
@@ -261,18 +351,12 @@ export const runCliSample = async (
       runtimeDirectory,
       tools: options.definitions.map((tool) => tool.name),
     });
-    const before = await sessions();
     const transcript: Array<unknown> = [];
     let stderr = "";
     const child = NodeChildProcess.spawn("codex", args, {
       cwd: fixture,
       stdio: ["pipe", "pipe", "pipe"],
-      env: Object.fromEntries(
-        Object.entries(process.env).filter(
-          ([name]) =>
-            !/(?:TOKEN|API_KEY|SECRET|PASSWORD|AUTH)/i.test(name) && !/^T3(?:CODE)?_/.test(name),
-        ),
-      ),
+      env: cliEnvironment(options.codexHome, tempDirectory),
     });
     const prompt = [
       testCase.setup.role === "native-subagent"
@@ -346,8 +430,6 @@ export const runCliSample = async (
       child.once("error", reject);
       child.once("close", resolve);
     });
-    const after = await sessions();
-    const sessionFilesAdded = [...after].filter((name) => !before.has(name));
     const text: Array<string> = [];
     const usage = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
     for (const event of transcript) {
@@ -371,13 +453,17 @@ export const runCliSample = async (
       shellUsage: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 },
       transcript,
       stderr,
-      sessionFilesAdded,
       toolLists: mock.listed,
       command: ["codex", ...args],
       prompt,
     };
   } finally {
     await mock.close();
-    await NodeFSP.rm(runtimeDirectory, { recursive: true, force: true });
   }
 };
+
+/** Runs the installed harness with branch-owned context and a synthetic filesystem. */
+export const runCliSample = (testCase: McpToolUseCase, options: CliSampleOptions) =>
+  withCliFixture(options.fixtureRoot, testCase.setup.world, (fixture) =>
+    runFixtureSample(testCase, options, fixture),
+  );

@@ -1,3 +1,38 @@
+/** Matches one title or workspace field, including prefixes and partial identifiers. */
+export function makeThreadSearchContextMatcher(query: string): (field: string) => boolean {
+  const fold = (text: string) =>
+    text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().trim().replace(/\s+/g, " ");
+  const phrase = fold(query);
+  const terms = phrase.match(/[\p{L}\p{N}]+/gu) ?? [];
+  return (field) => {
+    if (!phrase) return false;
+    const normalized = fold(field);
+    if (normalized.includes(phrase)) return true;
+    if (terms.length === 0 || /[^\p{L}\p{N}\s]/u.test(phrase)) return false;
+    const words = normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
+    return terms.every((term) => words.some((word) => word.startsWith(term)));
+  };
+}
+
+/**
+ * Scratch chats get folders named `YYYY-MM-DD-<first message words>-<id>`.
+ * Only the words say what the chat is about; the date and id match everything.
+ */
+export function threadSearchFolderName(name: string): string {
+  const dated = /^\d{4}-\d{2}-\d{2}(?:-|$)/;
+  return dated.test(name) ? name.replace(dated, "").replace(/-[a-z0-9]{8}$/, "") : name;
+}
+
+export function compareThreadSearchOrder(
+  left: { readonly about?: boolean; readonly activityAt?: string | null },
+  right: { readonly about?: boolean; readonly activityAt?: string | null },
+): number {
+  return (
+    Number(right.about === true) - Number(left.about === true) ||
+    (right.activityAt ?? "").localeCompare(left.activityAt ?? "")
+  );
+}
+
 interface ThreadSearchTextPart {
   readonly text: string;
   readonly highlighted: boolean;

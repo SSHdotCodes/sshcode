@@ -15,32 +15,36 @@ import {
 import { effectiveSnoozed } from "./state/threadSettled.ts";
 
 const DAY = 86_400_000;
-const easternDay = new Intl.DateTimeFormat("en-CA", {
-  timeZone: "America/New_York",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
+// Made on first use, so the dashboard follows the viewer's time zone at that moment.
+let localDayFormat: Intl.DateTimeFormat | undefined;
+const localDay = () =>
+  (localDayFormat ??= new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }));
 const monthName = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short" });
-const resetDate = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/New_York",
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-  hour12: true,
-});
-const scheduledTaskStartTime = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/New_York",
-  hour: "numeric",
-  minute: "2-digit",
-  hour12: true,
-});
+let resetDateFormat: Intl.DateTimeFormat | undefined;
+const resetDate = () =>
+  (resetDateFormat ??= new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }));
+let taskStartFormat: Intl.DateTimeFormat | undefined;
+const scheduledTaskStartTime = () =>
+  (taskStartFormat ??= new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }));
 
 // Calendar arithmetic uses UTC day ordinals after assigning each instant to
-// its Eastern date. DST then cannot create a missing or duplicated heatmap day.
+// its local date. DST then cannot create a missing or duplicated heatmap day.
 function dayOrdinal(instant: number): number {
-  const parts = easternDay.formatToParts(instant);
+  const parts = localDay().formatToParts(instant);
   const part = (type: Intl.DateTimeFormatPartTypes) =>
     Number(parts.find((value) => value.type === type)?.value);
   return Date.UTC(part("year"), part("month") - 1, part("day")) / DAY;
@@ -199,7 +203,7 @@ function activityLevels(activeCounts: ReadonlyArray<number>): (count: number) =>
 /** Absolute reset times remain truthful without a timer or background polling. */
 export function formatQuotaReset(resetsAt: string | undefined): string {
   const instant = resetsAt ? Date.parse(resetsAt) : Number.NaN;
-  return Number.isFinite(instant) ? `${resetDate.format(instant)} ET` : "Not reported";
+  return Number.isFinite(instant) ? resetDate().format(instant) : "Not reported";
 }
 
 /** Reuses the account deduplication used by Usage, including pooled sources. */
@@ -374,9 +378,9 @@ export interface UpcomingScheduledTaskEntry<
   readonly startsLabel: string;
 }
 
-/** The upcoming one-time task's clock time in the user's product timezone. */
+/** The upcoming one-time task's clock time on the viewer's clock. */
 export function formatScheduledTaskStart(runAt: string): string {
-  return scheduledTaskStartTime.format(Date.parse(runAt));
+  return scheduledTaskStartTime().format(Date.parse(runAt));
 }
 
 /**

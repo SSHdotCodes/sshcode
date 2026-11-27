@@ -6,6 +6,7 @@ import {
   OrchestrationV2ProviderCapabilities,
   type OrchestrationV2Run,
   OrchestrationV2ThreadProjection,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderInstanceId,
   type ProviderDriverKind,
   providerSteeringExecution,
@@ -13,10 +14,19 @@ import {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+
+/** Match the composer's input limit, which excludes separately attached context. */
+export function expandedCitationInputError(text: string): string | undefined {
+  if (expandAssistantCitationsForProvider(text).length <= PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
+    return undefined;
+  }
+  return `Message exceeds ${PROVIDER_SEND_TURN_MAX_INPUT_CHARS.toLocaleString("en-US")} characters after expanding quotes. Shorten it and try again.`;
+}
 
 export const MessageDispatchDecisionV2 = Schema.Union([
   Schema.Struct({

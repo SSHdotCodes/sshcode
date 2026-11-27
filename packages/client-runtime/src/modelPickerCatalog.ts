@@ -381,6 +381,13 @@ export function createModelPickerCatalog<T extends ModelRouteSource>(
     return family !== null && nativeFamilies.has(family) && !isOwnHarness(source);
   };
   const selected = new Set(input.selected?.map(routeKey));
+  // Curation trims a catalog's long tail by maker. A harness none of whose models has a
+  // known maker (a custom agent's own house models) has no tail: it lists them all.
+  const instancesWithKnownMakers = new Set(
+    inventory
+      .filter((source) => modelVendorFamily(source) !== null)
+      .map((source) => source.instanceId as string),
+  );
   const curatedVisible = (source: T) => {
     const family = modelVendorFamily(source);
     if (
@@ -391,7 +398,12 @@ export function createModelPickerCatalog<T extends ModelRouteSource>(
     )
       return false;
     if (isDeliberate(source)) return true;
-    if (!isOwnHarness(source) && !isCuratedModel(source)) return false;
+    if (
+      !isOwnHarness(source) &&
+      !isCuratedModel(source) &&
+      (family !== null || instancesWithKnownMakers.has(source.instanceId))
+    )
+      return false;
     if (isAliasCopy(source)) return false;
     return !isOld(source);
   };

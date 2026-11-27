@@ -75,7 +75,7 @@ export function MaterialPullRequestToolbar(props: { readonly onRequestVisibility
               onPress={() =>
                 navigation.navigate("SettingsSheet", {
                   screen: "SettingsContent",
-                  params: { screen: "SettingsEnvironments" },
+                  params: { screen: "SettingsEnvironments", initial: false },
                 })
               }
             />

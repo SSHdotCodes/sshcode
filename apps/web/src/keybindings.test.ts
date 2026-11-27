@@ -1088,6 +1088,20 @@ describe("resolveChatShortcutCommand", () => {
 });
 
 describe("resolveShortcutCommand", () => {
+  it.each(["constructor", "!constructor"])(
+    "treats inherited object properties in when-condition %s as unset",
+    (when) => {
+      const keybindings = compileResolvedKeybindingsConfig([
+        { key: "mod+j", command: "terminal.toggle", when },
+      ]);
+      assert.strictEqual(
+        resolveShortcutCommand(event({ code: "KeyJ", ctrlKey: true }), keybindings, {
+          platform: "Linux",
+        }),
+        when.startsWith("!") ? "terminal.toggle" : null,
+      );
+    },
+  );
   it("resolves a custom stop-thread shortcut", () => {
     const keybindings = compile([{ shortcut: modShortcut("escape"), command: "thread.stop" }]);
 

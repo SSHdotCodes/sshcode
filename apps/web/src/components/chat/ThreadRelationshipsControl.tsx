@@ -38,6 +38,8 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { subagentsToggleNeedsConfirm } from "@t3tools/shared/chatControls";
+import { SUBAGENTS_OFF_IN_SETTINGS } from "@t3tools/client-runtime/state/agent-behavior";
+import { useSubagentsOffInSettings } from "../../hooks/useSettings";
 import { deriveSubagentElapsedMs } from "@t3tools/shared/orchestrationTiming";
 import { groupBy } from "effect/Array";
 import * as DateTime from "effect/DateTime";
@@ -388,7 +390,9 @@ export function ThreadRelationshipsPanel(props: {
   const currentShell = threadShells.find(
     (thread) => thread.environmentId === props.environmentId && thread.id === props.threadId,
   );
-  const subagentsEnabled = currentShell?.subagentsEnabled !== false;
+  // Settings > Agents at None turns every chat's switch off; the chat keeps its own choice.
+  const offInSettings = useSubagentsOffInSettings(props.environmentId);
+  const subagentsEnabled = !offInSettings && currentShell?.subagentsEnabled !== false;
   const setSubagents = (enabled: boolean) =>
     void runChatControlsCommand({
       environmentId: props.environmentId,
@@ -398,13 +402,21 @@ export function ThreadRelationshipsPanel(props: {
   const subagentsSwitch = canToggleSubagents ? (
     <MenuCheckboxItem
       checked={subagentsEnabled}
+      disabled={offInSettings}
       onCheckedChange={(checked) =>
         subagentsToggleNeedsConfirm(checked)
           ? setSubagentsOffConfirmOpen(true)
           : setSubagents(checked)
       }
     >
-      Subagents
+      {offInSettings ? (
+        <span className="flex flex-col">
+          Subagents
+          <span className="text-xs text-muted-foreground">{SUBAGENTS_OFF_IN_SETTINGS}</span>
+        </span>
+      ) : (
+        "Subagents"
+      )}
     </MenuCheckboxItem>
   ) : null;
 
@@ -824,12 +836,13 @@ export function ThreadRelationshipsPanel(props: {
           }
         </ThreadLineageGroup>
       ))}
-      {/* One quiet last line: start a subagent yourself; says so when the chat's switch is off. */}
-      <div className="flex items-center gap-2">
-        {newSubagent === null ? null : <div className="min-w-0 flex-1">{newSubagent}</div>}
+      {/* One quiet last line: start a subagent yourself; says so when the chat's switch is off.
+          The Settings reason is longer, so it wraps under the button in a narrow panel. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {newSubagent === null ? null : <div className="min-w-0 grow">{newSubagent}</div>}
         {canToggleSubagents && !subagentsEnabled ? (
           <span className="ms-auto shrink-0 pe-1 text-xs text-muted-foreground/70">
-            Subagents off
+            {offInSettings ? "Subagents off in Settings › Agents" : "Subagents off"}
           </span>
         ) : null}
       </div>

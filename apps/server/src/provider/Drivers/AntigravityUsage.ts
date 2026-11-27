@@ -115,6 +115,16 @@ const make = Effect.gen(function* () {
       roots.push(path.join(directories.profile, "antigravity-acp"));
       own(path.join(directories.profile, "antigravity-acp"), instanceId);
     }
+    // Removed instances no longer own an account, but their managed profiles retain usage.
+    const profilesDirectory = path.join(host.paths.stateDir, "providers", "antigravity");
+    const profiles = yield* fileSystem
+      .readDirectory(profilesDirectory)
+      .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+    for (const profile of profiles) {
+      if (/^[a-f0-9]{64}$/u.test(profile)) {
+        roots.push(path.join(profilesDirectory, profile, "antigravity-acp"));
+      }
+    }
     const conversationDirs = new Set<string>();
     const dirOwners = new Map<string, Set<string>>();
     for (const root of roots) {

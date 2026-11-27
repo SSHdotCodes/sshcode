@@ -38,6 +38,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import {
   buildTemporaryWorktreeBranchName,
@@ -263,6 +264,13 @@ function errorText(error: unknown): string {
 
 /** How long a subagent waits for its worktree's setup before starting anyway. */
 const SUBAGENT_SETUP_TIMEOUT = "10 minutes";
+/**
+ * Subagent setups of one repository share its disk and CPU, so concurrent installs all
+ * finish together: on 2026-11-25 six took 205-230 s each where one alone took about 40 s,
+ * and no child started for four minutes. Two at a time starts the first children in about
+ * a minute without one stuck setup holding up the rest.
+ */
+const SUBAGENT_SETUPS_PER_REPOSITORY = 2;
 
 /** Told to the subagent on its first prompt, so missing dependencies are no surprise. */
 const setupFailureNotice = (reason: string) =>
@@ -286,6 +294,15 @@ const make = Effect.gen(function* () {
   const preparationScope = yield* Scope.make("sequential");
   const scheduledLaunches = yield* Ref.make<ReadonlySet<CommandId>>(new Set());
   yield* Effect.addFinalizer(() => Scope.close(preparationScope, Exit.void));
+  const subagentSetupGates = new Map<string, Semaphore.Semaphore>();
+  const subagentSetupGate = (repository: string) => {
+    let gate = subagentSetupGates.get(repository);
+    if (gate === undefined) {
+      gate = Semaphore.makeUnsafe(SUBAGENT_SETUPS_PER_REPOSITORY);
+      subagentSetupGates.set(repository, gate);
+    }
+    return gate;
+  };
 
   const mapError =
     (
@@ -490,6 +507,7 @@ const make = Effect.gen(function* () {
     let setupTerminalId: string | null = null;
     let workspaceRecorded = false;
     let runReleased = false;
+    let releaseSetupGate: Effect.Effect<void> = Effect.void;
     if (input.workspaceStrategy.type === "worktree") {
       yield* setupTracker.begin({
         threadId,
@@ -794,6 +812,37 @@ const make = Effect.gen(function* () {
       // waits for setup and is told plainly when setup did not complete.
       const holdForSetup = input.holdForSetup === true && tracked;
       let setupNotice: string | undefined;
+      if (holdForSetup && warmLease === undefined) {
+        const gate = subagentSetupGate(sourceCwd);
+        // Only the wait for a free slot can be interrupted. Taking the slot and
+        // arming its release happen in one uninterruptible step, so a
+        // cancelled launch never strands a permit.
+        const waited = yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            let waited = false;
+            while (!(yield* Semaphore.takeIfAvailable(gate, 1))) {
+              if (!waited) {
+                waited = true;
+                yield* setupTracker.stageStatus(
+                  threadId,
+                  "setup-script",
+                  "running",
+                  "Waiting for other subagent setups",
+                );
+              }
+              yield* restore(Semaphore.withPermits(gate, 1)(Effect.void));
+            }
+            let held = true;
+            releaseSetupGate = Effect.suspend(() => {
+              if (!held) return Effect.void;
+              held = false;
+              return Semaphore.release(gate, 1).pipe(Effect.asVoid);
+            });
+            return waited;
+          }),
+        );
+        if (waited) yield* setupTracker.stageStatus(threadId, "setup-script", "running", null);
+      }
       const started =
         warmLease !== undefined
           ? Exit.succeed({ status: "no-script" } as const)
@@ -908,6 +957,7 @@ const make = Effect.gen(function* () {
           warmLease ? "Dependencies ready" : undefined,
         );
       }
+      yield* releaseSetupGate;
       yield* setupTracker.markUncancellable(threadId);
       yield* setupTracker.stageStatus(threadId, "agent", "running");
       if (runId !== null) {
@@ -935,6 +985,7 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.onError((cause) =>
         Effect.gen(function* () {
+          yield* releaseSetupGate;
           if (warmLease && !workspaceRecorded) {
             yield* warmLease.abandon;
             // The pool reconciles its durable lease against the thread before removal.

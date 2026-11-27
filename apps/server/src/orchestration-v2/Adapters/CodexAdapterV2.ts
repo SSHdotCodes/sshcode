@@ -1,4 +1,7 @@
-import { SubagentsEnabled } from "@t3tools/provider-core/server/orchestrationInstructions";
+import {
+  SubagentsEnabled,
+  currentAgentBehavior,
+} from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as NodeURL from "node:url";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
@@ -958,7 +961,9 @@ export function buildCodexTurnStartParams(input: {
     const browserContext =
       input.hostBrowser === undefined ? undefined : buildCodexBrowserContext(input.hostBrowser);
     const toolCatalogContext =
-      input.hasT3Mcp === true && input.toolDiscoveryCatalog !== undefined
+      input.hasT3Mcp === true &&
+      input.toolDiscoveryCatalog !== undefined &&
+      currentAgentBehavior().tokens !== "low"
         ? {
             t3_code_tool_catalog: {
               kind: "application" as const,
@@ -1394,6 +1399,7 @@ function isCodexCapacityFailure(code: string | null | undefined, message?: strin
 }
 
 interface ActiveCodexTurnContext {
+  promptPending?: boolean;
   closedCommandItemIds?: ReadonlySet<string>;
   latestProviderFailure?: {
     readonly nativeMessage: string;
@@ -1697,6 +1703,7 @@ export function codexThreadRuntimeParams(input: {
             "shell_environment_policy.set.TMP": input.chatTempDir,
             "shell_environment_policy.set.TEMP": input.chatTempDir,
           }),
+      ...(currentAgentBehavior().subagents === "none" ? { "agents.enabled": false } : {}),
       ...(mcpSession === undefined
         ? {}
         : {
@@ -2424,7 +2431,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           ).hasSubagents = true;
         };
         const pendingRootTurns = yield* Ref.make(
-          new Map<string, ProviderAdapter.ProviderAdapterV2TurnInput>(),
+          new Map<
+            string,
+            {
+              readonly turnInput: ProviderAdapter.ProviderAdapterV2TurnInput;
+              readonly hasPrompt?: boolean;
+            }
+          >(),
         );
         const turnWaiters = yield* Ref.make(new Map<string, Deferred.Deferred<void, never>>());
         const subagentThreads = yield* Ref.make(new Map<string, CodexSubagentThreadContext>());
@@ -2631,6 +2644,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         const registerRootTurn = (input: {
           readonly turnInput: ProviderAdapter.ProviderAdapterV2TurnInput;
+          readonly hasPrompt?: boolean;
           readonly nativeTurnId: string;
           readonly startedAt: DateTime.Utc;
           readonly waitForNativeStart?: boolean;
@@ -2645,6 +2659,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               nativeTurnId: input.nativeTurnId,
             });
             const context: ActiveCodexTurnContext = {
+              ...(input.hasPrompt ? { promptPending: true } : {}),
               ...(input.waitForNativeStart
                 ? { nativeStartReady: yield* Deferred.make<void>() }
                 : {}),
@@ -5359,6 +5374,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           Effect.gen(function* () {
             const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
             if (context !== undefined) {
+              if (payload.turn.items.some((item) => item.type === "userMessage")) {
+                context.promptPending = false;
+              }
               if (context.nativeStartReady !== undefined) {
                 yield* Deferred.succeed(context.nativeStartReady, undefined);
               }
@@ -5367,7 +5385,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const pendingRootTurn = (yield* Ref.get(pendingRootTurns)).get(payload.threadId);
             if (pendingRootTurn !== undefined) {
               yield* registerRootTurn({
-                turnInput: pendingRootTurn,
+                ...pendingRootTurn,
+                hasPrompt:
+                  pendingRootTurn.hasPrompt === true &&
+                  !payload.turn.items.some((item) => item.type === "userMessage"),
                 nativeTurnId: payload.turn.id,
                 startedAt: codexTimestamp(payload.turn.startedAt),
               });
@@ -5689,6 +5710,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
 
             if (payload.item.type === "userMessage") {
+              context.promptPending = false;
               yield* emitSubagentUserMessage(
                 context,
                 payload.item,
@@ -5884,6 +5906,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
 
             if (payload.item.type === "userMessage") {
+              context.promptPending = false;
               if (yield* emitSubagentUserMessage(context, payload.item)) {
                 return;
               }
@@ -6932,6 +6955,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           readonly nativeTurnId: string;
           readonly status: OrchestrationV2ProviderTurn["status"];
           readonly completedAt: DateTime.Utc;
+          readonly promptDropped?: true;
           readonly failureMessage?: string;
           readonly failureCode?: string | null;
           readonly failureClass?: OrchestrationV2ProviderFailureClass;
@@ -7013,6 +7037,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 status: input.status,
                 startedAt: input.context.startedAt,
                 completedAt: input.completedAt,
+                ...(input.promptDropped === true ? { promptDropped: true } : {}),
                 ...codexGenerationField(input.context),
                 turnTokenUsage: completeCodexTurnTokenUsage(
                   usageStateForThread(
@@ -7270,11 +7295,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const error = payload.turn.error;
             const failureInfo =
               error == null ? undefined : codexFailureInfo(error.codexErrorInfo, error.message);
+            // turn/start can succeed before Codex records the user message.
+            const promptDropped =
+              nativeStatus === "interrupted" &&
+              context.promptPending === true &&
+              !payload.turn.items.some((item) => item.type === "userMessage");
             yield* finalizeCodexTurn({
               context,
               nativeTurnId: payload.turn.id,
               status,
               completedAt: codexTimestamp(payload.turn.completedAt),
+              ...(promptDropped ? { promptDropped: true as const } : {}),
               ...(error == null || failureInfo === undefined
                 ? {}
                 : {
@@ -7498,11 +7529,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
               threadId: turnInput.threadId,
             });
-            yield* Ref.update(pendingRootTurns, (current) => {
-              const updated = new Map(current);
-              updated.set(threadId, turnInput);
-              return updated;
-            });
+            const pending = { turnInput, hasPrompt: codexInput.length > 0 };
+            yield* Ref.update(pendingRootTurns, (current) =>
+              new Map(current).set(threadId, pending),
+            );
             yield* Ref.update(additionalContextByThread, (current) => {
               const next = new Map(current);
               if (turnStartParams.additionalContext)
@@ -7550,9 +7580,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             );
             if (contextDigest !== undefined && contextDigest !== deliveredDigest)
               yield* recordAdditionalContextDigest(threadId, contextDigest);
+            // The notification path may have registered and settled this turn already.
+            if ((yield* Ref.get(pendingRootTurns)).get(threadId) !== pending) return;
             const providerThread = rootProviderThreads.get(threadId) ?? turnInput.providerThread;
             yield* registerRootTurn({
               turnInput: { ...turnInput, providerThread },
+              hasPrompt:
+                pending.hasPrompt &&
+                !started.turn.items.some((item) => item.type === "userMessage"),
               nativeTurnId: started.turn.id,
               startedAt: codexTimestamp(started.turn.startedAt),
               waitForNativeStart: started.turn.startedAt === null,
@@ -7561,6 +7596,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             Effect.ensuring(
               Effect.flatMap(getNativeThreadId(turnInput.providerThread), (threadId) =>
                 Ref.update(pendingRootTurns, (current) => {
+                  if (current.get(threadId)?.turnInput !== turnInput) return current;
                   const updated = new Map(current);
                   updated.delete(threadId);
                   return updated;
@@ -7909,7 +7945,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             Effect.gen(function* () {
               const threadId = yield* getNativeThreadId(turnInput.providerThread);
               yield* Ref.update(pendingRootTurns, (current) =>
-                new Map(current).set(threadId, turnInput),
+                new Map(current).set(threadId, { turnInput }),
               );
               rootProviderThreads.set(
                 threadId,
@@ -7921,6 +7957,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* client.request("thread/compact/start", { threadId }).pipe(
                 Effect.onError(() =>
                   Ref.update(pendingRootTurns, (current) => {
+                    if (current.get(threadId)?.turnInput !== turnInput) return current;
                     const next = new Map(current);
                     next.delete(threadId);
                     return next;

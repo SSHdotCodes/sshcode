@@ -308,6 +308,22 @@ describe("new chat dashboard preference", () => {
   );
 });
 
+describe("website icons preference", () => {
+  it.effect("stays unset until this device chooses, then keeps the choice", () =>
+    Effect.gen(function* () {
+      const storage = preferencesStorage('{"themeMode":"dark"}');
+      expect((yield* (yield* storage).load).websiteIconsEnabled).toBeUndefined();
+      for (const enabled of [false, true]) {
+        yield* (yield* storage).savePatch({ websiteIconsEnabled: enabled });
+        expect(yield* (yield* storage).load).toEqual({
+          themeMode: "dark",
+          websiteIconsEnabled: enabled,
+        });
+      }
+    }),
+  );
+});
+
 describe("chat backdrop preference", () => {
   it.effect("stays opt-in and retains both choices independently of dashboard cards", () =>
     Effect.gen(function* () {

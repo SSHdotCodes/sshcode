@@ -1,6 +1,10 @@
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import type { EnvironmentId, ServerConfig } from "@t3tools/contracts";
-import { cliReleaseChannelOf } from "@t3tools/shared/cliRelease";
+import {
+  cliReleaseChannelOf,
+  SERVER_DOWNLOADS_PUBLISHED,
+  serverUpdateUnavailable,
+} from "@t3tools/shared/cliRelease";
 
 import {
   resolveServerSelfUpdateCapability,
@@ -8,6 +12,7 @@ import {
   supportsDesktopAppUpdate,
   supportsServerUpdateThreadContinuation,
 } from "~/versionSkew";
+import { serverDownloadReady } from "~/state/serverRelease";
 import type { ServerUpdateOutcome, ServerUpdateTarget } from "../ServerUpdateAction";
 
 export interface UpdateEverythingMachine {
@@ -83,6 +88,7 @@ export interface SkippedMachine {
 export function collectServerUpdateTargets(
   machines: ReadonlyArray<UpdateEverythingMachine>,
   targetVersion: string,
+  serverDownloadsPublished: boolean = SERVER_DOWNLOADS_PUBLISHED,
 ): { readonly targets: ServerUpdateTarget[]; readonly skipped: SkippedMachine[] } {
   const targets: ServerUpdateTarget[] = [];
   const skipped: SkippedMachine[] = [];
@@ -119,6 +125,11 @@ export function collectServerUpdateTargets(
       skip("needs a newer desktop app");
       continue;
     }
+    const unavailable = serverUpdateUnavailable(selfUpdate, serverDownloadsPublished);
+    if (unavailable !== null) {
+      skip(unavailable);
+      continue;
+    }
     const serverVersion = config.environment.serverVersion;
     if (
       selfUpdate !== "desktop-managed" &&
@@ -139,6 +150,45 @@ export function collectServerUpdateTargets(
     });
   }
   return { targets, skipped };
+}
+
+/**
+ * Keeps a server that downloads its update only once GitHub's release for `targetVersion` has the
+ * archive for that server's platform; the installer refuses a platform the checksum file does not
+ * list. A desktop-managed server follows its own app's update feed. `assets` is null while the
+ * release is unknown, and an unknown platform stays unknown, so both are skipped.
+ */
+export function gateServerDownloads(
+  machines: ReadonlyArray<Pick<UpdateEverythingMachine, "environmentId" | "serverConfig">>,
+  servers: ReadonlyArray<ServerUpdateTarget>,
+  assets: ReadonlySet<string> | null,
+  targetVersion: string,
+): { readonly servers: ServerUpdateTarget[]; readonly skipped: SkippedMachine[] } {
+  const platforms = new Map(
+    machines.map((machine) => [machine.environmentId, machine.serverConfig?.environment.platform]),
+  );
+  const kept: ServerUpdateTarget[] = [];
+  const skipped: SkippedMachine[] = [];
+  for (const server of servers) {
+    if (server.selfUpdate === "desktop-managed") {
+      kept.push(server);
+      continue;
+    }
+    const ready = serverDownloadReady(assets, targetVersion, platforms.get(server.environmentId));
+    if (ready === true) {
+      kept.push(server);
+      continue;
+    }
+    skipped.push({
+      environmentId: server.environmentId,
+      label: server.serverLabel,
+      reason:
+        ready === false
+          ? `GitHub has no SSHCode ${targetVersion} server download for it yet`
+          : `not yet confirmed that GitHub has an SSHCode ${targetVersion} server download for it`,
+    });
+  }
+  return { servers: kept, skipped };
 }
 
 export interface UpdateEverythingSteps<Providers, Servers> {

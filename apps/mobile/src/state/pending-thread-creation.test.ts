@@ -193,6 +193,10 @@ describe("pendingThreadCreationShell", () => {
     expect(pendingThreadCreationShell({ ...creation, creation: undefined })).toBeNull();
     expect(pendingThreadCreationShell({ ...creation, modelSelection: undefined })).toBeNull();
   });
+
+  it("titles a photo-only queued creation by its photo count instead of New thread", () => {
+    expect(pendingThreadCreationShell({ ...creation, text: "" })?.title).toBe("1 photo");
+  });
 });
 
 describe("isPendingThreadCreationVisible", () => {

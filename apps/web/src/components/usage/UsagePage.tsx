@@ -1142,7 +1142,13 @@ export function UsagePage() {
                                       figureClass(isProviderLoading(provider)),
                                     )}
                                   >
-                                    {formatUsd(period.byProvider.get(provider)?.costUsd ?? 0)}
+                                    {formatPeriodCost(
+                                      period.byProvider.get(provider) ?? {
+                                        costUsd: 0,
+                                        records: 0,
+                                        unpricedRecords: 0,
+                                      },
+                                    )}
                                   </td>
                                 ))}
                                 <td
@@ -1151,7 +1157,7 @@ export function UsagePage() {
                                     figureClass(loading.partial),
                                   )}
                                 >
-                                  {formatUsd(period.costUsd)}
+                                  {formatPeriodCost(period)}
                                 </td>
                                 <td
                                   className={cn(
@@ -1371,6 +1377,18 @@ function CountedFigure({
 /** Mutes a figure that is still coming in. The delay keeps a quick answer from flashing. */
 function figureClass(loading: boolean) {
   return cn("transition-opacity", loading && "opacity-40 delay-150");
+}
+
+function periodCostUnknown(cell: { readonly records?: number; readonly unpricedRecords?: number }) {
+  return (cell.records ?? 0) > 0 && (cell.unpricedRecords ?? 0) >= (cell.records ?? 0);
+}
+
+function formatPeriodCost(cell: {
+  readonly costUsd: number;
+  readonly records?: number;
+  readonly unpricedRecords?: number;
+}) {
+  return periodCostUnknown(cell) ? "–" : formatUsd(cell.costUsd);
 }
 
 function Metric({

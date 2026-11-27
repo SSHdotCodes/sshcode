@@ -180,3 +180,13 @@ it("resolves relay client tracing from runtime config with build-time fallback",
     null,
   );
 });
+
+it("DO_NOT_TRACK turns relay client tracing off even with a configured endpoint", () => {
+  const fallback = {
+    tracesUrl: "https://embedded.example.test/v1/traces",
+    tracesDataset: "embedded-dataset",
+    tracesToken: "embedded-token",
+  };
+  assert.equal(resolveRelayClientTracingConfig({ DO_NOT_TRACK: "1" }, fallback), null);
+  assert.deepEqual(resolveRelayClientTracingConfig({ DO_NOT_TRACK: "0" }, fallback), fallback);
+});

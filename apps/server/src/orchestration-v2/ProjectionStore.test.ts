@@ -1,3 +1,4 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ThreadUsageService from "../usage/ThreadUsageService.ts";
 import * as UsageService from "../usage/UsageService.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
@@ -34,8 +35,10 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -202,6 +205,37 @@ const addRolledBackRecoveryCandidate = Effect.fn("addRolledBackRecoveryCandidate
 
   return threadId;
 });
+
+it.effect("reads a full thread projection on the SQLite reader", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-projection-reader-" });
+    const database = SqlitePersistence.layerFromPath(path.join(directory, "state.sqlite"));
+    yield* Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const threadId = yield* addRolledBackRecoveryCandidate("projection-reader");
+      const connections: Array<unknown> = [];
+      const tracer = Tracer.make({
+        span(options) {
+          const span = new Tracer.NativeSpan(options);
+          if (span.name === "sql.transaction") {
+            const end = span.end.bind(span);
+            span.end = (endTime, exit) => {
+              end(endTime, exit);
+              connections.push(span.attributes.get("db.connection"));
+            };
+          }
+          return span;
+        },
+      });
+      const projection = yield* store.getThreadProjection(threadId).pipe(Effect.withTracer(tracer));
+      assert.equal(projection.thread.id, threadId);
+      assert.lengthOf(projection.runs, 1);
+      assert.deepEqual(connections, ["reader"]);
+    }).pipe(Effect.provide(ProjectionStore.layer.pipe(Layer.provide(database))));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
 
 it.effect("runtime recovery finds retained runs without scanning completed tool history", () =>
   Effect.gen(function* () {
@@ -8573,6 +8607,30 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           providerThreadId: ProviderThreadId.make("provider-thread:held-completion:new-provider"),
           requestedAt: releasedAt,
           startedAt: releasedAt,
+          completedAt: releasedAt,
+        },
+      });
+      assert.deepEqual(
+        (yield* store.getRuntimeRecoveryProjection(threadId)).runs.map((run) => run.id),
+        [runId, newerRunId],
+      );
+
+      // Deleting a queued message leaves its run behind as cancelled. Its
+      // provider never ran it, so it cannot own the older monitor's roster.
+      const discardedId = RunId.make("run:held-completion:discarded-queue-entry");
+      yield* store.apply({
+        id: EventId.make("event:held-completion:discarded-queue-entry"),
+        type: "run.created",
+        threadId,
+        runId: discardedId,
+        occurredAt: releasedAt,
+        payload: {
+          ...(yield* store.getThreadProjection(threadId)).runs[0]!,
+          id: discardedId,
+          ordinal: 3,
+          requestedAt: releasedAt,
+          startedAt: null,
+          status: "cancelled",
           completedAt: releasedAt,
         },
       });

@@ -1021,8 +1021,13 @@ const make = Effect.gen(function* () {
     removed: { files: number; bytes: number },
   ) {
     if (days === null || !(yield* fs.exists(root))) return removed;
+    const baseDir = path.resolve(config.baseDir);
+    const configuredRoot = path.resolve(root);
+    if (!inside(baseDir, configuredRoot)) return removed;
     const realRoot = yield* fs.realPath(root);
-    if (realRoot !== path.resolve(root)) return removed;
+    const realBaseDir = yield* fs.realPath(baseDir);
+    // Allow aliases in the configured base path while keeping cleanup within its own directories.
+    if (realRoot !== path.join(realBaseDir, path.relative(baseDir, configuredRoot))) return removed;
     const visit = Effect.fn("StorageCleanup.visitFiles")(function* (
       directory: string,
     ): Effect.fn.Return<void, PlatformError | ServerSettingsError> {

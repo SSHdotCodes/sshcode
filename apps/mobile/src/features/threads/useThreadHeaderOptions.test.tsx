@@ -61,6 +61,7 @@ vi.mock("../discord/useUiMode", () => ({ useUiMode: () => ["default", () => {}] 
 vi.mock("react-native", () => ({
   Alert: { alert: () => {} },
   Linking: {},
+  useWindowDimensions: () => ({ width: 390, height: 844, scale: 3, fontScale: 1 }),
   Platform: {
     OS: "ios",
     get isPad() {
@@ -90,6 +91,24 @@ vi.mock("../computer-use/useComputerUseStatus", () => ({
   useComputerUseStatus: () => null,
 }));
 vi.mock("../../state/entities", () => ({ useThreadShell: () => harness.threadShell }));
+// Bots are off in these chats.
+vi.mock("../bots/state", () => ({
+  useBotEntries: () => [],
+  useBotForThread: () => null,
+  useParkedBotForThread: () => null,
+  useBotRuntime: () => undefined,
+  useOptionalBotStatus: () => null,
+}));
+vi.mock("../bots/BotChat", () => ({
+  BotHeaderTitle: () => null,
+  BotParkedHeaderTitle: () => null,
+}));
+// The board's state opens native storage; these headers have no team board.
+vi.mock("../../state/teamBoard", async () => {
+  const { Atom } = await import("effect/reactivity");
+  const none = Atom.make(null);
+  return { teamBoardEnvironment: { summaryAtom: () => none } };
+});
 vi.mock("../../state/atom-registry", () => ({
   appAtomRegistry: { set: (_atom: unknown, value: unknown) => harness.jumps.push(value) },
 }));

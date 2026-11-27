@@ -2,6 +2,8 @@ import { collectComposerLinkTokens, collectComposerModelTokens } from "./compose
 import { upgradeLegacyContextMessage } from "@t3tools/shared/composerContextLegacy";
 import { buildProjectThreadStartTurnInput } from "./projectThreadStartTurn";
 import {
+  MessageId,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProjectId,
   ProviderInstanceId,
   ComposerContextId,
@@ -11,6 +13,10 @@ import {
 } from "@t3tools/contracts";
 import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
 import {
+  expandAssistantCitationsForProvider,
+  serializeAssistantCitation,
+} from "@t3tools/shared/assistantCitations";
+import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   collectComposerContextReferences,
   formatComposerContextReference,
@@ -18,8 +24,10 @@ import {
 } from "@t3tools/shared/composerContextReferences";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  assistantCitationChipLabel,
   composerContextEditorTokens,
   composerContextSendBlockReason,
+  composerPromptLengthMessage,
   composerMentionPath,
   createComposerContextHistory,
   referencedComposerContext,
@@ -167,6 +175,52 @@ describe("mobile composer context", () => {
     const tokens = composerContextEditorTokens(text, collectComposerInlineTokens(text));
     expect(tokens.map((token) => token.type)).toEqual(["skill", "mention", "context", "context"]);
     for (const token of tokens) expect(text.slice(token.start, token.end)).toBe(token.source);
+  });
+
+  it("chips a citation as one token named by its comment, else the start of its quote", () => {
+    const citation = {
+      version: 1 as const,
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("thread"),
+      messageId: MessageId.make("reply"),
+      text: "  Use $playwright with @src/app.ts to check the login flow  ",
+      start: 0,
+      end: 58,
+      prefix: "",
+      suffix: "",
+    };
+    const link = serializeAssistantCitation(citation);
+    const text = `Use $playwright on ${link} next`;
+    const tokens = composerContextEditorTokens(text, collectComposerInlineTokens(text));
+    expect(tokens.map((token) => [token.type, token.value])).toEqual([
+      ["skill", "playwright"],
+      ["citation", "Use $playwright with @src/ap…"],
+    ]);
+    for (const token of tokens) expect(text.slice(token.start, token.end)).toBe(token.source);
+    expect(assistantCitationChipLabel({ ...citation, comment: "Why?" })).toBe("Why?");
+  });
+
+  it("counts citations as the agent reads them against the Mac's prompt limit", () => {
+    const quote = "x".repeat(8_000);
+    const link = serializeAssistantCitation({
+      version: 1,
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("thread"),
+      messageId: MessageId.make("reply"),
+      text: quote,
+      start: 0,
+      end: quote.length,
+      prefix: "",
+      suffix: "",
+    });
+    expect(composerPromptLengthMessage(link)).toBeNull();
+    // The quote block the agent receives is longer than the link the draft holds.
+    const expanded = expandAssistantCitationsForProvider(link).length;
+    expect(expanded).toBeGreaterThan(link.length);
+    const filler = "y".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS - expanded + 1);
+    expect(composerPromptLengthMessage(`${link}${filler}`)).toBe(
+      "Prompt is 1 character over the 120,000-character limit. Shorten or split it before sending.",
+    );
   });
 
   it("chips finished GitHub and Hugging Face links, not one still being typed or in code", () => {

@@ -5,10 +5,10 @@ import * as DateTime from "effect/DateTime";
 import { makeOpenCodeGeneration, meterOpenCodeEvent } from "./generation.ts";
 import type { OpenCode2StreamEvent } from "./OpenCode2Client.ts";
 
-const event = (type: string, data: Record<string, unknown> = {}) =>
+const event = (type: string, data: Record<string, unknown> = {}, created = 0) =>
   ({
     id: `evt-${type}`,
-    created: 0,
+    created,
     type,
     location: { directory: "/workspace" },
     data: { sessionID: "ses-generation", ...data },
@@ -74,6 +74,46 @@ describe("OpenCode step timing", () => {
       outputTokens: 400,
       generatingMs: 5_000,
       lastReply: { firstTokenMs: 1_500 },
+    });
+  });
+
+  it("uses end-to-end timing when a reasoning stream only contains a summary", () => {
+    const generation = makeOpenCodeGeneration();
+    meterOpenCodeEvent(generation, event("session.step.started"), DateTime.makeUnsafe(0));
+    meterOpenCodeEvent(generation, event("session.reasoning.started"), DateTime.makeUnsafe(3_900));
+    meterOpenCodeEvent(
+      generation,
+      event("session.reasoning.delta", { delta: "A summary" }),
+      DateTime.makeUnsafe(4_000),
+    );
+    meterOpenCodeEvent(generation, event("session.text.started"), DateTime.makeUnsafe(4_100));
+    meterOpenCodeEvent(
+      generation,
+      event("session.step.ended", { finish: "stop", tokens: tokens(91, 258) }),
+      DateTime.makeUnsafe(4_825),
+    );
+    expect(generationSnapshot(generation.meter)).toMatchObject({
+      basis: "end-to-end",
+      outputTokens: 349,
+      generatingMs: 4_825,
+    });
+  });
+
+  it("uses the native request and response boundaries even when the frames arrive together", () => {
+    const generation = makeOpenCodeGeneration();
+    const receivedAt = DateTime.makeUnsafe(50_000);
+    for (const frame of [
+      event("session.step.started", { started: 1_000 }, 6_000),
+      event("session.text.started", {}, 6_100),
+      event("session.step.streamed", {}, 7_000),
+      event("session.step.ended", { tokens: tokens(91, 258), finish: "tool-calls" }, 49_000),
+    ]) {
+      meterOpenCodeEvent(generation, frame, receivedAt);
+    }
+    expect(generationSnapshot(generation.meter)).toMatchObject({
+      basis: "end-to-end",
+      outputTokens: 349,
+      generatingMs: 6_000,
     });
   });
 

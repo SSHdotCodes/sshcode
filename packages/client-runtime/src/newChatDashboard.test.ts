@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { HARNESS_MASCOTS } from "@t3tools/shared/harnessMascots";
 import {
   EnvironmentId,
@@ -27,6 +27,10 @@ import {
   type ThreadRuntimeSummary,
 } from "./state/models.ts";
 import { v2ThreadShell } from "./state/orchestrationV2TestFixtures.ts";
+
+// The dashboard reads the viewer's clock. These cases were written for New York days,
+// including its DST changes; newChatDashboard.localClock.test.ts covers another zone.
+vi.stubEnv("TZ", "America/New_York");
 
 const environmentId = EnvironmentId.make("machine-a");
 const now = Date.parse("2026-11-07T12:00:00-05:00");
@@ -112,7 +116,7 @@ describe("new chat activity", () => {
     expect(activity.total).toBe(0);
   });
 
-  it("buckets by Eastern calendar day across the fall DST change", () => {
+  it("buckets by the viewer's calendar day across the fall DST change", () => {
     const activity = buildNewChatActivity(
       [
         chat("late", "2026-11-01T03:59:00Z"),
@@ -315,9 +319,9 @@ describe("new chat activity", () => {
     expect([3, 0, -4].map(formatChatDelta)).toEqual(["+3", "0", "\u22124"]);
   });
 
-  it("formats resets in Eastern 12-hour time and handles missing dates", () => {
-    expect(formatQuotaReset("2026-07-01T16:05:00Z")).toBe("Jul 1, 12:05 PM ET");
-    expect(formatQuotaReset("2026-12-01T16:05:00Z")).toBe("Dec 1, 11:05 AM ET");
+  it("formats resets in the viewer's 12-hour time and handles missing dates", () => {
+    expect(formatQuotaReset("2026-07-01T16:05:00Z")).toBe("Jul 1, 12:05 PM");
+    expect(formatQuotaReset("2026-12-01T16:05:00Z")).toBe("Dec 1, 11:05 AM");
     expect(formatQuotaReset(undefined)).toBe("Not reported");
     expect(formatQuotaReset("invalid")).toBe("Not reported");
   });

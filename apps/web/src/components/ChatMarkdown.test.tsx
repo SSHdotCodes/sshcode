@@ -280,6 +280,42 @@ describe("ChatMarkdown favicon privacy", () => {
 });
 
 describe("ChatMarkdown streaming", () => {
+  it("keeps earlier paragraph nodes when a streamed reply settles", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(
+          <ChatMarkdown
+            cwd="/tmp/project"
+            text={"First paragraph.\n\nSecond paragraph.\n\nLast"}
+            isStreaming
+          />,
+        );
+      });
+      const previous = host.querySelectorAll(".chat-markdown > p");
+      expect(previous).toHaveLength(3);
+
+      await act(async () => {
+        root.render(
+          <ChatMarkdown
+            cwd="/tmp/project"
+            text={"First paragraph.\n\nSecond paragraph.\n\nLast paragraph."}
+          />,
+        );
+      });
+      const settled = host.querySelectorAll(".chat-markdown > p");
+      expect(settled).toHaveLength(3);
+      expect(settled[0]).toBe(previous[0]);
+      expect(settled[1]).toBe(previous[1]);
+      expect(settled[2]?.textContent).toBe("Last paragraph.");
+    } finally {
+      await act(async () => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("parses a reply once when its streaming finishes", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     const parsed = vi.fn();

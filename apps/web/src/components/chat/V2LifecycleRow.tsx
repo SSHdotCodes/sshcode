@@ -1,6 +1,14 @@
-import { SubagentCard, subagentStatusVisual, plainDetail } from "./SubagentCard";
+import {
+  IMAGE_GENERATOR_NATIVE_TYPE,
+  ImageGenerationCard,
+  ResearchCard,
+  SubagentCard,
+  subagentStatusVisual,
+  plainDetail,
+} from "./SubagentCard";
 export { SubagentAvatar } from "./SubagentCard";
 import { notificationSubagent } from "@t3tools/client-runtime/state/thread-execution";
+import { TeamBoardPresenceChip } from "./TeamBoard";
 import { SubagentGradeBadge } from "./SubagentGradeBadge";
 import { AgentElapsed } from "./AgentElapsed";
 import {
@@ -30,7 +38,11 @@ import {
   subagentCardDetail,
   SUBAGENT_SPEED_LABELS,
   subagentSpeed,
+  isResearchSubagent,
+  researchReportPreview,
+  researchSources,
 } from "@t3tools/client-runtime/state/subagent-display";
+import { useOpenLink } from "../../browser/useOpenLink";
 import {
   ProviderDriverKind,
   type ModelSelection,
@@ -84,6 +96,8 @@ export function V2LifecycleRow(props: {
   readonly providerStatuses: ReadonlyArray<ServerProvider>;
   readonly runs: ReadonlyArray<HandoffTimelineRun>;
   readonly onOpenThread: (threadId: ThreadId) => void;
+  /** Pictures a painting subagent made: the final one large, earlier tries small. */
+  readonly renderSubagentImages?: (paths: ReadonlyArray<string>) => ReactNode;
 }) {
   const { item } = props;
   if (item.type === "run_interrupt_request") {
@@ -183,6 +197,7 @@ export function V2LifecycleRow(props: {
         completedAt={item.completedAt}
         threadId={item.childThreadId}
         onOpenThread={props.onOpenThread}
+        renderImages={props.renderSubagentImages}
       />
     );
   }
@@ -292,6 +307,7 @@ function SubagentTimelineLink(props: {
   readonly completedAt: DateTime.Utc | null;
   readonly threadId: ThreadId | null;
   readonly onOpenThread: (threadId: ThreadId) => void;
+  readonly renderImages?: ((paths: ReadonlyArray<string>) => ReactNode) | undefined;
   /** Draws a past event about the subagent: its status then, and when it happened instead of elapsed time. */
   readonly event?: {
     readonly status: OrchestrationV2TurnItem["status"] | null;
@@ -304,23 +320,33 @@ function SubagentTimelineLink(props: {
     (thread) => thread?.projection.subagents.find((agent) => agent.id === props.subagentId) ?? null,
   );
   const threadId = props.threadId;
+  const openLink = useOpenLink(props.parentRef);
   const liveStatus = agent?.status ?? props.status;
   const status = props.event ? props.event.status : liveStatus;
   // A subagent whose turn ended with jobs still out reads as plain "Running"
-  // otherwise, which looks like a result that never arrived.
+  // otherwise, which looks like a result that never arrived. Its live progress
+  // (token use High) also rides on its chat's shell.
   const childShell = useThreadShell(
-    threadId && liveStatus === "running"
+    threadId && props.event === undefined && isActiveSubagentStatus(liveStatus)
       ? scopeThreadRef(props.parentRef.environmentId, threadId)
       : null,
   );
+  const liveProgress = childShell?.source.liveProgress;
   const waitingLabel =
-    childShell === null
+    childShell === null || liveStatus !== "running"
       ? null
       : subagentBackgroundWaitLabel({
           runtimeStatus: childShell.runtime?.status ?? null,
           longRunningWork: childShell.longRunningWork,
         });
   const statusLabel = props.event?.label ?? waitingLabel ?? subagentStatusVisual(liveStatus).label;
+  // A running subagent leading its own subagents says so; otherwise they show only in its chat.
+  const nestedRunning =
+    props.event || waitingLabel !== null || liveStatus !== "running"
+      ? 0
+      : (childShell?.longRunningWork?.runningSubagentCount ?? 0);
+  const nestedLabel =
+    nestedRunning > 0 ? `${nestedRunning} ${nestedRunning === 1 ? "subagent" : "subagents"}` : null;
   const result = (agent?.result ?? props.result)?.trim();
   const progress = (agent?.progress ?? props.progress)?.trim();
   const settled = SETTLED_SUBAGENT_STATUSES.has(status ?? liveStatus);
@@ -337,6 +363,79 @@ function SubagentTimelineLink(props: {
     provider: props.provider,
   });
   const speed = subagentSpeed(agent?.modelSelection);
+  if (props.event === undefined && agent?.nativeType === IMAGE_GENERATOR_NATIVE_TYPE) {
+    const imagePaths = agent.imagePaths ?? [];
+    return (
+      <ImageGenerationCard
+        title={props.title}
+        status={liveStatus}
+        imageCount={imagePaths.length}
+        elapsed={<SubagentElapsed agent={timing} />}
+        threadId={threadId}
+        onOpenThread={props.onOpenThread}
+        images={imagePaths.length > 0 ? props.renderImages?.(imagePaths) : null}
+      />
+    );
+  }
+  const trailing = (
+    <>
+      {props.event === undefined && agent?.origin === "app_owned" ? (
+        <TeamBoardPresenceChip threadRef={props.parentRef} taskId={props.subagentId} />
+      ) : null}
+      <SubagentGradeBadge
+        environmentId={props.parentRef.environmentId}
+        taskId={props.subagentId}
+        origin={agent?.origin ?? props.origin}
+        status={liveStatus}
+      />
+      {props.event === undefined &&
+      agent?.origin === "app_owned" &&
+      isActiveSubagentStatus(agent.status) ? (
+        <FirstSubagentAsk parentRef={props.parentRef} agent={agent} />
+      ) : null}
+    </>
+  );
+  if (props.event === undefined && agent !== null && isResearchSubagent(agent)) {
+    const done = SETTLED_SUBAGENT_STATUSES.has(liveStatus);
+    const report = done && liveStatus !== "failed" ? (result ?? null) : null;
+    return (
+      <div className="flex min-w-0 items-center">
+        <div className="min-w-0 flex-1">
+          <ResearchCard
+            title={props.title}
+            status={liveStatus}
+            statusLabel={
+              waitingLabel ??
+              (!done
+                ? "Researching…"
+                : liveStatus === "completed"
+                  ? "Research done"
+                  : subagentStatusVisual(liveStatus).label)
+            }
+            modelLabel={[
+              agent.model?.trim() ? modelLabel : null,
+              speed ? SUBAGENT_SPEED_LABELS[speed] : null,
+              nestedLabel,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+            elapsed={<SubagentElapsed agent={timing} />}
+            threadId={threadId}
+            onOpenThread={props.onOpenThread}
+            progress={done ? null : subagentCardDetail(progress)}
+            preview={researchReportPreview(report)}
+            failure={liveStatus === "failed" ? subagentCardDetail(result || progress) : null}
+            sources={researchSources(report)}
+            onOpenSource={(url, event) => {
+              event.preventDefault();
+              void openLink(url, { event }).catch((error: unknown) => console.error(error));
+            }}
+          />
+        </div>
+        {trailing}
+      </div>
+    );
+  }
   return (
     <div className="flex min-w-0 items-center">
       <div className="min-w-0 flex-1">
@@ -350,9 +449,11 @@ function SubagentTimelineLink(props: {
           modelLabel={
             // A past event keeps its own moment; only the live card reads what the app saw.
             [
-              modelLabel,
+              // An unknown model says nothing; "Not reported" read as the subagent not reporting.
+              agent?.model?.trim() ? modelLabel : null,
               speed ? SUBAGENT_SPEED_LABELS[speed] : null,
               props.event || agent === null ? null : subagentSeenLine(agent),
+              nestedLabel,
             ]
               .filter(Boolean)
               .join(" · ")
@@ -362,6 +463,7 @@ function SubagentTimelineLink(props: {
           threadId={threadId}
           onOpenThread={props.onOpenThread}
           itemType="subagent"
+          liveProgress={liveProgress}
         >
           <SubagentTimelineTooltip
             {...props}
@@ -376,17 +478,7 @@ function SubagentTimelineLink(props: {
           />
         </SubagentCard>
       </div>
-      <SubagentGradeBadge
-        environmentId={props.parentRef.environmentId}
-        taskId={props.subagentId}
-        origin={agent?.origin ?? props.origin}
-        status={liveStatus}
-      />
-      {props.event === undefined &&
-      agent?.origin === "app_owned" &&
-      isActiveSubagentStatus(agent.status) ? (
-        <FirstSubagentAsk parentRef={props.parentRef} agent={agent} />
-      ) : null}
+      {trailing}
     </div>
   );
 }
@@ -420,7 +512,11 @@ export function CreatedChatTimelineLink(props: {
       preview={chat.preview}
       driver={provider?.driver}
       provider={provider}
-      modelLabel={[modelLabel, effort ?? null, speed ? SUBAGENT_SPEED_LABELS[speed] : null]
+      modelLabel={[
+        chat.model?.trim() ? modelLabel : null,
+        effort ?? null,
+        speed ? SUBAGENT_SPEED_LABELS[speed] : null,
+      ]
         .filter(Boolean)
         .join(" · ")}
       speed={speed}

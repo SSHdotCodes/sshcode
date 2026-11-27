@@ -677,9 +677,9 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
     // Until the hub is in runningRef, nothing else stops it, so publishing it
     // is part of the guarded step.
     const next = yield* Effect.gen(function* () {
-      yield* pruneLocalDeviceTools(config.baseDir, nodePath, "hub").pipe(
+      yield* pruneLocalDeviceTools(config.baseDir, "hub").pipe(
         Effect.provideService(Path.Path, path),
-        Effect.provideService(ProcessRunner.ProcessRunner, runner),
+        Effect.provideService(FileSystem.FileSystem, fs),
         Effect.ignore,
       );
       const candidate = helperPaths(hubTool);
@@ -747,9 +747,9 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
         agentToolRef = { entryPath: agentTool.entryPath, nodePath: running.hub.nodePath };
         yield* onPhase("starting");
         const agentDevice = yield* startAgentDeviceDaemon(agentTool, running.hub.nodePath);
-        yield* pruneLocalDeviceTools(config.baseDir, running.hub.nodePath, "agent").pipe(
+        yield* pruneLocalDeviceTools(config.baseDir, "agent").pipe(
           Effect.provideService(Path.Path, path),
-          Effect.provideService(ProcessRunner.ProcessRunner, runner),
+          Effect.provideService(FileSystem.FileSystem, fs),
           Effect.ignore,
         );
         const next = { ...running, agentDevice };

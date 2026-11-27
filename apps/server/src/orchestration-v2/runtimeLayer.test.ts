@@ -1110,6 +1110,27 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
             ),
           );
         yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()));
+        const steers = supportsActiveSteering && !interruptsTools;
+        if (!subagentQuestion && !steers) {
+          const noticeId = CommandId.make(`${key}:board`);
+          const rejected = yield* orchestrator
+            .dispatch({
+              type: "message.dispatch",
+              commandId: noticeId,
+              threadId,
+              messageId: MessageId.make(`${key}:board`),
+              text: "Board: review a change.",
+              attachments: [],
+              dispatchMode: { type: "steer_active", targetRunId: run.id },
+              steerExistingOnly: true,
+              createdBy: "system",
+              creationSource: "mcp",
+            })
+            .pipe(Effect.flip);
+          assert.instanceOf(rejected, Orchestrator.OrchestratorDispatchError);
+          assert.deepEqual(yield* outbox.listByCommandId(noticeId), []);
+          assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
+        }
         const commandId = CommandId.make(`${key}:update`);
         const messageId = MessageId.make(`${key}:update`);
         yield* orchestrator.dispatch({
@@ -1136,7 +1157,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
           creationSource: "server",
         });
         const after = yield* orchestrator.getThreadProjection(threadId);
-        const steers = supportsActiveSteering && !interruptsTools;
         assert.lengthOf(after.runs, steers ? 1 : 2);
         assert.equal(
           after.messages.find((message) => message.id === messageId)?.notification?.detail,

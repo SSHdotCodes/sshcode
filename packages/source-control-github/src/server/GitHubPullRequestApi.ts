@@ -388,7 +388,8 @@ interface GitHubPullRequestListPage {
 const PULL_REQUEST_FALLBACK_MAX_ROWS = 1_000;
 
 /** What the files API serves at most in one response, which is what one slice is made of. */
-const DIFF_FILES_PAGE_SIZE = 100;
+// GitHub can omit patches and report 0/0 line counts on larger pages.
+const DIFF_FILES_PAGE_SIZE = 30;
 /**
  * How many hundred-file pages of viewed state one read will walk. A point of the hourly GraphQL
  * budget per page, against a change request nobody reviews in one sitting past the first few

@@ -43,6 +43,7 @@ vi.mock("../../state/server", () => ({
 vi.mock("../../state/entities", () => ({ useThreadPickerShells: () => [] }));
 // Shared skills load through their own command; keep it out of the refresh counts.
 vi.mock("../workflows/state", () => ({ workflowsState: () => null }));
+vi.mock("../bots/state", () => ({ useWithoutBotThreads: <T>(threads: T) => threads }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: () => refreshProviders,
 }));
@@ -370,7 +371,7 @@ describe("workspace command discovery retry", () => {
     expect(refreshProviders).toHaveBeenCalledTimes(2);
     expect(refreshProviders).toHaveBeenLastCalledWith({
       environmentId,
-      input: { instanceId, cwd: "/project-a" },
+      input: { instanceId, cwd: "/project-a", workspaceSnapshotOnly: true },
     });
     await act(() => vi.advanceTimersByTimeAsync(20_000));
     expect(refreshProviders).toHaveBeenCalledTimes(2);
@@ -477,7 +478,7 @@ describe("workspace command discovery retry", () => {
     expect(refreshProviders).toHaveBeenCalledTimes(2);
     expect(refreshProviders).toHaveBeenLastCalledWith({
       environmentId,
-      input: { instanceId, cwd: "/project-b" },
+      input: { instanceId, cwd: "/project-b", workspaceSnapshotOnly: true },
     });
     expect(vi.getTimerCount()).toBe(0);
   });

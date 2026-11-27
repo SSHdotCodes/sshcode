@@ -327,7 +327,7 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
         }
         navigation.navigate("SettingsSheet", {
           screen: "SettingsContent",
-          params: { screen: "SettingsEnvironments" },
+          params: { screen: "SettingsEnvironments", initial: false },
         });
       }}
     />
@@ -1452,6 +1452,7 @@ function ThreadRouteContent(
           selectedThreadFeed={composer.selectedThreadFeed}
           pendingHandoff={composer.pendingHandoff}
           activityRun={composer.selectedThreadActivityRun}
+          runs={selectedThreadDetail?.runs}
           avatarRuns={selectedThreadDetail?.runs}
           feedbackRuns={selectedThreadDetail?.runs ?? null}
           activeWorkStartedAt={

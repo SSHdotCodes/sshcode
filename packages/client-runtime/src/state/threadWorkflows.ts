@@ -141,6 +141,29 @@ export function getUserQueuedThreadRuns(
   );
 }
 
+export function isActiveThreadRunStopping(
+  projection: Pick<Projection, "runs"> & {
+    readonly turnItems?: ReadonlyArray<{
+      readonly runId: Run["id"] | null;
+      readonly type: string;
+      readonly forAccountMove?: boolean | undefined;
+    }>;
+  },
+  activeRun: Run | null = resolveActiveThreadRun(projection),
+): boolean {
+  // Stop reaches the server before the run leaves "running". Account moves also
+  // interrupt the provider but keep the user's work active.
+  return (
+    activeRun !== null &&
+    projection.turnItems?.some(
+      (item) =>
+        item.runId === activeRun.id &&
+        item.type === "run_interrupt_request" &&
+        !item.forAccountMove,
+    ) === true
+  );
+}
+
 export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQueueWorkflowState {
   const activeRun = resolveActiveThreadRun(projection);
   const session = resolveThreadProviderSession(projection);
@@ -154,16 +177,7 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
             turn.status === "running",
         )
       : undefined;
-  // Stop reaches the server before the run leaves "running". Account moves also
-  // interrupt the provider but keep the user's work active.
-  const stopping =
-    activeRun != null &&
-    projection.turnItems?.some(
-      (item) =>
-        item.runId === activeRun.id &&
-        item.type === "run_interrupt_request" &&
-        !item.forAccountMove,
-    );
+  const stopping = isActiveThreadRunStopping(projection, activeRun);
   const steering = providerSteeringExecution(session);
   const steeringUnavailableReason =
     runningTurn?.steeringUnavailable === true ||

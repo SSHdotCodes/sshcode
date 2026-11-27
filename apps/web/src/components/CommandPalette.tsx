@@ -34,7 +34,10 @@ import {
 } from "@t3tools/client-runtime/operations/projects";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
-import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import {
+  isThreadSearchMatchAbout,
+  threadSearchMatchKey,
+} from "@t3tools/client-runtime/state/thread-search";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
 import {
   canPreloadBrowsePath,
@@ -51,6 +54,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
   AuthFilesystemReadScope,
+  botForThread,
   type DesktopWslState,
   type EnvironmentId,
   type EnvironmentMachineKind,
@@ -271,6 +275,9 @@ import {
 } from "../sidebarProjectGrouping";
 import type { Project, SidebarThreadSummary } from "../types";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+import { BotsIcon } from "~/components/Icons";
+import { openSendToBot } from "~/components/bots/botRequests";
+import { sendToBotLabel, serverBotsView } from "@t3tools/client-runtime/state/bots";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
@@ -867,12 +874,12 @@ function OpenCommandPaletteDialog(props: {
   const threadContentMatchByKey = useMemo(
     () =>
       new Map(
-        threadSearch.matches.flatMap((match, rank) =>
+        threadSearch.matches.flatMap((match) =>
           match.source === "user" || match.source === "assistant"
             ? [
                 [
                   threadSearchMatchKey(match),
-                  { ...match, rank, query: threadSearch.query },
+                  { ...match, about: isThreadSearchMatchAbout(match), query: threadSearch.query },
                 ] as const,
               ]
             : [],
@@ -1455,6 +1462,7 @@ function OpenCommandPaletteDialog(props: {
         threads: threads.filter((thread) => thread.lineage.relationshipToParent !== "subagent"),
         ...(activeThreadId ? { activeThreadId } : {}),
         projectTitleById,
+        projectOf: (thread) => projectByKey.get(`${thread.environmentId}:${thread.projectId}`),
         sortOrder: "updated_at",
         icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
         renderLeadingContent: (thread) => <ThreadRowLeadingStatus thread={thread} />,
@@ -2159,6 +2167,28 @@ function OpenCommandPaletteDialog(props: {
       shortcutCommand: "thread.copyReference",
       run: copyActiveThreadReference,
     });
+  }
+
+  // "Send to <bot>…" for the open chat, when its server has bots and it is not a bot's own chat.
+  const activeThreadBots = serverBotsView(activeThreadServerConfig);
+  if (
+    activeThread &&
+    activeThreadBots.active &&
+    botForThread(activeThreadBots, activeThread.id) === undefined
+  ) {
+    for (const bot of activeThreadBots.list) {
+      const { environmentId, id: threadId } = activeThread;
+      actionItems.push({
+        kind: "action",
+        value: `action:send-to-bot:${bot.id}`,
+        searchTerms: ["send", "bot", "share", "message", bot.name],
+        title: sendToBotLabel(bot.name),
+        icon: <BotsIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          openSendToBot(environmentId, threadId, bot.id);
+        },
+      });
+    }
   }
 
   if (

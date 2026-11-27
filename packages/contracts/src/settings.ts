@@ -32,6 +32,7 @@ import {
   ProviderOptionSelections,
 } from "./model.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { Bot, BotsSettings } from "./bots.ts";
 import { ProjectScript, type ProjectMutation } from "./project.ts";
 import { DEFAULT_RUNTIME_MODE, RuntimeMode } from "./providerPolicy.ts";
 import { BrowserProfile, BrowserProfileId, DEFAULT_BROWSER_PROFILE_ID } from "./browserProfile.ts";
@@ -327,6 +328,13 @@ export type ModelPreferences = {
   readonly providerModelPreferences: typeof ProviderModelPreferences.Type;
 };
 
+/**
+ * Whether link and site icons load from the network (Google's favicon service and
+ * sites' own icons) until a device chooses. Off shows a local letter tile. The
+ * public SSHCode branch sets this to false; it is the only line that differs.
+ */
+export const WEBSITE_ICONS_DEFAULT = false;
+
 export const ClientSettingsSchema = Schema.Struct({
   autoModelEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   notificationMode: NotificationMode.pipe(
@@ -351,6 +359,9 @@ export const ClientSettingsSchema = Schema.Struct({
   // The horizon backdrop and activity/usage cards on an empty new chat.
   newChatDashboardEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   chatBackdropEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  websiteIconsEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(WEBSITE_ICONS_DEFAULT)),
+  ),
   // A collapsed desktop sidebar slides out while the pointer rests on the window's left edge.
   sidebarPeekEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -1005,6 +1016,65 @@ export const BackgroundActivitySettings = Schema.Struct({
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
 /**
+ * Settings > Agents: how SSHCode shapes every agent it runs. Each level is stored as a
+ * string, so a level added later never breaks an older client; read them through
+ * `agentBehaviorLevels`, which turns anything unknown into "default".
+ */
+export const AGENT_TOKEN_LEVELS = ["low", "default", "high"] as const;
+export const AGENT_SUBAGENT_LEVELS = ["none", "low", "default", "high"] as const;
+export const AGENT_QUESTION_LEVELS = ["fewer", "default", "more"] as const;
+export const AGENT_VERIFICATION_LEVELS = ["light", "default", "thorough"] as const;
+export const AGENT_REPLY_LEVELS = ["short", "default", "detailed"] as const;
+
+const agentLevelField = Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed("default")));
+export const AgentBehaviorSettings = Schema.Struct({
+  /** Token use: low trims SSHCode's extras toward the native harness; high adds live progress. */
+  tokens: agentLevelField,
+  /** How readily leads start subagents on other models; none turns SSHCode delegation off. */
+  subagents: agentLevelField,
+  /** How often agents stop to ask the user instead of deciding. */
+  questions: agentLevelField,
+  /** How much agents check their work before calling it done. */
+  verification: agentLevelField,
+  /** How long agents' replies are. */
+  replies: agentLevelField,
+}).pipe(Schema.withDecodingDefault(Effect.succeed({})));
+export type AgentBehaviorSettings = typeof AgentBehaviorSettings.Type;
+
+export interface AgentBehaviorLevels {
+  readonly tokens: (typeof AGENT_TOKEN_LEVELS)[number];
+  readonly subagents: (typeof AGENT_SUBAGENT_LEVELS)[number];
+  readonly questions: (typeof AGENT_QUESTION_LEVELS)[number];
+  readonly verification: (typeof AGENT_VERIFICATION_LEVELS)[number];
+  readonly replies: (typeof AGENT_REPLY_LEVELS)[number];
+}
+
+export const DEFAULT_AGENT_BEHAVIOR: AgentBehaviorLevels = {
+  tokens: "default",
+  subagents: "default",
+  questions: "default",
+  verification: "default",
+  replies: "default",
+};
+
+function agentLevel<const L extends readonly string[]>(levels: L, value: unknown): L[number] {
+  return typeof value === "string" && levels.includes(value) ? value : "default";
+}
+
+/** The stored levels, with anything missing or unknown read as "default". */
+export function agentBehaviorLevels(
+  settings: Partial<Record<keyof AgentBehaviorLevels, unknown>> | null | undefined,
+): AgentBehaviorLevels {
+  return {
+    tokens: agentLevel(AGENT_TOKEN_LEVELS, settings?.tokens),
+    subagents: agentLevel(AGENT_SUBAGENT_LEVELS, settings?.subagents),
+    questions: agentLevel(AGENT_QUESTION_LEVELS, settings?.questions),
+    verification: agentLevel(AGENT_VERIFICATION_LEVELS, settings?.verification),
+    replies: agentLevel(AGENT_REPLY_LEVELS, settings?.replies),
+  };
+}
+
+/**
  * How assistant text reaches clients while a turn runs.
  * - `turn`: hold the whole message until the turn finishes or pauses.
  * - `paragraph`: deliver each finished paragraph or closed code block.
@@ -1379,6 +1449,12 @@ export const ServerSettings = Schema.Struct({
   autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /** Leads rate checked subagent results (`grades` on subagent tools) to feed model rankings. */
   subagentGrading: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Settings > Agents levels; read through `agentBehaviorLevels`. */
+  agentBehavior: AgentBehaviorSettings,
+  // Server-stamped on every agentBehavior write, so a phone that sees several servers shows the latest.
+  agentBehaviorChangedAt: Schema.optionalKey(Schema.Int),
+  /** Settings > Bots; off by default. Read through `botsSettings`. */
+  bots: BotsSettings,
   /**
    * Auto asks an outside decision model about a new chat's first message, with zero data
    * retention, when an OpenRouter key is saved. Off: only the model on this machine decides.
@@ -1803,6 +1879,23 @@ export const ServerSettingsPatch = Schema.Struct({
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   subagentGrading: Schema.optionalKey(Schema.Boolean),
+  /** Levels not sent keep their stored value (patches deep-merge). */
+  agentBehavior: Schema.optionalKey(
+    Schema.Struct({
+      tokens: Schema.optionalKey(Schema.String),
+      subagents: Schema.optionalKey(Schema.String),
+      questions: Schema.optionalKey(Schema.String),
+      verification: Schema.optionalKey(Schema.String),
+      replies: Schema.optionalKey(Schema.String),
+    }),
+  ),
+  /** The switch merges on its own; a list replaces the stored one (the server writes it). */
+  bots: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      list: Schema.optionalKey(Schema.Array(Bot)),
+    }),
+  ),
   autoModelDecision: Schema.optionalKey(Schema.Boolean),
   chatListTabsEnabled: Schema.optionalKey(Schema.Boolean),
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
@@ -1942,6 +2035,7 @@ export const ClientSettingsPatch = Schema.Struct({
   screenRecordingPrivacy: Schema.optionalKey(Schema.Boolean),
   newChatDashboardEnabled: Schema.optionalKey(Schema.Boolean),
   chatBackdropEnabled: Schema.optionalKey(Schema.Boolean),
+  websiteIconsEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarPeekEnabled: Schema.optionalKey(Schema.Boolean),
   loadBalancingEnabled: Schema.optionalKey(Schema.Boolean),
   loadBalancingWeights: Schema.optionalKey(LoadBalancingWeights),

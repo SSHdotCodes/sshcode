@@ -20,6 +20,7 @@ export function useComputerUseStatus(environmentId: EnvironmentId, threadId: Thr
       screen: "SettingsContent",
       params: {
         screen: "SettingsComputerUse",
+        initial: false,
         params: { environmentId },
       },
     });

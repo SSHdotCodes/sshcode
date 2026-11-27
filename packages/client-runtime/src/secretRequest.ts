@@ -4,6 +4,8 @@ import type {
   ApiKeyScope,
 } from "@t3tools/contracts";
 
+import { notificationMessageId } from "./work-log/restartNotice.ts";
+
 export type SecretRequestItem = Extract<
   OrchestrationV2TurnItem,
   { readonly type: "secret_request" }
@@ -18,6 +20,19 @@ export const secretRequestPrivacyNote = (item: Pick<SecretRequestItem, "delivery
     ? "Kept out of chat, in a private file this agent's commands can read for 24 hours"
     : "Stored securely, never shown to the agent";
 export const SECRET_REQUEST_DEFAULT_PLACEHOLDER = "Paste the secret";
+
+/**
+ * The inputs a pending card draws, in order: one per field for a credential in
+ * parts, otherwise one named by the card itself.
+ */
+export function secretRequestInputs(
+  item: Pick<SecretRequestItem, "label" | "placeholder" | "fields">,
+): ReadonlyArray<{ readonly label: string; readonly placeholder: string }> {
+  return (item.fields ?? [item]).map((field) => ({
+    label: field.label,
+    placeholder: field.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER,
+  }));
+}
 
 /** What a secret request card shows: the form while pending, otherwise a one-line outcome. */
 export type SecretRequestDisplay =
@@ -55,14 +70,23 @@ const PENDING_ELSEWHERE_DISPLAY: SecretRequestDisplay = {
  * thread (a fork) can only be answered where it was asked.
  */
 export function secretRequestDisplay(
-  item: Pick<SecretRequestItem, "secretStatus">,
+  item: Pick<SecretRequestItem, "secretStatus" | "fields">,
   visibility: "local" | "inherited" | "synthetic",
 ): SecretRequestDisplay {
   switch (item.secretStatus) {
     case "pending":
       return visibility === "local" ? PENDING_DISPLAY : PENDING_ELSEWHERE_DISPLAY;
     case "saved":
-      return SAVED_DISPLAY;
+      return item.fields === undefined
+        ? SAVED_DISPLAY
+        : {
+            kind: "answered",
+            outcome: "saved",
+            label:
+              item.fields.length === 2
+                ? "Both parts saved privately"
+                : `All ${item.fields.length} parts saved privately`,
+          };
     case "declined":
       return DECLINED_DISPLAY;
     case "cancelled":
@@ -71,15 +95,17 @@ export function secretRequestDisplay(
 }
 
 /**
- * Builds the RPC payload for an answer. A save with a blank value returns null,
- * since the server rejects it; callers keep Save disabled instead.
+ * Builds the RPC payload for an answer, with one value per input in
+ * `secretRequestInputs` order. A save with any blank value returns null, since
+ * the server rejects it; callers keep Save disabled instead. Only a card with
+ * fields is answered with `secrets`, so servers from before fields never get one.
  */
 export function secretRequestAnswerInput(
-  item: Pick<SecretRequestItem, "id" | "threadId">,
+  item: Pick<SecretRequestItem, "id" | "threadId" | "fields">,
   answer:
     | {
         readonly type: "save";
-        readonly secret: string;
+        readonly values: ReadonlyArray<string>;
         readonly scope?: ApiKeyScope;
         readonly expiresAt?: number | null;
       }
@@ -88,9 +114,41 @@ export function secretRequestAnswerInput(
   if (answer.type === "decline") {
     return { threadId: item.threadId, turnItemId: item.id, answer: { type: "decline" } };
   }
-  const secret = answer.secret.trim();
-  if (secret.length === 0) return null;
-  return { threadId: item.threadId, turnItemId: item.id, answer: { ...answer, secret } };
+  const { values, ...rest } = answer;
+  const secrets = values.map((value) => value.trim());
+  if (secrets.length !== (item.fields?.length ?? 1) || secrets.some((value) => value === "")) {
+    return null;
+  }
+  return {
+    threadId: item.threadId,
+    turnItemId: item.id,
+    answer:
+      item.fields === undefined ? { ...rest, secret: secrets[0]! } : { type: "save", secrets },
+  };
+}
+
+const SECRET_ANSWER_MESSAGE_PREFIX = "message:secret-request-answer:";
+
+/**
+ * Notices that only repeat a secret card: the server tells the agent "The user
+ * saved …" as a notification, and the card's own row already says so. Hidden
+ * whenever that card is in the same list, however the notice was delivered.
+ */
+export function secretAnswerNoticeIds(
+  items: Iterable<{ readonly item: OrchestrationV2TurnItem }>,
+): ReadonlySet<string> {
+  const cardIds = new Set<string>();
+  const notices: Array<{ readonly id: string; readonly cardId: string }> = [];
+  for (const { item } of items) {
+    if (item.type === "secret_request") cardIds.add(item.id);
+    else if (item.type === "notification") {
+      const messageId = notificationMessageId(item.id);
+      if (messageId?.startsWith(SECRET_ANSWER_MESSAGE_PREFIX)) {
+        notices.push({ id: item.id, cardId: messageId.slice(SECRET_ANSWER_MESSAGE_PREFIX.length) });
+      }
+    }
+  }
+  return new Set(notices.filter(({ cardId }) => cardIds.has(cardId)).map(({ id }) => id));
 }
 
 /** Failures whose message is written for the user and never echoes the request payload. */

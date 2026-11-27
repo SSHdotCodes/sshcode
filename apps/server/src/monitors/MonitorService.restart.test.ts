@@ -172,6 +172,48 @@ describe("monitors across a server restart", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.live.each([false, true])(
+    "replays the actual exit wake after restarting before delivery (restartable=%s)",
+    (restartable) =>
+      Effect.gen(function* () {
+        if ((yield* HostProcess.Platform) === "win32") return;
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "monitor-exit-restart-" });
+        const original = yield* serverRun(baseDir)((service) =>
+          Effect.gen(function* () {
+            const { monitorId } = yield* start(service, {
+              command: "printf 'finished\\n'; exit 3",
+              restartable,
+            });
+            const [event] = yield* service.events.pipe(Stream.take(1), Stream.runCollect);
+            expect(event).toMatchObject({
+              monitorId,
+              notification: { outcome: "failed", summary: "Restart test: exited with code 3" },
+            });
+            yield* service.stream(threadId).pipe(
+              Stream.filter((monitors) => monitors.length === 0),
+              Stream.take(1),
+              Stream.runDrain,
+            );
+            return event!;
+          }),
+        );
+
+        yield* serverRun(baseDir)((service) =>
+          Effect.gen(function* () {
+            expect(service.hasOpenWork(threadId)).toBe(true);
+            expect(yield* service.list(threadId)).toEqual([]);
+            yield* service.recover(() => Effect.succeed("ok"));
+            const [replayed] = yield* service.events.pipe(Stream.take(1), Stream.runCollect);
+            expect(replayed).toEqual(original);
+            yield* service.acknowledge(original);
+            expect(service.hasOpenWork(threadId)).toBe(false);
+          }),
+        );
+        expect(yield* readJournal(baseDir)).toEqual([]);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.live("stops an individual restartable watcher before recovery can relaunch it", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

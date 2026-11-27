@@ -35,7 +35,7 @@ function Grade(props: { readonly environmentId: EnvironmentId; readonly taskId: 
       accessibilityLabel={`Lead's grade ${grade} of ${SUBAGENT_GRADE_MAX}`}
       className="shrink-0 rounded bg-subtle px-1.5 py-px"
     >
-      <Text className="text-2xs font-medium tabular-nums text-foreground-muted">
+      <Text className="text-2xs font-medium text-foreground-muted">
         {grade}/{SUBAGENT_GRADE_MAX}
       </Text>
     </View>

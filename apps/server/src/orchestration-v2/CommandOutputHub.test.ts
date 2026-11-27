@@ -339,10 +339,18 @@ layer("CommandOutputHub", (it) => {
 
         const bytes = sent.reduce((total, { frame }) => total + frame.text.length, 0);
         // 3.2 s of flooding: a frame per chunk would be 512 frames and 2 MB.
+        // A replacement includes control sequences to reconstruct its live window.
+        const frameBudget = TERMINAL_OUTPUT_TAIL_CHARS + 256;
         assert.isAtMost(sent.length, 10);
-        assert.isAtMost(bytes, 10 * TERMINAL_OUTPUT_TAIL_CHARS);
+        assert.isAtMost(bytes, 10 * frameBudget);
         for (const { frame } of sent) {
-          assert.isAtMost(frame.text.length, TERMINAL_OUTPUT_TAIL_CHARS);
+          assert.isAtMost(frame.text.length, frameBudget);
+          if (frame.kind === "replace") {
+            assert.isAtMost(
+              applyFrame(EMPTY_TERMINAL_OUTPUT, frame).text.length,
+              TERMINAL_OUTPUT_TAIL_CHARS,
+            );
+          }
         }
         for (let index = 1; index < sent.length; index += 1) {
           if (sent[index - 1]!.frame.kind === "replace") {

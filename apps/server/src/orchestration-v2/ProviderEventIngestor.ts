@@ -27,6 +27,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as SqlError from "effect/sql/SqlError";
@@ -34,7 +35,10 @@ import * as SqlError from "effect/sql/SqlError";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
+import { analyticsModelLabel } from "../telemetry/ModelLabel.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
+import * as TeamBoard from "../teamBoard/TeamBoard.ts";
+import { shouldRefreshAfterTool } from "../teamBoard/TeamBoardGit.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -145,7 +149,9 @@ function providerTurnAnalyticsProperties(input: {
       : { cacheCreationTokens: usage.cacheCreationTokens }),
     ...(usage?.outputTokens === undefined ? {} : { outputTokens: usage.outputTokens }),
     ...(usage?.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
-    ...(modelSelection ? { model: modelSelection.model, mixedModels: false } : {}),
+    ...(modelSelection
+      ? { model: analyticsModelLabel(input.driver, modelSelection.model), mixedModels: false }
+      : {}),
     ...(effort ? { effort } : {}),
     ...(input.context?.runtimeMode ? { runtimeMode: input.context.runtimeMode } : {}),
     ...(input.context?.interactionMode ? { interactionMode: input.context.interactionMode } : {}),
@@ -342,6 +348,7 @@ export const layer: Layer.Layer<
   ProviderEventIngestorV2,
   Effect.gen(function* () {
     const eventSink = yield* EventSink.EventSinkV2;
+    const teamBoard = Option.getOrUndefined(yield* Effect.serviceOption(TeamBoard.TeamBoard));
     const git = yield* GitVcsDriver.GitVcsDriver;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -942,6 +949,18 @@ export const layer: Layer.Layer<
                 ),
               ),
         ),
+        Effect.tap((storedEvents) => {
+          if (
+            teamBoard === undefined ||
+            storedEvents.length === 0 ||
+            input.event.type !== "turn_item.updated"
+          )
+            return Effect.void;
+          const item = input.event.turnItem;
+          return shouldRefreshAfterTool(item)
+            ? teamBoard.refreshAfterTool(item.threadId)
+            : Effect.void;
+        }),
         Effect.tap((storedEvents) =>
           Effect.gen(function* () {
             if (storedEvents.length === 0 || input.event.type !== "provider_turn.updated") return;

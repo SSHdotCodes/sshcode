@@ -23,8 +23,9 @@ restart from the update button when you are ready. A server still restarting
 finishes on its own, and the button keeps showing it after the desktop app
 restarts.
 
-Server updates appear only after that version is published to npm. Remote
-desktop apps do not wait for npm. The confirmation lists each machine it skips
+Servers that download their update appear only once that version's server
+downloads are on its GitHub release. Remote desktop apps do not wait for them.
+Updating a server that downloads its update is not available yet: SSHCode's releases don't include the server download this needs, so run the server from a source checkout instead. The confirmation lists each machine it skips
 and why, such as a machine that is offline or needs a manual update. Use the
 notice or **Settings → Connections** for those.
 
@@ -79,8 +80,9 @@ The offered action depends on how the server runs:
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Update server**          | Keep the client open while it installs and reconnects. Supported background services update remotely. For a desktop-hosted server, this also closes and relaunches the desktop app on the host. |
 | **Update the desktop app** | Update the desktop app on the machine running the server, then reopen it if needed.                                                                                                             |
-| **Copy update command**    | Run the command on the named host to update the detected global npm install, then restart the server with your usual options.                                                                   |
-| **Copy relaunch command**  | Stop the command-line server on its host and relaunch with the copied command, keeping your usual subcommand and options. This does not update an installed `sshcode` command.                  |
+| **Copy update command**    | Run the command in the SSHCode source checkout on the named host. It checks out that release and rebuilds; then restart the server with your usual options.                                     |
+
+`sshcode update` is not available yet: SSHCode's releases don't include the server download this needs, so run the server from a source checkout instead.
 
 On the host, run:
 
@@ -94,9 +96,9 @@ asks before restarting the background service; if you decline, run
 stop it and start it again afterwards with your usual options such as `--host`
 or `--tailscale-serve`.
 
-If you run the server with `npx` rather than an installed `sshcode`, there is
-nothing to update on the host: stop the server and relaunch it as
-`npx sshcode@<client-version>` with the same subcommand and options.
+If the server runs from a source checkout, update it there instead: check out the
+release tag (`git fetch --tags && git checkout v<client-version>`), run
+`vp i && vp run build:desktop`, then restart the server.
 
 ## If an update fails
 

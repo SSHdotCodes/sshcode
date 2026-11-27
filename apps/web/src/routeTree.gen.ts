@@ -33,8 +33,10 @@ import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagn
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
 import { Route as SettingsComputerUseRouteImport } from './routes/settings.computer-use'
 import { Route as SettingsChatsRouteImport } from './routes/settings.chats'
+import { Route as SettingsBotsRouteImport } from './routes/settings.bots'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
+import { Route as SettingsAgentsRouteImport } from './routes/settings.agents'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatOverviewRouteImport } from './routes/_chat.overview'
@@ -169,6 +171,11 @@ const SettingsChatsRoute = SettingsChatsRouteImport.update({
   path: '/chats',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsBotsRoute = SettingsBotsRouteImport.update({
+  id: '/bots',
+  path: '/bots',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsArchivedRoute = SettingsArchivedRouteImport.update({
   id: '/archived',
   path: '/archived',
@@ -177,6 +184,11 @@ const SettingsArchivedRoute = SettingsArchivedRouteImport.update({
 const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   id: '/appearance',
   path: '/appearance',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsAgentsRoute = SettingsAgentsRouteImport.update({
+  id: '/agents',
+  path: '/agents',
   getParentRoute: () => SettingsRoute,
 } as any)
 const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
@@ -263,8 +275,10 @@ export interface FileRoutesByFullPath {
   '/overview': typeof ChatOverviewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/settings/agents': typeof SettingsAgentsRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/bots': typeof SettingsBotsRoute
   '/settings/chats': typeof SettingsChatsRoute
   '/settings/computer-use': typeof SettingsComputerUseRoute
   '/settings/connections': typeof SettingsConnectionsRoute
@@ -302,8 +316,10 @@ export interface FileRoutesByTo {
   '/overview': typeof ChatOverviewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/settings/agents': typeof SettingsAgentsRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/bots': typeof SettingsBotsRoute
   '/settings/chats': typeof SettingsChatsRoute
   '/settings/computer-use': typeof SettingsComputerUseRoute
   '/settings/connections': typeof SettingsConnectionsRoute
@@ -344,8 +360,10 @@ export interface FileRoutesById {
   '/_chat/overview': typeof ChatOverviewRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/settings/agents': typeof SettingsAgentsRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/bots': typeof SettingsBotsRoute
   '/settings/chats': typeof SettingsChatsRoute
   '/settings/computer-use': typeof SettingsComputerUseRoute
   '/settings/connections': typeof SettingsConnectionsRoute
@@ -387,8 +405,10 @@ export interface FileRouteTypes {
     | '/overview'
     | '/pull-requests'
     | '/projects/$projectKey'
+    | '/settings/agents'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/bots'
     | '/settings/chats'
     | '/settings/computer-use'
     | '/settings/connections'
@@ -426,8 +446,10 @@ export interface FileRouteTypes {
     | '/overview'
     | '/pull-requests'
     | '/projects/$projectKey'
+    | '/settings/agents'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/bots'
     | '/settings/chats'
     | '/settings/computer-use'
     | '/settings/connections'
@@ -467,8 +489,10 @@ export interface FileRouteTypes {
     | '/_chat/overview'
     | '/_chat/pull-requests'
     | '/projects/$projectKey'
+    | '/settings/agents'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/bots'
     | '/settings/chats'
     | '/settings/computer-use'
     | '/settings/connections'
@@ -676,6 +700,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsChatsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/bots': {
+      id: '/settings/bots'
+      path: '/bots'
+      fullPath: '/settings/bots'
+      preLoaderRoute: typeof SettingsBotsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/archived': {
       id: '/settings/archived'
       path: '/archived'
@@ -688,6 +719,13 @@ declare module '@tanstack/react-router' {
       path: '/appearance'
       fullPath: '/settings/appearance'
       preLoaderRoute: typeof SettingsAppearanceRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/agents': {
+      id: '/settings/agents'
+      path: '/agents'
+      fullPath: '/settings/agents'
+      preLoaderRoute: typeof SettingsAgentsRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/projects/$projectKey': {
@@ -822,8 +860,10 @@ const ChatRouteChildren: ChatRouteChildren = {
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 
 interface SettingsRouteChildren {
+  SettingsAgentsRoute: typeof SettingsAgentsRoute
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute
   SettingsArchivedRoute: typeof SettingsArchivedRoute
+  SettingsBotsRoute: typeof SettingsBotsRoute
   SettingsChatsRoute: typeof SettingsChatsRoute
   SettingsComputerUseRoute: typeof SettingsComputerUseRoute
   SettingsConnectionsRoute: typeof SettingsConnectionsRoute
@@ -843,8 +883,10 @@ interface SettingsRouteChildren {
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
+  SettingsAgentsRoute: SettingsAgentsRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsArchivedRoute: SettingsArchivedRoute,
+  SettingsBotsRoute: SettingsBotsRoute,
   SettingsChatsRoute: SettingsChatsRoute,
   SettingsComputerUseRoute: SettingsComputerUseRoute,
   SettingsConnectionsRoute: SettingsConnectionsRoute,

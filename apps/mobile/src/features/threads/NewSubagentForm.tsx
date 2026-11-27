@@ -15,6 +15,10 @@ import {
   subagentsOffConfirmation,
   subagentsToggleNeedsConfirm,
 } from "@t3tools/shared/chatControls";
+import {
+  SUBAGENTS_OFF_IN_SETTINGS,
+  subagentsOffInSettings,
+} from "@t3tools/client-runtime/state/agent-behavior";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Keyboard, Pressable, ScrollView, View } from "react-native";
@@ -73,9 +77,11 @@ export function AgentsFooter(props: AgentsTarget & { readonly onNewSubagent: () 
     null,
   );
   if (!canOperate || shell === null || shell === undefined) return null;
+  // Settings > Agents at None turns every chat's switch off; the chat keeps its own choice.
+  const offInSettings = subagentsOffInSettings(config?.settings);
   const subagentsEnabled = shell.subagentsEnabled !== false;
   if (tapped !== null && tapped.from !== subagentsEnabled) setTapped(null);
-  const shown = tapped?.value ?? subagentsEnabled;
+  const shown = !offInSettings && (tapped?.value ?? subagentsEnabled);
   const setSubagents = (enabled: boolean) => {
     const send = async () => {
       const pending = { value: enabled, from: subagentsEnabled };
@@ -120,11 +126,19 @@ export function AgentsFooter(props: AgentsTarget & { readonly onNewSubagent: () 
       )}
       {/* Small and quiet: it is rarely touched, but this is where it lives. */}
       <View className="flex-row items-center gap-2">
-        <Text className="text-sm text-foreground-muted">Subagents</Text>
+        <View className="items-end">
+          <Text className="text-sm text-foreground-muted">Subagents</Text>
+          {offInSettings ? (
+            <Text className="text-xs text-foreground-muted">{SUBAGENTS_OFF_IN_SETTINGS}</Text>
+          ) : null}
+        </View>
         <ThemedSwitch
           accessibilityLabel="Subagents"
-          accessibilityHint="Lets this chat's agent start subagents"
+          accessibilityHint={
+            offInSettings ? SUBAGENTS_OFF_IN_SETTINGS : "Lets this chat's agent start subagents"
+          }
           value={shown}
+          disabled={offInSettings}
           onValueChange={setSubagents}
           style={{ transform: [{ scale: 0.82 }] }}
         />

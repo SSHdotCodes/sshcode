@@ -36,7 +36,7 @@ const DeviceToolFailure = Schema.Union([DeviceToolError, OrchestratorMcpFailure]
  */
 const DeviceListTool = Tool.make("device_list", {
   description:
-    "List iOS Simulators and Android Emulators on this environment's device hosts, which platforms each host can run, and which devices are already open in this thread's Device panel. Call this before device_open when you do not know a device id.",
+    "List iOS Simulators and Android Emulators on device hosts, supported platforms, and devices open in this thread's Device panel. Call before device_open if you need a device id.",
   // An empty struct serializes as `anyOf [object, array]`, which some
   // providers reject and then drop every tool on the server with it.
   parameters: Schema.Struct({
@@ -56,7 +56,7 @@ const DeviceListTool = Tool.make("device_list", {
 
 const DeviceOpenTool = Tool.make("device_open", {
   description:
-    "Open a simulator or emulator for this thread: boots it if needed, starts its live stream, and shows it in the user's Device panel so they can watch. Returns the agent-device CLI invocation pinned to the device; drive the device with that CLI afterwards.",
+    "Open a simulator or emulator in the Device panel. Boots and streams live; returns the pinned agent-device CLI command.",
   parameters: DeviceToolOpenInput,
   success: DeviceToolOpenResult,
   failure: DeviceToolFailure,
@@ -69,8 +69,7 @@ const DeviceOpenTool = Tool.make("device_open", {
   .annotate(Tool.OpenWorld, true);
 
 export const DeviceScreenshotTool = Tool.make("device_screenshot", {
-  description:
-    "Capture the current screen of an open device as a PNG image. Use it to see what the user sees; for taps and text use the agent-device CLI.",
+  description: "Capture an open device screen as PNG. For taps and text use the agent-device CLI.",
   parameters: DeviceToolTargetInput,
   success: DeviceToolScreenshotResult,
   failure: DeviceToolFailure,
@@ -83,8 +82,7 @@ export const DeviceScreenshotTool = Tool.make("device_screenshot", {
   .annotate(Tool.OpenWorld, true);
 
 const DeviceCloseTool = Tool.make("device_close", {
-  description:
-    "Remove a device from this thread's Device panel. Pass shutdown=true to also power the simulator or emulator off.",
+  description: "Remove a device from the Device panel. Pass shutdown=true to also power it off.",
   parameters: DeviceToolCloseInput,
   success: Schema.Record(Schema.String, Schema.Never).annotate({
     description: "The device was closed.",

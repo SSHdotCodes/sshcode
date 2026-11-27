@@ -7,8 +7,8 @@ import { APP_VERSION } from "~/branding";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { isElectron } from "~/env";
 import { useEnvironments } from "~/state/environments";
-import { useNpmReleasePublished } from "~/state/npmRelease";
 import { serverEnvironment } from "~/state/server";
+import { useServerReleaseAssets } from "~/state/serverRelease";
 import { environmentSession } from "~/state/session";
 import { getProviderUpdateRunOutcome } from "../ProviderUpdateLaunchNotification.logic";
 import { useProviderUpdates } from "../ProviderUpdatesAction";
@@ -18,6 +18,7 @@ import {
   collectRestartingMachines,
   collectServerUpdateTargets,
   collectUpdateEverythingResult,
+  gateServerDownloads,
   describeUpdateEverything,
   runUpdateEverything,
   type SkippedMachine,
@@ -42,8 +43,8 @@ export type ReportLocalUpdateError = (title: string, description: string) => voi
 /**
  * The remote half of the sidebar update button: outdated providers on every
  * connected machine, and servers behind the version this client runs or is
- * about to install (`localUpdateVersion`). Servers that install from npm appear
- * only once npm confirms that version. `run` performs the whole pass, including
+ * about to install (`localUpdateVersion`). Servers that download their update
+ * appear only once GitHub lists that version's archive for their platform. `run` performs the whole pass, including
  * this app's own download and install when given. It updates quietly, tracks
  * each machine in the run state, and reports one summary toast at the end.
  * This app relaunches once every server restarts into its update, after a
@@ -79,22 +80,12 @@ export function useUpdateEverything(localUpdateVersion: string | null) {
     targetVersion,
   );
   // A desktop-managed server installs from its own app's update feed, so only
-  // servers that download t3 from npm wait for npm to publish the version.
-  const needsNpm = behindServers.some((server) => server.selfUpdate !== "desktop-managed");
-  const published = useNpmReleasePublished(needsNpm ? targetVersion : null);
-  const servers = published
-    ? behindServers
-    : behindServers.filter((server) => server.selfUpdate === "desktop-managed");
-  const skipped: ReadonlyArray<SkippedMachine> = [
-    ...unreachable,
-    ...behindServers
-      .filter((server) => !servers.includes(server))
-      .map((server) => ({
-        environmentId: server.environmentId,
-        label: server.serverLabel,
-        reason: `sshcode@${targetVersion} is not on npm yet`,
-      })),
-  ];
+  // servers that download a release archive wait for GitHub to publish theirs.
+  const needsArchive = behindServers.some((server) => server.selfUpdate !== "desktop-managed");
+  const assets = useServerReleaseAssets(needsArchive ? targetVersion : null);
+  const gated = gateServerDownloads(machines, behindServers, assets, targetVersion);
+  const servers = gated.servers;
+  const skipped: ReadonlyArray<SkippedMachine> = [...unreachable, ...gated.skipped];
   const restarts = collectRestartingMachines(machines, servers, localUpdateVersion !== null);
   const providers = useProviderUpdates();
   const updateServer = useServerUpdate();

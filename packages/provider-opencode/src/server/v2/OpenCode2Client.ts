@@ -75,7 +75,7 @@ export type OpenCode2StreamEvent =
 export interface OpenCode2Api {
   readonly client: OpenCodeClient;
   readonly usageLimits: (
-    directory: string,
+    directory: string | undefined,
   ) => Effect.Effect<import("@t3tools/contracts").ServerProviderUsageLimits | undefined>;
   readonly events: Effect.Effect<
     Stream.Stream<

@@ -216,8 +216,12 @@ export interface OpenCodeInventory {
 export type OpenCodeSlashCommand = Pick<Command, "name" | "description" | "source" | "hints">;
 
 /** Command templates stay in OpenCode, which expands arguments and runs MCP prompts. */
-export const loadOpenCodeCommands = (client: OpencodeClient) =>
-  runOpenCodeSdk("command.list", (signal) => client.command.list(undefined, { signal })).pipe(
+export const loadOpenCodeCommands = (client: OpencodeClient, requestSignal?: AbortSignal) =>
+  runOpenCodeSdk("command.list", (signal) =>
+    client.command.list(undefined, {
+      signal: requestSignal === undefined ? signal : AbortSignal.any([signal, requestSignal]),
+    }),
+  ).pipe(
     Effect.map((result): ReadonlyArray<OpenCodeSlashCommand> =>
       (result.data ?? []).map(({ name, description, source, hints }) => ({
         name,

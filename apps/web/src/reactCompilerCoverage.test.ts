@@ -16,6 +16,9 @@ const MUST_COMPILE: ReadonlyArray<readonly [file: string, functions: ReadonlyArr
   ["components/chat/ModelPickerContent.tsx", ["ModelPickerContent"]],
   ["components/chat/ChatHeader.tsx", ["ChatHeader"]],
   ["components/Sidebar.tsx", ["SidebarThreadRow", "SidebarSearchResultRow"]],
+  ["components/sidebar/SidebarBotsGroup.tsx", ["SidebarBotsGroup", "SidebarBotRow"]],
+  ["components/bots/BotAvatar.tsx", ["BotAvatar"]],
+  ["components/bots/BotChat.tsx", ["BotChatHeader", "BotInfoPanel"]],
 ];
 
 type CompilerEvent = {

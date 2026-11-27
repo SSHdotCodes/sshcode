@@ -2,12 +2,31 @@
 
 The server sends no product usage data. It records product events only when its environment sets
 `T3CODE_TELEMETRY_ENABLED=true` and names your own PostHog project with `T3CODE_POSTHOG_KEY` and
-`T3CODE_POSTHOG_HOST`. Events then carry a hashed account or installation identifier, the
-provider, model, reasoning effort, permission mode, turn result, duration, and main-agent token
-totals when available.
+`T3CODE_POSTHOG_HOST`. `DO_NOT_TRACK=1` turns them off even then. Events carry a hashed random
+identifier for the installation, never one from your provider accounts. They include the provider,
+model (custom models as `custom:<provider>`), reasoning effort, permission mode, turn result,
+duration, and main-agent token totals when available.
 
 Events never include prompts, responses, file contents, authentication tokens, conversation IDs,
 raw provider events, or child-agent output. Child-agent token use is excluded from the totals.
+
+The desktop app reads `T3CODE_TELEMETRY_ENABLED` and `DO_NOT_TRACK` from your shell profile (for
+example `~/.zshrc`) on macOS and Linux, so export them there and restart the app. On Windows, set
+them as user environment variables.
+
+## T3 Connect tracing
+
+T3 Connect traces leave the machine only when the build or the environment names a trace endpoint
+(`T3CODE_RELAY_CLIENT_OTLP_TRACES_*`); none is built in. They carry span names, timings, and error
+types, never error messages, stack frames, machine addresses, or log text. `DO_NOT_TRACK=1` turns
+them off.
+
+## Website icons
+
+Website icons are off by default: links and agent web activity show the site's first letter, with
+no request. Turn on **Settings > Appearance > Website icons** to show each site's icon. Links then
+load it through Google's icon service, which sees each site name, and agent web activity asks the
+site itself. On the phone the switch is in the same place and covers agent web activity.
 
 ## Export diagnostics to your own receiver
 

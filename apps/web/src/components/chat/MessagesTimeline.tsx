@@ -1,6 +1,9 @@
 import { createThreadProjectionCache } from "../../lib/threadProjectionCache";
 import { BugIcon, WorkflowIcon } from "lucide-react";
 import { UserMessageBubble } from "./UserMessageBubble";
+import { botInboundNote } from "@t3tools/client-runtime/state/bots";
+import type { BotWakeItem } from "@t3tools/shared/bots";
+import { BotInboundNotes } from "../bots/BotInboundNote";
 import {
   matchesTimelineJump,
   type TimelineJumpRequest,
@@ -25,6 +28,7 @@ import { HarnessMascot } from "../HarnessMascot";
 import { ThreadFindTimelineContext } from "./ThreadFindProvider";
 import { MarkdownFindContext, useFindRevealRef } from "./markdownFindContext";
 import { useChatCanvas } from "./ChatCanvasContext";
+import { LiveProgressTimeWithFinish, useLiveProgressTimeLeft } from "./LiveProgress";
 import { WorkLogBlock, WorkLogButton, WorkLogDetails, WorkLogList, WorkLogRow } from "./WorkLog";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import type { TurnItemId, WorktreeSetupSnapshot } from "@t3tools/contracts";
@@ -51,6 +55,7 @@ import {
   type AssistantCitation,
   type EnvironmentId,
   type MessageId,
+  type OrchestrationV2LiveProgress,
   type OrchestrationV2ProviderTurnGeneration,
   type OrchestrationV2TurnItem,
   type RunAttemptId,
@@ -218,6 +223,13 @@ import {
   SnapShotAttachmentDetails,
 } from "./SnapShotAttachmentDetails";
 import { ProposedPlanCard } from "./ProposedPlanCard";
+import {
+  AgentCard,
+  AgentCardSkeleton,
+  CardReplyGlyph,
+  type AgentCardSendPayload,
+} from "./AgentCard";
+import { cardReplyUserBubbleText } from "@t3tools/shared/cards";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import { McpAppFrame } from "./McpAppFrame";
 import { ChangedFilesCard } from "./ChangedFilesTree";
@@ -341,6 +353,7 @@ import { useClientSettings } from "~/hooks/useSettings";
 import type { ChatMarkdownContextReference } from "../ChatMarkdown";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { cn } from "~/lib/utils";
+import { WebsiteLetterTile } from "../WebsiteLetterTile";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import {
@@ -416,6 +429,7 @@ function timelineImageActionsSource(
 interface TimelineRowSharedState {
   searchJumpRowId: string | null;
   discord: boolean;
+  botChat: boolean;
   casualVoice: boolean;
   onCiteAssistantText: MessagesTimelineProps["onCiteAssistantText"];
   citationRequest: AssistantCitationTarget | null;
@@ -438,6 +452,8 @@ interface TimelineRowSharedState {
   onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
   /** Sends text an MCP App asked to post, after the user approved it. */
   onSendAppMessage: ((text: string) => Promise<void>) | undefined;
+  /** Sends a reply from an interactive native card (steers if running). */
+  onSendCardReply: ((payload: AgentCardSendPayload) => Promise<void>) | undefined;
   /**
    * An MCP App row entering or leaving full screen. The row stays rendered
    * and the list stops following new output meanwhile, so the app is not
@@ -502,11 +518,30 @@ interface TimelineRowActivityState {
 const NO_PINNED_MESSAGES: ReadonlySet<MessageId> = new Set();
 const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
 const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
+const TimelineArrivalIdsCtx = createContext<ReadonlyMap<string, number>>(new Map());
+type BotWakeNotes = ReadonlyMap<string, ReadonlyArray<BotWakeItem>>;
+const NO_BOT_WAKE_NOTES: BotWakeNotes = new Map();
+// Only wake rows read the notes, so a new note does not redraw every row of a bot's chat.
+const BotWakeNotesCtx = createContext<BotWakeNotes>(NO_BOT_WAKE_NOTES);
+
+function TimelineRowProviders(props: {
+  shared: TimelineRowSharedState;
+  botWakeNotes: BotWakeNotes;
+  children: ReactNode;
+}) {
+  return (
+    <TimelineRowCtx value={props.shared}>
+      <BotWakeNotesCtx value={props.botWakeNotes}>{props.children}</BotWakeNotesCtx>
+    </TimelineRowCtx>
+  );
+}
 
 interface TimelineGenerationState {
   readonly byRunId: ReadonlyMap<RunId, OrchestrationV2ProviderTurnGeneration>;
   /** The running run's rate, for the working header. */
   readonly running: OrchestrationV2ProviderTurnGeneration | undefined;
+  /** Token use High: the chat's live progress, whose time left replaces the rate. */
+  readonly liveProgress?: OrchestrationV2LiveProgress | undefined;
 }
 
 // Its own context: rates change with every model reply, and only the rows that show one rerender.
@@ -604,6 +639,8 @@ interface MessagesTimelineProps {
   activeTurnStartedAt?: string | null;
   /** Each run's output speed, from its provider turns' `generation`. */
   generationByRunId?: ReadonlyMap<RunId, OrchestrationV2ProviderTurnGeneration>;
+  /** Token use High: the chat's live progress, for time left in the working header. */
+  liveProgress?: OrchestrationV2LiveProgress | undefined;
   worktreeSetup?: WorktreeSetupSnapshot | null;
   onCancelWorktreeSetup?: () => void;
   /** Runs whose failed workspace preparation can be retried, keyed by run id. */
@@ -656,6 +693,7 @@ interface MessagesTimelineProps {
   onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
   onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
   onSendAppMessage?: (text: string) => Promise<void>;
+  onSendCardReply?: (payload: AgentCardSendPayload) => Promise<void>;
   onRunShellCommand?: (command: string) => void;
   steerWait?: SteerWait | null;
   onSendSteerNow?: (toolItemIds: ReadonlyArray<TurnItemId>) => Promise<void>;
@@ -694,6 +732,10 @@ interface MessagesTimelineProps {
   cancelPositionRestoreRef?: React.RefObject<(() => void) | null> | undefined;
   hideEmptyPlaceholder?: boolean;
   topFadeEnabled?: boolean;
+  /** A bot's home chat: turns fold into one plain-words row and notes from chats read as notes. */
+  botChat?: boolean;
+  /** A bot's wake notes by the run each started (`botWakeNotesByRun`). */
+  botWakeNotes?: BotWakeNotes | undefined;
   historyControls?: MessagesTimelineHistoryControls | undefined;
   /** Non-null when older turns exist beyond the loaded window. */
   loadEarlier?: CitationHistoryPage | null;
@@ -736,6 +778,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   activeTurnInProgress,
   activeTurnStartedAt = null,
   generationByRunId = EMPTY_GENERATIONS,
+  liveProgress,
   worktreeSetup = null,
   footer = null,
   onCancelWorktreeSetup,
@@ -775,6 +818,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onRevertToTurnCount,
   onUseArtifactTemplate = NOOP_USE_ARTIFACT_TEMPLATE,
   onSendAppMessage,
+  onSendCardReply,
   onRunShellCommand,
   steerWait = null,
   onSendSteerNow,
@@ -802,6 +846,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
   cancelPositionRestoreRef,
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
+  botChat = false,
+  botWakeNotes = NO_BOT_WAKE_NOTES,
   historyControls,
   loadEarlier = null,
 }: MessagesTimelineProps) {
@@ -1033,6 +1079,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
     });
   }, [listIdentityKey, latestRun]);
 
+  const runs = useStableHandoffRuns(runsProp);
+
   // Find the fold that hides the match: imported turns have no run id but still
   // fold under a synthetic key, so the match's own run id cannot open them.
   const findFoldRunIds = useMemo(
@@ -1041,12 +1089,23 @@ const ConversationTimeline = memo(function ConversationTimeline({
         ? timelineTurnFoldRunIdsByEntryId({
             timelineEntries,
             latestRun,
+            runs,
             runningRunId,
             isWorking,
             runlessWorkActive,
+            botChat,
           })
         : null,
-    [findActive, timelineEntries, latestRun, runningRunId, isWorking, runlessWorkActive],
+    [
+      findActive,
+      timelineEntries,
+      latestRun,
+      runs,
+      runningRunId,
+      isWorking,
+      runlessWorkActive,
+      botChat,
+    ],
   );
   const activeFindRunId = activeFindMatch
     ? findFoldRunIds?.get(activeFindMatch.entryId)
@@ -1109,6 +1168,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       {
         timelineEntries,
         latestRun,
+        runs,
         runningRunId,
         expandedRunIds: visibleExpandedRunIds,
         expandedAttemptIds: visibleExpandedAttemptIds,
@@ -1119,6 +1179,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
         turnDiffSummaries,
         supportsConversationRollback,
         worktreeSetup,
+        botChat,
       },
       workspaceRoot,
     );
@@ -1159,6 +1220,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     workspaceRoot,
     timelineEntries,
     latestRun,
+    runs,
     runningRunId,
     visibleExpandedRunIds,
     visibleExpandedAttemptIds,
@@ -1169,8 +1231,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
     turnDiffSummaries,
     supportsConversationRollback,
     worktreeSetup,
+    botChat,
   ]);
-  const runs = useStableHandoffRuns(runsProp);
   const providerByRunId = useMemo(
     () => new Map(runs.map((run) => [run.id, run.providerInstanceId])),
     [runs],
@@ -1753,6 +1815,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     () => ({
       searchJumpRowId,
       discord,
+      botChat,
       casualVoice,
       onCiteAssistantText,
       citationRequest: readyCitationRequest,
@@ -1775,6 +1838,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       onFileOpen,
       onUseArtifactTemplate,
       onSendAppMessage,
+      onSendCardReply,
       onAppFullscreenChange,
       onFileDownload,
       openPullRequest,
@@ -1801,6 +1865,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     [
       searchJumpRowId,
       discord,
+      botChat,
       casualVoice,
       onCiteAssistantText,
       readyCitationRequest,
@@ -1822,6 +1887,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       onFileOpen,
       onUseArtifactTemplate,
       onSendAppMessage,
+      onSendCardReply,
       onAppFullscreenChange,
       onFileDownload,
       openPullRequest,
@@ -1859,8 +1925,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     () => ({
       byRunId: generationByRunId,
       running: runningRunId === null ? undefined : generationByRunId.get(runningRunId),
+      liveProgress,
     }),
-    [generationByRunId, runningRunId],
+    [generationByRunId, liveProgress, runningRunId],
   );
   const activityState = useMemo<TimelineRowActivityState>(
     () => ({
@@ -1935,9 +2002,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
         timelineTurnFoldRunIdsByEntryId({
           timelineEntries,
           latestRun,
+          runs,
           runningRunId,
           isWorking,
           runlessWorkActive,
+          botChat,
         });
       const entryById = new Map(timelineEntries.map((entry) => [entry.id, entry]));
       return readThreadFindPosition(
@@ -1987,6 +2056,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     isWorking,
     latestRun,
     rows,
+    runs,
     runlessWorkActive,
     runningRunId,
     timelineEntries,
@@ -2006,20 +2076,17 @@ const ConversationTimeline = memo(function ConversationTimeline({
     contentInsetEndAdjustment,
   });
 
-  // Refresh mounted containers on row-count changes and when committed arrivals change.
-  const listExtraData = useMemo(
-    () => ({ listIdentityKey, rowCount: rows.length, arrivedRowIds }),
-    [listIdentityKey, rows.length, arrivedRowIds],
-  );
+  // Refresh mounted containers when activity rows are replaced or removed on Stop.
+  const listExtraData = `${listIdentityKey}:${rows.length}`;
   const renderItem = useCallback(
     ({ item }: { item: MessagesTimelineRow }) => (
       <div className="messages-timeline-row-frame">
         <div className="chat-content-lane overflow-x-clip" data-timeline-root="true">
-          <TimelineRowContent row={item} arrived={arrivedRowIds.has(item.id)} />
+          <TimelineRowContent row={item} />
         </div>
       </div>
     ),
-    [arrivedRowIds],
+    [],
   );
 
   const forwardMinimapWheel = useCallback(
@@ -2066,7 +2133,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
 
   return (
     <MarkdownFindContext value={findActive}>
-      <TimelineRowCtx value={sharedState}>
+      <TimelineRowProviders shared={sharedState} botWakeNotes={botWakeNotes}>
         <TimelineRowActivityCtx value={activityState}>
           <TimelineGenerationCtx value={generationState}>
             <TooltipScrollDismissArea
@@ -2094,52 +2161,54 @@ const ConversationTimeline = memo(function ConversationTimeline({
                   onAskAbout={onAskAboutAssistantText}
                 />
               ) : null}
-              <LegendList<MessagesTimelineRow>
-                ref={setTimelineList}
-                data={rows}
-                extraData={listExtraData}
-                keyExtractor={keyExtractor}
-                getItemType={getItemType}
-                renderItem={renderItem}
-                estimatedItemSize={90}
-                initialScrollAtEnd={
-                  !findActive && citationRequest === null && rememberedPosition?.atEnd !== false
-                }
-                // Legend needs a data refresh to mount new pins without a scroll event.
-                dataVersion={readyCitationRequest?.key ?? listIdentityKey}
-                {...(alwaysRender ? { alwaysRender } : {})}
-                onLoad={handleListLoad}
-                {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-                contentInsetEndAdjustment={anchoredEndSpace ? contentInsetEndAdjustment : 0}
-                maintainScrollAtEnd={
-                  citationPositioning ||
-                  (restoringThreadPosition && rememberedPosition?.atEnd === false) ||
-                  anchoredEndSpace ||
-                  !liveFollowEnabled ||
-                  fullscreenAppRowId !== null ||
-                  disclosureToggleSettling
-                    ? false
-                    : isWorking && !prefersReducedMotion && settlingListIdentity === null
-                      ? TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH
-                      : TIMELINE_MAINTAIN_SCROLL_AT_END
-                }
-                maintainVisibleContentPosition={
-                  findActive ||
-                  citationPositioning ||
-                  (restoringThreadPosition && rememberedPosition?.atEnd === false)
-                    ? false
-                    : maintainVisibleContentPosition
-                }
-                maintainScrollAtEndThreshold={1}
-                onScroll={handleScroll}
-                onItemSizeChanged={handleItemSizeChanged}
-                className={cn(
-                  "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain [overflow-anchor:none]",
-                  topFadeEnabled && "topbar-scroll-fade",
-                )}
-                ListHeaderComponent={listHeader}
-                ListFooterComponent={timelineListFooter}
-              />
+              <TimelineArrivalIdsCtx value={arrivedRowIds}>
+                <LegendList<MessagesTimelineRow>
+                  ref={setTimelineList}
+                  data={rows}
+                  extraData={listExtraData}
+                  keyExtractor={keyExtractor}
+                  getItemType={getItemType}
+                  renderItem={renderItem}
+                  estimatedItemSize={90}
+                  initialScrollAtEnd={
+                    !findActive && citationRequest === null && rememberedPosition?.atEnd !== false
+                  }
+                  // Legend needs a data refresh to mount new pins without a scroll event.
+                  dataVersion={readyCitationRequest?.key ?? listIdentityKey}
+                  {...(alwaysRender ? { alwaysRender } : {})}
+                  onLoad={handleListLoad}
+                  {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
+                  contentInsetEndAdjustment={anchoredEndSpace ? contentInsetEndAdjustment : 0}
+                  maintainScrollAtEnd={
+                    citationPositioning ||
+                    (restoringThreadPosition && rememberedPosition?.atEnd === false) ||
+                    anchoredEndSpace ||
+                    !liveFollowEnabled ||
+                    fullscreenAppRowId !== null ||
+                    disclosureToggleSettling
+                      ? false
+                      : isWorking && !prefersReducedMotion && settlingListIdentity === null
+                        ? TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH
+                        : TIMELINE_MAINTAIN_SCROLL_AT_END
+                  }
+                  maintainVisibleContentPosition={
+                    findActive ||
+                    citationPositioning ||
+                    (restoringThreadPosition && rememberedPosition?.atEnd === false)
+                      ? false
+                      : maintainVisibleContentPosition
+                  }
+                  maintainScrollAtEndThreshold={1}
+                  onScroll={handleScroll}
+                  onItemSizeChanged={handleItemSizeChanged}
+                  className={cn(
+                    "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain [overflow-anchor:none]",
+                    topFadeEnabled && "topbar-scroll-fade",
+                  )}
+                  ListHeaderComponent={listHeader}
+                  ListFooterComponent={timelineListFooter}
+                />
+              </TimelineArrivalIdsCtx>
               <TimelineMinimap
                 items={minimapItems}
                 hasPersistentGutter={minimapHasPersistentGutter}
@@ -2158,7 +2227,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
             </TooltipScrollDismissArea>
           </TimelineGenerationCtx>
         </TimelineRowActivityCtx>
-      </TimelineRowCtx>
+      </TimelineRowProviders>
     </MarkdownFindContext>
   );
 });
@@ -2635,14 +2704,10 @@ function TimelineMinimapNavigationButton({
 type TimelineWorkEntry = Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"][number];
 type TimelineRow = MessagesTimelineRow;
 
-const TimelineRowContent = memo(function TimelineRowContent({
-  row,
-  arrived,
-}: {
-  row: TimelineRow;
-  arrived: boolean;
-}) {
-  const { discord, casualVoice, searchJumpRowId } = use(TimelineRowCtx);
+const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
+  const { discord, botChat, casualVoice, searchJumpRowId } = use(TimelineRowCtx);
+  // Arrival markers apply to row styles. Deliver them without refreshing list containers.
+  const arrived = use(TimelineArrivalIdsCtx).has(row.id);
   const searchJumpHighlighted = searchJumpRowId === row.id;
   if (row.kind === "steer-reply") return casualVoice ? <SteerReplyTimelineRow row={row} /> : null;
   const terminalDivider =
@@ -2653,6 +2718,7 @@ const TimelineRowContent = memo(function TimelineRowContent({
       ? row.groupedEntries[0].label
       : null;
   const isExpandedToolGroup = row.kind === "work" && row.isExpandedToolGroup;
+  const botWakeRunId = botChat && row.kind === "work" ? botWakeRowRunId(row) : null;
   const isSubagentGroup = row.kind === "event" && row.projectedItem.item.type === "subagent";
   const isWorkLogRow =
     row.kind === "work" ||
@@ -2702,6 +2768,7 @@ const TimelineRowContent = memo(function TimelineRowContent({
                     row.kind === "worktree-setup" ||
                     row.kind === "event" ||
                     row.kind === "attempt-fold" ||
+                    row.kind === "agent-card" ||
                     row.kind === "html-render" ||
                     row.kind === "mcp-app"
                   ? "pb-2"
@@ -2748,6 +2815,8 @@ const TimelineRowContent = memo(function TimelineRowContent({
           >
             {terminalDivider}
           </div>
+        ) : row.kind === "work" && botWakeRunId !== null ? (
+          <BotWakeTimelineRow row={row} runId={botWakeRunId} />
         ) : row.kind === "thinking" && row.groupId === undefined ? (
           <ThinkingTimelineRow row={row} />
         ) : isWorkLogRow ? (
@@ -2781,7 +2850,7 @@ const TimelineRowContent = memo(function TimelineRowContent({
         {row.kind === "message" && row.message.role === "user" ? (
           <>
             <UserModelSwitchDivider row={row} />
-            <UserTimelineRow row={row} />
+            {botChat ? <BotUserTimelineRow row={row} /> : <UserTimelineRow row={row} />}
           </>
         ) : null}
         {row.kind === "message" && row.message.role === "assistant" ? (
@@ -2789,6 +2858,7 @@ const TimelineRowContent = memo(function TimelineRowContent({
         ) : null}
         {row.kind === "assistant-meta" && !discord ? <AssistantMetaTimelineRow row={row} /> : null}
         {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
+        {row.kind === "agent-card" ? <AgentCardTimelineRow row={row} /> : null}
         {row.kind === "html-render" ? <HtmlRenderTimelineRow row={row} /> : null}
         {row.kind === "mcp-app" ? <McpAppTimelineRow row={row} /> : null}
         {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
@@ -3180,6 +3250,63 @@ function WakeModelSwitchDivider({ row }: { row: Extract<TimelineRow, { kind: "wo
   );
 }
 
+/** The run of a lone wake notification row, the shape a bot's wake takes in its chat. */
+function botWakeRowRunId(row: Extract<TimelineRow, { kind: "work" }>): string | null {
+  const entry = row.groupedEntries.length === 1 ? row.groupedEntries[0] : undefined;
+  const item = entry?.structuredPayload;
+  return item?.type === "notification" && item.source.kind === "monitor"
+    ? (entry?.runId ?? null)
+    : null;
+}
+
+/** A bot's wake reads as the notes that woke it; a wake whose note is not loaded keeps its row. */
+function BotWakeTimelineRow({
+  row,
+  runId,
+}: {
+  row: Extract<TimelineRow, { kind: "work" }>;
+  runId: string;
+}) {
+  const ctx = use(TimelineRowCtx);
+  const items = use(BotWakeNotesCtx).get(runId);
+  if (items === undefined) {
+    return (
+      <WorkLogBlock continues={row.continuesWorkLog} failed={ctx.discord && workRowFailed(row)}>
+        <WorkGroupSection
+          anchorKey={row.id}
+          groupedEntries={row.groupedEntries}
+          isExpandedToolGroup={row.isExpandedToolGroup}
+          displayLabel={row.displayLabel}
+        />
+      </WorkLogBlock>
+    );
+  }
+  return (
+    <div className="pb-3">
+      <BotInboundNotes
+        environmentId={ctx.activeThreadEnvironmentId}
+        items={items}
+        onOpenThread={ctx.onOpenThread}
+      />
+    </div>
+  );
+}
+
+/** In a bot's chat, a note from SSHCode or another chat reads as a note, not as the user. */
+function BotUserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+  const ctx = use(TimelineRowCtx);
+  const note = useMemo(() => botInboundNote(row.message.text), [row.message.text]);
+  return note === null ? (
+    <UserTimelineRow row={row} />
+  ) : (
+    <BotInboundNotes
+      environmentId={ctx.activeThreadEnvironmentId}
+      items={note}
+      onOpenThread={ctx.onOpenThread}
+    />
+  );
+}
+
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const { onImageExpand, onFileOpen } = ctx;
@@ -3219,7 +3346,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
     () => resolveUserMessageContext({ ...row.message, text: userMessage.text }),
     [row.message, userMessage.text],
   );
-  const hasVisibleBody = resolvedContext.text.trim().length > 0;
+  const cardBubble = cardReplyUserBubbleText({
+    text: resolvedContext.text,
+    context: row.message.context,
+  });
+  const hasVisibleBody = cardBubble.displayText.trim().length > 0;
   const previewImages = useMemo(
     () => userImages.filter((image) => image.name.startsWith("preview-annotation-")),
     [userImages],
@@ -3499,14 +3630,23 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       ) : null}
       {hasVisibleBody ? (
         <div onCopyCapture={onBodyCopyCapture}>
-          <CollapsibleUserMessageBody
-            entryId={row.id}
-            text={resolvedContext.text}
-            plainValues={isAgentMessage}
-            renderContextReference={renderContextReference}
-            skills={ctx.skills}
-            markdownCwd={ctx.markdownCwd}
-          />
+          {cardBubble.fromCard ? (
+            <div className="flex items-center gap-1.5 text-sm leading-relaxed">
+              <span aria-label="From card" className="inline-flex text-message-foreground/70">
+                <CardReplyGlyph />
+              </span>
+              <span className="min-w-0 break-words">{cardBubble.displayText}</span>
+            </div>
+          ) : (
+            <CollapsibleUserMessageBody
+              entryId={row.id}
+              text={resolvedContext.text}
+              plainValues={isAgentMessage}
+              renderContextReference={renderContextReference}
+              skills={ctx.skills}
+              markdownCwd={ctx.markdownCwd}
+            />
+          )}
         </div>
       ) : null}
     </UserMessageBubble>
@@ -4019,22 +4159,30 @@ function TimelineRowTimestamp({
 function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-fold" }> }) {
   const ctx = use(TimelineRowCtx);
   const rate = formatGenerationRate(use(TimelineGenerationCtx).byRunId.get(row.runId));
+  const label = rate === undefined ? row.label : `${row.label} · ${rate}`;
 
   return (
     <div
       data-turn-fold
       className="group/timeline-row relative flex items-center gap-1 border-b border-border/60 pb-2 pe-0.5 pt-1"
     >
-      <button
-        type="button"
-        aria-expanded={row.expanded}
-        data-scroll-anchor-ignore
-        onClick={() => ctx.onToggleTurnFold(row.runId)}
-        className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-sm leading-relaxed text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-      >
-        <span>{rate === undefined ? row.label : `${row.label} · ${rate}`}</span>
-        <MorphIcon className="size-3.5" icon={row.expanded ? ChevronDown : ChevronRight} />
-      </button>
+      {row.hidesWork ? (
+        <button
+          type="button"
+          aria-expanded={row.expanded}
+          data-scroll-anchor-ignore
+          onClick={() => ctx.onToggleTurnFold(row.runId)}
+          className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-sm leading-relaxed text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+        >
+          <span>{label}</span>
+          <MorphIcon className="size-3.5" icon={row.expanded ? ChevronDown : ChevronRight} />
+        </button>
+      ) : (
+        // Nothing to open on a text-only turn: the time alone, no chevron.
+        <span className="select-none px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
+          {label}
+        </span>
+      )}
       <TimelineRowTimestamp
         createdAt={row.createdAt}
         timestampFormat={ctx.timestampFormat}
@@ -4402,6 +4550,35 @@ function ProposedPlanTimelineRow({
   );
 }
 
+function AgentCardTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "agent-card" }> }) {
+  const ctx = use(TimelineRowCtx);
+
+  if (row.card.state === "streaming" || !row.card.card) {
+    return (
+      <div className="min-w-0 px-1">
+        <AgentCardSkeleton title={row.card.streamingTitle} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-w-0 px-1">
+      <AgentCard
+        key={row.itemId}
+        itemId={String(row.itemId)}
+        card={row.card.card}
+        lockedState={row.lockedState}
+        environmentId={ctx.activeThreadEnvironmentId}
+        threadId={row.sourceThreadId}
+        workspaceRoot={ctx.workspaceRoot}
+        resolvedTheme={ctx.resolvedTheme}
+        onImageExpand={ctx.onImageExpand}
+        onReply={ctx.onSendCardReply}
+      />
+    </div>
+  );
+}
+
 function HtmlRenderTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "html-render" }> }) {
   const ctx = use(TimelineRowCtx);
   const { onAppFullscreenChange } = ctx;
@@ -4563,6 +4740,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
         providerStatuses={ctx.providerStatuses}
         runs={ctx.runs}
         onOpenThread={ctx.onOpenThread}
+        renderSubagentImages={renderGeneratedImages}
       />
     );
   }
@@ -4867,6 +5045,7 @@ const V2SubagentGroup = memo(function V2SubagentGroup({
                   providerStatuses={ctx.providerStatuses}
                   runs={ctx.runs}
                   onOpenThread={ctx.onOpenThread}
+                  renderSubagentImages={renderGeneratedImages}
                 />
               ))}
             </div>
@@ -5176,7 +5355,7 @@ function toolIconAcceptsTint(toolIcon: ToolActivityIcon | undefined): boolean {
 }
 
 function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "working" }> }) {
-  const { discord } = use(TimelineRowCtx);
+  const { discord, botChat } = use(TimelineRowCtx);
   const { isCompacting, isPreparingWorktree, backgroundWorktreeSetup, mascotState } =
     use(TimelineRowActivityCtx);
   if (discord)
@@ -5189,7 +5368,7 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
   const shownState = row.leaving ?? mascotState;
   const reacting = shownState === "done" || shownState === "failed";
   const shimmer = !reacting && (isPreparingWorktree || isCompacting);
-  const { running: generation } = use(TimelineGenerationCtx);
+  const { running: generation, liveProgress } = use(TimelineGenerationCtx);
   const showsRate = !reacting && !isPreparingWorktree && !isCompacting;
   const label = reacting ? (
     shownState === "done" ? (
@@ -5204,12 +5383,12 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
   ) : row.createdAt ? (
     <>
       Working for <WorkingTimer createdAt={row.createdAt} />
-      {showsRate ? <GenerationRateLabel generation={generation} /> : null}
+      {showsRate ? <WorkingHeaderTail generation={generation} liveProgress={liveProgress} /> : null}
     </>
   ) : (
     <>
       Working...
-      {showsRate ? <GenerationRateLabel generation={generation} /> : null}
+      {showsRate ? <WorkingHeaderTail generation={generation} liveProgress={liveProgress} /> : null}
     </>
   );
   return (
@@ -5222,7 +5401,8 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
       <div className="min-h-0 overflow-hidden">
         <div className="border-b border-border/60 pb-2 pt-1">
           <div className="flex h-7 min-w-0 items-center gap-2 px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
-            <HarnessMascot state={reacting ? shownState : "working"} size={28} />
+            {/* A bot's own face works in its header instead. */}
+            {botChat ? null : <HarnessMascot state={reacting ? shownState : "working"} size={28} />}
             <span
               ref={shimmer ? observeVisibleAnimation : undefined}
               className="relative shrink-0 overflow-hidden whitespace-nowrap"
@@ -5237,6 +5417,20 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
         </div>
       </div>
     </div>
+  );
+}
+
+/** Time left once the agent's live progress has an estimate (token use High), else the rate. */
+function WorkingHeaderTail(props: {
+  readonly generation: OrchestrationV2ProviderTurnGeneration | undefined;
+  readonly liveProgress: OrchestrationV2LiveProgress | undefined;
+}) {
+  const timeLeft = useLiveProgressTimeLeft(props.liveProgress);
+  if (timeLeft === null) return <GenerationRateLabel generation={props.generation} />;
+  return (
+    <LiveProgressTimeWithFinish finish={timeLeft.finish} className="text-muted-foreground">
+      {` · ${timeLeft.text}`}
+    </LiveProgressTimeWithFinish>
   );
 }
 
@@ -5770,6 +5964,40 @@ function WorkViewedImages({ paths }: { paths: ReadonlyArray<string> }) {
     </div>
   );
 }
+
+/** A painting subagent's pictures: the one it kept large, earlier tries as small thumbnails. */
+function GeneratedImages({ paths }: { paths: ReadonlyArray<string> }) {
+  const { threadRef, workspaceRoot, onImageExpand } = use(TimelineRowCtx);
+  if (!threadRef || paths.length === 0) return null;
+  const image = (path: string, maxHeightRem: number) => {
+    const resolved = resolveViewedImageAsset(path, { threadId: threadRef.threadId, workspaceRoot });
+    return resolved ? (
+      <ChatMarkdownAssetImage
+        key={path}
+        environmentId={threadRef.environmentId}
+        resource={resolved.resource}
+        alt={resolved.alt}
+        srcFragment={resolved.srcFragment}
+        workspaceRoot={workspaceRoot}
+        maxHeightRem={maxHeightRem}
+        onImageExpand={onImageExpand}
+      />
+    ) : null;
+  };
+  const earlier = paths.slice(0, -1);
+  return (
+    <div data-image-gallery="" onClick={(event) => event.stopPropagation()}>
+      {image(paths[paths.length - 1]!, 22)}
+      {earlier.length > 0 ? (
+        <div className="mt-2 flex flex-wrap items-start gap-1.5 opacity-75 transition-opacity duration-150 hover:opacity-100">
+          {earlier.map((path) => image(path, 3.5))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const renderGeneratedImages = (paths: ReadonlyArray<string>) => <GeneratedImages paths={paths} />;
 
 function WorkGroupHeader(props: {
   label: string;
@@ -6709,9 +6937,20 @@ function ToolActivityIconView(props: {
   muted: boolean;
 }) {
   const { resolvedTheme } = use(TimelineRowCtx);
+  const websiteIconsEnabled = useClientSettings((settings) => settings.websiteIconsEnabled);
   const fallbackClassName = cn(props.className, props.muted && "opacity-70 light:brightness-60");
   if (!props.icon) {
     return <WorkEntryIcon name={props.fallbackName} className={fallbackClassName} />;
+  }
+  if (props.icon._tag === "website" && !websiteIconsEnabled) {
+    return (
+      <WebsiteLetterTile
+        site={props.icon.pageUrl}
+        size={16}
+        className={cn("rounded-xs", props.muted && "opacity-70")}
+        fallback={<WorkEntryIcon name={props.fallbackName} className={fallbackClassName} />}
+      />
+    );
   }
   if (props.icon._tag === "website") {
     const src = toolActivityFaviconUrl(props.icon, resolvedTheme, 32);
@@ -7216,6 +7455,21 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
           </p>
         ) : null}
         <div className="ms-7 flex flex-wrap items-center gap-2 pb-1 empty:hidden">
+          {failureItem.failure.verificationUrl ? (
+            <Button
+              size="xs"
+              variant="outline"
+              render={
+                <a
+                  href={failureItem.failure.verificationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                />
+              }
+            >
+              Verify Google account
+            </Button>
+          ) : null}
           {threadRef !== null && failureItem.runId !== null ? (
             <ReplaceProviderCredentialButton threadRef={threadRef} runId={failureItem.runId} />
           ) : null}

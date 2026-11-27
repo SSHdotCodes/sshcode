@@ -16,6 +16,9 @@ import * as Exit from "effect/Exit";
 import * as Ref from "effect/Ref";
 import * as ScheduledTaskState from "./ScheduledTaskState.ts";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
+import * as Tracer from "effect/Tracer";
+import { RelayClientTracer, withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Queue from "effect/Queue";
@@ -116,6 +119,35 @@ const withService = <A, E>(
   }).pipe(
     Effect.provide(Layer.mergeAll(SqlitePersistence.layerMemory, ScheduledTaskStateTest.layer)),
   );
+
+// Upstream #42450: the run a relay-delivered webhook starts carries workspace paths.
+it.effect("a relay-delivered webhook keeps the run it starts off the relay tracer", () =>
+  withService(({ service, launches }) =>
+    Effect.gen(function* () {
+      const { task } = yield* service.upsert(yield* webhookTaskInput());
+      const relaySpans: Array<string> = [];
+      const relayTracer = Tracer.make({
+        span: (options) => {
+          relaySpans.push(options.name);
+          return new Tracer.NativeSpan(options);
+        },
+      });
+
+      const result = yield* service
+        .triggerWebhook(requestFor(task))
+        .pipe(
+          withRelayClientTracing,
+          Effect.provideService(RelayClientTracer, Option.some(relayTracer)),
+        );
+      assert.equal(result._tag, "accepted");
+      yield* Queue.take(launches);
+
+      assert.include(relaySpans, "ScheduledTaskService.triggerWebhook");
+      assert.notInclude(relaySpans, "ScheduledTaskService.runWebhookDelivery");
+      assert.notInclude(relaySpans, "ScheduledTaskService.runTask");
+    }),
+  ),
+);
 
 it.effect("dispatches exactly the rendered prompt and logs the delivery", () =>
   withService(({ service, launches }) =>

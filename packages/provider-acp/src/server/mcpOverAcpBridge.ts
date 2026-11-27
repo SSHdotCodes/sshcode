@@ -19,6 +19,13 @@ interface JsonRpcEnvelope {
   readonly result?: unknown;
 }
 
+interface JsonRpcRequest {
+  readonly jsonrpc: "2.0";
+  readonly id?: number;
+  readonly method: string;
+  readonly params?: unknown;
+}
+
 interface Connection {
   readonly mutex: Semaphore.Semaphore;
   sessionId: string | null;
@@ -98,18 +105,25 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
         : Effect.succeed(connection);
     });
 
-  // Only initialization needs ordering; negotiated calls may wait independently.
-  const untilNegotiated = <A, E>(connection: Connection, effect: Effect.Effect<A, E>) =>
+  // Every initialize owns the lock, including when it replaces a negotiated session.
+  const untilNegotiated = <A, E>(
+    connection: Connection,
+    method: string,
+    effect: Effect.Effect<A, E>,
+  ) =>
     Effect.suspend(() =>
-      connection.protocolVersion === null ? connection.mutex.withPermits(1)(effect) : effect,
+      method === "initialize" || connection.protocolVersion === null
+        ? connection.mutex.withPermits(1)(effect)
+        : effect,
     );
 
   const sendNow = (
     connection: Connection,
-    message: unknown,
+    message: JsonRpcRequest,
   ): Effect.Effect<ReadonlyArray<unknown>, AcpMcpOverAcpError> =>
     untilNegotiated(
       connection,
+      message.method,
       Effect.gen(function* () {
         const body = JSON.stringify(message);
         if (Buffer.byteLength(body) > MAX_MESSAGE_BYTES) {
@@ -117,20 +131,19 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
         }
         // The endpoint rejects an initialize carrying the old session id (HTTP 400),
         // so an agent re-initializing a connection gets a fresh session.
-        const method =
-          typeof message === "object" && message !== null
-            ? (message as { readonly method?: unknown }).method
-            : undefined;
-        if (method === "initialize" && connection.sessionId !== null) {
+        if (message.method === "initialize" && connection.sessionId !== null) {
           const previous = connection.sessionId;
           connection.sessionId = null;
           connection.protocolVersion = null;
-          yield* Effect.tryPromise(() =>
-            fetchImplementation(options.endpoint, {
-              method: "DELETE",
-              headers: { authorization: options.authorization, "mcp-session-id": previous },
-            }).then((response) => response.body?.cancel()),
-          ).pipe(Effect.ignore);
+          yield* Effect.tryPromise({
+            try: (signal) =>
+              fetchImplementation(options.endpoint, {
+                method: "DELETE",
+                signal,
+                headers: { authorization: options.authorization, "mcp-session-id": previous },
+              }).then((response) => response.body?.cancel()),
+            catch: bridgeError,
+          }).pipe(Effect.timeoutOption(DISCONNECT_TIMEOUT), Effect.ignore);
         }
         const response = yield* Effect.tryPromise({
           try: (signal) =>
@@ -171,7 +184,7 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
 
   const send = (
     connection: Connection,
-    message: unknown,
+    message: JsonRpcRequest,
   ): Effect.Effect<ReadonlyArray<unknown>, AcpMcpOverAcpError> =>
     Effect.suspend(() =>
       Effect.raceFirst(

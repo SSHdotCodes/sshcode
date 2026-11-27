@@ -131,6 +131,9 @@ interface HarnessOptions {
   readonly providers?: ReadonlyArray<ServerProvider>;
   readonly readQuota?: Parameters<typeof ProviderRegistryMock.layer>[1];
   readonly git?: Partial<GitWorkflow.GitWorkflowService["Service"]>;
+  readonly wrapSetupTracker?: (
+    tracker: WorktreeSetupTracker.WorktreeSetupTracker["Service"],
+  ) => WorktreeSetupTracker.WorktreeSetupTracker["Service"];
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -190,8 +193,14 @@ function makeHarness(options: HarnessOptions = {}) {
   const generateThreadTitle = vi.fn(
     options.generateTitle ?? (() => Effect.succeed({ title: "Generated title" })),
   );
+  const wrapSetupTracker = options.wrapSetupTracker;
   const layerExternalServices = Layer.mergeAll(
-    WorktreeSetupTracker.layer,
+    wrapSetupTracker === undefined
+      ? WorktreeSetupTracker.layer
+      : Layer.effect(
+          WorktreeSetupTracker.WorktreeSetupTracker,
+          WorktreeSetupTracker.make.pipe(Effect.map(wrapSetupTracker)),
+        ),
     Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ get: () => Effect.succeed(null) }),
     Layer.mock(TerminalManager.TerminalManager)({ close: closeTerminal }),
     Layer.succeed(ProjectService.ProjectService, {
@@ -1217,6 +1226,180 @@ it.effect("provisions independent launches concurrently instead of behind a glob
       yield* Deferred.succeed(allowSetup, undefined);
     }).pipe(Effect.provide(harness.layer));
   }),
+);
+
+// 2026-11-25: six subagent installs of one repository ran at once and all took 205-230 s,
+// where one alone took about 40 s, so no child started for four minutes.
+it.effect("runs at most two subagent setups of one repository at a time", () =>
+  Effect.gen(function* () {
+    const entered = yield* Ref.make<ReadonlyArray<string>>([]);
+    const twoEntered = yield* Deferred.make<void>();
+    const finished = new Map<string, Deferred.Deferred<void>>();
+    for (const name of ["a", "b", "c"]) finished.set(name, yield* Deferred.make<void>());
+    const harness = makeHarness({
+      createWorktree: (input) =>
+        Effect.succeed({
+          worktree: {
+            path: `/repo-worktrees/${input.newRefName}`,
+            refName: input.newRefName,
+            headSha: "abc",
+          },
+        } as never),
+      runSetup: (input) =>
+        Effect.gen(function* () {
+          const name = String(input.threadId).slice(-1);
+          const now = yield* Ref.updateAndGet(entered, (names) => [...names, name]);
+          if (now.length === 2) yield* Deferred.succeed(twoEntered, undefined);
+          return {
+            status: "started" as const,
+            scriptId: "setup",
+            scriptName: "Setup",
+            scriptCommand: "vp i",
+            terminalId: `setup-${name}`,
+            cwd: input.worktreePath,
+            async: false,
+            completion: Deferred.await(finished.get(name)!).pipe(
+              Effect.as({ exitCode: 0, durationMs: 0 }),
+            ),
+          };
+        }),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+      yield* Effect.forEach(
+        ["a", "b", "c"],
+        (name) => {
+          // prepareRun sets this for subagent chats; launch hands its input to the same preparation.
+          const subagentLaunch = {
+            ...launchInput({
+              command: `command:launch:setup-gate-${name}`,
+              thread: `thread:launch:setup-gate-${name}`,
+              message: "Work",
+              workspace: { type: "worktree", baseRef: "main" },
+            }),
+            holdForSetup: true,
+          };
+          return launches.launch(subagentLaunch);
+        },
+        { concurrency: "unbounded" },
+      );
+      yield* Deferred.await(twoEntered);
+      const setupDetail = (name: string) =>
+        tracker
+          .get(ThreadId.make(`thread:launch:setup-gate-${name}`))
+          .pipe(
+            Effect.map(
+              (snapshot) =>
+                snapshot?.stages.find((stage) => stage.id === "setup-script")?.detail ?? null,
+            ),
+          );
+      // The third child waits for a slot, and its setup card says so, instead of installing.
+      const first = yield* Ref.get(entered);
+      const waiting = ["a", "b", "c"].find((name) => !first.includes(name))!;
+      yield* waitUntil(() =>
+        setupDetail(waiting).pipe(
+          Effect.map((detail) => detail === "Waiting for other subagent setups"),
+        ),
+      );
+      assert.deepEqual(yield* Ref.get(entered), first);
+      yield* Deferred.succeed(finished.get(first[0]!)!, undefined);
+      yield* waitUntil(() => Ref.get(entered).pipe(Effect.map((names) => names.length === 3)));
+      assert.equal((yield* Ref.get(entered))[2], waiting);
+      assert.isNull(yield* setupDetail(waiting));
+      for (const done of finished.values()) yield* Deferred.succeed(done, undefined);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect(
+  "returns a subagent setup slot when its launch is interrupted right after taking it",
+  () =>
+    Effect.gen(function* () {
+      const entered = yield* Ref.make<ReadonlyArray<string>>([]);
+      const interrupted = yield* Deferred.make<void>();
+      const releaseA = yield* Deferred.make<void>();
+      const holding = yield* Deferred.make<void>();
+      const cut = ThreadId.make("thread:launch:setup-slot-c");
+      const harness = makeHarness({
+        createWorktree: (input) =>
+          Effect.succeed({
+            worktree: {
+              path: `/repo-worktrees/${input.newRefName}`,
+              refName: input.newRefName,
+              headSha: "abc",
+            },
+          } as never),
+        runSetup: (input) =>
+          Effect.gen(function* () {
+            const name = String(input.threadId).slice(-1);
+            yield* Ref.update(entered, (names) => [...names, name]);
+            return {
+              status: "started" as const,
+              scriptId: "setup",
+              scriptName: "Setup",
+              scriptCommand: "vp i",
+              terminalId: `setup-${name}`,
+              cwd: input.worktreePath,
+              async: false,
+              completion: Deferred.await(name === "a" ? releaseA : holding).pipe(
+                Effect.as({ exitCode: 0, durationMs: 0 }),
+              ),
+            };
+          }),
+        // The first step after a waiting child takes its slot clears the waiting notice;
+        // the interrupt lands there.
+        wrapSetupTracker: (tracker) => ({
+          ...tracker,
+          stageStatus: (threadId, stage, status, detail) =>
+            threadId === cut && stage === "setup-script" && detail === null
+              ? Deferred.succeed(interrupted, undefined).pipe(Effect.andThen(Effect.interrupt))
+              : tracker.stageStatus(threadId, stage, status, detail),
+        }),
+      });
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+        const launch = (name: string) => {
+          const subagentLaunch = {
+            ...launchInput({
+              command: `command:launch:setup-slot-${name}`,
+              thread: `thread:launch:setup-slot-${name}`,
+              message: "Work",
+              workspace: { type: "worktree", baseRef: "main" },
+            }),
+            holdForSetup: true,
+          };
+          return launches.launch(subagentLaunch);
+        };
+        yield* launch("a");
+        yield* launch("b");
+        yield* waitUntil(() => Ref.get(entered).pipe(Effect.map((names) => names.length === 2)));
+        yield* launch("c");
+        yield* waitUntil(() =>
+          tracker
+            .get(cut)
+            .pipe(
+              Effect.map(
+                (snapshot) =>
+                  snapshot?.stages.find((stage) => stage.id === "setup-script")?.detail ===
+                  "Waiting for other subagent setups",
+              ),
+            ),
+        );
+        yield* Deferred.succeed(releaseA, undefined);
+        yield* Deferred.await(interrupted);
+        yield* waitUntil(() =>
+          tracker.get(cut).pipe(Effect.map((snapshot) => snapshot?.phase === "cancelled")),
+        );
+        // c took the slot a left behind and was cut before installing; its slot must come back
+        // while b still holds the other one.
+        yield* launch("d");
+        yield* waitUntil(() => Ref.get(entered).pipe(Effect.map((names) => names.includes("d"))));
+        assert.isFalse((yield* Ref.get(entered)).includes("c"));
+        yield* Deferred.succeed(holding, undefined);
+      }).pipe(Effect.provide(harness.layer));
+    }),
 );
 
 it.effect("enqueues provider work only after setup has been initiated", () =>

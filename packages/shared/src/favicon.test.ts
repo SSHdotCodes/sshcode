@@ -1,6 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { faviconUrlForOrigin, toolActivityFaviconUrl } from "./favicon.ts";
+import {
+  faviconUrlForOrigin,
+  toolActivityFaviconUrl,
+  WEBSITE_LETTER_TILE_HUES,
+  websiteLetterTile,
+} from "./favicon.ts";
 
 describe("faviconUrlForOrigin", () => {
   it.each([
@@ -98,5 +103,59 @@ describe("toolActivityFaviconUrl", () => {
         "light",
       ),
     ).toBe("https://example.com/favicon.ico");
+  });
+});
+
+describe("websiteLetterTile", () => {
+  it("takes the site's first letter and ignores www, scheme, path, and case", () => {
+    expect(websiteLetterTile("https://www.example.com/a?b=c")?.letter).toBe("E");
+    expect(websiteLetterTile("docs.python.org")?.letter).toBe("P");
+    expect(websiteLetterTile("https://developer.mozilla.org/en-US/")?.letter).toBe("M");
+    expect(websiteLetterTile("www.bbc.co.uk")?.letter).toBe("B");
+    expect(websiteLetterTile("http://192.168.1.10:8080")?.letter).toBe("1");
+    expect(websiteLetterTile("docs.python.org")).toEqual(websiteLetterTile("python.org"));
+    expect(websiteLetterTile("https://www.Example.com")).toEqual(websiteLetterTile("example.com"));
+  });
+
+  it("picks one of eight muted hues, stable for a hostname", () => {
+    const backgrounds = new Set(
+      ["github.com", "google.com", "npmjs.com", "x.com", "apple.com", "vercel.com", "a.io"].map(
+        (host) => websiteLetterTile(host)?.background,
+      ),
+    );
+    expect(backgrounds.size).toBeGreaterThan(1);
+    for (const background of backgrounds) {
+      expect(background).toMatch(
+        new RegExp(`^hsl\\((${WEBSITE_LETTER_TILE_HUES.join("|")}), 22%, 40%\\)$`),
+      );
+    }
+    expect(websiteLetterTile("github.com")).toEqual(websiteLetterTile("github.com"));
+  });
+
+  it("keeps a white letter at WCAG AA contrast on every hue", () => {
+    const channel = (value: number) =>
+      value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    for (const hue of WEBSITE_LETTER_TILE_HUES) {
+      // hsl(hue, 22%, 40%) to linear RGB.
+      const chroma = (1 - Math.abs(2 * 0.4 - 1)) * 0.22;
+      const x = chroma * (1 - Math.abs(((hue / 60) % 2) - 1));
+      const m = 0.4 - chroma / 2;
+      const [r, g, b] = [
+        [chroma, x, 0],
+        [x, chroma, 0],
+        [0, chroma, x],
+        [0, x, chroma],
+        [x, 0, chroma],
+        [chroma, 0, x],
+      ][Math.floor(hue / 60) % 6]!.map((value) => channel(value + m));
+      const luminance = 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+      expect(1.05 / (luminance + 0.05)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("returns null without a hostname", () => {
+    expect(websiteLetterTile(null)).toBeNull();
+    expect(websiteLetterTile("")).toBeNull();
+    expect(websiteLetterTile("https://")).toBeNull();
   });
 });

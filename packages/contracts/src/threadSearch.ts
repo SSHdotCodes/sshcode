@@ -51,6 +51,10 @@ export const OrchestrationThreadSearchMatch = Schema.Struct({
   matchedModel: Schema.optionalKey(Schema.String),
   matchedHarness: Schema.optionalKey(Schema.String),
   titleCorrection: Schema.optionalKey(Schema.String),
+  /** Last chat activity, independent of the timestamp on the excerpt. */
+  activityAt: Schema.optionalKey(IsoDateTime),
+  /** The title, workspace context or opening user message matched. */
+  about: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationThreadSearchMatch = typeof OrchestrationThreadSearchMatch.Type;
 

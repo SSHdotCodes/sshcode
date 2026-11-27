@@ -4776,9 +4776,14 @@ describe("OrchestratorMcpService provider resolution", () => {
                 { slug: "gpt-7-sol", name: "GPT-7-Sol", minVersion: "0.140.0" },
               ],
             },
+            providerSnapshot({
+              instanceId: ProviderInstanceId.make("acpRegistry_devin"),
+              driver: ProviderDriverKind.make("acpRegistry"),
+              model: "swe-2-1-medium",
+            }),
           ]),
         }),
-        adapterRegistryLayer([codexInstanceId]),
+        adapterRegistryLayer([codexInstanceId, ProviderInstanceId.make("acpRegistry_devin")]),
         Layer.mock(ProjectService.ProjectService)({}),
         Layer.mock(SecretRequests.SecretRequests)({}),
         Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
@@ -4897,6 +4902,32 @@ describe("OrchestratorMcpService provider resolution", () => {
           .pipe(Effect.flip);
         assert.equal(prefixed.code, "model_unavailable");
         assert.include(prefixed.message, "Did you mean gpt-6.1-sol?");
+        const combinedInstanceModel = yield* service
+          .delegateTask(scope, {
+            task: "Survey the kernels.",
+            target: { model: "acpRegistry_devin/swe-2-1-medium" },
+            mode: "async",
+            clientRequestId: "delegate-combined-instance-model",
+          })
+          .pipe(Effect.flip);
+        assert.equal(combinedInstanceModel.code, "model_unavailable");
+        assert.include(
+          combinedInstanceModel.message,
+          'Pass target.providerInstanceId: "acpRegistry_devin" and target.model: "swe-2-1-medium" separately.',
+        );
+        const otherProviderModel = yield* service
+          .delegateTask(scope, {
+            task: "Survey the kernels.",
+            target: { model: "swe-2-1-medium" },
+            mode: "async",
+            clientRequestId: "delegate-other-provider-model",
+          })
+          .pipe(Effect.flip);
+        assert.equal(otherProviderModel.code, "model_unavailable");
+        assert.include(
+          otherProviderModel.message,
+          `Omitted providerInstanceId inherited ${codexInstanceId}; swe-2-1-medium is on acpRegistry_devin.`,
+        );
         const updateRequired = yield* service
           .delegateTask(scope, {
             task: "Survey the kernels.",

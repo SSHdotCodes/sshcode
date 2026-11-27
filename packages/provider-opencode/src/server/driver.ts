@@ -441,7 +441,7 @@ export const OpenCodeDriver: ProviderDriver<
         )
           return yield* legacyUsageLimits(probed);
         const limits = yield* openCode2Server.withConnection((connection) =>
-          connection.usageLimits(host.paths.cwd),
+          connection.usageLimits(connection.external ? undefined : host.paths.cwd),
         );
         if (limits === undefined) unsupportedUsageVersion = probed.version;
         if (limits !== undefined && !limits.unavailable && limits.windows.length > 0) return limits;

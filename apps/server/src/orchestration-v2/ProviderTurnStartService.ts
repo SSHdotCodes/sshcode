@@ -1,8 +1,12 @@
 import { modelSelectionsEqual } from "@t3tools/shared/model";
+import * as TeamBoard from "../teamBoard/TeamBoard.ts";
+import { TEAM_BOARD_TOOL } from "../teamBoard/model.ts";
+import { currentAgentToolPolicyState } from "../mcp/AgentToolPolicy.ts";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import { SUBAGENTS_OFF_USER_LINE, SUBAGENTS_ON_USER_LINE } from "@t3tools/shared/chatControls";
 import {
   CommandId,
+  isAgentToolEnabled,
   TerminalHandoffError,
   latestProviderTurnForAttempt,
   type OrchestrationV2ContextHandoff,
@@ -22,12 +26,14 @@ import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
@@ -51,7 +57,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { deliverContextHandoffs } from "./ContextHandoffDelivery.ts";
 import { nativeContextState } from "./nativeContextState.ts";
 import { delegatedCompletionWakeDetail, resultsForNextTurn } from "./NotificationMailbox.ts";
-import { isNativeMaintenanceCommand } from "./CommandPolicy.ts";
+import { expandedCitationInputError, isNativeMaintenanceCommand } from "./CommandPolicy.ts";
 import { workspaceSetupNotice } from "./workspacePreparation.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -91,6 +97,36 @@ export class ProviderTurnStartError extends Schema.TaggedError<ProviderTurnStart
 }
 
 const isProviderTurnStartError = Schema.is(ProviderTurnStartError);
+
+export function startTurnWithBoardNotices<
+  Input extends Pick<
+    ProviderAdapter.ProviderAdapterV2TurnInput,
+    "threadId" | "runId" | "restartContinuationOfRunId"
+  > & { readonly message: { readonly text: string } },
+  A,
+  E,
+  R,
+>(
+  input: Input,
+  start: (input: Input) => Effect.Effect<A, E, R>,
+  board: Pick<TeamBoard.TeamBoard["Service"], "reserveNotices">,
+) {
+  return Effect.uninterruptibleMask((restore) =>
+    Effect.suspend(() => {
+      // A native continuation can resume without sending a new prompt. Keep the
+      // notice pending for a steer or authenticated tool result instead.
+      if (input.restartContinuationOfRunId !== undefined) return restore(start(input));
+      const receipt = board.reserveNotices(input.threadId, input.runId);
+      if (receipt === undefined) return restore(start(input));
+      return restore(
+        start({
+          ...input,
+          message: { ...input.message, text: `${receipt.text}\n\n${input.message.text}` },
+        }),
+      ).pipe(Effect.onExit((exit) => receipt.finish(Exit.isSuccess(exit))));
+    }),
+  );
+}
 
 /**
  * First-turn line for a subagent the user started themselves. The lead wrote no brief for
@@ -173,6 +209,7 @@ export const layer: Layer.Layer<
 > = Layer.effect(
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
+    const teamBoard = Option.getOrUndefined(yield* Effect.serviceOption(TeamBoard.TeamBoard));
     const chatControls = Option.getOrElse(
       yield* Effect.serviceOption(ChatControls.ChatControls),
       () => ChatControls.make().store,
@@ -329,6 +366,74 @@ export const layer: Layer.Layer<
       };
     };
 
+    const makeInlinePromptSettlement = () => {
+      let onSettled: ((promptDropped: boolean) => Effect.Effect<void>) | undefined;
+      return {
+        register: (settle: NonNullable<typeof onSettled>) => {
+          onSettled = settle;
+        },
+        settle: (promptDropped: boolean) =>
+          Effect.suspend(() => {
+            const callback = onSettled;
+            onSettled = undefined;
+            return callback?.(promptDropped) ?? Effect.void;
+          }),
+      };
+    };
+
+    const persistHandoffDelivery =
+      (
+        run: Pick<OrchestrationV2Run, "id" | "threadId" | "providerInstanceId">,
+        retryHandoffId: OrchestrationV2ContextHandoff["id"] | undefined,
+      ) =>
+      (handoff: OrchestrationV2ContextHandoff) =>
+        Effect.gen(function* () {
+          const updatedAt = yield* DateTime.now;
+          yield* eventSink.write({
+            events: [
+              {
+                id: yield* idAllocator.allocate.event({ threadId: run.threadId }),
+                type: "context-handoff.updated",
+                threadId: run.threadId,
+                runId: run.id,
+                providerInstanceId: run.providerInstanceId,
+                occurredAt: updatedAt,
+                payload: {
+                  ...handoff,
+                  // A missed-run delta is rebuilt from history on the next attempt.
+                  ...(handoff.delivery === undefined && handoff.id === retryHandoffId
+                    ? { status: "superseded" as const }
+                    : {}),
+                  updatedAt,
+                },
+              },
+            ],
+          });
+        });
+
+    const restoreUnsentHandoffs = <E>(runId: RunId, unsent: Effect.Effect<void, E>) =>
+      unsent.pipe(
+        Effect.catchCause(() =>
+          Effect.logWarning("Failed to restore unsent context handoffs", { runId }),
+        ),
+      );
+
+    const makeInlinePromptWrites = Effect.fnUntraced(function* (restore: Effect.Effect<void>) {
+      const writes = yield* Semaphore.make(1);
+      let promptDropped = false;
+      return {
+        settle: (dropped: boolean) =>
+          writes.withPermits(1)(
+            Effect.suspend(() => {
+              promptDropped = dropped;
+              return dropped ? restore : Effect.void;
+            }),
+          ),
+        markAccepted: (write: Effect.Effect<void>) =>
+          writes.withPermits(1)(Effect.suspend(() => (promptDropped ? Effect.void : write))),
+      };
+    });
+
     const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (input: {
       readonly threadId: ThreadId;
       readonly runId: RunId;
@@ -343,6 +448,18 @@ export const layer: Layer.Layer<
       if (run.status !== "starting") {
         // The effect is idempotent once the run has advanced or terminalized.
         return;
+      }
+      const lineage = projection.thread.lineage;
+      if (lineage?.relationshipToParent === "subagent")
+        teamBoard?.registerSubagent(projection.thread.id);
+      if (
+        teamBoard !== undefined &&
+        lineage?.relationshipToParent === "subagent" &&
+        lineage.parentEnvironmentId === undefined &&
+        lineage.parentThreadId !== null &&
+        projection.thread.forkedFrom?.type === "node"
+      ) {
+        yield* teamBoard.prepareChild(lineage.parentThreadId, projection.thread.id);
       }
       // A brief written for another target ends, with the session it holds open, before
       // this turn opens one. A brief for this target is waited for until the deadline.
@@ -496,6 +613,31 @@ export const layer: Layer.Layer<
         },
       );
       return yield* Effect.gen(function* () {
+        const recoveryRun =
+          run.promptRecoveryOfRunId === undefined || attempt.reason === "steering_restart"
+            ? undefined
+            : projection.runs.find((source) => source.id === run.promptRecoveryOfRunId);
+        const providerMessage =
+          recoveryRun === undefined
+            ? message
+            : (projection.messages.find((source) => source.id === recoveryRun.userMessageId) ??
+              message);
+        const inputError = expandedCitationInputError(providerMessage.text);
+        if (inputError !== undefined) {
+          yield* settleRunBeforeStart({
+            signal: "expanded-input-too-long",
+            status: "failed",
+            now: yield* DateTime.now,
+            providerInstanceId: run.providerInstanceId,
+            itemProviderThreadId: providerThread.id,
+            item: {
+              type: "error",
+              title: "Message is too long",
+              failure: makeProviderFailure({ class: "validation_error", message: inputError }),
+            },
+          });
+          return;
+        }
         if (message.attachments.length === 0 && message.text.trimStart().startsWith("/")) {
           const isEmptyCompaction =
             message.text.trim().toLowerCase() === "/compact" && !projection.hasConversation;
@@ -1010,8 +1152,8 @@ export const layer: Layer.Layer<
         // The last attempt already failed the run.
         if (loadedProviderThread === undefined) return;
         const originalUserText = projectComposerContextForProvider({
-          text: message.text,
-          records: message.context?.records ?? [],
+          text: providerMessage.text,
+          records: providerMessage.context?.records ?? [],
         });
         const knownModelWindow = session.getModelContextWindow?.(
           run.modelSelection,
@@ -1073,7 +1215,7 @@ export const layer: Layer.Layer<
           const budgetInput = {
             tokenCap: DEFAULT_HANDOFF_TOKEN_CAP,
             userText: originalUserText,
-            attachments: message.attachments,
+            attachments: providerMessage.attachments,
             providerThread: { ...loadedProviderThread, contextUsage: usage },
             nativeContextEstimate,
             modelContextWindow: knownModelWindow ?? usage?.maxTokens,
@@ -1093,7 +1235,7 @@ export const layer: Layer.Layer<
               knownModelWindow !== undefined &&
               (usage?.usedTokens ?? nativeContextEstimate) +
                 Buffer.byteLength(originalUserText) +
-                attachmentTokenAllowance(message.attachments) >
+                attachmentTokenAllowance(providerMessage.attachments) >
                 knownModelWindow) ||
             needsFreshHandoff
           ) {
@@ -1296,9 +1438,19 @@ export const layer: Layer.Layer<
         const setupNotice = workspaceSetupNotice(projection.turnItems, run.id);
         // A subagent the user started has no brief from the lead: point it at the lead's chat.
         const userStartNotice = userStartedSubagentNotice(projection.thread, projection.runs, run);
+        if (
+          teamBoard?.needsGuidance(projection.thread.id, run.id) ||
+          teamBoard?.needsLeadGuidance(projection.thread.id)
+        ) {
+          const { available, policy } = yield* currentAgentToolPolicyState;
+          if (available && isAgentToolEnabled(policy, TEAM_BOARD_TOOL, run.providerInstanceId)) {
+            yield* teamBoard.queueGuidance(projection.thread.id, run.id);
+            yield* teamBoard.queueLeadGuidance(projection.thread.id, run.id);
+          }
+        }
         const userText =
           (carriedTaskIds.length
-            ? `${delegatedCompletionWakeDetail(carriedTaskIds, carriedTasks)}\n\n`
+            ? `${delegatedCompletionWakeDetail(carriedTaskIds, carriedTasks, teamBoard?.completion)}\n\n`
             : "") +
           (setupNotice === undefined ? "" : `${setupNotice}\n\n`) +
           (userStartNotice === undefined ? "" : `${userStartNotice}\n\n`) +
@@ -1370,6 +1522,7 @@ export const layer: Layer.Layer<
           providerThread,
           run,
           nativeThreadId: runningProviderThread.nativeThreadRef?.nativeId,
+          recoveringPromptOfRunId: providerMessage === message ? undefined : recoveryRun?.id,
         });
         const nativeContextEstimate = sameNativeThread
           ? projectionStore.getTurnStartHistory(input.threadId).pipe(Effect.map(estimateHistory))
@@ -1503,6 +1656,9 @@ export const layer: Layer.Layer<
               });
             yield* eventSink.write({ events });
           });
+        // The event worker retains this callback for the turn's lifetime. Keep its
+        // closure separate from the startup projection.
+        const inlinePromptSettlement = makeInlinePromptSettlement();
         const startWithHandoffs = (
           turnInput: Parameters<typeof session.startTurn>[0],
           compact = false,
@@ -1534,6 +1690,10 @@ export const layer: Layer.Layer<
                   ];
             const brief = Option.getOrUndefined(yield* handoffBrief);
             const workspace = yield* handoffWorkspace;
+            const persist = persistHandoffDelivery(
+              run,
+              session.driver === "codex" ? retryHandoff[0]?.id : undefined,
+            );
             const deliver = (handoffs: ReadonlyArray<OrchestrationV2ContextHandoff>) =>
               deliverContextHandoffs({
                 handoffs,
@@ -1546,8 +1706,11 @@ export const layer: Layer.Layer<
                     tokenCap,
                     modelContextWindow,
                     // The note is sent with the user text, so it spends the same allowance.
-                    userText: restartNote === "" ? userText : `${restartNote}\n\n${userText}`,
-                    attachments: message.attachments,
+                    userText:
+                      restartNote === ""
+                        ? turnInput.message.text
+                        : `${restartNote}\n\n${turnInput.message.text}`,
+                    attachments: providerMessage.attachments,
                     providerThread: budgetProviderThread,
                     nativeContextEstimate:
                       budgetProviderThread.contextUsage?.usedTokens === undefined
@@ -1565,25 +1728,7 @@ export const layer: Layer.Layer<
                           ...history,
                         }),
                     }),
-                persist: (handoff) =>
-                  Effect.gen(function* () {
-                    const updatedAt = yield* DateTime.now;
-                    yield* eventSink.write({
-                      events: [
-                        {
-                          id: yield* idAllocator.allocate.event({
-                            threadId: projection.thread.id,
-                          }),
-                          type: "context-handoff.updated",
-                          threadId: projection.thread.id,
-                          runId: run.id,
-                          providerInstanceId: run.providerInstanceId,
-                          occurredAt: updatedAt,
-                          payload: { ...handoff, updatedAt },
-                        },
-                      ],
-                    });
-                  }),
+                persist,
               });
             // Replaying a failed run's content into the same native thread is
             // optional. When it does not fit beside the native transcript, skip it
@@ -1613,6 +1758,15 @@ export const layer: Layer.Layer<
             if (!(yield* isCurrentAttemptInStatus("running"))) return;
             const start =
               compact && recoverySource === undefined ? session.compactThread! : session.startTurn;
+            const restore = restoreUnsentHandoffs(run.id, delivery.unsent);
+            const inlineWrites =
+              delivery.context !== "" && session.driver === "codex"
+                ? yield* makeInlinePromptWrites(restore)
+                : undefined;
+            if (inlineWrites !== undefined) {
+              // The native terminal can reach ingestion before the start call returns.
+              inlinePromptSettlement.register(inlineWrites.settle);
+            }
             const context = [delivery.context, restartNote]
               .filter((part) => part !== "")
               .join("\n\n");
@@ -1622,26 +1776,19 @@ export const layer: Layer.Layer<
               ...(promptedContinuation ? promptedInput : turnInput),
               message: {
                 ...turnInput.message,
-                text: context === "" ? userText : `${context}\n\nUser message:\n${userText}`,
+                text:
+                  context === ""
+                    ? turnInput.message.text
+                    : `${context}\n\nUser message:\n${turnInput.message.text}`,
               },
             }).pipe(
               // A pending marker would make the next turn abandon this native
               // session, though the refused prompt never reached it.
-              Effect.tapError((error) =>
-                refusedBeforePrompt(error)
-                  ? delivery.unsent.pipe(
-                      Effect.catchCause(() =>
-                        Effect.logWarning("Failed to restore unsent context handoffs", {
-                          runId: run.id,
-                        }),
-                      ),
-                    )
-                  : Effect.void,
-              ),
+              Effect.tapError((error) => (refusedBeforePrompt(error) ? restore : Effect.void)),
             );
             // The provider already accepted the turn. A stale pending marker
             // can force a fresh thread later, but must not stop live ingestion.
-            yield* delivery.delivered.pipe(
+            const recordDelivery = delivery.delivered.pipe(
               Effect.catchCause(() =>
                 Effect.logWarning("Failed to record accepted context handoff delivery", {
                   runId: run.id,
@@ -1649,6 +1796,7 @@ export const layer: Layer.Layer<
                 }),
               ),
             );
+            yield* inlineWrites?.markAccepted(recordDelivery) ?? recordDelivery;
           }).pipe(
             Effect.mapError((cause) =>
               cause._tag === "ProviderAdapterTurnStartError"
@@ -1669,13 +1817,21 @@ export const layer: Layer.Layer<
           !promptedContinuation
             ? session
             : makeDeliverySession(session, startWithHandoffs);
+        const boardSession =
+          teamBoard === undefined
+            ? deliverySession
+            : {
+                ...deliverySession,
+                startTurn: (turnInput: ProviderAdapter.ProviderAdapterV2TurnInput) =>
+                  startTurnWithBoardNotices(turnInput, deliverySession.startTurn, teamBoard),
+              };
         return runExecution.startRootRun({
           commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
           appThread: projection.thread,
           providerSessionId,
           session: Option.isNone(terminal)
-            ? deliverySession
-            : makeTerminalGuardedSession(terminal.value, deliverySession),
+            ? boardSession
+            : makeTerminalGuardedSession(terminal.value, boardSession),
           run: runningRun,
           rootNode: runningRootNode,
           checkpointScope,
@@ -1705,11 +1861,16 @@ export const layer: Layer.Layer<
               !acceptedAttempts.some((source) => source.nativeThreadId !== undefined)),
           shouldStartProviderTurn: runControls.shouldStartProviderTurn,
           shouldFinalizeRun: runControls.shouldFinalizeRun,
+          ...(deliverySession === session || session.driver !== "codex"
+            ? {}
+            : {
+                settleInlinePromptDelivery: inlinePromptSettlement.settle,
+              }),
           hasUnpairedRunInterruptRequest: runControls.hasUnpairedRunInterruptRequest,
           message: {
             messageId: message.id,
             text: userText,
-            attachments: message.attachments,
+            attachments: providerMessage.attachments,
             createdBy: message.createdBy,
             creationSource: message.creationSource,
             ...(message.scheduledTaskId === undefined

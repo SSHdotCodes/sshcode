@@ -326,3 +326,118 @@ it("keeps worktree and pending requests stable during output updates, then refle
   dispose();
   registry.dispose();
 });
+
+it("updates queue workflow when a stop interrupt request lands in turnItems without changing runs", () => {
+  const activeRunId = RunId.make("active-run");
+  const base: OrchestrationV2ThreadProjection = {
+    ...v2Projection,
+    runs: [
+      {
+        id: activeRunId,
+        threadId: v2Projection.thread.id,
+        ordinal: 1,
+        providerInstanceId: v2Projection.thread.providerInstanceId,
+        modelSelection: v2Projection.thread.modelSelection,
+        providerThreadId: null,
+        userMessageId: MessageId.make("message-1"),
+        rootNodeId: null,
+        activeAttemptId: null,
+        status: "running",
+        requestedAt: v2Now,
+        startedAt: v2Now,
+        completedAt: null,
+        checkpointId: null,
+        contextHandoffId: null,
+      },
+    ],
+  };
+  const source = Atom.make(
+    AsyncResult.success(
+      threadState({ data: Option.some(base), status: "live", error: Option.none() }),
+    ),
+  );
+  const details = createEnvironmentThreadDetailAtoms(() => source);
+  const registry = AtomRegistry.make();
+  const dispose = registry.mount(details.queueWorkflowAtom(ref));
+
+  const before = registry.get(details.queueWorkflowAtom(ref));
+  expect(before?.canSendSteer).toBe(true);
+
+  // Account-move interrupts must not disable steering or trigger spurious recomputations.
+  registry.set(
+    source,
+    AsyncResult.success(
+      threadState({
+        data: Option.some({
+          ...base,
+          turnItems: [
+            ...base.turnItems,
+            {
+              id: TurnItemId.make("account-move-interrupt"),
+              threadId: base.thread.id,
+              runId: activeRunId,
+              nodeId: null,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 1,
+              status: "completed",
+              title: null,
+              startedAt: v2Now,
+              completedAt: v2Now,
+              updatedAt: v2Now,
+              type: "run_interrupt_request",
+              forAccountMove: true,
+              message: "Moving account",
+            },
+          ],
+        }),
+        status: "live",
+        error: Option.none(),
+      }),
+    ),
+  );
+  expect(registry.get(details.queueWorkflowAtom(ref))).toBe(before);
+
+  // A user stop request arrives in turnItems while the run is still "running".
+  registry.set(
+    source,
+    AsyncResult.success(
+      threadState({
+        data: Option.some({
+          ...base,
+          turnItems: [
+            ...base.turnItems,
+            {
+              id: TurnItemId.make("user-stop-interrupt"),
+              threadId: base.thread.id,
+              runId: activeRunId,
+              nodeId: null,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 2,
+              status: "completed",
+              title: null,
+              startedAt: v2Now,
+              completedAt: v2Now,
+              updatedAt: v2Now,
+              type: "run_interrupt_request",
+              message: "Stopping turn",
+            },
+          ],
+        }),
+        status: "live",
+        error: Option.none(),
+      }),
+    ),
+  );
+  const afterStop = registry.get(details.queueWorkflowAtom(ref));
+  expect(afterStop?.canSendSteer).toBe(false);
+  expect(afterStop?.canPromoteToSteer).toBe(false);
+  expect(afterStop?.canSendNow).toBe(false);
+  dispose();
+  registry.dispose();
+});

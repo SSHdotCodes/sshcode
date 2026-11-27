@@ -36,7 +36,7 @@ const ownerKey = (scope: McpThreadInvocationScope) =>
   `${scope.environmentId}:${scope.thread.threadId}`;
 /** Words the fake model reacts to anywhere in a prompt (apps/server/scripts/acp-mock-agent.ts). */
 const FIXTURE_PROMPTS =
-  "qa:fail = provider error; qa:wait = 2 min run; qa:stream = 30 s text stream; qa:long = 300 tool calls; qa:secret, qa:ask, qa:delegate = secret card, question card, subagent";
+  "qa:fail = provider error; qa:wait = 2 min run; qa:stream = 30 s text stream; qa:long = 300 tool calls; qa:secret, qa:ask, qa:delegate = secret card, question card, subagent; qa:secret-parts = two-part secret card; qa:progress, qa:progress-team, qa:progress-todo = live progress (token use High); bots: qa:watch <chat id>, qa:message-bot <text>, qa:remember <text>";
 
 const summary = (sandbox: Sandbox) => ({
   id: sandbox.files.id,

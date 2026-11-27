@@ -31,6 +31,7 @@ const state = vi.hoisted(() => ({
   limited: false,
   helper: false,
   subagent: false,
+  bot: false,
   background: [] as Array<{ taskId: string; kind: "command" | "monitor" }>,
   delegatedChild: null as "running" | "approval" | "input" | null,
   nestedChild: false,
@@ -147,12 +148,14 @@ function mockThreads(merged: boolean) {
 
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: string) =>
-    atom === "snapshot"
-      ? { threads: mockThreads(true) }
-      : {
-          status: state.live ? "live" : "disconnected",
-          snapshot: Option.some({ threads: mockThreads(false) }),
-        },
+    atom === "bots"
+      ? new Set(state.bot ? ["thread-1"] : [])
+      : atom === "snapshot"
+        ? { threads: mockThreads(true) }
+        : {
+            status: state.live ? "live" : "disconnected",
+            snapshot: Option.some({ threads: mockThreads(false) }),
+          },
 }));
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => state.navigate,
@@ -185,6 +188,7 @@ vi.mock("../state/shell", () => ({
 }));
 vi.mock("../state/notificationRequests", () => ({ notificationThreadProjection: "load" }));
 vi.mock("../state/threads", () => ({
+  botThreadIdsAtom: () => "bots",
   threadFamilies: { snapshotAtom: () => "snapshot" },
   threadEnvironment: {
     waitForSendConnection: "wait",
@@ -250,6 +254,7 @@ beforeEach(() => {
     limited: false,
     helper: false,
     subagent: false,
+    bot: false,
     background: [],
     delegatedChild: null,
     nestedChild: false,
@@ -311,6 +316,20 @@ describe("thread notifications", () => {
       expect(state.showNative).not.toHaveBeenCalled();
     },
   );
+
+  it.each([true, false])("keeps a bot's home chat silent with focus=%s", async (focused) => {
+    state.bot = true;
+    state.focused = focused;
+    state.mode = "notifications-and-sound";
+    await render();
+    await complete();
+    state.input = true;
+    await render();
+    expect(state.sound).not.toHaveBeenCalled();
+    expect(state.add).not.toHaveBeenCalled();
+    expect(state.notification).not.toHaveBeenCalled();
+    expect(state.showNative).not.toHaveBeenCalled();
+  });
 
   it("alerts on the parent when its delegated subagent asks for approval", async () => {
     state.mode = "notifications-and-sound";

@@ -714,6 +714,47 @@ it.effect("thread.stop keeps a restart continuation of the stopped run from star
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("cancelling a queued message leaves an earlier restart continuation eligible", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = ThreadId.make("thread:restart-after-queue-cancel");
+    yield* createWatchingThread(threadId, 8);
+    yield* send(threadId, "first", "start_immediately");
+    yield* send(threadId, "queued", "queue_after_active");
+    const [source, queued] = (yield* orchestrator.getThreadProjection(threadId)).runs;
+    const now = yield* DateTime.now;
+    yield* projections.apply({
+      id: EventId.make("event:restart-after-queue-cancel:cut"),
+      type: "run.updated",
+      threadId,
+      runId: source!.id,
+      occurredAt: now,
+      payload: { ...source!, status: "cancelled", completedAt: now },
+    });
+    yield* orchestrator.dispatch({
+      type: "queued-run.cancel",
+      commandId: CommandId.make("cancel-queued-before-restart-continuation"),
+      threadId,
+      runId: queued!.id,
+    });
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("restart-continuation-after-queue-cancel"),
+      threadId,
+      messageId: MessageId.make("message:restart-continuation-after-queue-cancel"),
+      text: "Continue.",
+      attachments: [],
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "agent",
+      creationSource: "server",
+      restartContinuationOfRunId: source!.id,
+    });
+    const { runs } = yield* orchestrator.getThreadProjection(threadId);
+    assert.equal(runs[2]?.restartContinuationOfRunId, source!.id);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect.each(["thread.stop", "run.interrupt"] as const)(
   "a successful %s blocks a newer restart continuation when completion timestamps tie",
   (stopType) =>

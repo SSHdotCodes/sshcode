@@ -126,11 +126,18 @@ export function childThreadInputsTitle(
     : `${children.length} subagents need ${need}`;
 }
 
+const NO_PROJECT_IDS: ReadonlySet<string> = new Set();
+
 export function createEnvironmentThreadShellAtoms(input: {
   readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
   readonly snapshotAtom: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<OrchestrationV2ShellSnapshot | null>;
+  /**
+   * Threads that keep their point reads but stay out of every chat list, such as bot home
+   * chats, which show only in the Bots area. Keep the set's identity while its ids are the same.
+   */
+  readonly hiddenThreadIdsAtom?: (environmentId: EnvironmentId) => Atom.Atom<ReadonlySet<string>>;
 }) {
   // Point reads and aggregate lists share values without keeping an atom alive
   // for every listed thread. Replaced source objects can be collected.
@@ -171,6 +178,44 @@ export function createEnvironmentThreadShellAtoms(input: {
         : threads;
     }).pipe(Atom.withLabel(`environment-threads:${environmentId}`)),
   );
+
+  // What chat lists read: helpers and hidden threads left out. Work bookkeeping (running
+  // keep-alive, subagent requests) still reads `environmentThreadsAtom`.
+  const hiddenThreadIdsAtom = input.hiddenThreadIdsAtom;
+  const listedThreadsAtom =
+    hiddenThreadIdsAtom === undefined
+      ? environmentThreadsAtom
+      : Atom.family((environmentId: EnvironmentId) =>
+          Atom.make((get): ReadonlyArray<OrchestrationV2ThreadShell> => {
+            const threads = get(environmentThreadsAtom(environmentId));
+            const hidden = get(hiddenThreadIdsAtom(environmentId));
+            return hidden.size > 0 && threads.some((thread) => hidden.has(thread.id))
+              ? threads.filter((thread) => !hidden.has(thread.id))
+              : threads;
+          }).pipe(Atom.withLabel(`environment-listed-threads:${environmentId}`)),
+        );
+
+  // Projects whose every chat is hidden, such as the "No project" folder a bot's home chat
+  // created. Project lists leave them out; a project with no chats at all still shows.
+  const hiddenOnlyProjectIdsAtom = Atom.family((environmentId: EnvironmentId) => {
+    let previous: ReadonlySet<string> = NO_PROJECT_IDS;
+    return Atom.make((get): ReadonlySet<string> => {
+      const hidden =
+        hiddenThreadIdsAtom === undefined ? null : get(hiddenThreadIdsAtom(environmentId));
+      if (hidden === null || hidden.size === 0) return (previous = NO_PROJECT_IDS);
+      const hiddenOnly = new Set<string>();
+      const shown = new Set<string>();
+      for (const thread of get(environmentThreadsAtom(environmentId))) {
+        (hidden.has(thread.id) ? hiddenOnly : shown).add(thread.projectId);
+      }
+      for (const projectId of shown) hiddenOnly.delete(projectId);
+      if (hiddenOnly.size === previous.size && [...hiddenOnly].every((id) => previous.has(id))) {
+        return previous;
+      }
+      previous = hiddenOnly.size === 0 ? NO_PROJECT_IDS : hiddenOnly;
+      return previous;
+    }).pipe(Atom.withLabel(`environment-hidden-only-projects:${environmentId}`));
+  });
 
   const environmentThreadIndexAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get): ReadonlyMap<ThreadId, OrchestrationV2ThreadShell> => {
@@ -218,7 +263,7 @@ export function createEnvironmentThreadShellAtoms(input: {
   const environmentThreadRefsAtom = Atom.family((environmentId: EnvironmentId) => {
     let previous: ReadonlyArray<ScopedThreadRef> = [];
     return Atom.make((get) => {
-      const next = get(environmentThreadsAtom(environmentId)).map((thread) => ({
+      const next = get(listedThreadsAtom(environmentId)).map((thread) => ({
         environmentId,
         threadId: thread.id,
       }));
@@ -237,7 +282,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     > = EMPTY_THREAD_REFS_BY_PROJECT;
     return Atom.make((get) => {
       const grouped = new Map<ProjectId, ScopedThreadRef[]>();
-      for (const thread of get(environmentThreadsAtom(environmentId))) {
+      for (const thread of get(listedThreadsAtom(environmentId))) {
         const refs = grouped.get(thread.projectId);
         const ref = { environmentId, threadId: thread.id };
         if (refs === undefined) {
@@ -406,7 +451,7 @@ export function createEnvironmentThreadShellAtoms(input: {
       const next: EnvironmentThreadShell[] = [];
       for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
         const requests = get(pendingSubagentRequestsAtom(environmentId));
-        for (const thread of get(environmentThreadsAtom(environmentId))) {
+        for (const thread of get(listedThreadsAtom(environmentId))) {
           if (!include || include(thread)) next.push(scopedThread(environmentId, thread, requests));
         }
       }
@@ -430,6 +475,7 @@ export function createEnvironmentThreadShellAtoms(input: {
   return {
     modelManagerThreadRefAtom,
     environmentThreadsAtom,
+    hiddenOnlyProjectIdsAtom,
     environmentThreadIndexAtom,
     environmentThreadRefsAtom,
     environmentThreadRefsByProjectAtom,

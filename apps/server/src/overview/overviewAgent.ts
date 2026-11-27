@@ -31,6 +31,7 @@ export const AGENT_SURFACE_T3_MCP_TOOLS: ReadonlyArray<string> = [
   "council",
   "task_status",
   "task_cancel",
+  "team_board",
   "t3_workflow_stop",
   "schedule_task",
   "list_scheduled_tasks",

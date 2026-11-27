@@ -16,7 +16,9 @@ import type {
 import { resolveSettingsScope, type SettingsScopeSearch } from "./settingsScope";
 
 import { deriveProviderInstanceEntries } from "../../providerInstances";
+import { scheduledMessageLocalDateTime } from "@t3tools/client-runtime/scheduled-message";
 import {
+  createEmptyDraft,
   scheduledTaskModelSelection,
   matchesScheduledTaskScope,
   scheduleFromDraft,
@@ -396,6 +398,18 @@ it("round trips a scheduled message without changing its target workspace intent
   };
   expect(scheduleFromDraft(taskToDraft(task))).toEqual(task.schedule);
   expect(scheduleLabel(task.schedule)).toContain("Once");
+});
+
+it("computes empty draft one-shot default from the current time rather than module load time", () => {
+  const later = Date.parse("2030-06-15T12:00:00.000Z");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(later);
+  try {
+    expect(createEmptyDraft("project-1").onceAt).toBe(
+      scheduledMessageLocalDateTime(later + 3_600_000),
+    );
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 describe("finished one-time tasks", () => {

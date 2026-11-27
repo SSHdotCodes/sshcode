@@ -131,6 +131,7 @@ function stubCatalog(
       }),
     resolve: () => Effect.die("unused resolve"),
     maintenance: () => Effect.die("unused maintenance"),
+    pruneManagedVersions: () => Effect.die("unused"),
     uninstallManagedBinary: () => Effect.die("unused uninstall"),
     ...overrides,
   };

@@ -371,4 +371,44 @@ describe("Antigravity side questions", () => {
       assert.deepEqual(yield* harness.leftovers, []);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
+
+  it.effect.each([
+    {
+      stopReason: "end_turn",
+      text: "Usage Limit Reached\n\nYou have reached your current quota for this period.",
+      failure: "Usage Limit Reached",
+    },
+    { stopReason: "refusal", text: "I can't finish that.", failure: "refused this request" },
+    { stopReason: "max_tokens", text: "An unfinished reply", failure: "output token limit" },
+  ])("fails when a side question ends with $stopReason and text", ({ stopReason, text, failure }) =>
+    Effect.gen(function* () {
+      const first = yield* fixture("antigravity_transcript.ndjson");
+      const harness = yield* makeHarness([
+        {
+          ...first,
+          scenario: "antigravity_side_question_unsuccessful_stop",
+          entries: [
+            ...prefixUntilPrompt(first),
+            {
+              type: "expect_outbound",
+              frame: { kind: "request", method: "session/prompt", params: "<any>" },
+            },
+            update(sessionIdOf(first), {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text },
+            }),
+            {
+              type: "emit_inbound",
+              frame: { kind: "response", method: "session/prompt", result: { stopReason } },
+            },
+          ],
+        },
+      ]);
+      const result = yield* harness.ask("What codeword did I give you?");
+      assert.isTrue(Exit.isFailure(result.exit));
+      if (Exit.isFailure(result.exit)) assert.include(String(result.exit.cause), failure);
+      yield* harness.replayed;
+      assert.deepEqual(yield* harness.leftovers, []);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
 });

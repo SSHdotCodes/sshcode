@@ -87,6 +87,8 @@ export function assertClaudeBackgroundTaskWakeOutput(
     taskId: BACKGROUND_TASK_ID,
     description: "Background sleep test",
     kind: "command",
+    // Claude background commands wake the agent when they finish (445e5965c2).
+    wakesAgent: true,
   });
   assert.deepEqual(backgroundNotifications(projection), [
     {

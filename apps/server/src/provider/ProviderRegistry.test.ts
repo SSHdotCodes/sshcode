@@ -1786,6 +1786,38 @@ it.layer(
       });
     });
 
+    it("publishes a newly selected ACP version while model discovery is still refreshing", () => {
+      const previous = {
+        instanceId: ProviderInstanceId.make("acpRegistry_qwen_code"),
+        driver: ProviderDriverKind.make("acpRegistry"),
+        enabled: true,
+        installed: true,
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-11-26T23:00:00.000Z",
+        version: "0.28.4",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      } as const satisfies ServerProvider;
+      const refreshed = {
+        ...previous,
+        auth: { status: "unknown" },
+        checkedAt: "2026-11-26T23:01:00.000Z",
+        version: "0.28.7",
+        refreshing: true,
+      } as const satisfies ServerProvider;
+
+      const merged = ProviderRegistry.mergeProviderSnapshot(previous, refreshed);
+      assert.strictEqual(merged.version, "0.28.7");
+      assert.strictEqual(merged.checkedAt, refreshed.checkedAt);
+      assert.strictEqual(merged.refreshing, true);
+      assert.strictEqual(
+        ProviderRegistry.mergeProviderSnapshot(previous, { ...refreshed, version: null }).version,
+        previous.version,
+      );
+    });
+
     describe("Antigravity saved account", () => {
       const signedIn = {
         instanceId: ProviderInstanceId.make("antigravity-personal"),

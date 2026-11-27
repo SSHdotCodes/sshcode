@@ -26,6 +26,7 @@ import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import { secretRequestAnswerCommand } from "./secretRequestAnswer.ts";
+import { secretAnswerNoticeIds } from "@t3tools/client-runtime/secret-request";
 
 const instanceId = ProviderInstanceId.make("codex");
 const adapter = {
@@ -229,8 +230,16 @@ it.live.each([
             runs.find((run) => run.userMessageId === notices[0]!.id)?.status,
             ended ? "starting" : "queued",
           );
-          // Queued notices acquire their timeline row when their run starts.
-          if (ended) assert.isTrue(turnItems.some((item) => item.type === "notification"));
+          // Queued notices acquire their timeline row when their run starts. Clients
+          // draw that row only as the card's own, so it must be found from the card.
+          if (ended) {
+            const row = turnItems.find((item) => item.type === "notification");
+            assert.isDefined(row);
+            assert.deepEqual(
+              [...secretAnswerNoticeIds(turnItems.map((item) => ({ item })))],
+              [row!.id],
+            );
+          }
         }).pipe(Effect.provide(freshRuntime()));
       }
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),

@@ -1,8 +1,4 @@
-import {
-  mergeSidebarSearchMatches,
-  rankSidebarSearchResults,
-  withoutRemovedCheckout,
-} from "./Sidebar.logic";
+import { rankSidebarSearchResults, withoutRemovedCheckout } from "./Sidebar.logic";
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import * as DateTime from "effect/DateTime";
 import { deriveActiveWorkStartedAt } from "../session-logic.ts";
@@ -51,7 +47,6 @@ import {
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
   pullRequestMatchesSearchQuery,
-  searchSidebarThreads,
   shouldClearThreadSelectionOnMouseDown,
   shouldShowSidebarV2Duration,
   shouldRecedeSidebarThread,
@@ -84,7 +79,6 @@ import {
   resolveLastActivityAt,
   SIDEBAR_QUIET_AFTER_MS,
 } from "./Sidebar.logic";
-import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
 import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
 
@@ -1313,72 +1307,6 @@ describe("pullRequestMatchesSearchQuery", () => {
   it("rejects queries with a token the PR does not carry, and blank queries", () => {
     expect(pullRequestMatchesSearchQuery({ branchPullRequest }, "rebase 123")).toBe(false);
     expect(pullRequestMatchesSearchQuery({ branchPullRequest }, "   ")).toBe(false);
-  });
-});
-
-describe("searchSidebarThreads", () => {
-  const searchThread = (id: string, title: string, project: string) => ({
-    environmentId: localEnvironmentId,
-    id: ThreadId.make(id),
-    title,
-    project,
-  });
-  const threads = [
-    searchThread("thread-1", "Fix workspace search", "Alpha"),
-    searchThread("thread-2", "Review providers", "Workspace"),
-    searchThread("thread-3", "WORKTREE cleanup", "Beta"),
-  ];
-  const contentKeys = (...ids: ReadonlyArray<string>) =>
-    new Set(
-      ids.map((id) =>
-        threadSearchMatchKey({ environmentId: localEnvironmentId, threadId: ThreadId.make(id) }),
-      ),
-    );
-
-  it("matches thread titles case-insensitively, the title starting with the words first", () => {
-    expect(searchSidebarThreads(threads, "work")).toEqual([threads[2], threads[0]]);
-  });
-
-  it("keeps the sidebar order among equal matches", () => {
-    const fixes = [
-      searchThread("fix-b", "Fix login", "Alpha"),
-      searchThread("fix-a", "Fix logout", "Alpha"),
-    ];
-    expect(searchSidebarThreads(fixes, "fix")).toEqual(fixes);
-  });
-
-  it("finds a title by its words in any order", () => {
-    expect(searchSidebarThreads(threads, "cleanup worktree")).toEqual([threads[2]]);
-  });
-
-  it("does not match project metadata", () => {
-    expect(searchSidebarThreads(threads, "workspace")).toEqual([threads[0]]);
-  });
-
-  it("returns no results for an empty query", () => {
-    expect(searchSidebarThreads(threads, "   ")).toEqual([]);
-  });
-
-  it("appends content-only matches after every title match", () => {
-    expect(searchSidebarThreads(threads, "work", contentKeys("thread-2"))).toEqual([
-      threads[2],
-      threads[0],
-      threads[1],
-    ]);
-  });
-
-  it("lists a thread matching both title and content once", () => {
-    expect(searchSidebarThreads(threads, "work", contentKeys("thread-1"))).toEqual([
-      threads[2],
-      threads[0],
-    ]);
-  });
-
-  it("ignores content matches for threads outside the sidebar collection", () => {
-    expect(searchSidebarThreads(threads, "work", contentKeys("thread-missing"))).toEqual([
-      threads[2],
-      threads[0],
-    ]);
   });
 });
 
@@ -2973,97 +2901,48 @@ describe("holdSidebarOrder", () => {
   });
 });
 
-it("keeps unloaded content results in relevance order with keyboard-visible loaded results", () => {
-  const title = { environmentId: EnvironmentId.make("env"), id: ThreadId.make("title") };
-  const loaded = { environmentId: title.environmentId, id: ThreadId.make("loaded") };
-  const matches = ["archived", "loaded", "title"].map((id) => ({
-    environmentId: title.environmentId,
-    threadId: ThreadId.make(id),
-    projectId: ProjectId.make("p"),
-    source: "user" as const,
-    snippet: "match",
-    messageCreatedAt: null,
-  }));
-  const results = mergeSidebarSearchMatches([title], matches, [title, loaded]);
-  expect(results.map((row) => ("id" in row ? row.id : row.threadId))).toEqual([
-    "title",
-    "archived",
-    "loaded",
-  ]);
-});
-
-it("lists the chats a search names ahead of the chats that only mention its words", () => {
-  const environmentId = EnvironmentId.make("env");
-  const chat = (id: string, title: string, model: string, instanceId: string) => ({
-    environmentId,
+it("merges loaded chats and archived matches by topic, then by the row activity", () => {
+  const chat = (id: string, title: string, latestUserMessageAt: string, worktreePath?: string) => ({
+    environmentId: localEnvironmentId,
     id: ThreadId.make(id),
     title,
-    modelSelection: { model, instanceId },
+    ...(worktreePath ? { worktreePath } : {}),
+    latestUserMessageAt,
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatedAt: "2026-11-27T12:00:00.000Z",
+    pinnedAt: "2026-11-27T12:00:00.000Z",
   });
-  const mentions = chat(
-    "mentions",
-    "Find the Prompt for Bhbench",
-    "claude-opus-5-5",
-    "claudeAgent",
-  );
-  const ember = chat(
-    "ember",
-    "Build a Black Hole Simulation (Muse Ember)",
-    "muse-ember-1.0",
-    "muse",
-  );
-  const wonderOld = chat(
-    "wonder-old",
-    "Build Scientific Black Hole Simulation",
-    "muse-wonder-full-1.0",
-    "muse",
-  );
-  const wonderNew = chat(
-    "wonder-new",
-    "Build Scientific Black Hole Simulation",
-    "muse-wonder-full-1.0",
-    "muse",
-  );
-  const unfound = chat("unfound", "Black Hole Shader", "muse-wonder-full-1.0", "muse");
-  const offTopic = chat("off-topic", "Tax return", "muse-wonder-full-1.0", "muse");
-  const known = [mentions, ember, wonderOld, wonderNew, unfound, offTopic];
-  const matches = ["mentions", "archived", "ember", "wonder-old", "wonder-new"].map((id) => ({
-    environmentId,
-    threadId: ThreadId.make(id),
+  const known = [
+    chat("pinned-old-title", "Review and Fix BetterWright Issues", "2026-10-20T12:00:00.000Z"),
+    chat("newer-mention", "Release notes", "2026-11-27T11:51:00.000Z"),
+    chat(
+      "wanted",
+      "Review Pi Prompt Parts Change",
+      "2026-11-25T12:00:00.000Z",
+      "/work/https-github-com-betterwright-betterwright",
+    ),
+  ];
+  const matches = [
+    ["newer-mention", false, "2026-11-26T00:00:00.000Z"],
+    ["archived-topic", true, "2026-11-01T00:00:00.000Z"],
+    ["archived-mention", false, "2026-11-27T11:45:00.000Z"],
+  ].map(([id, about, activityAt]) => ({
+    environmentId: localEnvironmentId,
+    threadId: ThreadId.make(String(id)),
     projectId: ProjectId.make("p"),
     source: "user" as const,
-    snippet: "muse wonder full vs opus black hole",
+    snippet: "BetterWright",
     messageCreatedAt: null,
+    about: Boolean(about),
+    activityAt: String(activityAt),
   }));
-  const ids = (query: string) =>
-    rankSidebarSearchResults({ query, titles: [], matches, known, nameable: known }).map((row) =>
-      "id" in row ? row.id : row.threadId,
-    );
-  // Both Wonder Full black hole chats lead in the order they were found, a chat no search
-  // returned joins them on its name, then the chat naming fewer words, then mentions.
-  expect(ids("muse wonder full black hole")).toEqual([
-    "wonder-old",
-    "wonder-new",
-    "unfound",
-    "ember",
-    "mentions",
-    "archived",
-  ]);
-  // A model alone names a chat only when it carries every word, and adds no chat by itself.
-  expect(ids("muse wonder full")).toEqual([
-    "wonder-old",
-    "wonder-new",
-    "mentions",
-    "archived",
-    "ember",
-  ]);
-  // Nothing but filler words: the found order stands.
-  expect(ids("the one with")).toEqual([
-    "mentions",
-    "archived",
-    "ember",
-    "wonder-old",
-    "wonder-new",
+  const result = rankSidebarSearchResults({ query: "betterwright", known, matches });
+  expect(result.map((row) => ("id" in row ? row.id : row.threadId))).toEqual([
+    "wanted",
+    "archived-topic",
+    "pinned-old-title",
+    "newer-mention",
+    "archived-mention",
   ]);
 });
 

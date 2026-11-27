@@ -4,10 +4,14 @@ import { HomeInsights } from "./HomeInsights";
 import { HomeSky } from "./HomeSky";
 import { createInsightsViewport, InsightsViewportContext } from "./insightsViewport";
 import { workflowListHiddenKeys } from "../workflows/workflowVisibility";
+import { BotsStrip } from "../bots/BotsStrip";
+import { isBotThreadKey } from "../bots/botVisibility";
+import { useBotThreadKeys } from "../bots/state";
 import { HomeShortcutChips, HomeShortcutsRow } from "./HomeShortcutsRow";
 import { usePrivacyLabel } from "../../state/use-privacy-mode";
 import { CLAUDE_RC_TAB } from "@t3tools/contracts";
-import { ThreadSearchExtraMatches } from "../threads/ThreadSearchExtraMatches";
+import { ThreadSearchResultRow } from "../threads/ThreadSearchResultRow";
+import { ThreadSearchMoreButton } from "../threads/thread-search-match";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { pendingThreadSearchJumpAtom } from "@t3tools/client-runtime/state/thread-search";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -29,8 +33,9 @@ import {
 } from "@t3tools/client-runtime/state/shell";
 import {
   threadSearchMatchKey,
-  type EnvironmentThreadSearchMatch,
+  threadSearchContextTerms,
 } from "@t3tools/client-runtime/state/thread-search";
+import { useProjects } from "../../state/entities";
 import { useAtomValue } from "@effect/atom-react";
 import { useFocusEffect } from "@react-navigation/native";
 import { use, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
@@ -86,6 +91,7 @@ import { harnessMascotAgentId } from "@t3tools/shared/harnessMascots";
 import {
   buildSessionBoxListItems,
   homeListItemsAreEqual,
+  resolveSessionBoxMenuActions,
   type HomeListItem,
   type SessionBoxEntry,
 } from "../sessionBoxes/sessionBoxListItems";
@@ -106,7 +112,7 @@ import {
 } from "@t3tools/client-runtime/state/thread-sort";
 import {
   buildThreadListV2Items,
-  rankedContentSearchMatches,
+  mergeMobileThreadSearchResults,
   getThreadListV2OrderedSection,
   buildThreadListV2ListItems,
   resolveThreadListV2Status,
@@ -371,29 +377,39 @@ function HomeScreenContent(allProps: HomeScreenProps) {
     searchEnvironmentIds,
     chatTabs.selected === CLAUDE_RC_TAB ? "" : props.searchQuery,
   );
-  const threadSearchMatchByKey = useMemo(() => {
-    const matches = new Map<string, EnvironmentThreadSearchMatch>();
-    for (const match of threadSearch.matches) {
-      if (match.source === "user" || match.source === "assistant") {
-        matches.set(threadSearchMatchKey(match), match);
-      }
-    }
-    return matches;
-  }, [threadSearch.matches]);
   const workflowHiddenKeys = useMemo(
     () => workflowListHiddenKeys(props.childThreads ?? props.threads),
     [props.childThreads, props.threads],
   );
-  const extraSearchMatches = useMemo(
+  const botThreadKeys = useBotThreadKeys();
+  const searchMatches = useMemo(
     () =>
-      rankedContentSearchMatches(
-        props.threads,
-        threadSearch.matches.filter(
-          (match) => !workflowHiddenKeys.has(threadSearchMatchKey(match)),
-        ),
-        props.searchQuery,
+      threadSearch.matches.filter(
+        (match) =>
+          !workflowHiddenKeys.has(threadSearchMatchKey(match)) &&
+          !isBotThreadKey(botThreadKeys, match),
       ),
-    [props.threads, threadSearch.matches, props.searchQuery, workflowHiddenKeys],
+    [threadSearch.matches, workflowHiddenKeys, botThreadKeys],
+  );
+  const threadSearchMatchByKey = useMemo(
+    () => new Map(searchMatches.map((match) => [threadSearchMatchKey(match), match] as const)),
+    [searchMatches],
+  );
+  const projects = useProjects();
+  const projectByKey = useMemo(
+    () =>
+      new Map(
+        projects.map((project) => [`${project.environmentId}:${project.id}`, project] as const),
+      ),
+    [projects],
+  );
+  const searchContextOf = useCallback(
+    (thread: EnvironmentThreadShell) =>
+      threadSearchContextTerms(
+        thread,
+        projectByKey.get(`${thread.environmentId}:${thread.projectId}`),
+      ),
+    [projectByKey],
   );
   const handleSwipeableWillOpen = useCallback((methods: SwipeableMethods) => {
     if (openSwipeableRef.current !== methods) {
@@ -759,6 +775,8 @@ function HomeScreenContent(allProps: HomeScreenProps) {
         pendingOrder,
         threads: visibleThreads,
         searchQuery: props.searchQuery,
+        searchContextOf,
+        matchedThreadKeys: threadSearchMatchByKey,
         settlementEnvironmentIds,
         snoozeEnvironmentIds,
         queuedThreadKeys,
@@ -783,6 +801,8 @@ function HomeScreenContent(allProps: HomeScreenProps) {
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
       props.searchQuery,
+      searchContextOf,
+      threadSearchMatchByKey,
       visibleThreads,
     ],
   );
@@ -842,13 +862,11 @@ function HomeScreenContent(allProps: HomeScreenProps) {
     ],
   );
 
-  // Session boxes: rows of painted boxes grouped by what needs you. Search keeps the
-  // boxes too, each showing where it matched.
+  // Session boxes group the resting list by status.
   const [homeLayout] = useHomeListLayout();
   const [listWidth, setListWidth] = useState(0);
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const boxLayoutActive = !discord && homeLayout === "boxes";
-  const boxSearchQuery = props.searchQuery.trim();
   const boxSidePadding =
     (contentSideInsets?.left ?? 0) + (contentSideInsets?.right ?? 0) + (primaryColumn ? 16 : 0);
   const boxColumns = Math.max(
@@ -861,49 +879,49 @@ function HomeScreenContent(allProps: HomeScreenProps) {
           (listWidth - boxSidePadding - BOX_EDGE * 2 - BOX_GAP * (boxColumns - 1)) / boxColumns,
         )
       : 0;
+  const searchListItems = useMemo(
+    () =>
+      hasSearchQuery
+        ? mergeMobileThreadSearchResults({
+            items: threadListV2Items,
+            matches: searchMatches,
+            query: props.searchQuery,
+            contextOf: searchContextOf,
+          })
+        : threadListV2Items,
+    [hasSearchQuery, threadListV2Items, searchMatches, props.searchQuery, searchContextOf],
+  );
   const homeListItems = useMemo<ReadonlyArray<HomeListItem>>(
     () =>
-      discord
-        ? discordHomeList(
-            threadListV2Items,
-            collapsedCategories,
-            allProps.childThreads ?? [],
-            connectionPhases,
-          )
-        : boxLayoutActive && boxSize > 0
-          ? buildSessionBoxListItems({
-              items: threadListV2Items,
-              columns: boxColumns,
-              now: Date.parse(`${nowMinute}:00.000Z`),
+      hasSearchQuery
+        ? searchListItems
+        : discord
+          ? discordHomeList(
+              threadListV2Items,
+              collapsedCategories,
+              allProps.childThreads ?? [],
               connectionPhases,
-              ...(boxSearchQuery
-                ? {
-                    search: {
-                      query: boxSearchQuery,
-                      snippetFor: (thread: EnvironmentThreadShell) =>
-                        threadSearchMatchByKey.get(
-                          threadSearchMatchKey({
-                            environmentId: thread.environmentId,
-                            threadId: thread.id,
-                          }),
-                        )?.snippet ?? null,
-                    },
-                  }
-                : {}),
-            })
-          : threadListV2Items,
+            )
+          : boxLayoutActive && boxSize > 0
+            ? buildSessionBoxListItems({
+                items: threadListV2Items,
+                columns: boxColumns,
+                now: Date.parse(`${nowMinute}:00.000Z`),
+                connectionPhases,
+              })
+            : threadListV2Items,
     [
       discord,
       collapsedCategories,
       allProps.childThreads,
       boxLayoutActive,
       boxColumns,
-      boxSearchQuery,
       boxSize,
       nowMinute,
       connectionPhases,
       threadListV2Items,
-      threadSearchMatchByKey,
+      hasSearchQuery,
+      searchListItems,
     ],
   );
   const environmentLabels = useEnvironmentDisplayLabels();
@@ -915,15 +933,25 @@ function HomeScreenContent(allProps: HomeScreenProps) {
   const openBoxActions = useCallback(
     (entry: SessionBoxEntry) => {
       const thread = entry.thread;
-      const actions: Array<{ label: string; run: () => void; destructive?: boolean }> = [
-        { label: "Open", run: () => props.onSelectThread(thread) },
-        entry.pinned
-          ? { label: "Unpin", run: () => void props.onUnpinThread(thread) }
-          : { label: "Pin", run: () => void props.onPinThread(thread) },
-        { label: "Settle", run: () => void props.onSettleThread(thread) },
-        { label: "Rename", run: () => props.onRenameThread(thread) },
-        { label: "Archive", run: () => props.onArchiveThread(thread), destructive: true },
-      ];
+      const runForKind = {
+        open: () => props.onSelectThread(thread),
+        pin: () => void props.onPinThread(thread),
+        unpin: () => void props.onUnpinThread(thread),
+        settle: () => void props.onSettleThread(thread),
+        unsettle: () => void props.onUnsettleThread(thread),
+        unsnooze: () => void props.onUnsnoozeThread(thread),
+        rename: () => props.onRenameThread(thread),
+        archive: () => props.onArchiveThread(thread),
+      };
+      const actions = resolveSessionBoxMenuActions(entry, {
+        pinningSupported: pinningEnvironmentIds.has(thread.environmentId),
+        settlementSupported: settlementEnvironmentIds.has(thread.environmentId),
+        snoozeSupported: snoozeEnvironmentIds.has(thread.environmentId),
+      }).map((action) => ({
+        label: action.label,
+        destructive: action.destructive,
+        run: runForKind[action.kind],
+      }));
       if (Platform.OS === "ios") {
         ActionSheetIOS.showActionSheetWithOptions(
           {
@@ -945,7 +973,7 @@ function HomeScreenContent(allProps: HomeScreenProps) {
         { text: "Cancel", style: "cancel" as const },
       ]);
     },
-    [props, privateLabel],
+    [pinningEnvironmentIds, privateLabel, props, settlementEnvironmentIds, snoozeEnvironmentIds],
   );
 
   const selectSearchThread = useCallback(
@@ -958,7 +986,7 @@ function HomeScreenContent(allProps: HomeScreenProps) {
     },
     [props.onSelectThread, threadSearchMatchByKey],
   );
-  useThreadJumpShortcuts(threadListV2Items, selectSearchThread);
+  useThreadJumpShortcuts(searchListItems, selectSearchThread);
   useEffect(() => {
     if (swipeEnabled) activateVisibleRows(homeListItems);
   }, [activateVisibleRows, swipeEnabled, homeListItems]);
@@ -1089,6 +1117,15 @@ function HomeScreenContent(allProps: HomeScreenProps) {
   );
   const renderHomeItem = useCallback(
     ({ item }: { readonly item: HomeListItem }) => {
+      if (item.type === "v2-search-match") {
+        return (
+          <ThreadSearchResultRow
+            match={item.match}
+            query={props.searchQuery}
+            onSelectThread={selectThread}
+          />
+        );
+      }
       if (item.type === "discord-heading") {
         return (
           <Pressable
@@ -1191,6 +1228,8 @@ function HomeScreenContent(allProps: HomeScreenProps) {
     [
       boxSize,
       privateLabel,
+      props.searchQuery,
+      selectThread,
       machineLabelFor,
       openBoxActions,
       props.onSelectThread,
@@ -1327,6 +1366,7 @@ function HomeScreenContent(allProps: HomeScreenProps) {
             paddingTop: NATIVE_LIQUID_GLASS_SUPPORTED ? insets.top + 8 : 0,
           }}
         >
+          <BotsStrip onOpen={selectThread} />
           {chatTabStrip ?? <HomeShortcutsRow />}
           <View
             className="w-full max-w-[430px] flex-1 items-center justify-center self-center"
@@ -1382,6 +1422,10 @@ function HomeScreenContent(allProps: HomeScreenProps) {
       <OutboxRecovery threads={allProps.threads} />
       {!hasSearchQuery ? (
         <>
+          <BotsStrip
+            onOpen={selectThread}
+            backgroundClassName={primaryColumn ? "bg-drawer" : "bg-screen"}
+          />
           {machineChips}
           {listChatTabStrip}
         </>
@@ -1391,6 +1435,7 @@ function HomeScreenContent(allProps: HomeScreenProps) {
     <>
       <HomeTopContentSpacer />
       <OutboxRecovery threads={allProps.threads} />
+      {!hasSearchQuery ? <BotsStrip onOpen={selectThread} /> : null}
       {machineChips}
       {listChatTabStrip}
     </>
@@ -1417,12 +1462,7 @@ function HomeScreenContent(allProps: HomeScreenProps) {
       />
     );
 
-  if (
-    Platform.OS === "android" &&
-    threadListV2Items.length === 0 &&
-    extraSearchMatches.length === 0 &&
-    !threadSearch.pagination
-  ) {
+  if (Platform.OS === "android" && homeListItems.length === 0 && !threadSearch.pagination) {
     return (
       <View className="flex-1 bg-header">
         <View
@@ -1430,6 +1470,7 @@ function HomeScreenContent(allProps: HomeScreenProps) {
           style={{ paddingBottom: insets.bottom }}
         >
           <HomeTopContentSpacer />
+          {hasSearchQuery ? null : <BotsStrip onOpen={selectThread} />}
           {hasSearchQuery ? null : (chatTabStrip ?? <HomeShortcutsRow />)}
           <View className="flex-1 items-center justify-center px-4">
             <OutboxRecovery threads={allProps.threads} />
@@ -1489,19 +1530,12 @@ function HomeScreenContent(allProps: HomeScreenProps) {
               recycleItems
               extraData={v2ExtraData}
               ListHeaderComponent={v2ListHeader}
-              ListEmptyComponent={
-                extraSearchMatches.length || threadSearch.pagination ? null : v2ListEmpty
-              }
+              ListEmptyComponent={threadSearch.pagination ? null : v2ListEmpty}
               onEndReached={showsInsights ? revealInsights : undefined}
               onEndReachedThreshold={0.6}
               ListFooterComponent={
                 <>
-                  <ThreadSearchExtraMatches
-                    matches={extraSearchMatches}
-                    pagination={threadSearch.pagination}
-                    query={props.searchQuery}
-                    onSelectThread={selectThread}
-                  />
+                  <ThreadSearchMoreButton pagination={threadSearch.pagination} />
                   {showsInsights ? (
                     <InsightsViewportContext value={insightsViewport}>
                       <View ref={listEndRef} collapsable={false} onLayout={placeInsights} />

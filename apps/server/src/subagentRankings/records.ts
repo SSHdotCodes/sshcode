@@ -149,17 +149,21 @@ function stats(runs: ReadonlyArray<RunRecord>) {
 const TASK_KINDS = ["code", "ui", "review", "research", "other"] as const;
 
 /**
- * Kinds of task this model does clearly better or worse at than its own average (3+ rated
- * runs, a point or more apart), so a lead choosing a model for that kind sees it in the one
- * line it reads. Naming only the worse kinds made a model that reviews well and researches
- * badly look bad at everything.
+ * Kinds of task this model does clearly better or worse at (3+ rated runs, either a point
+ * off its overall score or >=1.5 points off the other kinds when those have 3+ rated runs).
+ * Comparing against the other kinds catches the dominant weak kind too (e.g. a model whose
+ * majority-research runs drag its overall score down while its reviews score well).
  */
 function kindNotes(runs: ReadonlyArray<RunRecord>): string {
   const overall = score(runs).average;
   if (Number.isNaN(overall)) return "";
   return TASK_KINDS.flatMap((kind) => {
     const { average, rated } = score(runs.filter((r) => r.kind === kind));
-    return rated >= 3 && Math.abs(average - overall) >= 1
+    if (rated < 3) return [];
+    const other = score(runs.filter((r) => r.kind !== kind));
+    const differsFromOverall = Math.abs(average - overall) >= 1;
+    const differsFromOthers = other.rated >= 3 && Math.abs(average - other.average) >= 1.5;
+    return differsFromOverall || differsFromOthers
       ? [` · ${kind} ${average.toFixed(1)}/${SUBAGENT_GRADE_MAX}`]
       : [];
   }).join("");

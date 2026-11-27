@@ -7,6 +7,8 @@ import { describe } from "vite-plus/test";
 
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ApiKeyStore from "../secrets/ApiKeyStore.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as XPostReader from "./XPostReader.ts";
 import * as XSearch from "./XSearch.ts";
 
 // Spends X API credits (up to 10 posts). Run through `sshcode secret run` so the key stays out of sight:
@@ -34,6 +36,8 @@ describe.runIf(process.env.T3_X_API_LIVE === "1")("X API search (live)", () => {
               listInstances: Effect.succeed([]),
             }),
           ),
+          Layer.provide(XPostReader.layer),
+          Layer.provide(ServerSettings.layerTest()),
         ),
       ),
     ),

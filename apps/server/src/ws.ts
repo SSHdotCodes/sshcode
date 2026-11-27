@@ -5,6 +5,7 @@ import { getBenchmarkFeed } from "./benchmarks/BenchmarkFeed.ts";
 import { getXPostPreview } from "./xPost/XPostPreviews.ts";
 import * as ProviderCredentials from "./provider/ProviderCredentials.ts";
 import * as ComputerUseService from "./computer/ComputerUseService.ts";
+import { TeamBoardError } from "@t3tools/contracts";
 import * as OutsideAgents from "./auth/OutsideAgents.ts";
 import * as TerminalHandoffService from "./orchestration-v2/TerminalHandoffService.ts";
 import * as ClaudeRcService from "./project/ClaudeRcService.ts";
@@ -35,7 +36,11 @@ import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import { rpcInitialItems } from "./rpcInitialItems.ts";
 import { rpcSerializationLayerFor, withChunkedMessages } from "./wsMessageCompression.ts";
-import { serverConfigTransport, serverSettingsConfigUpdates } from "./serverConfigTransport.ts";
+import {
+  providerRefreshReply,
+  serverConfigTransport,
+  serverSettingsConfigUpdates,
+} from "./serverConfigTransport.ts";
 import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
 import { subscribeCodexAuthCallback } from "./provider/CodexAuthCallback.ts";
 import {
@@ -143,8 +148,10 @@ import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as HarnessDefaultsService from "./harnessDefaults/HarnessDefaultsService.ts";
 import * as NotesService from "./notes/NotesService.ts";
 import { SubagentRankings } from "./subagentRankings/SubagentRankings.ts";
+import * as TeamBoard from "./teamBoard/TeamBoard.ts";
 import * as SharedSkills from "./sharedSkills/SharedSkills.ts";
 import * as WorkflowsService from "./workflows/WorkflowsService.ts";
+import * as BotService from "./bots/BotService.ts";
 import * as SideChatService from "./sideChat/SideChatService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
@@ -1493,8 +1500,10 @@ export const layerWsRpc = (
       const mcpAppRequests = yield* McpAppRequests.McpAppRequests;
       const notes = yield* NotesService.NotesService;
       const subagentRankings = yield* SubagentRankings;
+      const teamBoard = yield* Effect.serviceOption(TeamBoard.TeamBoard);
       const sharedSkills = yield* SharedSkills.SharedSkills;
       const workflows = yield* WorkflowsService.WorkflowsService;
+      const bots = yield* BotService.BotService;
       const casualVoice = yield* CasualVoice.CasualVoice;
       const modelManager = yield* ModelManager.ModelManager;
       const claudeRc = yield* ClaudeRcService.ClaudeRcService;
@@ -2548,7 +2557,7 @@ export const layerWsRpc = (
                 providers = yield* providerRegistry.refreshInstance(instance.instanceId);
               }
             }
-            return { providers };
+            return providerRefreshReply(providers, input);
           }),
         [WS_METHODS.mcpAppsCallTool]: (input) => mcpAppRequests.callTool(input),
         [WS_METHODS.harnessDefaultsSubscribe]: () => harnessDefaults.subscribe(),
@@ -2560,11 +2569,19 @@ export const layerWsRpc = (
         [WS_METHODS.workflowsMutate]: (input) => workflows.mutate(input),
         [WS_METHODS.workflowsCompile]: (input) => workflows.compile(input),
         [WS_METHODS.workflowsStart]: (input) => workflows.start(input),
+        [WS_METHODS.botsSubscribe]: () => bots.subscribe(),
+        [WS_METHODS.botsMutate]: (input) => bots.mutate(input),
         [WS_METHODS.notesSubscribe]: () => notes.subscribe(),
         [WS_METHODS.notesMutate]: (input) => notes.mutate(input),
         [WS_METHODS.subagentRankingsSubscribe]: () => subagentRankings.subscribe(),
         [WS_METHODS.subagentRankingsToggleThumb]: (input) =>
           subagentRankings.toggleThumb(input.taskId, input.thumb),
+        [WS_METHODS.teamBoardSubscribe]: (input) =>
+          Option.isSome(teamBoard) ? teamBoard.value.subscribe(input) : Stream.empty,
+        [WS_METHODS.teamBoardPost]: (input) =>
+          Option.isSome(teamBoard)
+            ? teamBoard.value.postUser(input)
+            : Effect.fail(new TeamBoardError({ message: "Team board is unavailable." })),
         [WS_METHODS.sharedSkillsList]: () => sharedSkills.list,
         [WS_METHODS.sharedSkillsCommand]: (input) => sharedSkills.command(input),
         [WS_METHODS.casualVoice]: (input) => casualVoice.request(input),

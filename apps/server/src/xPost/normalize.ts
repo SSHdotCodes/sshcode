@@ -167,6 +167,12 @@ export function normalizePost(
     ],
     id,
   );
+  // X's embed endpoint escapes &, < and > as HTML entities, as its API does; fx sends plain text.
+  if (source === "syndication") {
+    text = text.replace(/&(amp|lt|gt);/gu, (_entity, name: string) =>
+      name === "amp" ? "&" : name === "lt" ? "<" : ">",
+    );
+  }
   const a = record(p.article);
   const content = record(a.content);
   const entitiesInArticle = Array.isArray(content.entityMap)

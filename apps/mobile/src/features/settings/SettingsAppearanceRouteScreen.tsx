@@ -1,4 +1,8 @@
-import { useChatBackdropEnabled, useNewChatDashboardEnabled } from "../threads/useNewChatDashboard";
+import {
+  useChatBackdropEnabled,
+  useNewChatDashboardEnabled,
+  useWebsiteIconsEnabled,
+} from "../threads/useNewChatDashboard";
 import { DiscordProfileSetting } from "../discord/DiscordProfileSetting";
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -28,6 +32,7 @@ export function SettingsAppearanceRouteScreen() {
   const privacy = usePrivacySetting();
   const [newChatDashboardEnabled, setNewChatDashboardEnabled] = useNewChatDashboardEnabled();
   const [chatBackdropEnabled, setChatBackdropEnabled] = useChatBackdropEnabled();
+  const [websiteIconsEnabled, setWebsiteIconsEnabled] = useWebsiteIconsEnabled();
   const [bedsideEnabled, setBedsideEnabled] = useBedsideScreenEnabled();
   const [bedsidePreview, setBedsidePreview] = useState(false);
 
@@ -57,6 +62,13 @@ export function SettingsAppearanceRouteScreen() {
             subtitle="Keep the dimmed horizon behind conversations on this device. It glows while the agent works and holds brighter while it waits on you."
             value={chatBackdropEnabled}
             onValueChange={setChatBackdropEnabled}
+          />
+          <SettingsSwitchRow
+            icon="globe"
+            label="Website icons"
+            subtitle="Real site icons instead of letter tiles. Fetching them tells Google's icon service, or the site itself, which sites appear in your chats."
+            value={websiteIconsEnabled}
+            onValueChange={setWebsiteIconsEnabled}
           />
           <SettingsSwitchRow
             icon="moon"

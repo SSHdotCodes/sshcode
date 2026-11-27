@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
-import { DEFAULT_RESOLVED_KEYBINDINGS, parseKeybindingShortcut } from "@t3tools/shared/keybindings";
+import {
+  compileResolvedKeybindingsConfig,
+  DEFAULT_RESOLVED_KEYBINDINGS,
+  parseKeybindingShortcut,
+} from "@t3tools/shared/keybindings";
 
 import {
   buildKeybindingRows,
@@ -465,5 +469,16 @@ describe("KeybindingsSettings.logic", () => {
     expect(caps("c", "MacIntel")).toEqual(["C"]);
     expect(caps("mod+shift+b", "Win32")).toEqual(["Ctrl", "Shift", "B"]);
     expect(caps("meta+alt+escape", "Linux x86_64")).toEqual(["Alt", "Meta", "Esc"]);
+  });
+  it("treats a true condition like no condition when reporting conflicts", () => {
+    const rows = buildKeybindingRows(
+      compileResolvedKeybindingsConfig([
+        { command: "chat.new", key: "mod+k", when: "true" },
+        { command: "chat.newLocal", key: "mod+k", when: "terminalFocus" },
+      ]),
+      "",
+    );
+
+    expect(rows.map((row) => row.conflicts)).toEqual([["Chat: New Local"], ["Chat: New"]]);
   });
 });

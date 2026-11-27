@@ -117,6 +117,8 @@ export interface Preferences {
   /** The empty new-chat dashboard; unset means on for this device. */
   readonly newChatDashboardEnabled?: boolean;
   readonly chatBackdropEnabled?: boolean;
+  /** Network site icons on tool activity; unset follows `WEBSITE_ICONS_DEFAULT`. */
+  readonly websiteIconsEnabled?: boolean;
   /** The charging clock over the chat list after a minute idle; unset means on. */
   readonly bedsideScreenEnabled?: boolean;
   /** Suggests a model for a new chat's first message; unset means on. */
@@ -217,6 +219,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     overviewEnabled?: boolean;
     newChatDashboardEnabled?: boolean;
     chatBackdropEnabled?: boolean;
+    websiteIconsEnabled?: boolean;
     bedsideScreenEnabled?: boolean;
     autoModelEnabled?: boolean;
     modelFavorites?: Preferences["modelFavorites"];
@@ -360,6 +363,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.chatBackdropEnabled === "boolean") {
     preferences.chatBackdropEnabled = parsed.chatBackdropEnabled;
+  }
+  if (typeof parsed.websiteIconsEnabled === "boolean") {
+    preferences.websiteIconsEnabled = parsed.websiteIconsEnabled;
   }
   if (typeof parsed.bedsideScreenEnabled === "boolean") {
     preferences.bedsideScreenEnabled = parsed.bedsideScreenEnabled;

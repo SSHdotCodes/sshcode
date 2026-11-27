@@ -1,4 +1,6 @@
 import { isWorkflowThread } from "../workflows/workflowVisibility";
+import { withoutBotThreads } from "../bots/botVisibility";
+import { useBotThreadKeys } from "../bots/state";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useUiMode } from "../discord/useUiMode";
 import { resolveThreadListV2Status } from "../threads/threadListV2";
@@ -63,12 +65,18 @@ export function HomeRouteScreen() {
   // Discord nests children under their parent. Search also needs them to recognize
   // workflow descendants. Other Home layouts only read top-level chats.
   const withChildren = uiMode === "discord" || searchQuery.trim().length > 0;
-  const threads = useAtomValueWhileVisible(
+  const allThreads = useAtomValueWhileVisible(
     withChildren ? homeThreadShells.threadShellsAtom : homeThreadShells.topLevelThreadShellsAtom,
     visible,
   );
   const readOnlyEnvironmentIds = useAtomValue(shellPreviewPresentation.readOnlyEnvironmentIdsAtom);
   const previewCounts = useAtomValue(shellPreviewPresentation.countsAtom);
+  // Bot home chats live in the Bots strip, never in the list, its search or its counts.
+  const botThreadKeys = useBotThreadKeys();
+  const threads = useMemo(
+    () => withoutBotThreads(allThreads, botThreadKeys),
+    [allThreads, botThreadKeys],
+  );
   const navigationThreads = useMemo(
     () =>
       threads.filter(
@@ -187,7 +195,7 @@ export function HomeRouteScreen() {
               ? () =>
                   navigation.navigate("SettingsSheet", {
                     screen: "SettingsContent",
-                    params: { screen: "SettingsEnvironmentNew" },
+                    params: { screen: "SettingsEnvironmentNew", initial: false },
                   })
               : undefined
           }
@@ -221,7 +229,7 @@ export function HomeRouteScreen() {
                 onOpenEnvironments: () =>
                   navigation.navigate("SettingsSheet", {
                     screen: "SettingsContent",
-                    params: { screen: "SettingsEnvironments" },
+                    params: { screen: "SettingsEnvironments", initial: false },
                   }),
               }),
               headerShown: Platform.OS !== "android",
@@ -234,7 +242,7 @@ export function HomeRouteScreen() {
           onOpenEnvironments={() =>
             navigation.navigate("SettingsSheet", {
               screen: "SettingsContent",
-              params: { screen: "SettingsEnvironments" },
+              params: { screen: "SettingsEnvironments", initial: false },
             })
           }
           onOpenSettings={() =>
@@ -262,7 +270,7 @@ export function HomeRouteScreen() {
             onAddConnection={() =>
               navigation.navigate("SettingsSheet", {
                 screen: "SettingsContent",
-                params: { screen: "SettingsEnvironmentNew" },
+                params: { screen: "SettingsEnvironmentNew", initial: false },
               })
             }
             onArchiveThread={archiveThread}

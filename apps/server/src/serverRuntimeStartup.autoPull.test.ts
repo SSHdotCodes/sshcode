@@ -1,3 +1,5 @@
+import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
 import { DEFAULT_SERVER_SETTINGS, EnvironmentId, ProjectId } from "@t3tools/contracts";
@@ -23,6 +25,7 @@ import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeReco
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
+import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
@@ -41,6 +44,7 @@ it.effect("parks automatic pull until activation without delaying command readin
       const commitTrial = yield* Deferred.make<void>();
       const statusCalled = yield* Deferred.make<string>();
       const statusInterrupted = yield* Deferred.make<void>();
+      const pruned = yield* Deferred.make<void>();
       const cwd = "/auto-pull-project";
       const updatedAt = "2026-01-01T00:00:00.000Z";
       const snapshot = {
@@ -70,6 +74,11 @@ it.effect("parks automatic pull until activation without delaying command readin
       const dependencies: Layer.Layer<
         Layer.Services<ReturnType<typeof ServerRuntimeStartup.layerWithOptions>>
       > = Layer.mergeAll(
+        SqlitePersistence.layerMemory.pipe(Layer.orDie),
+        NodeFileSystem.layer,
+        Layer.mock(AcpRegistrySupport.AcpRegistryCatalog)({
+          pruneManagedVersions: () => Deferred.succeed(pruned, undefined).pipe(Effect.as([])),
+        }),
         Layer.mock(ServerConfig.ServerConfig)({
           ...(yield* ServerConfig.deriveServerPaths(cwd, undefined).pipe(
             Effect.provide(Path.layer),
@@ -183,6 +192,7 @@ it.effect("parks automatic pull until activation without delaying command readin
         // Race the two receipts so that regression fails without a timeout.
         yield* Effect.raceFirst(Deferred.await(prepared), Deferred.await(statusCalled));
         expect(yield* Deferred.isDone(activation)).toBe(false);
+        expect(yield* Deferred.isDone(pruned)).toBe(false);
         expect(yield* Deferred.isDone(statusCalled)).toBe(false);
         expect(yield* Deferred.isDone(prepared)).toBe(true);
 
@@ -191,6 +201,7 @@ it.effect("parks automatic pull until activation without delaying command readin
         expect(yield* Deferred.await(statusCalled)).toBe(cwd);
         // statusDetails can never finish; readiness must not depend on it.
         yield* startup.awaitCommandReady;
+        yield* Deferred.await(pruned);
       }).pipe(
         Effect.provide(
           ServerRuntimeStartup.layerWithOptions({

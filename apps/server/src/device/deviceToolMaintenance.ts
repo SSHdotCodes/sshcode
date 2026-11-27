@@ -1,11 +1,15 @@
 // @effect-diagnostics preferSchemaOverJson:off - JSON string literals safely embed paths and arguments in generated JavaScript.
-import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
-import * as ProcessRunner from "../processRunner.ts";
+import * as FileSystem from "effect/FileSystem";
+import {
+  isManagedToolVersion,
+  pruneManagedToolVersions,
+  type ManagedToolProcesses,
+} from "@t3tools/shared/managedToolRetention";
 import { AGENT_DEVICE_VERSION, DEVICE_HUB_VERSION } from "./DeviceToolchain.ts";
 
-/** Shared with the SSH bootstrap. Cleanup runs only after successful startup. */
+/** Standalone SSH bootstrap, which runs on a host without the server bundle. */
 export const deviceToolMaintenanceScript = String.raw`
 const maintenanceFs = require('node:fs');
 const maintenancePath = require('node:path');
@@ -96,56 +100,29 @@ function pruneTools(root, specs, flat) {
 }
 `;
 
-class DeviceToolMaintenanceError extends Schema.TaggedError<DeviceToolMaintenanceError>()(
-  "DeviceToolMaintenanceError",
-  {
-    operation: Schema.Literal("prune"),
-    tool: Schema.Literals(["hub", "agent"]),
-    exitCode: Schema.NullOr(Schema.Int),
-    cause: Schema.Defect(),
-  },
-) {
-  override get message() {
-    return `Device tool ${this.operation} failed for ${this.tool} (exit code ${this.exitCode ?? "unknown"}).`;
-  }
-}
-
-const runMaintenance = Effect.fn("DeviceToolchain.maintenance")(function* (
-  nodePath: string,
-  script: string,
-  operation: "prune",
-  tool: "hub" | "agent",
-) {
-  const runner = yield* ProcessRunner.ProcessRunner;
-  const result = yield* runner.run({
-    command: nodePath,
-    args: [
-      "-e",
-      deviceToolMaintenanceScript +
-        "\n" +
-        script +
-        ".catch(error => { console.error(error.message); process.exitCode = 1; });",
-    ],
-  });
-  if (result.code !== 0)
-    return yield* new DeviceToolMaintenanceError({
-      operation,
-      tool,
-      exitCode: result.code,
-      cause: result,
-    });
-});
-
 export const pruneLocalDeviceTools = Effect.fn("DeviceToolchain.prune")(function* (
   baseDir: string,
-  nodePath: string,
   tool: "hub" | "agent",
+  options?: { dryRun?: boolean; processes?: Effect.Effect<ManagedToolProcesses | null> },
 ) {
   const path = yield* Path.Path;
-  yield* runMaintenance(
-    nodePath,
-    `pruneTools(${JSON.stringify(path.join(baseDir, "tools"))}, ${JSON.stringify(tool === "hub" ? [["expo-device-hub", DEVICE_HUB_VERSION]] : [["agent-device", AGENT_DEVICE_VERSION]])}, false)`,
-    "prune",
-    tool,
-  );
+  const fs = yield* FileSystem.FileSystem;
+  const toolsDirectory = path.join(baseDir, "tools");
+  const [name, current] =
+    tool === "hub"
+      ? ["expo-device-hub", DEVICE_HUB_VERSION]
+      : ["agent-device", AGENT_DEVICE_VERSION];
+  return yield* pruneManagedToolVersions({
+    toolsDirectory,
+    versionsDirectory: path.join(toolsDirectory, name),
+    current,
+    isVersion: (version) =>
+      isManagedToolVersion(version) && version.localeCompare(current, "en", { numeric: true }) <= 0,
+    completed: (version, directory) =>
+      fs.readFileString(path.join(directory, ".install-complete")).pipe(
+        Effect.map((sentinel) => sentinel.trim() === version),
+        Effect.orElseSucceed(() => false),
+      ),
+    ...options,
+  });
 });

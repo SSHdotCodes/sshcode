@@ -1,5 +1,6 @@
 import { ThreadMediaHistory } from "@t3tools/client-runtime/state/threads";
 import { useAtomValue } from "@effect/atom-react";
+import { createBotThreadIdsAtom } from "@t3tools/client-runtime/state/bots";
 import { enabledEnvironmentIds } from "@t3tools/client-runtime/state/connections";
 import { arrayElementsEqual } from "@t3tools/client-runtime/state/entities";
 import {
@@ -26,6 +27,7 @@ import { useEffect } from "react";
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
+import { serverEnvironment } from "./server";
 import { environmentShell } from "./shell";
 
 export const threadFamilies = createThreadFamilyAtoms(
@@ -42,13 +44,17 @@ const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRunti
 export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
   environmentThreads.stateAtom,
 );
+/** Bot home chats show only in the Bots area, so every chat list leaves them out. */
+export const botThreadIdsAtom = createBotThreadIdsAtom(serverEnvironment.settingsValueAtom);
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: threadEnvironment.snapshotAtom,
+  hiddenThreadIdsAtom: botThreadIdsAtom,
 });
 export const threadPickerShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: threadFamilies.allSnapshotAtom,
+  hiddenThreadIdsAtom: botThreadIdsAtom,
 });
 
 export const createdChatShellAtom = createCreatedChatShellAtoms(

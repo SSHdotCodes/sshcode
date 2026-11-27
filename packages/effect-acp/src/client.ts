@@ -43,6 +43,15 @@ const decodeNoticeUpdate = Schema.decodeUnknownOption(
   }),
 );
 
+// Some agents negotiate v2 but still send v1's whole-list `plan` update. Read it as the plan it
+// is, so their todo list shows instead of an "unsupported update" row.
+const decodeLegacyPlanUpdate = Schema.decodeUnknownOption(
+  Schema.Struct({
+    sessionUpdate: Schema.Literal("plan"),
+    entries: Schema.Array(AcpSchemaV2.PlanEntry),
+  }),
+);
+
 export interface AcpClientOptions {
   readonly logIncoming?: boolean;
   readonly logOutgoing?: boolean;
@@ -581,6 +590,8 @@ function normalizeSessionUpdate(
     default: {
       const notice = decodeNoticeUpdate(update);
       if (Option.isSome(notice)) return { ...base, update: notice.value };
+      const legacyPlan = decodeLegacyPlanUpdate(update);
+      if (Option.isSome(legacyPlan)) return { ...base, update: legacyPlan.value };
       return {
         ...base,
         update: {

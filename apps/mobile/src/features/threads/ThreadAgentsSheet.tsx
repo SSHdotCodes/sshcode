@@ -1,3 +1,4 @@
+import { TeamBoardPresenceChip } from "./TeamBoardPresenceChip";
 import { SubagentGradeBadge } from "./SubagentGradeBadge";
 import { useUiMode } from "../discord/useUiMode";
 import { DiscordMainMembers, DiscordMember } from "../discord/DiscordMembers";
@@ -304,12 +305,21 @@ function AgentRow(props: {
   const presentation = resolveSubagentRowPresentation(subagent, props.connectionState);
   const paused = resolveSubagentRowPresentation(subagent).live && !presentation.live;
   const grade = (
-    <SubagentGradeBadge
-      environmentId={props.environmentId}
-      taskId={subagent.id}
-      origin={subagent.origin}
-      status={subagent.status}
-    />
+    <>
+      {subagent.origin === "app_owned" ? (
+        <TeamBoardPresenceChip
+          environmentId={props.environmentId}
+          threadId={subagent.threadId}
+          taskId={subagent.id}
+        />
+      ) : null}
+      <SubagentGradeBadge
+        environmentId={props.environmentId}
+        taskId={subagent.id}
+        origin={subagent.origin}
+        status={subagent.status}
+      />
+    </>
   );
   const row =
     uiMode === "discord" ? (
@@ -382,7 +392,7 @@ function AgentElapsed(props: {
 }) {
   const elapsed = useSubagentElapsed(props.subagent, props.tickSeconds);
   return elapsed === null ? null : (
-    <Text className="shrink-0 text-xs tabular-nums text-foreground-muted">{elapsed}</Text>
+    <Text className="shrink-0 text-xs text-foreground-muted">{elapsed}</Text>
   );
 }
 

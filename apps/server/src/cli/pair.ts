@@ -78,7 +78,7 @@ export class NoRunningServerError extends Schema.TaggedError<NoRunningServerErro
     return [
       "No running SSHCode server found.",
       ...this.checkedStatePaths.map((statePath) => `  checked ${statePath}`),
-      "Start one with `npx sshcode serve`, or connect this machine with T3 Connect: `npx sshcode connect`.",
+      "Start one with `sshcode serve` or the SSHCode app, or connect this machine with T3 Connect: `sshcode connect`.",
     ].join("\n");
   }
 }

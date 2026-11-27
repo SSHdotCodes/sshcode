@@ -5,6 +5,7 @@
  * agent works, and flares when one needs you. Atmosphere only: the chats stay the
  * brightest thing on screen.
  */
+import { useWithoutBotThreads } from "../bots/state";
 import { useIsFocused } from "@react-navigation/native";
 import { chatBackdropPalette } from "@t3tools/client-runtime/new-chat-dashboard";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
@@ -58,7 +59,7 @@ const MAX_TONES = 4;
  * harnesses that started at least a tenth of the chats.
  */
 function useSkyMood() {
-  const threads = useThreadShells();
+  const threads = useWithoutBotThreads(useThreadShells());
   const resolver = useHarnessResolver();
   const { insights, harnesses } = useHomeInsights();
   let mood: SkyMood = "idle";

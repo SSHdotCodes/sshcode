@@ -52,19 +52,25 @@ export function composerDraftHasUserContent(draft: ComposerDraft): boolean {
 }
 
 /**
- * A draft's row title: what the user wrote. Attached pictures sit in the text as chips whose
- * labels are file names ("IMG_0006.jpg"), which say nothing in a list, so they are counted
- * instead of read out.
+ * A draft or queued new task's row title: what the user wrote. Attached pictures sit in the
+ * text as chips whose labels are file names ("IMG_0006.jpg"), which say nothing in a list, so
+ * they are counted instead of read out.
  */
-function draftTitle(draft: ComposerDraft): string {
-  const written = replaceComposerContextReferences(draft.text, (reference) =>
+export function derivePendingTaskTitle(input: {
+  readonly text: string;
+  readonly attachments: ReadonlyArray<{ readonly type: string }>;
+}): string {
+  const written = replaceComposerContextReferences(input.text, (reference) =>
     reference.kind === "image" ? "" : reference.source,
   );
   if (written.trim().length > 0) {
     return deriveThreadTitleFromPrompt(written);
   }
-  const count = draft.attachments.length;
-  if (count > 0 && draft.attachments.every((attachment) => attachment.type === "image")) {
+  const count = input.attachments.length;
+  if (count === 0) {
+    return deriveThreadTitleFromPrompt(written);
+  }
+  if (input.attachments.every((attachment) => attachment.type === "image")) {
     return count === 1 ? "1 photo" : `${count} photos`;
   }
   return count === 1 ? "1 attachment" : `${count} attachments`;
@@ -87,7 +93,7 @@ export function buildPendingNewTasks(input: {
       projectTitle: message.creation.projectTitle,
       projectCwd: message.creation.projectCwd,
       branch: message.creation.branch,
-      title: deriveThreadTitleFromPrompt(message.text),
+      title: derivePendingTaskTitle(message),
       createdAt: message.createdAt,
       message,
       creation: message.creation,
@@ -105,7 +111,7 @@ export function buildPendingNewTasks(input: {
       projectTitle: undefined,
       projectCwd: undefined,
       branch: draft.workspaceSelection?.branch ?? null,
-      title: draftTitle(draft),
+      title: derivePendingTaskTitle(draft),
       createdAt: draft.project.createdAt,
       draftKey,
       draft,

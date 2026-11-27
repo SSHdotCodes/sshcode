@@ -167,7 +167,7 @@ function makeAcpRegistryRuntime(
     Effect.gen(function* () {
       const { processEnvironment, ...runtimeInput } = input;
       const resolved = yield* catalog
-        .resolve(options.settings, input.cwd, options.environment)
+        .resolve(options.settings, input.cwd, options.environment, { waitForSelfUpdate: true })
         .pipe(
           Effect.mapError(
             (cause) =>

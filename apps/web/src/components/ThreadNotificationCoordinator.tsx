@@ -27,7 +27,7 @@ import {
 import { splitPaneIndex, useSplitChatStore } from "../splitChatStore";
 import { useEnvironmentIds } from "../state/environments";
 import { environmentShell } from "../state/shell";
-import { threadFamilies } from "../state/threads";
+import { botThreadIdsAtom, threadFamilies } from "../state/threads";
 import {
   hasDesktopNotifications,
   hasNotificationSound,
@@ -150,6 +150,8 @@ function EnvironmentNotifications({
   const snapshot = useAtomValue(threadFamilies.snapshotAtom(environmentId));
   // The merged rows include idle ancestors needed to route a nested subagent's request.
   const threads = shellStatus === "live" ? (snapshot?.threads ?? null) : null;
+  // Bot home chats speak through the Bots area and the bot's own alerts, not chat notifications.
+  const botThreadIds = useAtomValue(botThreadIdsAtom(environmentId));
   const mode = useClientSettings((settings) => settings.notificationMode);
   const notificationSoundEvents = useClientSettings((settings) => settings.notificationSoundEvents);
   const inAppNotificationsEnabled = useClientSettings(
@@ -181,7 +183,11 @@ function EnvironmentNotifications({
     const subagentRequests = pendingSubagentRequestsByThread(threads);
     for (const rawThread of threads) {
       // Helpers answer in their own UI rather than through chat notifications.
-      if (rawThread.lineage.relationshipToParent === "subagent" || isHelperThreadId(rawThread.id)) {
+      if (
+        rawThread.lineage.relationshipToParent === "subagent" ||
+        isHelperThreadId(rawThread.id) ||
+        botThreadIds.has(rawThread.id)
+      ) {
         continue;
       }
       const prior = previous.current.get(rawThread.id);
@@ -308,6 +314,7 @@ function EnvironmentNotifications({
   }, [
     activeEnvironmentId,
     activeThreadId,
+    botThreadIds,
     environmentId,
     inAppNotificationsEnabled,
     mode,

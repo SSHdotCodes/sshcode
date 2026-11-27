@@ -12,6 +12,8 @@ export const SECRET_REQUEST_TURN_ITEM_ID_PREFIX = "turn-item:secret-request:";
 /**
  * The user's answer to an agent's request for a secret. A saved value is kept
  * by the server under a one-use SecretRef; the thread learns only status and handles.
+ * A card with `fields` is saved with `secrets`, one per field in order; only
+ * servers that ask with `fields` ever receive that shape.
  */
 export const SecretRequestAnswerInput = Schema.Struct({
   threadId: ThreadId,
@@ -22,6 +24,10 @@ export const SecretRequestAnswerInput = Schema.Struct({
       secret: TrimmedNonEmptyString,
       scope: Schema.optional(ApiKeyScope),
       expiresAt: Schema.optional(ApiKeyExpiry),
+    }),
+    Schema.Struct({
+      type: Schema.Literal("save"),
+      secrets: Schema.Array(TrimmedNonEmptyString),
     }),
     Schema.Struct({ type: Schema.Literal("decline") }),
   ]),

@@ -679,6 +679,27 @@ describe("model picker catalog", () => {
     expect(catalog.groups.map((group) => group.maker.id)).toEqual(["deepseek", "muse"]);
   });
 
+  it("lists every model of a harness whose own models come from no known maker", () => {
+    const providers = [
+      claude,
+      provider("acpRegistry_house", "acpRegistry", [
+        model("house-balanced", { name: "House Balanced" }),
+        model("house-fast", { name: "House Fast" }),
+        model("house-large", { name: "House Large" }),
+      ]),
+    ];
+    const catalog = createModelPickerCatalog(sources(providers), {
+      providers,
+      selected: [ref("acpRegistry_house", "house-balanced")],
+    });
+    expect(catalog.sources.map((source) => source.slug)).toEqual([
+      "claude-opus-5-5",
+      "house-balanced",
+      "house-fast",
+      "house-large",
+    ]);
+  });
+
   it("never exempts custom Anthropic, OpenAI or xAI gateway routes from native routing", () => {
     const providers = [
       claude,

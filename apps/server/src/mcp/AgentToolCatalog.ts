@@ -1,11 +1,22 @@
+import { botThreadInfo, botToolVisible } from "../bots/botsRuntime.ts";
 import { XPostToolkit } from "./toolkits/xPost/tools.ts";
+import { CardToolkit } from "./toolkits/cards/tools.ts";
 import { DebugToolkit } from "./toolkits/debug/tools.ts";
 import { WorkflowToolkit } from "./toolkits/workflows/tools.ts";
 import { workflowsBetaEnabled } from "../workflows/workflowsBeta.ts";
-import { modelPreferencesInUse } from "@t3tools/provider-core/server/orchestrationInstructions";
+import {
+  currentAgentBehavior,
+  modelPreferencesInUse,
+} from "@t3tools/provider-core/server/orchestrationInstructions";
 import { ModelPreferencesToolkit } from "./toolkits/modelPreferences/tools.ts";
+import { ProgressToolkit } from "./toolkits/progress/tools.ts";
 import { ComputerToolkit } from "./toolkits/computer/tools.ts";
-import { AgentToolDescriptor, type AgentToolPolicy, isAgentToolEnabled } from "@t3tools/contracts";
+import {
+  type AgentBehaviorLevels,
+  AgentToolDescriptor,
+  type AgentToolPolicy,
+  isAgentToolEnabled,
+} from "@t3tools/contracts";
 import { isSubagentOrchestrationTool } from "@t3tools/shared/chatControls";
 import * as Context from "effect/Context";
 import * as Option from "effect/Option";
@@ -18,6 +29,8 @@ import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { PreviewToolkit } from "./toolkits/preview/tools.ts";
 import { ProjectListToolkit } from "./toolkits/project/tools.ts";
 import { PendingRequestToolkit } from "./toolkits/thread/tools.ts";
+import { TEAM_BOARD_TOOL } from "../teamBoard/model.ts";
+import type { ThreadId } from "@t3tools/contracts";
 
 /**
  * The settings catalog is the agent surface: orchestration, pending
@@ -28,8 +41,10 @@ import { PendingRequestToolkit } from "./toolkits/thread/tools.ts";
  */
 const AGENT_TOOL_GROUPS = [
   ["orchestration", OrchestratorToolkit],
+  ["cards", CardToolkit],
   ["workflows", WorkflowToolkit],
   ["models", ModelPreferencesToolkit],
+  ["progress", ProgressToolkit],
   ["web", XPostToolkit],
   ["debug", DebugToolkit],
   ["questions", PendingRequestToolkit],
@@ -108,8 +123,21 @@ export const agentToolListVisible = (
   name: string,
   scope: McpInvocationScope | undefined,
   chatControls: Pick<ChatControls.ChatControls["Service"], "subagentsEnabled">,
+  behavior: AgentBehaviorLevels = currentAgentBehavior(),
+  teamBoardListed?: (threadId: ThreadId) => boolean,
 ) => {
   if (!isAgentToolEnabled(policy, name, scope?.thread?.providerInstanceId)) return false;
+  if (name === TEAM_BOARD_TOOL) {
+    return (
+      scope?.thread !== undefined &&
+      scope.capabilities.has("orchestration") &&
+      chatControls.subagentsEnabled(scope.thread.threadId) &&
+      teamBoardListed?.(scope.thread.threadId) === true
+    );
+  }
+  // Settings > Bots: message_bot only while a bot exists, bot tools only in its own chat.
+  const bot = botToolVisible(name, scope);
+  if (bot !== undefined) return bot;
   // No thread means an external client; the per-chat switch does not apply.
   if (
     isSubagentOrchestrationTool(name) &&
@@ -134,7 +162,11 @@ export const agentToolListVisible = (
       modelPreferencesInUse()
     );
   }
-  if (name === "debug_log" || computerAgentToolNames.has(name)) {
+  if (name === "report_progress") {
+    // Listed only at Settings > Agents token use High, the only level that shows progress.
+    return scope?.thread !== undefined && behavior.tokens === "high";
+  }
+  if (name === "show_card" || name === "debug_log" || computerAgentToolNames.has(name)) {
     return scope?.thread !== undefined && scope.capabilities.has("orchestration");
   }
   if (deviceAgentToolNames.has(name)) {
@@ -150,7 +182,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Ids of `tools/list` requests in one HTTP body. Undefined when the body is not a list. */
-export const toolsListRequestIds = (raw: string): ReadonlySet<string> | undefined => {
+export const mcpRequestIds = (
+  raw: string,
+  method: "tools/list" | "tools/call",
+): ReadonlySet<string> | undefined => {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -160,12 +195,28 @@ export const toolsListRequestIds = (raw: string): ReadonlySet<string> | undefine
   const messages = Array.isArray(parsed) ? parsed : [parsed];
   const ids = new Set<string>();
   for (const message of messages) {
-    if (!isRecord(message) || message.method !== "tools/list") continue;
+    if (!isRecord(message) || message.method !== method) continue;
     if (typeof message.id === "string" || typeof message.id === "number")
       ids.add(String(message.id));
   }
   return ids.size === 0 ? undefined : ids;
 };
+export const toolsListRequestIds = (raw: string) => mcpRequestIds(raw, "tools/list");
+
+/** Attach MCP `_meta` entries to matching listed tools (e.g. Claude Code's `anthropic/alwaysLoad`). */
+export const withToolMeta =
+  (metaByTool: Readonly<Record<string, Readonly<Record<string, unknown>>>>): ToolsListTransform =>
+  (tool) => {
+    if (typeof tool.name !== "string") return tool;
+    const extra = metaByTool[tool.name];
+    if (!extra) return tool;
+    const existing = isRecord(tool._meta) ? tool._meta : undefined;
+    return { ...tool, _meta: { ...existing, ...extra } };
+  };
+
+export const withTeamBoardToolMeta = withToolMeta({
+  [TEAM_BOARD_TOOL]: { "anthropic/alwaysLoad": true },
+});
 
 /** Changes one listed tool; returns the same object when nothing changes. */
 export type ToolsListTransform = (tool: Record<string, unknown>) => Record<string, unknown>;
@@ -200,6 +251,37 @@ export const callerReadsGeminiSchemas = (
 ): boolean =>
   instanceId !== undefined &&
   GEMINI_SCHEMA_DRIVERS.has(instances[instanceId]?.driver ?? instanceId);
+
+/** A bot's own chat running on Claude Code, which reads `anthropic/alwaysLoad`. */
+export const callerIsClaudeBot = (
+  instances: Readonly<Record<string, { readonly driver: string } | undefined>>,
+  scope: Pick<McpInvocationScope, "thread"> | undefined,
+): boolean => {
+  const instanceId = scope?.thread?.providerInstanceId;
+  return (
+    instanceId !== undefined &&
+    botThreadInfo(scope?.thread?.threadId) !== undefined &&
+    (instances[instanceId]?.driver ?? instanceId) === "claudeAgent"
+  );
+};
+
+/**
+ * The tools a bot uses nearly every turn. Claude Code hides MCP tools behind ToolSearch
+ * unless a tool asks to load up front, so in a bot's own chat these do, and nothing else.
+ * show_card gets the same mark from eager cards (a bot chat's cards are always eager).
+ */
+export const withBotAlwaysLoad = withToolMeta(
+  Object.fromEntries(
+    [
+      "bot_memory",
+      "watch_chats",
+      "t3_thread_list",
+      "t3_thread_read",
+      "t3_thread_send",
+      "create_threads",
+    ].map((name) => [name, { "anthropic/alwaysLoad": true }]),
+  ),
+);
 
 const geminiSafeSchema = (value: unknown): unknown => {
   if (Array.isArray(value)) {
@@ -317,6 +399,14 @@ export const rewriteToolsListBody = (
   visible: (name: string) => boolean,
   transform?: ToolsListTransform,
   transformCatalog?: ToolsCatalogTransform,
+): string =>
+  rewriteMcpResponseBody(text, (payload) =>
+    rewriteJsonDocument(payload, ids, visible, transform, transformCatalog),
+  );
+
+export const rewriteMcpResponseBody = (
+  text: string,
+  rewriteDocument: (payload: string) => string | undefined,
 ): string => {
   // A JSON tool description can contain the letters "data:", so only a body
   // that begins as an event stream is framed that way.
@@ -335,13 +425,7 @@ export const rewriteToolsListBody = (
           .map((line) => {
             if (!line.startsWith("data:")) return line;
             const payload = line.slice("data:".length).trimStart();
-            const rewritten = rewriteJsonDocument(
-              payload,
-              ids,
-              visible,
-              transform,
-              transformCatalog,
-            );
+            const rewritten = rewriteDocument(payload);
             if (rewritten === undefined || rewritten === payload) return line;
             changed = true;
             return `data: ${rewritten.trim()}`;
@@ -351,13 +435,13 @@ export const rewriteToolsListBody = (
       .join("\n\n");
     return changed ? next : text;
   }
-  const whole = rewriteJsonDocument(text, ids, visible, transform, transformCatalog);
+  const whole = rewriteDocument(text);
   if (whole !== undefined) return whole;
   if (!text.includes("\n")) return text;
   let changed = false;
   const lines = text.split("\n").map((line) => {
     if (line.trim().length === 0) return line;
-    const rewritten = rewriteJsonDocument(line, ids, visible, transform, transformCatalog);
+    const rewritten = rewriteDocument(line);
     if (rewritten === undefined || rewritten === line) return line;
     changed = true;
     return rewritten.trim();

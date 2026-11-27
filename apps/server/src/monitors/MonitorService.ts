@@ -201,6 +201,35 @@ const make = Effect.gen(function* () {
   const settled = yield* Queue.unbounded<ThreadId>();
   const eventKey = (event: Pick<MonitorEvent, "monitorId" | "sequence">) =>
     `${event.monitorId}:${event.sequence}`;
+  const publishWatcherEvent = (
+    entry: Pick<
+      MonitorJournalEntry,
+      "monitorId" | "threadId" | "description" | "generation" | "sequence"
+    >,
+    summary: string,
+    detail: string,
+    outcome: OrchestrationV2Notification["outcome"],
+    urgent = false,
+  ) =>
+    Effect.gen(function* () {
+      const { monitorId, threadId, description, generation = 0, sequence } = entry;
+      const event: MonitorEvent = {
+        monitorId,
+        threadId,
+        generation,
+        sequence,
+        ...(urgent ? { urgent } : {}),
+        text: `Monitor "${description}" (${monitorId}): ${summary}${detail ? `\n${detail}` : ""}`,
+        notification: {
+          source: { kind: "monitor" },
+          outcome,
+          summary: `${description}: ${summary}`,
+          ...(detail ? { detail } : {}),
+        },
+      };
+      pending.set(eventKey(event), threadId);
+      yield* Queue.offer(events, event);
+    });
   // A monitor that outlived a restart counts until `recover` relaunches it or
   // reports it, so a delegated task waiting on it is not settled in between.
   const hasOpenWork = (threadId: ThreadId) =>
@@ -957,24 +986,16 @@ const make = Effect.gen(function* () {
               Effect.gen(function* () {
                 // Taken before saving: another fiber's notice may take the next one meanwhile.
                 const eventSequence = ++sequence;
-                // Saved first: a relaunch after a crash never reuses this event's id.
-                yield* journalPut(journalEntry(eventSequence, delivered));
-                const event: MonitorEvent = {
-                  monitorId,
-                  threadId: info.threadId,
+                const saved = {
+                  ...journalEntry(eventSequence, delivered),
                   generation: entry.generation,
-                  sequence: eventSequence,
-                  ...(urgent ? { urgent } : {}),
-                  text: `Monitor "${info.description}" (${monitorId}): ${summary}${detail ? `\n${detail}` : ""}`,
-                  notification: {
-                    source: { kind: "monitor" },
-                    outcome,
-                    summary: `${info.description}: ${summary}`,
-                    ...(detail ? { detail } : {}),
-                  },
+                  ...(outcome === "completed" || outcome === "failed"
+                    ? { completion: { summary, detail, outcome } }
+                    : {}),
                 };
-                pending.set(eventKey(event), info.threadId);
-                yield* Queue.offer(events, event);
+                // Keep an exit until delivery acknowledges it. Recovery can reuse its id.
+                yield* journalPut(saved);
+                yield* publishWatcherEvent(saved, summary, detail, outcome, urgent);
               });
             let exited = false;
             const checkErrors = (lines: ReadonlyArray<string>, now: number, stream: string) =>
@@ -1266,9 +1287,9 @@ const make = Effect.gen(function* () {
                   ? "completed"
                   : "failed",
             );
-            // Ended and reported: nothing to recover. A shutdown interrupts before this,
-            // so the journal keeps monitors the server stops with it.
-            yield* journalRemove(monitorId);
+            if ("reason" in termination && termination.reason === "stopped") {
+              yield* journalRemove(monitorId);
+            }
           }).pipe(
             Effect.scoped,
             Effect.ensuring(
@@ -1397,23 +1418,7 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.uninterruptible);
   /** Wakes a monitor's thread once with how the restart ended it. */
   const reportLost = (saved: MonitorJournalEntry, summary: string, detail: string) =>
-    Effect.gen(function* () {
-      const event: MonitorEvent = {
-        monitorId: saved.monitorId,
-        threadId: saved.threadId,
-        generation: saved.generation ?? 0,
-        sequence: saved.sequence + 1,
-        text: `Monitor "${saved.description}" (${saved.monitorId}): ${summary}\n${detail}`,
-        notification: {
-          source: { kind: "monitor" },
-          outcome: "failed",
-          summary: `${saved.description}: ${summary}`,
-          detail,
-        },
-      };
-      pending.set(eventKey(event), saved.threadId);
-      yield* Queue.offer(events, event);
-    });
+    publishWatcherEvent({ ...saved, sequence: saved.sequence + 1 }, summary, detail, "failed");
 
   const recoveryRetries = new Set<string>();
   const recover: MonitorService["Service"]["recover"] = (access) =>
@@ -1462,6 +1467,12 @@ const make = Effect.gen(function* () {
             yield* publishRoster();
             yield* journalRemove(saved.monitorId);
             yield* notifySettled(saved.threadId);
+            return;
+          }
+          if (saved.completion !== undefined && allowed === "ok") {
+            recoverable.delete(saved.monitorId);
+            const { summary, detail, outcome } = saved.completion;
+            yield* publishWatcherEvent(saved, summary, detail, outcome);
             return;
           }
           if (saved.restartable && allowed === "ok" && !expired) {

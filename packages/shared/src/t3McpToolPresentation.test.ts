@@ -114,6 +114,11 @@ describe("resolveT3McpToolPresentation", () => {
     expect(resolveT3McpToolPresentation("t3-code-thread_opencode2-adapter_not_a_tool")).toBeNull();
   });
 
+  it("still resolves provider aliases that exceed the tool-name cache limit", () => {
+    const tool = `t3-code-${"thread_segment_".repeat(24)}html_render`;
+    expect(resolveT3McpToolPresentation(tool)).toEqual(resolveT3McpToolPresentation("html_render"));
+  });
+
   it("keeps unknown MCP tools on the generic renderer path", () => {
     expect(resolveT3McpToolPresentation("mcp__github__search_issues")).toBeNull();
     expect(resolveT3McpToolPresentation("t3-code.not_a_real_tool")).toBeNull();

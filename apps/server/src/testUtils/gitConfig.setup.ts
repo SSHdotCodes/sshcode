@@ -19,3 +19,17 @@ entries.forEach(([key, value], index) => {
   process.env[`GIT_CONFIG_KEY_${existing + index}`] = key;
   process.env[`GIT_CONFIG_VALUE_${existing + index}`] = value;
 });
+
+// `git bisect run`, hooks and `git rebase -x` export the outer repository's location. A
+// test's git child then acts on that repository instead of its own temp one: during a
+// bisect in a linked worktree this rewrote the real checkout's shared core.worktree.
+for (const key of [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_COMMON_DIR",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_PREFIX",
+]) {
+  delete process.env[key];
+}

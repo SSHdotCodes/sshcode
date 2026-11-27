@@ -31,7 +31,7 @@ const status = Tool.make("computer_status", {
 
 const open = Tool.make("computer_open", {
   description:
-    "Acquire computer control and open an app by id from computer_status. Returns a lease and short operating instructions. Busy requests may queue; inspect status and retry when control is available. Respect other controllers and user takeover.",
+    "Lease computer control and open appId from computer_status. Busy requests may queue; respect user takeover.",
   parameters: Schema.Struct({ appId: Id }),
   success: Schema.Unknown,
   failure,
@@ -45,7 +45,7 @@ const open = Tool.make("computer_open", {
 
 const snapshot = Tool.make("computer_snapshot", {
   description:
-    "Inspect your app as compact accessibility text with native control refs. Reuse snapshotId as since for a small patch or unchanged. No screenshot is taken. Increase maxChars only if truncation hides the target.",
+    "Read app accessibility text with native refs (no screenshot). Pass snapshotId as since for a patch; raise maxChars only if truncated.",
   parameters: Schema.Struct({
     ...Lease,
     maxChars: Schema.optionalKey(
@@ -65,7 +65,7 @@ const snapshot = Tool.make("computer_snapshot", {
 
 const action = Tool.make("computer_action", {
   description:
-    "Click, type, press a key or scroll in your leased app. Prefer fresh snapshot refs. clickAt requires a screenshot captureId. Background delivery is default; choose foreground explicitly when the app needs it. Verify the result with a compact snapshot.",
+    "Click, type, press or scroll in your leased app. Prefer snapshot refs; clickAt needs screenshot captureId. Background delivery by default; verify with a snapshot.",
   parameters: Schema.Struct({ ...Lease, action: ComputerAction }),
   success: Schema.Unknown,
   failure,
@@ -78,8 +78,7 @@ const action = Tool.make("computer_action", {
   .annotate(Tool.OpenWorld, true);
 
 const release = Tool.make("computer_release", {
-  description:
-    "Release your computer lease after finishing, so the next waiting agent can work. This leaves the app open.",
+  description: "Release your computer lease when done (leaves app open).",
   parameters: Schema.Struct(Lease),
   success: Schema.Struct({ released: Schema.Boolean }),
   failure,
@@ -93,7 +92,7 @@ const release = Tool.make("computer_release", {
 
 export const ComputerScreenshotTool = Tool.make("computer_screenshot", {
   description:
-    "Capture an image of your leased app when visual inspection is needed. Returns image content plus captureId for grounded coordinate clicks. Prefer text snapshots for routine inspection.",
+    "Capture your leased app as PNG with captureId for coordinate clicks. Prefer text snapshots for routine checks.",
   parameters: Schema.Struct(Lease),
   success: Schema.Struct({
     screenshot: Schema.Struct({

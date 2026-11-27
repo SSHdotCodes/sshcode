@@ -90,6 +90,7 @@ const LOGIN_SHELL_ENV_NAMES = [
   "SSL_CERT_DIR",
   "NODE_EXTRA_CA_CERTS",
   "T3CODE_TELEMETRY_ENABLED",
+  "DO_NOT_TRACK",
   "__MISE_DIFF",
 ] as const;
 const WINDOWS_PROFILE_ENV_NAMES = ["PATH", "FNM_DIR", "FNM_MULTISHELL_PATH"] as const;
@@ -467,6 +468,7 @@ const installPosixEnvironment = Effect.fn("desktop.shellEnvironment.installPosix
       "NODE_EXTRA_CA_CERTS",
       // The telemetry opt-out is documented as a shell variable; GUI launches never see it.
       "T3CODE_TELEMETRY_ENABLED",
+      "DO_NOT_TRACK",
     ] as const) {
       if (!config.env[name] && shellEnvironment[name]) {
         config.env[name] = shellEnvironment[name];

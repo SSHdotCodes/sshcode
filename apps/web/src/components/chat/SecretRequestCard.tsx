@@ -2,7 +2,7 @@ import { ApiKeyExpiryPicker } from "./ApiKeyExpiryPicker";
 import { useAtomValue } from "@effect/atom-react";
 import type { ApiKeyScope } from "@t3tools/contracts";
 import {
-  SECRET_REQUEST_DEFAULT_PLACEHOLDER,
+  secretRequestInputs,
   secretRequestPrivacyNote,
   secretRequestAnswerInput,
   secretRequestDisplay,
@@ -62,7 +62,11 @@ function PendingSecretRequestForm(props: {
   readonly item: SecretRequestItem;
 }) {
   const { item } = props;
+  const inputs = secretRequestInputs(item);
+  // A credential in parts gets a small label over each of its stacked inputs.
+  const inParts = item.fields !== undefined;
   const inputId = useId();
+  const fieldId = (index: number) => `${inputId}-${index}`;
   const errorId = useId();
   const privacyId = useId();
   const answer = useAtomCommand(serverEnvironment.answerSecretRequest, {
@@ -82,18 +86,20 @@ function PendingSecretRequestForm(props: {
       ? openedAt + 30 * 86_400_000
       : item.apiKey.suggestedExpiresAt,
   );
-  const [secret, setSecret] = useState("");
+  const [values, setValues] = useState<ReadonlyArray<string>>(() => inputs.map(() => ""));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Enter then a click can both run before a re-render; this guard is synchronous.
   const inFlight = useRef(false);
 
-  const send = async (
-    reply: { readonly type: "save"; readonly secret: string } | { readonly type: "decline" },
-  ) => {
+  const send = async (reply: { readonly type: "save" } | { readonly type: "decline" }) => {
     const input = secretRequestAnswerInput(
       item,
-      reply.type === "save" && item.apiKey !== undefined ? { ...reply, scope, expiresAt } : reply,
+      reply.type === "decline"
+        ? reply
+        : item.apiKey !== undefined
+          ? { type: "save", values, scope, expiresAt }
+          : { type: "save", values },
     );
     if (input === null || inFlight.current || !allowed) return;
     if (
@@ -114,7 +120,7 @@ function PendingSecretRequestForm(props: {
     });
     if (result._tag === "Success") {
       // The card switches to its answered row once the item updates.
-      setSecret("");
+      setValues(inputs.map(() => ""));
       setRevealed(false);
       return;
     }
@@ -125,8 +131,63 @@ function PendingSecretRequestForm(props: {
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    void send({ type: "save", secret });
+    void send({ type: "save" });
   };
+
+  const field = (index: number) => (
+    <Input
+      id={fieldId(index)}
+      type={revealed ? "text" : "password"}
+      autoComplete="off"
+      autoCorrect="off"
+      autoCapitalize="off"
+      spellCheck={false}
+      // Password managers otherwise offer to save or fill this field.
+      data-1p-ignore
+      data-lpignore="true"
+      data-bwignore
+      placeholder={inputs[index]!.placeholder}
+      value={values[index] ?? ""}
+      disabled={submitting || !allowed}
+      aria-invalid={error !== null || undefined}
+      aria-describedby={error !== null ? `${privacyId} ${errorId}` : privacyId}
+      onChange={(event) => {
+        const value = event.currentTarget.value;
+        setValues((current) => current.map((old, at) => (at === index ? value : old)));
+      }}
+      onKeyDown={(event) => {
+        // Enter moves to the next part; the last one saves.
+        if (event.key !== "Enter" || index === inputs.length - 1) return;
+        event.preventDefault();
+        document.getElementById(fieldId(index + 1))?.focus();
+      }}
+    />
+  );
+  const revealButton = (
+    <Button
+      type="button"
+      variant="ghost-muted"
+      disabled={submitting || !allowed}
+      aria-label={revealed ? "Hide key" : "Reveal key"}
+      aria-pressed={revealed}
+      onClick={() => setRevealed(!revealed)}
+    >
+      {revealed ? "Hide" : "Show"}
+    </Button>
+  );
+  const saveButton = (
+    <Button
+      type="submit"
+      disabled={
+        submitting ||
+        !allowed ||
+        values.some((value) => value.trim().length === 0) ||
+        (item.apiKey !== undefined && expiresAt !== null && expiresAt <= openedAt)
+      }
+    >
+      Save
+    </Button>
+  );
 
   // Same hierarchy as a chat card: what is asked, why, the field, then the
   // promise about where the value goes.
@@ -136,66 +197,56 @@ function PendingSecretRequestForm(props: {
       className="flex min-w-0 flex-col gap-3 rounded-xl border border-border/60 bg-card p-4"
       onSubmit={onSubmit}
       autoComplete="off"
-      // A click anywhere on the card targets its field, so a paste that
-      // follows lands here rather than with the composer.
+      // A click anywhere on the card targets its first empty field, so a paste
+      // that follows lands here rather than with the composer.
       onPointerDown={(event) => {
         if (!(event.target instanceof HTMLElement)) return;
         if (event.target.closest("input, button, a, select")) return;
-        document.getElementById(inputId)?.focus();
+        const empty = values.findIndex((value) => value.trim().length === 0);
+        document.getElementById(fieldId(Math.max(empty, 0)))?.focus();
       }}
     >
       <div className="flex min-w-0 flex-col gap-1 wrap-anywhere">
-        <label htmlFor={inputId} className="text-sm font-medium text-foreground">
-          {item.label}
-        </label>
+        {inParts ? (
+          <p className="text-sm font-medium text-foreground">{item.label}</p>
+        ) : (
+          <label htmlFor={fieldId(0)} className="text-sm font-medium text-foreground">
+            {item.label}
+          </label>
+        )}
         {item.apiKey ? (
           <p className="font-mono text-xs text-muted-foreground">{item.apiKey.name}</p>
         ) : null}
         {item.reason.trim() ? <p className="text-sm text-muted-foreground">{item.reason}</p> : null}
       </div>
-      <div className="flex min-w-0 items-center gap-2">
-        <div className="min-w-0 flex-1">
-          <Input
-            id={inputId}
-            type={revealed ? "text" : "password"}
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-            spellCheck={false}
-            // Password managers otherwise offer to save or fill this field.
-            data-1p-ignore
-            data-lpignore="true"
-            data-bwignore
-            placeholder={item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
-            value={secret}
-            disabled={submitting || !allowed}
-            aria-invalid={error !== null || undefined}
-            aria-describedby={error !== null ? `${privacyId} ${errorId}` : privacyId}
-            onChange={(event) => setSecret(event.currentTarget.value)}
-          />
+      {inParts ? (
+        <>
+          <div className="flex min-w-0 flex-col gap-3">
+            {inputs.map((input, index) => (
+              // oxlint-disable-next-line react/no-array-index-key -- A card's parts never reorder.
+              <div key={index} className="flex min-w-0 flex-col gap-1.5">
+                <label
+                  htmlFor={fieldId(index)}
+                  className="text-xs text-muted-foreground wrap-anywhere"
+                >
+                  {input.label}
+                </label>
+                {field(index)}
+              </div>
+            ))}
+          </div>
+          <div className="flex min-w-0 items-center justify-end gap-2">
+            {revealButton}
+            {saveButton}
+          </div>
+        </>
+      ) : (
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="min-w-0 flex-1">{field(0)}</div>
+          {revealButton}
+          {saveButton}
         </div>
-        <Button
-          type="button"
-          variant="ghost-muted"
-          disabled={submitting || !allowed}
-          aria-label={revealed ? "Hide key" : "Reveal key"}
-          aria-pressed={revealed}
-          onClick={() => setRevealed(!revealed)}
-        >
-          {revealed ? "Hide" : "Show"}
-        </Button>
-        <Button
-          type="submit"
-          disabled={
-            submitting ||
-            !allowed ||
-            secret.trim().length === 0 ||
-            (item.apiKey !== undefined && expiresAt !== null && expiresAt <= openedAt)
-          }
-        >
-          Save
-        </Button>
-      </div>
+      )}
       {item.apiKey ? (
         <div className="flex flex-col gap-3">
           <div role="group" aria-label="API key scope" className="flex gap-2">

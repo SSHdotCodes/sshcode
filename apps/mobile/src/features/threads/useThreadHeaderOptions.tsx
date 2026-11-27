@@ -1,9 +1,18 @@
 import { usePrivacyLabel, usePrivacyMode } from "../../state/use-privacy-mode";
+import { sendToBotLabel } from "@t3tools/client-runtime/state/bots";
+import { BotHeaderTitle, BotParkedHeaderTitle } from "../bots/BotChat";
+import {
+  useBotEntries,
+  useBotForThread,
+  useBotRuntime,
+  useOptionalBotStatus,
+  useParkedBotForThread,
+} from "../bots/state";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useUiMode } from "../discord/useUiMode";
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { useMemo } from "react";
-import { Platform } from "react-native";
+import { Platform, useWindowDimensions } from "react-native";
 import type { AppNativeStackNavigationOptions } from "../../native/StackHeader";
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
@@ -14,6 +23,9 @@ import { useComputerUseStatus } from "../computer-use/useComputerUseStatus";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { pendingThreadSearchJumpAtom } from "@t3tools/client-runtime/state/thread-search";
 import { appAtomRegistry } from "../../state/atom-registry";
+import { useAtomValue } from "@effect/atom-react";
+import { teamBoardHistory, teamBoardHistoryLabel } from "@t3tools/client-runtime/state/team-board";
+import { teamBoardEnvironment } from "../../state/teamBoard";
 import { useThreadShell } from "../../state/entities";
 import { formatTranscriptTimestamp } from "../../lib/time";
 import {
@@ -49,6 +61,7 @@ export function useThreadHeaderOptions(props: {
 }) {
   const privateLabel = usePrivacyLabel();
   const privacy = usePrivacyMode();
+  const { width: windowWidth } = useWindowDimensions();
   const title = privateLabel("Chat", props.gitControls.threadId, props.title);
   const usesNativeWorkspaceColumns = useNativeWorkspaceColumnsSupported();
   const usesDuoHeader = usesNativeWorkspaceColumns && Platform.OS === "ios" && !Platform.isPad;
@@ -69,6 +82,116 @@ export function useThreadHeaderOptions(props: {
       ThreadId.make(props.gitControls.threadId),
     ),
   );
+  const teamBoardSummary = useAtomValue(
+    teamBoardEnvironment.summaryAtom(
+      scopeThreadRef(
+        EnvironmentId.make(props.gitControls.environmentId),
+        ThreadId.make(props.gitControls.threadId),
+      ),
+    ),
+  );
+  // Past pushes for the list, or the one ended board a server without history keeps.
+  const teamBoardPast = teamBoardHistory(teamBoardSummary);
+  const teamBoardMenuLabel =
+    teamBoardPast === null
+      ? null
+      : teamBoardHistoryLabel(teamBoardPast, teamBoardSummary?.postCount ?? 0);
+  const teamBoardMenuList = teamBoardPast?.kind === "pushes";
+  // The chat's overflow menu. A live push opens from its pill and presence chips; past pushes
+  // stay here, read-only, even while a new one runs.
+  const moreHeaderItem = useMemo(
+    () =>
+      teamBoardMenuLabel !== null
+        ? {
+            accessibilityLabel: "More",
+            icon: { name: "ellipsis.circle", type: "sfSymbol" },
+            identifier: "thread-right-more",
+            label: "More",
+            menu: {
+              items: [
+                {
+                  description: teamBoardMenuLabel,
+                  icon: { name: "bubble.left.and.text.bubble.right", type: "sfSymbol" as const },
+                  label: "Team board",
+                  onPress: () =>
+                    navigation.navigate("ThreadTeamBoard", {
+                      environmentId: EnvironmentId.make(props.gitControls.environmentId),
+                      threadId: ThreadId.make(props.gitControls.threadId),
+                      ...(teamBoardMenuList ? { history: true } : {}),
+                    }),
+                  type: "action" as const,
+                },
+              ],
+            },
+            sharesBackground: true,
+            type: "menu",
+            variant: "plain",
+          }
+        : null,
+    [
+      teamBoardMenuLabel,
+      teamBoardMenuList,
+      navigation,
+      props.gitControls.environmentId,
+      props.gitControls.threadId,
+    ],
+  );
+  // A bot's home chat shows the bot in the title and opens its info sheet; any other chat
+  // can be sent to a bot on the same machine.
+  const headerEnvironmentId = EnvironmentId.make(props.gitControls.environmentId);
+  const headerThreadId = ThreadId.make(props.gitControls.threadId);
+  const bot = useBotForThread(headerEnvironmentId, headerThreadId);
+  // With Bots off the bot's chat still opens; its title is the bot, never its folder.
+  const parkedBot = useParkedBotForThread(headerEnvironmentId, headerThreadId);
+  const botRuntime = useBotRuntime(bot);
+  const botStatus = useOptionalBotStatus(bot, botRuntime);
+  const botEntries = useBotEntries();
+  const sendTargets = useMemo(
+    () =>
+      bot === null ? botEntries.filter((entry) => entry.environmentId === headerEnvironmentId) : [],
+    [bot, botEntries, headerEnvironmentId],
+  );
+  const botId = bot?.bot.id;
+  const botHeaderItems = useMemo<NativeHeaderItems>(() => {
+    if (botId !== undefined)
+      return [
+        {
+          accessibilityLabel: "Bot info",
+          icon: { name: "info.circle", type: "sfSymbol" },
+          identifier: "thread-bot-info",
+          label: "Info",
+          onPress: () =>
+            navigation.navigate("BotInfo", {
+              environmentId: String(headerEnvironmentId),
+              botId,
+            }),
+          type: "button",
+        },
+      ];
+    if (sendTargets.length === 0) return [];
+    return [
+      {
+        accessibilityLabel: "More",
+        icon: { name: "ellipsis.circle", type: "sfSymbol" },
+        identifier: "thread-bot-send",
+        label: "More",
+        menu: {
+          items: sendTargets.map((entry) => ({
+            icon: { name: "paperplane", type: "sfSymbol" as const },
+            label: sendToBotLabel(entry.bot.name),
+            onPress: () =>
+              navigation.navigate("BotSend", {
+                environmentId: String(entry.environmentId),
+                botId: entry.bot.id,
+                threadId: String(headerThreadId),
+              }),
+            type: "action" as const,
+          })),
+        },
+        type: "menu",
+      },
+    ];
+  }, [botId, headerEnvironmentId, headerThreadId, navigation, sendTargets]);
   const pinnedMessages = headerThread?.pinnedMessages;
   const headerProjectId = headerThread?.projectId;
   // Shown only while the chat has a pin; newest pin first, each one jumps to its message.
@@ -135,6 +258,7 @@ export function useThreadHeaderOptions(props: {
   );
   const contextualHeaderItems = useMemo<NativeHeaderItems>(
     () => [
+      ...botHeaderItems,
       ...(computerUseStatus
         ? [
             {
@@ -205,13 +329,16 @@ export function useThreadHeaderOptions(props: {
             },
           ]
         : []),
+      ...(moreHeaderItem ? [moreHeaderItem] : []),
     ],
     [
+      botHeaderItems,
       computerUseStatus,
       onMergeBack,
       props.onOpenMedia,
       props.onFindInChat,
       pinnedHeaderItem,
+      moreHeaderItem,
       sideChatHeaderItem,
       discord,
       navigation,
@@ -336,9 +463,29 @@ export function useThreadHeaderOptions(props: {
     [navigation, threadCenterHeaderItems, layout.usesSplitView, panes.primarySidebarVisible],
   );
 
+  const botTitleWidth = Math.max(160, windowWidth - 200);
   const options: AppNativeStackNavigationOptions = {
     headerShown: true,
-    headerTitle: discord ? `# ${title}` : title,
+    headerTitle:
+      bot !== null && botStatus !== null
+        ? () => (
+            <BotHeaderTitle
+              entry={bot}
+              status={botStatus}
+              maxWidth={botTitleWidth}
+              onPress={() =>
+                navigation.navigate("BotInfo", {
+                  environmentId: String(bot.environmentId),
+                  botId: bot.bot.id,
+                })
+              }
+            />
+          )
+        : parkedBot !== null
+          ? () => <BotParkedHeaderTitle entry={parkedBot} maxWidth={botTitleWidth} />
+          : discord
+            ? `# ${title}`
+            : title,
     headerTitleStyle: props.usesNativeHeaderGlass
       ? {
           fontSize: 17,
@@ -365,11 +512,12 @@ export function useThreadHeaderOptions(props: {
           ? threadCenterHeaderItems
           : compactRightHeaderItems,
     unstable_headerToolbarItems: () => [],
-    unstable_headerSubtitle: props.usesNativeHeaderGlass
-      ? privacy
-        ? "Details hidden"
-        : props.subtitle
-      : undefined,
+    unstable_headerSubtitle:
+      props.usesNativeHeaderGlass && bot === null && parkedBot === null
+        ? privacy
+          ? "Details hidden"
+          : props.subtitle
+        : undefined,
     contentStyle: undefined,
   };
   const { environmentId, threadId } = props.gitControls;
@@ -381,6 +529,10 @@ export function useThreadHeaderOptions(props: {
     optionsVersion: [
       privacy,
       title,
+      bot?.bot,
+      parkedBot?.bot,
+      botStatus?.kind,
+      botStatus?.label,
       splitLeftHeaderItems,
       threadCenterHeaderItems,
       compactRightHeaderItems,

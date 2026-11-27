@@ -11,6 +11,12 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
 import { parseLinkChip } from "@t3tools/shared/githubLinks";
 import { collectComposerContextReferences } from "@t3tools/shared/composerContextReferences";
+import {
+  collectAssistantCitations,
+  serializeAssistantCitation,
+  withAssistantCitationComment,
+} from "@t3tools/shared/assistantCitations";
+import { AssistantCitationSheet } from "./AssistantCitationSheet";
 import { ComposerEditor as NativeComposerEditor } from "../native/T3ComposerEditor";
 import type { ComposerEditorProps as NativeComposerEditorProps } from "../native/T3ComposerEditor";
 import {
@@ -36,6 +42,7 @@ import { AppText as Text } from "./AppText";
 import {
   composerDocumentAttachment,
   composerMentionPath,
+  composerPromptLengthMessage,
   type ComposerDocumentAttachment,
 } from "../lib/composerContext";
 
@@ -181,6 +188,38 @@ export function ComposerEditor({
   const record = draft.context?.records.find(
     (entry) => entry.contextId === selectedReference?.contextId,
   );
+  const selectedCitation = selected
+    ? collectAssistantCitations(selected.source)[0]?.citation
+    : undefined;
+  const editable = !props.readOnly && props.editable !== false;
+  // Edits apply only while the chip still sits where it was tapped.
+  const selectedStillInDraft = () =>
+    selected !== null && props.value.slice(selected.start, selected.end) === selected.source;
+  const removeSelected = () => {
+    if (selected && selectedStillInDraft()) {
+      changeText(props.value.slice(0, selected.start) + props.value.slice(selected.end));
+      props.onSelectionChange?.({ start: selected.start, end: selected.start });
+    }
+    setSelected(null);
+  };
+  const commentSelectedCitation = (comment: string) => {
+    if (!selected || !selectedCitation || !selectedStillInDraft()) return true;
+    const next = serializeAssistantCitation(
+      withAssistantCitationComment(selectedCitation, comment),
+    );
+    const text = props.value.slice(0, selected.start) + next + props.value.slice(selected.end);
+    const tooLong = composerPromptLengthMessage(text);
+    if (tooLong) {
+      Alert.alert("Comment not saved", tooLong);
+      return false;
+    }
+    if (draftKey) {
+      const cursor = selected.start + next.length;
+      rememberComposerDraftSelection(draftKey, text, { start: cursor, end: cursor });
+    }
+    changeText(text);
+    return true;
+  };
   return (
     <>
       {/* Fabric recreates a hidden native view; its JS revision history must restart with it. */}
@@ -237,6 +276,15 @@ export function ComposerEditor({
       {importing ? (
         <Text className="py-2 text-xs text-foreground-muted">Copying context…</Text>
       ) : null}
+      {selectedCitation ? (
+        <AssistantCitationSheet
+          citation={selectedCitation}
+          onClose={() => setSelected(null)}
+          {...(editable
+            ? { onCommentChange: commentSelectedCitation, onRemove: removeSelected }
+            : {})}
+        />
+      ) : null}
       {selected && (selectedReference || selectedSkill) ? (
         <ComposerContextSheet
           label={
@@ -275,19 +323,7 @@ export function ComposerEditor({
           records={draft.context?.records}
           attachments={draft.attachments}
           onClose={() => setSelected(null)}
-          onRemove={
-            props.readOnly || props.editable === false
-              ? undefined
-              : () => {
-                  if (props.value.slice(selected.start, selected.end) === selected.source) {
-                    changeText(
-                      props.value.slice(0, selected.start) + props.value.slice(selected.end),
-                    );
-                    props.onSelectionChange?.({ start: selected.start, end: selected.start });
-                  }
-                  setSelected(null);
-                }
-          }
+          onRemove={editable ? removeSelected : undefined}
         />
       ) : null}
     </>

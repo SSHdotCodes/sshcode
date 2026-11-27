@@ -292,6 +292,12 @@ const TRACE_ATTRIBUTE_TRUNCATED_LENGTH = 200;
 const TRACE_ATTRIBUTE_TRUNCATION_SUFFIX = "…[truncated]";
 const ALWAYS_TRUNCATED_TRACE_ATTRIBUTES: ReadonlySet<string> = new Set(["db.query.text"]);
 
+function truncateTraceString(value: string, length: number): string {
+  const last = value.charCodeAt(length - 1);
+  const end = length - (last >= 0xd800 && last <= 0xdbff ? 1 : 0);
+  return `${value.slice(0, end)}${TRACE_ATTRIBUTE_TRUNCATION_SUFFIX}`;
+}
+
 // Clamps strings nested inside already-normalized attribute values (arrays and
 // plain objects from normalizeJsonValue, e.g. an Error's `stack`). Returns the
 // input reference when nothing was clamped.
@@ -299,7 +305,7 @@ function truncateNestedValue(value: unknown): unknown {
   if (typeof value === "string") {
     return value.length <= TRACE_ATTRIBUTE_MAX_LENGTH
       ? value
-      : `${value.slice(0, TRACE_ATTRIBUTE_MAX_LENGTH)}${TRACE_ATTRIBUTE_TRUNCATION_SUFFIX}`;
+      : truncateTraceString(value, TRACE_ATTRIBUTE_MAX_LENGTH);
   }
   if (Array.isArray(value)) {
     const truncated = value.map(truncateNestedValue);
@@ -330,8 +336,7 @@ export function truncateTraceAttributes(attributes: TraceAttributes): TraceAttri
     if (typeof value === "string" && ALWAYS_TRUNCATED_TRACE_ATTRIBUTES.has(key)) {
       if (value.length <= TRACE_ATTRIBUTE_TRUNCATED_LENGTH) continue;
       truncated ??= { ...attributes };
-      truncated[key] =
-        `${value.slice(0, TRACE_ATTRIBUTE_TRUNCATED_LENGTH)}${TRACE_ATTRIBUTE_TRUNCATION_SUFFIX}`;
+      truncated[key] = truncateTraceString(value, TRACE_ATTRIBUTE_TRUNCATED_LENGTH);
       continue;
     }
     const next = truncateNestedValue(value);

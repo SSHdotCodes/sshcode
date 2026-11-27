@@ -95,6 +95,29 @@ export function useProjects(): ReadonlyArray<EnvironmentProject> {
   return useAtomValue(environmentProjects.projectsAtom);
 }
 
+/** Projects the legacy sidebar lists: one holding nothing but bot home chats stays out. */
+const sidebarProjectsAtom = (() => {
+  let previous: ReadonlyArray<EnvironmentProject> = [];
+  return Atom.make((get): ReadonlyArray<EnvironmentProject> => {
+    const projects = get(environmentProjects.projectsAtom);
+    const next = projects.filter(
+      (project) =>
+        !get(environmentThreadShells.hiddenOnlyProjectIdsAtom(project.environmentId)).has(
+          project.id,
+        ),
+    );
+    if (next.length === projects.length) return (previous = projects);
+    if (next.length === previous.length && next.every((project, i) => project === previous[i])) {
+      return previous;
+    }
+    return (previous = next);
+  }).pipe(Atom.withLabel("sidebar-projects"));
+})();
+
+export function useSidebarProjects(): ReadonlyArray<EnvironmentProject> {
+  return useAtomValue(sidebarProjectsAtom);
+}
+
 export function useServerConfigs(): ReadonlyMap<EnvironmentId, ServerConfig> {
   return useAtomValue(environmentServerConfigsAtom);
 }

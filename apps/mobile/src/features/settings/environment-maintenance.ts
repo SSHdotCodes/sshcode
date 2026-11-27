@@ -9,6 +9,8 @@ import {
   cliReleaseChannelOf,
   cliReleaseIndexPageUrl,
   newestCliReleaseVersion,
+  SERVER_DOWNLOADS_PUBLISHED,
+  serverUpdateUnavailable,
 } from "@t3tools/shared/cliRelease";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 import * as Schema from "effect/Schema";
@@ -23,10 +25,13 @@ export function canMaintainEnvironment(session: AuthSessionState | null, connect
 
 export function supportsEnvironmentUpdate(
   capabilities: Pick<ExecutionEnvironmentCapabilities, "serverSelfUpdate" | "desktopAppUpdate">,
+  serverDownloadsPublished: boolean = SERVER_DOWNLOADS_PUBLISHED,
 ) {
   return (
     capabilities.serverSelfUpdate !== undefined &&
-    (capabilities.serverSelfUpdate !== "desktop-managed" || capabilities.desktopAppUpdate === true)
+    (capabilities.serverSelfUpdate !== "desktop-managed" ||
+      capabilities.desktopAppUpdate === true) &&
+    serverUpdateUnavailable(capabilities.serverSelfUpdate, serverDownloadsPublished) === null
   );
 }
 

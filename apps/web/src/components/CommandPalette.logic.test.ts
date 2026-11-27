@@ -58,7 +58,7 @@ describe("fuzzy chat title search", () => {
     ]);
   });
 
-  it("keeps an exact thread ID above 150 fuzzy title matches before applying the cap", () => {
+  it("keeps an older exact thread ID reachable when the results hit the cap", () => {
     const threads = [
       ...Array.from({ length: 150 }, (_, index) =>
         makeThread({
@@ -86,7 +86,7 @@ describe("fuzzy chat title search", () => {
     });
     expect(groups[0]?.label).toBe("Chats · 100 of 151 matches");
     expect(groups[0]?.items).toHaveLength(100);
-    expect(groups[0]?.items[0]?.value).toBe("thread:abcd");
+    expect(groups[0]?.items.at(-1)?.value).toBe("thread:abcd");
   });
 
   it("ranks an exact normalized project field above a fuzzy title", () => {
@@ -562,7 +562,7 @@ describe("buildThreadActionItems", () => {
     expect(items[1]?.activityAt).toBe("2026-03-20T00:00:00.000Z");
   });
 
-  it("ranks thread title matches ahead of contextual project-name matches", () => {
+  it("ranks title and project matches by activity", () => {
     const threadItems = buildThreadActionItems({
       threads: [
         makeThread({
@@ -594,12 +594,12 @@ describe("buildThreadActionItems", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]?.value).toBe("threads-search");
     expect(groups[0]?.items.map((item) => item.value)).toEqual([
-      "thread:thread-title-match",
       "thread:thread-context-match",
+      "thread:thread-title-match",
     ]);
   });
 
-  it("orders title matches by recent activity before older prefix matches", () => {
+  it("orders topic matches by activity ahead of newer passing mentions", () => {
     const threads = [
       makeThread({
         id: ThreadId.make("old-prefix"),
@@ -609,7 +609,8 @@ describe("buildThreadActionItems", () => {
       }),
       makeThread({
         id: ThreadId.make("recent-title"),
-        title: "Disable Convex schema validation",
+        title: "Review the schema migration",
+        worktreePath: "/work/convex/schema-migration",
         createdAt: "2025-12-01T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",
       }),
@@ -626,9 +627,16 @@ describe("buildThreadActionItems", () => {
       sortOrder: "created_at",
       icon: null,
       getContentMatch: (thread) =>
-        thread.id === ThreadId.make("recent-content")
-          ? { source: "user", snippet: "Please check Convex", query: "convex" }
-          : undefined,
+        thread.id === ThreadId.make("recent-title")
+          ? {
+              about: true,
+              source: "user",
+              snippet: "Review https://example.test/convex",
+              query: "convex",
+            }
+          : thread.id === ThreadId.make("recent-content")
+            ? { source: "user", snippet: "Please check Convex", query: "convex" }
+            : undefined,
       runThread: async () => undefined,
     });
 

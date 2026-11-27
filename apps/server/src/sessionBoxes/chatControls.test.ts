@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ThreadId } from "@t3tools/contracts";
+import { DEFAULT_AGENT_BEHAVIOR, ThreadId, type AgentBehaviorLevels } from "@t3tools/contracts";
+import { registerAgentBehavior } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -114,6 +115,66 @@ describe("chat controls store", () => {
       yield* chatControls.command({ action: "subagents", threadId: THREAD, enabled: true });
       expect(chatControls.consumeSubagentNotice(THREAD, true)).toBe(false);
     }),
+  );
+
+  it.effect(
+    "Settings > Agents None turns subagents off in every chat, like each chat's switch",
+    () =>
+      Effect.gen(function* () {
+        let levels: AgentBehaviorLevels = DEFAULT_AGENT_BEHAVIOR;
+        registerAgentBehavior(() => levels);
+        const chatControls = make().store;
+        const ownSwitchOff = ThreadId.make("thread-own-switch-off");
+        yield* chatControls.command({
+          action: "subagents",
+          threadId: ownSwitchOff,
+          enabled: false,
+        });
+        chatControls.consumeSubagentNotice(ownSwitchOff, true);
+        expect(chatControls.subagentsEnabled(THREAD)).toBe(true);
+        expect(chatControls.consumeSubagentNotice(THREAD, true)).toBe(false);
+
+        levels = { ...DEFAULT_AGENT_BEHAVIOR, subagents: "none" };
+        expect(chatControls.subagentsEnabled(THREAD)).toBe(false);
+        // The chat keeps its own choice for when the level changes back.
+        expect(chatControls.view(THREAD).subagentsEnabled).toBe(true);
+        // A live session hears it once; a chat whose own switch was already off hears nothing.
+        expect(chatControls.consumeSubagentNotice(THREAD, true)).toBe(true);
+        expect(chatControls.consumeSubagentNotice(THREAD, true)).toBe(false);
+        expect(chatControls.consumeSubagentNotice(ownSwitchOff, true)).toBe(false);
+        // A chat's own switch cannot turn subagents back on under None, and flipping it while
+        // effective state stays off must not emit a duplicate notice.
+        yield* chatControls.command({ action: "subagents", threadId: ownSwitchOff, enabled: true });
+        expect(chatControls.subagentsEnabled(ownSwitchOff)).toBe(false);
+        expect(chatControls.consumeSubagentNotice(ownSwitchOff, true)).toBe(false);
+
+        // Turning a chat's own switch off under None then returning Settings to Default keeps
+        // effective state off throughout, so neither transition emits a bogus notice.
+        const turnedOffUnderNone = ThreadId.make("thread-turned-off-under-none");
+        expect(chatControls.consumeSubagentNotice(turnedOffUnderNone, true)).toBe(true);
+        yield* chatControls.command({
+          action: "subagents",
+          threadId: turnedOffUnderNone,
+          enabled: false,
+        });
+        expect(chatControls.consumeSubagentNotice(turnedOffUnderNone, true)).toBe(false);
+
+        levels = { ...DEFAULT_AGENT_BEHAVIOR, subagents: "low" };
+        expect(chatControls.subagentsEnabled(THREAD)).toBe(true);
+        expect(chatControls.subagentsEnabled(ownSwitchOff)).toBe(true);
+        expect(chatControls.subagentsEnabled(turnedOffUnderNone)).toBe(false);
+        expect(chatControls.consumeSubagentNotice(THREAD, true)).toBe(true);
+        expect(chatControls.consumeSubagentNotice(ownSwitchOff, true)).toBe(true);
+        expect(chatControls.consumeSubagentNotice(turnedOffUnderNone, true)).toBe(false);
+        // None and back before the next message: the session still has the rules in force.
+        levels = { ...DEFAULT_AGENT_BEHAVIOR, subagents: "none" };
+        expect(chatControls.subagentsEnabled(THREAD)).toBe(false);
+        levels = DEFAULT_AGENT_BEHAVIOR;
+        expect(chatControls.subagentsEnabled(THREAD)).toBe(true);
+        expect(chatControls.consumeSubagentNotice(THREAD, true)).toBe(false);
+      }).pipe(
+        Effect.ensuring(Effect.sync(() => registerAgentBehavior(() => DEFAULT_AGENT_BEHAVIOR))),
+      ),
   );
 
   it.effect("asks once on the first subagent and hides the ask while the switch is off", () =>

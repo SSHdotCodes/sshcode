@@ -13,18 +13,26 @@ const assistantEnd = (
   output: number,
   content: ReadonlyArray<string>,
   stopReason = "toolUse",
+  reasoning?: number,
 ): PiRpcRecord => ({
   type: "message_end",
   message: {
     role: "assistant",
     stopReason,
     content: content.map((type) => ({ type })),
-    usage: { input: 900, output, cacheRead: 0, cacheWrite: 0, totalTokens: 900 + output },
+    usage: {
+      input: 900,
+      output,
+      reasoning,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 900 + output,
+    },
   },
 });
 
 describe("Pi message timing", () => {
-  it("times streamed messages from their first block and hidden thinking end to end", () => {
+  it("times streamed thought summaries and hidden thinking end to end", () => {
     const generation = makePiGeneration(DateTime.makeUnsafe(0));
     const timeline: ReadonlyArray<readonly [number, PiRpcRecord]> = [
       [0, { type: "agent_start" }],
@@ -44,7 +52,15 @@ describe("Pi message timing", () => {
     ];
     const ended: Array<number> = [];
     for (const [ms, event] of timeline) {
-      if (meterPiEvent(generation, event, DateTime.makeUnsafe(ms))) ended.push(ms);
+      if (meterPiEvent(generation, event, DateTime.makeUnsafe(ms))) {
+        ended.push(ms);
+        if (ms === 4_200) {
+          expect(generationSnapshot(generation.meter)).toMatchObject({
+            basis: "end-to-end",
+            generatingMs: 4_200,
+          });
+        }
+      }
     }
 
     expect(ended).toEqual([4_200, 11_000]);
@@ -88,6 +104,17 @@ describe("Pi message timing", () => {
       outputTokens: 250,
       generatingMs: 2_500,
       replies: 1,
+    });
+  });
+
+  it("uses end-to-end timing when usage counts thinking with no thinking block", () => {
+    const generation = makePiGeneration(DateTime.makeUnsafe(0));
+    meterPiEvent(generation, update("text_start"), DateTime.makeUnsafe(4_000));
+    meterPiEvent(generation, assistantEnd(349, ["text"], "stop", 258), DateTime.makeUnsafe(4_725));
+    expect(generationSnapshot(generation.meter)).toMatchObject({
+      basis: "end-to-end",
+      outputTokens: 349,
+      generatingMs: 4_725,
     });
   });
 });

@@ -7,19 +7,25 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as ServerConfig from "../config.ts";
+import * as TeamBoard from "../teamBoard/TeamBoard.ts";
+import { v2PullRequestThread } from "../orchestration-v2/testkit/pullRequestFixtures.ts";
 import { expect, it } from "@effect/vitest";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   AuthMcpClientAccess,
+  DEFAULT_AGENT_BEHAVIOR,
   EnvironmentId,
   IsoDateTime,
   ProjectId,
+  NodeId,
+  RunId,
   ProviderInstanceId,
   ThreadId,
   ServerSettingsError,
 } from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import { registerAgentBehavior } from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -52,6 +58,7 @@ import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import * as PreviewBrowser from "../preview/PreviewBrowser.ts";
 import * as AgentToolPolicy from "./AgentToolPolicy.ts";
+import { writeAgentQualityArtifact } from "../orchestration-v2/testkit/AgentQualityRecorder.ts";
 
 const layerStubServices = Layer.mergeAll(
   Layer.mock(DebugLog.DebugLog)({}),
@@ -93,9 +100,13 @@ const decodeRpc = (text: string) =>
   JSON.parse(text.match(/\{[\s\S]*\}/)![0]) as {
     readonly result?: {
       readonly capabilities?: { readonly tools?: { readonly listChanged?: boolean } };
-      readonly tools?: ReadonlyArray<{ readonly name: string }>;
+      readonly tools?: ReadonlyArray<{
+        readonly name: string;
+        readonly _meta?: Readonly<Record<string, unknown>>;
+      }>;
       readonly isError?: boolean;
       readonly content?: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
+      readonly structuredContent?: Readonly<Record<string, unknown>>;
     };
   };
 
@@ -109,6 +120,7 @@ it.effect("filters and refuses tools on the same MCP session as settings change"
   Effect.scoped(
     Effect.gen(function* () {
       const settings = yield* ServerSettings.ServerSettingsService;
+      const board = yield* TeamBoard.TeamBoard;
       const screenshotRan = yield* Ref.make(false);
       const computerRan = yield* Ref.make(false);
       const failedRead = yield* Ref.make(false);
@@ -127,61 +139,102 @@ it.effect("filters and refuses tools on the same MCP session as settings change"
           ),
         ),
       };
-      const layerRoutes = McpHttpServer.layer.pipe(
-        Layer.provide(
-          Layer.mock(ComputerUseService.ComputerUseService)({
-            status: () =>
-              Ref.set(computerRan, true).pipe(
-                Effect.as({
-                  supported: true,
-                  enabled: true,
-                  paused: false,
-                  driver: {
-                    platform: "darwin",
-                    installed: true,
-                    accessibility: "granted",
-                    screenRecording: "granted",
-                    reason: null,
-                  },
-                  owner: null,
-                  queued: [],
-                  blockedAppIds: [],
+      const layerRoutes = McpHttpServer.layer
+        .pipe(
+          Layer.provide(
+            Layer.mock(ThreadManagementService.ThreadManagementService)({
+              getThreadShell: (id) =>
+                Effect.succeed({
+                  ...v2PullRequestThread({
+                    id,
+                    projectId: ProjectId.make("board-policy-test"),
+                    title: "Board test",
+                    modelSelection: {
+                      instanceId: ProviderInstanceId.make("claudeAgent"),
+                      model: "fixture",
+                    },
+                    runtimeMode: "full-access",
+                    interactionMode: "default",
+                    branch: null,
+                    worktreePath: null,
+                    pullRequests: [],
+                    latestUserMessageAt: null,
+                    createdAt: "2026-06-17T00:00:00.000Z",
+                    updatedAt: "2026-06-17T00:00:00.000Z",
+                    archivedAt: null,
+                    settledOverride: null,
+                    settledAt: null,
+                  }),
+                  activeRunId: RunId.make(`run-${id}`),
                 }),
-              ),
-          }),
-        ),
-        Layer.provide(Layer.succeed(ServerSettings.ServerSettingsService, guardedSettings)),
-        Layer.provide(
-          Layer.mock(DeviceService.DeviceService)({
-            sessionsForThread: () => Ref.set(screenshotRan, true).pipe(Effect.as([])),
-          }),
-        ),
-        Layer.provide(
-          Layer.succeed(McpHttpServer.McpClientAuthenticator, {
-            authenticate: (request) =>
-              Effect.succeed(
-                request.headers.authorization === `Bearer ${externalToken}`
-                  ? externalScope
-                  : undefined,
-              ),
-          }),
-        ),
-        Layer.provide(Layer.mock(ApiKeyStore.ApiKeyStore)({})),
-        Layer.provide(Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({})),
-        Layer.provide(
-          Layer.mock(MonitorService.MonitorService)({
-            canDeliver: () => true,
-            ownsCwd: () => false,
-            hasOpenWork: () => false,
-          }),
-        ),
-        Layer.provide(
-          McpSessionRegistry.layer.pipe(
-            Layer.provide(AgentToolPolicy.layerDiscovery),
-            Layer.provide(Layer.succeed(ServerSettings.ServerSettingsService, guardedSettings)),
+            }),
           ),
-        ),
-      );
+          Layer.provide(
+            Layer.mock(ComputerUseService.ComputerUseService)({
+              status: () =>
+                Ref.set(computerRan, true).pipe(
+                  Effect.as({
+                    supported: true,
+                    enabled: true,
+                    paused: false,
+                    driver: {
+                      platform: "darwin",
+                      installed: true,
+                      accessibility: "granted",
+                      screenRecording: "granted",
+                      reason: null,
+                    },
+                    owner: null,
+                    queued: [],
+                    blockedAppIds: [],
+                  }),
+                ),
+            }),
+          ),
+          Layer.provide(Layer.succeed(ServerSettings.ServerSettingsService, guardedSettings)),
+          Layer.provide(
+            Layer.mock(DeviceService.DeviceService)({
+              list: Effect.succeed({
+                hostStatus: "idle",
+                hostStatuses: {},
+                hosts: [],
+                devices: [],
+                sessions: [],
+                onboardingCompleted: true,
+                agentAccessEnabled: true,
+                hubBasePath: "/devices",
+                revision: 0,
+              }),
+              sessionsForThread: () => Ref.set(screenshotRan, true).pipe(Effect.as([])),
+            }),
+          ),
+          Layer.provide(
+            Layer.succeed(McpHttpServer.McpClientAuthenticator, {
+              authenticate: (request) =>
+                Effect.succeed(
+                  request.headers.authorization === `Bearer ${externalToken}`
+                    ? externalScope
+                    : undefined,
+                ),
+            }),
+          ),
+          Layer.provide(Layer.mock(ApiKeyStore.ApiKeyStore)({})),
+          Layer.provide(Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({})),
+          Layer.provide(
+            Layer.mock(MonitorService.MonitorService)({
+              canDeliver: () => true,
+              ownsCwd: () => false,
+              hasOpenWork: () => false,
+            }),
+          ),
+          Layer.provide(
+            McpSessionRegistry.layer.pipe(
+              Layer.provide(AgentToolPolicy.layerDiscovery),
+              Layer.provide(Layer.succeed(ServerSettings.ServerSettingsService, guardedSettings)),
+            ),
+          ),
+        )
+        .pipe(Layer.provide(Layer.succeed(TeamBoard.TeamBoard, board)));
       yield* HttpRouter.serve(layerRoutes, {
         disableListenLog: true,
         disableLogger: true,
@@ -268,7 +321,7 @@ it.effect("filters and refuses tools on the same MCP session as settings change"
           return decodeRpc(yield* response.text);
         });
 
-      const configA = yield* issue("thread-a", "claudeAgent", new Set(["device"]));
+      const configA = yield* issue("thread-a", "claudeAgent", new Set(["device", "orchestration"]));
       const providerA = configA.authorizationHeader;
       const opened = yield* openSession(providerA);
       expect(opened.init.result?.capabilities?.tools?.listChanged).toBe(true);
@@ -286,6 +339,95 @@ it.effect("filters and refuses tools on the same MCP session as settings change"
       expect(initial).toContain("computer_screenshot");
       expect(initial.some((name) => name.startsWith("preview_"))).toBe(false);
       expect(initial).not.toContain("t3_worktree_handoff");
+      expect(initial).not.toContain("team_board");
+      const leadProvider = (yield* issue("board-lead", "claudeAgent", new Set(["orchestration"])))
+        .authorizationHeader;
+      const leadSession = yield* openSession(leadProvider);
+      const leadList = (id: number) =>
+        post(
+          leadProvider,
+          leadSession.sessionId,
+          JSON.stringify({ jsonrpc: "2.0", id, method: "tools/list", params: {} }),
+        ).pipe(
+          Effect.flatMap((response) => response.text),
+          Effect.map((text) => decodeRpc(text).result?.tools ?? []),
+        );
+      expect((yield* leadList(60)).find(({ name }) => name === "team_board")).toBeUndefined();
+      const cohort = {
+        leadId: ThreadId.make("board-lead"),
+        repo: "fixture-repo",
+        members: ["thread-a", "sibling"].map((id) => ({
+          threadId: ThreadId.make(id),
+          taskId: NodeId.make(`task-${id}`),
+          runId: RunId.make(`run-${id}`),
+          cwd: `/test/${id}`,
+          name: id,
+          worktree: true,
+        })),
+      };
+      board.registerSubagent(cohort.members[0]!.threadId);
+      yield* board.updateTeam({ ...cohort, members: cohort.members.slice(0, 1) });
+      const firstChildList = yield* post(
+        providerA,
+        opened.sessionId,
+        '{"jsonrpc":"2.0","id":61,"method":"tools/list","params":{}}',
+      );
+      const firstChildCatalog = decodeRpc(yield* firstChildList.text).result?.tools;
+      const soloBoard = yield* call(providerA, opened.sessionId, 610, "team_board", {});
+      expect(soloBoard.result?.isError, resultText(soloBoard)).not.toBe(true);
+      expect(resultText(soloBoard)).toContain("No sibling subagents right now.");
+      yield* board.updateTeam(cohort);
+      const activeLeadCatalog = yield* leadList(611);
+      const leadBoard = activeLeadCatalog.find(({ name }) => name === "team_board");
+      expect(leadBoard).toBeDefined();
+      expect(JSON.stringify(leadBoard)).not.toContain("anthropic/alwaysLoad");
+      const claudeTools = yield* post(
+        providerA,
+        opened.sessionId,
+        '{"jsonrpc":"2.0","id":62,"method":"tools/list","params":{}}',
+      );
+      const claudeCatalog = yield* claudeTools.text;
+      expect(toolNames(decodeRpc(claudeCatalog))).toContain("team_board");
+      expect(claudeCatalog).toContain('"anthropic/alwaysLoad":true');
+      expect(decodeRpc(claudeCatalog).result?.tools).toEqual(firstChildCatalog);
+      expect(yield* discovery).toContain("team_board —");
+      yield* board.postUser({ threadId: cohort.leadId, text: "Keep the file format" });
+      const beforeSettleBytes = Buffer.byteLength(
+        JSON.stringify(decodeRpc(claudeCatalog).result?.tools),
+      );
+      yield* board.endRun(cohort.members[1]!);
+      const afterSettle = yield* post(
+        providerA,
+        opened.sessionId,
+        '{"jsonrpc":"2.0","id":621,"method":"tools/list","params":{}}',
+      );
+      const afterSettlePayload = decodeRpc(yield* afterSettle.text).result?.tools;
+      expect(afterSettlePayload).toEqual(decodeRpc(claudeCatalog).result?.tools);
+      const afterSettleBytes = Buffer.byteLength(JSON.stringify(afterSettlePayload));
+      expect(afterSettleBytes).toBe(beforeSettleBytes);
+      yield* Effect.promise(() =>
+        writeAgentQualityArtifact("team-board-tool-stability", {
+          twoSiblings: beforeSettleBytes,
+          firstChild: Buffer.byteLength(JSON.stringify(firstChildCatalog)),
+          lastSibling: afterSettleBytes,
+          delta: afterSettleBytes - beforeSettleBytes,
+        }),
+      );
+      expect(board.hasNotices(cohort.members[0]!.threadId)).toBe(true);
+      const attached = yield* call(providerA, opened.sessionId, 622, "device_list", {});
+      const notice = "From the user, via the team board: Keep the file format";
+      expect(attached.result?.isError, attached.result?.content?.[0]?.text).not.toBe(true);
+      expect(resultText(attached)).toContain(notice);
+      expect(attached.result?.structuredContent?._sshcodeTeamBoard).toBe(notice);
+      expect(
+        (yield* call(providerA, opened.sessionId, 623, "device_list", {})).result?.structuredContent
+          ?._sshcodeTeamBoard,
+      ).toBeUndefined();
+      expect(board.hasNotices(cohort.members[1]!.threadId)).toBe(true);
+      yield* board.endRun(cohort.members[0]!);
+      expect(yield* list(providerA, opened.sessionId, 63)).toContain("team_board");
+      expect(yield* discovery).toContain("team_board —");
+      expect(yield* leadList(631)).toEqual(activeLeadCatalog);
 
       yield* settings.updateSettings({
         agentToolPolicy: {
@@ -367,6 +509,60 @@ it.effect("filters and refuses tools on the same MCP session as settings change"
       );
       expect(yield* Ref.get(screenshotRan)).toBe(false);
 
+      // Settings > Agents Token use = Low defers every visible tool behind t3_tool
+      // for any harness and omits the redundant discovery catalog.
+      yield* settings.updateSettings({ agentBehavior: { tokens: "low" } });
+      expect((yield* list(providerA, opened.sessionId, 80)).toSorted()).toEqual([
+        "t3_tool",
+        "team_board",
+      ]);
+      expect(yield* discovery).toBe("");
+      yield* board.updateTeam(cohort);
+      expect((yield* list(providerA, opened.sessionId, 801)).toSorted()).toEqual([
+        "t3_tool",
+        "team_board",
+      ]);
+      expect(yield* discovery).toBe("");
+      yield* board.updateTeam({ ...cohort, members: [] });
+      const lookedUp = yield* call(providerA, opened.sessionId, 81, "t3_tool", {
+        name: "device_list",
+      });
+      expect(lookedUp.result?.isError).not.toBe(true);
+      expect(JSON.parse(resultText(lookedUp))).toMatchObject({
+        name: "device_list",
+        inputSchema: { type: "object" },
+      });
+      yield* settings.updateSettings({ agentBehavior: { tokens: "default" } });
+      expect(yield* list(providerA, opened.sessionId, 82)).toContain("device_list");
+      expect(yield* discovery).toContain("device_list —");
+
+      // Settings > Agents Token use = High lists `report_progress` with `anthropic/alwaysLoad`
+      // so Claude Code does not defer it behind ToolSearch; other tools carry no `_meta`.
+      try {
+        registerAgentBehavior(() => ({ ...DEFAULT_AGENT_BEHAVIOR, tokens: "high" }));
+        yield* settings.updateSettings({ agentBehavior: { tokens: "high" } });
+        const highResponse = yield* post(
+          providerA,
+          opened.sessionId,
+          `{"jsonrpc":"2.0","id":83,"method":"tools/list","params":{}}`,
+        );
+        expect(highResponse.status).toBe(200);
+        const highTools = decodeRpc(yield* highResponse.text).result?.tools ?? [];
+        const progressTool = highTools.find((tool) => tool.name === "report_progress");
+        const deviceTool = highTools.find((tool) => tool.name === "device_list");
+        expect(progressTool?._meta).toEqual({ "anthropic/alwaysLoad": true });
+        expect(deviceTool?._meta).toBeUndefined();
+      } finally {
+        registerAgentBehavior(() => DEFAULT_AGENT_BEHAVIOR);
+        yield* settings.updateSettings({ agentBehavior: { tokens: "default" } });
+      }
+      expect(yield* list(providerA, opened.sessionId, 84)).not.toContain("report_progress");
+      const refusedProgress = yield* call(providerA, opened.sessionId, 85, "report_progress", {
+        update: "Still working.",
+      });
+      expect(refusedProgress.result?.isError).toBe(true);
+      expect(resultText(refusedProgress)).toContain("Token use is High");
+
       yield* settings.updateSettings({
         agentToolPolicy: { enabled: true, tools: {}, providers: {} },
       });
@@ -418,13 +614,17 @@ it.effect("filters and refuses tools on the same MCP session as settings change"
     }),
   ).pipe(
     Effect.provide(
-      Layer.mergeAll(
-        NodeHttpServer.layerTest,
-        ServerConfig.layerTest(process.cwd(), { prefix: "t3-agent-tool-policy-http-" }).pipe(
-          Layer.provide(NodeServices.layer),
+      TeamBoard.layer.pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            NodeHttpServer.layerTest,
+            ServerConfig.layerTest(process.cwd(), { prefix: "t3-agent-tool-policy-http-" }).pipe(
+              Layer.provide(NodeServices.layer),
+            ),
+            NodeServices.layer,
+            ServerSettings.layerTest(),
+          ),
         ),
-        NodeServices.layer,
-        ServerSettings.layerTest(),
       ),
     ),
   ),
@@ -616,6 +816,147 @@ it.effect(
         Layer.mergeAll(
           NodeHttpServer.layerTest,
           ServerConfig.layerTest(process.cwd(), { prefix: "t3-outside-access-http-" }).pipe(
+            Layer.provide(NodeServices.layer),
+          ),
+          NodeServices.layer,
+          ServerSettings.layerTest(),
+        ),
+      ),
+    ),
+);
+
+it.effect(
+  "marks show_card with anthropic/alwaysLoad for Claude at High and in bot chats, and omits it from compact default lists",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const layerRoutes = McpHttpServer.layer.pipe(
+          Layer.provide(
+            Layer.mock(ComputerUseService.ComputerUseService)({
+              status: () => Effect.die("unused"),
+            }),
+          ),
+          Layer.provide(Layer.succeed(ServerSettings.ServerSettingsService, settings)),
+          Layer.provide(Layer.mock(DeviceService.DeviceService)({})),
+          Layer.provide(
+            Layer.succeed(McpHttpServer.McpClientAuthenticator, {
+              authenticate: () => Effect.succeed(undefined),
+            }),
+          ),
+          Layer.provide(Layer.mock(ApiKeyStore.ApiKeyStore)({})),
+          Layer.provide(Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({})),
+          Layer.provide(
+            Layer.mock(MonitorService.MonitorService)({
+              canDeliver: () => true,
+              ownsCwd: () => false,
+              hasOpenWork: () => false,
+            }),
+          ),
+          Layer.provide(
+            McpSessionRegistry.layer.pipe(
+              Layer.provide(AgentToolPolicy.layerDiscovery),
+              Layer.provide(Layer.succeed(ServerSettings.ServerSettingsService, settings)),
+            ),
+          ),
+        );
+        yield* HttpRouter.serve(layerRoutes, {
+          disableListenLog: true,
+          disableLogger: true,
+        }).pipe(
+          Layer.provide(
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getEnvironmentId: Effect.succeed("environment-cards-http" as never),
+            }),
+          ),
+          Layer.provide(PreviewAutomationBroker.layer),
+          Layer.provide(Layer.mock(QaSandbox)({ touch: () => Effect.void })),
+          Layer.provide(PreviewBrowser.layer),
+          Layer.provide(layerStubServices),
+          Layer.build,
+        );
+
+        const httpClient = yield* HttpClient.HttpClient;
+        const post = (authorization: string, sessionId: string | undefined, body: string) =>
+          httpClient.post("/mcp", {
+            headers: {
+              accept: "application/json, text/event-stream",
+              authorization,
+              ...(sessionId === undefined
+                ? {}
+                : { "mcp-protocol-version": "2025-06-18", "mcp-session-id": sessionId }),
+            },
+            body: HttpBody.text(body, "application/json"),
+          });
+
+        const openAndList = (thread: string, provider: string, id: number) =>
+          Effect.gen(function* () {
+            const cred = yield* McpSessionRegistry.issueActiveMcpCredential({
+              threadId: ThreadId.make(thread),
+              providerInstanceId: ProviderInstanceId.make(provider),
+              capabilities: new Set(["orchestration"]),
+            });
+            const auth = cred!.config.authorizationHeader;
+            const init = yield* post(
+              auth,
+              undefined,
+              `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"cards","version":"1.0.0"}}}`,
+            );
+            expect(init.status).toBe(200);
+            const listed = yield* post(
+              auth,
+              init.headers["mcp-session-id"]!,
+              `{"jsonrpc":"2.0","id":${id},"method":"tools/list","params":{}}`,
+            );
+            expect(listed.status).toBe(200);
+            return decodeRpc(yield* listed.text).result?.tools ?? [];
+          });
+
+        try {
+          // Default token use (from ServerSettingsService, even without syncing the module global):
+          // Claude sees show_card without anthropic/alwaysLoad; Antigravity omits it; report_progress is hidden.
+          registerAgentBehavior(() => DEFAULT_AGENT_BEHAVIOR);
+          McpHttpServer.registerEagerCardsCheck(() => false);
+          const claudeDefault = yield* openAndList("thread-claude-default", "claudeAgent", 2);
+          const defaultCard = claudeDefault.find((t) => t.name === "show_card");
+          expect(defaultCard).toBeDefined();
+          expect(defaultCard?._meta?.["anthropic/alwaysLoad"]).toBeUndefined();
+          expect(claudeDefault.some((t) => t.name === "report_progress")).toBe(false);
+
+          const agDefault = yield* openAndList("thread-ag-default", "antigravity", 3);
+          expect(agDefault.some((t) => t.name === "show_card")).toBe(false);
+
+          // High token use via ServerSettingsService alone (module global intentionally still Default):
+          // Claude sees show_card + report_progress with anthropic/alwaysLoad=true; Antigravity includes show_card.
+          yield* settings.updateSettings({ agentBehavior: { tokens: "high" } });
+          const claudeHigh = yield* openAndList("thread-claude-high", "claudeAgent", 4);
+          const highCard = claudeHigh.find((t) => t.name === "show_card");
+          expect(highCard).toBeDefined();
+          expect(highCard?._meta?.["anthropic/alwaysLoad"]).toBe(true);
+          const highProgress = claudeHigh.find((t) => t.name === "report_progress");
+          expect(highProgress).toBeDefined();
+          expect(highProgress?._meta?.["anthropic/alwaysLoad"]).toBe(true);
+
+          const agHigh = yield* openAndList("thread-ag-high", "antigravity", 5);
+          expect(agHigh.some((t) => t.name === "show_card")).toBe(true);
+
+          // Bot chat at Default token use: Claude still sees anthropic/alwaysLoad=true.
+          yield* settings.updateSettings({ agentBehavior: { tokens: "default" } });
+          McpHttpServer.registerEagerCardsCheck((id) => id === "thread-claude-bot");
+          const claudeBot = yield* openAndList("thread-claude-bot", "claudeAgent", 6);
+          const botCard = claudeBot.find((t) => t.name === "show_card");
+          expect(botCard).toBeDefined();
+          expect(botCard?._meta?.["anthropic/alwaysLoad"]).toBe(true);
+        } finally {
+          registerAgentBehavior(() => DEFAULT_AGENT_BEHAVIOR);
+          McpHttpServer.registerEagerCardsCheck(() => false);
+        }
+      }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NodeHttpServer.layerTest,
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3-cards-meta-http-" }).pipe(
             Layer.provide(NodeServices.layer),
           ),
           NodeServices.layer,

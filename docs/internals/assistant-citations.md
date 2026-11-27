@@ -14,6 +14,12 @@ normalization is only for locating it. Repeated text needs an unambiguous contex
 match, even if one occurrence still sits at the saved offsets. Guessing could
 highlight the wrong claim.
 
+The phone's native selection reports its text and offsets inside one native text
+view, not the message. Those offsets drift from any Markdown model (link pills are
+one character, and spacer lines and separate code, quote and table views move them),
+so the [phone mapping](../../apps/mobile/src/lib/assistantCitationSelection.ts) trusts
+the nearest repeated copy only when it clearly wins, and otherwise asks the user.
+
 Navigation owns the highlight's lifetime across virtual-row remounts. The source
 row must be fetched, unfolded, mounted, and measured before quote positioning
 takes over from normal timeline scrolling. Remounting must not revive a dismissed

@@ -19,6 +19,7 @@ export function nativeContextState(input: {
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly run: OrchestrationV2Run;
   readonly nativeThreadId: string | null | undefined;
+  readonly recoveringPromptOfRunId?: OrchestrationV2Run["id"] | undefined;
 }) {
   const { projection, providerThread, run, nativeThreadId } = input;
   const sameNativeThread = providerThread.nativeThreadRef?.nativeId === nativeThreadId;
@@ -47,24 +48,35 @@ export function nativeContextState(input: {
     ...deliveredItemIds,
     ...settledHandoffs.flatMap((handoff) => handoff.delivery?.omittedItemIds ?? []),
   ]);
-  const deliveredAttemptIds = new Set(projection.providerTurns.map((turn) => turn.runAttemptId));
+  const deliveredAttemptIds = new Set(
+    projection.providerTurns.filter((turn) => !turn.promptDropped).map((turn) => turn.runAttemptId),
+  );
   const acceptedAttempts = projection.attempts.filter(
     (source) =>
       !rolledBackRunIds.has(source.runId) &&
       source.providerThreadId === providerThread.id &&
       deliveredAttemptIds.has(source.id),
   );
-  const nativeInputRunIds = new Set(
-    acceptedAttempts
-      .filter(
-        (source) => source.nativeThreadId !== undefined && source.nativeThreadId === nativeThreadId,
-      )
-      .map((source) => source.runId),
+  const recoverySourceByRun = new Map(
+    projection.runs.flatMap((run) =>
+      run.promptRecoveryOfRunId === undefined ? [] : [[run.id, run.promptRecoveryOfRunId] as const],
+    ),
   );
-  const legacyInputRunIds = new Set(
-    acceptedAttempts
-      .filter((source) => source.nativeThreadId === undefined)
-      .map((source) => source.runId),
+  const nativeInputRunIds = new Set<OrchestrationV2Run["id"]>();
+  const legacyInputRunIds = new Set<OrchestrationV2Run["id"]>();
+  const recoveredPromptRunIds = new Set<OrchestrationV2Run["id"]>();
+  for (const attempt of acceptedAttempts) {
+    if (attempt.nativeThreadId !== undefined && attempt.nativeThreadId !== nativeThreadId) continue;
+    const recovered =
+      attempt.reason === "steering_restart" ? undefined : recoverySourceByRun.get(attempt.runId);
+    if (recovered !== undefined) recoveredPromptRunIds.add(recovered);
+    const inputRuns = attempt.nativeThreadId === undefined ? legacyInputRunIds : nativeInputRunIds;
+    inputRuns.add(recovered ?? attempt.runId);
+  }
+  const steeringAttemptIds = new Set(
+    projection.attempts
+      .filter((attempt) => attempt.reason === "steering_restart")
+      .map((attempt) => attempt.id),
   );
   const legacyRecoveredRunIds = new Set(
     projection.runs
@@ -85,8 +97,12 @@ export function nativeContextState(input: {
     (source) =>
       source.ordinal < run.ordinal &&
       source.providerThreadId === providerThread.id &&
+      source.id !== input.recoveringPromptOfRunId &&
+      (source.promptRecoveryOfRunId === undefined ||
+        (source.activeAttemptId !== null && steeringAttemptIds.has(source.activeAttemptId))) &&
       (source.status === "failed" || source.status === "interrupted") &&
-      !deliveredAttemptIds.has(source.activeAttemptId),
+      !deliveredAttemptIds.has(source.activeAttemptId) &&
+      !recoveredPromptRunIds.has(source.id),
   );
   const missedRunIds = new Set(missedRuns.map((source) => source.id));
   // Imported history has no native attachments. Legacy attempts without a native

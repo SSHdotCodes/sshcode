@@ -41,8 +41,14 @@ import { HeldBackgroundWorkActions } from "./HeldBackgroundWork";
 import type { FloatingWorkingStatus } from "./floating-working-status";
 import { ShimmeringWorkContent } from "./thread-work-log";
 import { useVisibleSecondClock } from "./use-visible-second-clock";
+import { LiveProgressBar, useLiveProgressCard } from "./LiveProgress";
 
 const CONTROL_HEIGHT = 38.5; // h-11 with the mobile 14px rem
+// The capsule keeps its height at every text size, so its labels stop growing where one line
+// still fits; past that they truncate instead of clipping mid-glyph.
+const CAPSULE_MAX_FONT_SCALE = 1.6;
+// The working row's padding (px-4), mascot and gap, around its text.
+const WORKING_LABEL_CHROME = 62;
 // The collapsed composer capsule starts 6 below its overlay's top edge, so
 // the pill sits at (gap - 6) above the overlay to leave the same gap to the
 // capsule as the feed's end inset leaves between it and the last row.
@@ -90,6 +96,13 @@ export function FloatingWorkingControl(props: {
   readonly queuedCount: number;
   readonly queueHeld?: boolean;
   readonly onOpenQueue: () => void;
+  /** The lead's team board; it follows the working status (live progress included). */
+  readonly teamBoard?: {
+    readonly postCount: number;
+    readonly overlapCount: number;
+    readonly unread: boolean;
+    readonly onPress: () => void;
+  } | null;
   /** Extra distance to rise above the anchor, e.g. an overlay card's coverage. */
   readonly lift?: SharedValue<number>;
 }) {
@@ -100,6 +113,9 @@ export function FloatingWorkingControl(props: {
   const [overlayWidth, setOverlayWidth] = useState(windowWidth);
   const [queueWidth, setQueueWidth] = useState(0);
   const [agentsWidth, setAgentsWidth] = useState(0);
+  const [boardWidth, setBoardWidth] = useState(0);
+  const teamBoard = props.teamBoard ?? null;
+  const hasBoard = teamBoard !== null;
   const hasQueue = props.queuedCount > 0;
   const hasPreview = props.devicePreview !== null || props.browserPreview !== null;
   const [previewWidth, setPreviewWidth] = useState(0);
@@ -114,6 +130,7 @@ export function FloatingWorkingControl(props: {
       32 -
       (hasQueue ? queueWidth : 0) -
       (hasAgents ? agentsWidth : 0) -
+      (hasBoard ? boardWidth : 0) -
       (hasPreview ? previewWidth : 0),
   );
   const separationProgress = useSharedValue(props.showScrollToEnd ? 1 : 0);
@@ -155,7 +172,7 @@ export function FloatingWorkingControl(props: {
   const mascotReady = useHarnessMascotReady(moment != null || result ? (mascot?.id ?? null) : null);
   const reacting = (mascotReady && result) || moment != null;
   const hasStatus = props.status !== null || reacting;
-  const hasCapsule = hasStatus || hasQueue || hasAgents || hasPreview;
+  const hasCapsule = hasStatus || hasQueue || hasAgents || hasPreview || hasBoard;
   useEffect(() => {
     if (!hasStatus) {
       measuredWidthRef.current = null;
@@ -180,14 +197,16 @@ export function FloatingWorkingControl(props: {
     hasStatus ||
     hasAgents ||
     hasQueue ||
+    hasBoard ||
     (props.devicePreview !== null && props.browserPreview !== null);
   // The queue, agents, questions, and reconnect labels have separate tap targets.
   const statusInteractive =
     props.status?.kind === "connection" ||
     props.status?.kind === "child-input" ||
+    (props.status?.kind === "working" && props.status.progress !== undefined) ||
     (props.status?.kind === "background" &&
       (props.status.onPress !== undefined || props.status.held !== undefined));
-  const capsuleInteractive = statusInteractive || hasQueue || hasAgents || hasPreview;
+  const capsuleInteractive = statusInteractive || hasQueue || hasAgents || hasPreview || hasBoard;
   // The host stays centered on the capsule, but its measurement constraint
   // comes from the overlay, independent of the capsule's current width.
   const statusContent =
@@ -200,6 +219,7 @@ export function FloatingWorkingControl(props: {
           />
         ) : null}
         <Text
+          maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
           className="text-xs text-foreground"
           numberOfLines={1}
           style={{ maxWidth: Math.max(0, labelWidth - 48) }}
@@ -226,20 +246,76 @@ export function FloatingWorkingControl(props: {
             }
             status={props.status}
             onLayout={handleLabelLayout}
+            {...(hasBoard ? { compactWidth: labelWidth - WORKING_LABEL_CHROME } : {})}
           />
         </View>
       </View>
     ) : null;
 
+  // The board gives way: its name goes beside other segments, and beside the working status
+  // (live progress included) it keeps only the counts, so both stay readable on a phone.
+  const boardLabel = teamBoardCapsuleLabel(teamBoard, {
+    beside: hasStatus ? "status" : hasAgents || hasQueue || hasPreview ? "segments" : null,
+  });
   const capsuleContent = (
     <View className="flex-row items-center">
       {statusContent}
+      {teamBoard !== null ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={[
+            "Open team board",
+            `${teamBoard.postCount} ${teamBoard.postCount === 1 ? "post" : "posts"}`,
+            teamBoard.overlapCount > 0
+              ? `${teamBoard.overlapCount} ${teamBoard.overlapCount === 1 ? "overlap" : "overlaps"}`
+              : null,
+            teamBoard.unread ? "new posts" : null,
+          ]
+            .filter(Boolean)
+            .join(", ")}
+          onPress={teamBoard.onPress}
+          onLayout={(event) => setBoardWidth(event.nativeEvent.layout.width)}
+          // Never wider than the capsule; past that the overlaps, then the posts, truncate.
+          style={{
+            maxWidth: Math.max(0, Math.min(overlayWidth, windowWidth) - CONTROL_HEIGHT - 32),
+          }}
+          className="h-11 flex-row items-center gap-1.5 px-3 active:opacity-70"
+        >
+          {hasStatus ? <View className="mr-1 h-4 w-px bg-border" /> : null}
+          <View>
+            <SymbolView
+              name={{ ios: "bubble.left.and.text.bubble.right", android: "chat" }}
+              size={13}
+              tintColorClassName="accent-foreground-muted"
+            />
+            {teamBoard.unread ? (
+              <View className="absolute -top-0.5 -right-1 size-[7px] rounded-full bg-primary" />
+            ) : null}
+          </View>
+          <Text
+            maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
+            className="font-t3-medium text-xs tabular-nums"
+            numberOfLines={1}
+            style={{ flexShrink: 1 }}
+          >
+            {boardLabel.lead}
+            {boardLabel.overlaps ? (
+              <Text
+                maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
+                className="font-t3-medium text-xs text-adaptive-amber-700-400"
+              >
+                {boardLabel.overlaps}
+              </Text>
+            ) : null}
+          </Text>
+        </Pressable>
+      ) : null}
       {hasPreview ? (
         <View
           className="h-11 flex-row items-center"
           onLayout={(event) => setPreviewWidth(event.nativeEvent.layout.width)}
         >
-          {hasStatus ? <View className="h-4 w-px bg-border" /> : null}
+          {hasStatus || hasBoard ? <View className="h-4 w-px bg-border" /> : null}
           {props.devicePreview !== null ? (
             <DevicePreviewButton {...props.devicePreview} compact={previewCompact} />
           ) : null}
@@ -257,9 +333,15 @@ export function FloatingWorkingControl(props: {
           onLayout={(event) => setAgentsWidth(event.nativeEvent.layout.width)}
           className="h-11 flex-row items-center gap-1.5 px-3 active:opacity-70"
         >
-          {hasStatus || hasPreview ? <View className="mr-1 h-4 w-px bg-border" /> : null}
+          {hasStatus || hasPreview || hasBoard ? (
+            <View className="mr-1 h-4 w-px bg-border" />
+          ) : null}
           <SymbolView name="person.2" size={13} tintColorClassName="accent-foreground-muted" />
-          <Text className="font-t3-medium text-xs tabular-nums" numberOfLines={1}>
+          <Text
+            maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
+            className="font-t3-medium text-xs tabular-nums"
+            numberOfLines={1}
+          >
             {agents.label}
           </Text>
         </Pressable>
@@ -274,11 +356,15 @@ export function FloatingWorkingControl(props: {
           style={{ maxWidth: Math.min(overlayWidth, windowWidth) * 0.45 }}
           className="h-11 flex-row items-center gap-2 px-3 active:opacity-70"
         >
-          {hasStatus || hasPreview || hasAgents ? (
+          {hasStatus || hasPreview || hasAgents || hasBoard ? (
             <View className="mr-1 h-4 w-px bg-border" />
           ) : null}
           <SymbolView name="list.number" size={13} tintColorClassName="accent-foreground-muted" />
-          <Text className="shrink font-t3-medium text-xs tabular-nums" numberOfLines={1}>
+          <Text
+            maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
+            className="shrink font-t3-medium text-xs tabular-nums"
+            numberOfLines={1}
+          >
             {props.queuedCount} {props.queueHeld ? "held" : "queued"}
           </Text>
         </Pressable>
@@ -375,6 +461,26 @@ export function FloatingWorkingControl(props: {
   );
 }
 
+export function teamBoardCapsuleLabel(
+  board: { readonly postCount: number; readonly overlapCount: number } | null,
+  options: { readonly beside: "status" | "segments" | null },
+): { readonly lead: string; readonly overlaps: string | null } {
+  if (board === null) return { lead: "", overlaps: null };
+  const posts = `${board.postCount} ${board.postCount === 1 ? "post" : "posts"}`;
+  const overlaps = `${board.overlapCount} ${board.overlapCount === 1 ? "overlap" : "overlaps"}`;
+  const hasOverlaps = board.overlapCount > 0;
+  if (options.beside === "status") {
+    return {
+      lead: String(board.postCount),
+      overlaps: hasOverlaps ? ` · ${board.overlapCount}` : null,
+    };
+  }
+  return {
+    lead: options.beside === "segments" ? posts : `Team board · ${posts}`,
+    overlaps: hasOverlaps ? ` · ${overlaps}` : null,
+  };
+}
+
 function CompactingLabel(props: { readonly onLayout: (event: LayoutChangeEvent) => void }) {
   return (
     <StatusLabelRow accessibilityLabel="Compacting" className="gap-1.5" onLayout={props.onLayout}>
@@ -384,7 +490,12 @@ function CompactingLabel(props: { readonly onLayout: (event: LayoutChangeEvent) 
         tintColorClassName="accent-foreground"
         type="monochrome"
       />
-      <Text className="font-t3-medium text-xs text-foreground">Compacting…</Text>
+      <Text
+        maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
+        className="font-t3-medium text-xs text-foreground"
+      >
+        Compacting…
+      </Text>
     </StatusLabelRow>
   );
 }
@@ -392,6 +503,8 @@ function CompactingLabel(props: { readonly onLayout: (event: LayoutChangeEvent) 
 function FloatingStatusLabel(props: {
   readonly status: FloatingWorkingStatus;
   readonly onLayout: (event: LayoutChangeEvent) => void;
+  /** Set beside the team board's counts: the working text's room for its compact form. */
+  readonly compactWidth?: number;
 }) {
   // Keyed by kind so a swap mounts a fresh row and the two cross-fade while
   // the capsule animates to the new row's measured width.
@@ -406,7 +519,11 @@ function FloatingStatusLabel(props: {
         {props.status.showSpinner ? (
           <AppActivityIndicator size="small" colorClassName="accent-icon-muted" />
         ) : null}
-        <Text className="shrink font-t3-medium text-xs text-foreground" numberOfLines={1}>
+        <Text
+          maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
+          className="shrink font-t3-medium text-xs text-foreground"
+          numberOfLines={1}
+        >
           {props.status.label}
         </Text>
       </StatusLabelRow>
@@ -426,7 +543,11 @@ function FloatingStatusLabel(props: {
         onPress={props.status.onPress}
       >
         <SymbolView name="text.bubble" size={13} tintColorClassName="accent-foreground" />
-        <Text className="shrink font-t3-medium text-xs text-foreground" numberOfLines={1}>
+        <Text
+          maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
+          className="shrink font-t3-medium text-xs text-foreground"
+          numberOfLines={1}
+        >
           {props.status.label}
         </Text>
       </StatusLabelRow>
@@ -448,6 +569,7 @@ function FloatingStatusLabel(props: {
           <View className="h-2 w-2 rounded-full bg-red-500" />
         )}
         <Text
+          maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
           className="max-w-[260px] shrink font-t3-medium text-xs text-foreground"
           numberOfLines={1}
         >
@@ -489,12 +611,20 @@ function FloatingStatusLabel(props: {
             className="shrink active:opacity-70"
             onPress={props.status.onPress}
           >
-            <Text className="font-t3-medium text-xs text-foreground" numberOfLines={1}>
+            <Text
+              maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
+              className="font-t3-medium text-xs text-foreground"
+              numberOfLines={1}
+            >
               {props.status.label}
             </Text>
           </Pressable>
         ) : (
-          <Text className="shrink font-t3-medium text-xs text-foreground" numberOfLines={1}>
+          <Text
+            maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
+            className="shrink font-t3-medium text-xs text-foreground"
+            numberOfLines={1}
+          >
             {props.status.label}
           </Text>
         )}
@@ -516,7 +646,11 @@ function FloatingStatusLabel(props: {
           tintColorClassName="accent-foreground"
           type="monochrome"
         />
-        <Text className="shrink font-t3-medium text-xs text-foreground" numberOfLines={1}>
+        <Text
+          maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
+          className="shrink font-t3-medium text-xs text-foreground"
+          numberOfLines={1}
+        >
           {props.status.label}
         </Text>
       </StatusLabelRow>
@@ -553,7 +687,9 @@ function FloatingStatusLabel(props: {
       key="working"
       startedAt={props.status.startedAt}
       rate={formatGenerationRate(props.status.generation)}
+      progress={props.status.progress}
       onLayout={props.onLayout}
+      compactWidth={props.compactWidth}
     />
   );
 }
@@ -601,21 +737,53 @@ function StatusLabelRow(props: {
 function WorkingDuration(props: {
   readonly startedAt: string;
   readonly rate: string | undefined;
+  readonly progress: Extract<FloatingWorkingStatus, { kind: "working" }>["progress"];
   readonly onLayout: (event: LayoutChangeEvent) => void;
+  readonly compactWidth: number | undefined;
 }) {
+  // Token use High: time left replaces the rate, and a thin bar runs along the bottom edge.
+  const card = useLiveProgressCard(props.progress?.value);
+  const timeLeft = card?.pillTimeLeft ?? undefined;
   return (
-    <StatusLabelRow onLayout={props.onLayout} className="gap-1.5">
+    <StatusLabelRow
+      onLayout={props.onLayout}
+      className="gap-1.5"
+      {...(props.progress === undefined
+        ? {}
+        : {
+            accessibilityRole: "button" as const,
+            accessibilityLabel: `Working${timeLeft ? `, ${timeLeft}` : ""}. Shows progress.`,
+            onPress: props.progress.onPress,
+          })}
+    >
       <HarnessMascot state="working" size={28} />
-      <WorkingTimer startedAt={props.startedAt} rate={props.rate} />
+      {props.compactWidth === undefined ? (
+        <WorkingTimer startedAt={props.startedAt} rate={timeLeft ?? props.rate} />
+      ) : (
+        <CompactWorkingTimer
+          startedAt={props.startedAt}
+          detail={timeLeft ?? props.rate}
+          width={props.compactWidth}
+        />
+      )}
+      {card !== null ? (
+        <View pointerEvents="none" className="absolute right-5 bottom-[5px] left-5">
+          <LiveProgressBar fraction={card.fraction} size="mini" />
+        </View>
+      ) : null}
     </StatusLabelRow>
   );
 }
 
-/** `Working 4m 12s`, then ` · 84 tok/s` in muted text once the turn has a timed reply. */
+/**
+ * `Working 4m 12s`, then ` · 84 tok/s` in muted text once the turn has a timed reply, or
+ * ` · 8 min left` when its live progress has an estimate.
+ */
 export function WorkingTimer(props: { readonly startedAt: string; readonly rate?: string }) {
   const nowMs = useVisibleSecondClock(true);
   return (
     <SystemText
+      maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
       className="shrink text-xs text-foreground"
       numberOfLines={1}
       style={{ fontVariant: ["tabular-nums"], fontWeight: "500" }}
@@ -625,6 +793,74 @@ export function WorkingTimer(props: { readonly startedAt: string; readonly rate?
         <SystemText className="text-foreground-muted">{` · ${props.rate}`}</SystemText>
       )}
     </SystemText>
+  );
+}
+
+/**
+ * Beside the team board's counts the working text drops "Working": "57s · 3 min left" while all
+ * of it fits, otherwise the elapsed time alone. A word is never cut; until the full text has been
+ * measured, only the elapsed time shows.
+ */
+export function compactWorkingLabel(input: {
+  readonly elapsed: string;
+  readonly detail: string | undefined;
+  readonly width: number;
+  readonly fullWidth: number | null;
+}): string {
+  if (input.detail === undefined) return input.elapsed;
+  return input.fullWidth !== null && input.fullWidth <= input.width
+    ? `${input.elapsed} · ${input.detail}`
+    : input.elapsed;
+}
+
+function CompactWorkingTimer(props: {
+  readonly startedAt: string;
+  readonly detail: string | undefined;
+  readonly width: number;
+}) {
+  const nowMs = useVisibleSecondClock(true);
+  const [fullWidth, setFullWidth] = useState<number | null>(null);
+  const elapsed = formatWorkingDuration(props.startedAt, nowMs);
+  const label = compactWorkingLabel({
+    elapsed,
+    detail: props.detail,
+    width: props.width,
+    fullWidth,
+  });
+  const textStyle = { fontVariant: ["tabular-nums" as const], fontWeight: "500" as const };
+  return (
+    <>
+      <SystemText
+        maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
+        className="text-xs text-foreground"
+        numberOfLines={1}
+        style={textStyle}
+      >
+        {elapsed}
+        {label === elapsed ? null : (
+          <SystemText className="text-foreground-muted">{` · ${props.detail}`}</SystemText>
+        )}
+      </SystemText>
+      {props.detail === undefined ? null : (
+        // Unconstrained twin of the full text, measured to decide whether it fits.
+        <View
+          testID="working-label-measure"
+          pointerEvents="none"
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={{ position: "absolute", left: 0, top: 0, width: 1000, opacity: 0 }}
+        >
+          <SystemText
+            maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
+            className="text-xs"
+            style={[textStyle, { alignSelf: "flex-start" }]}
+            onLayout={(event) => setFullWidth(event.nativeEvent.layout.width)}
+          >
+            {`${elapsed} · ${props.detail}`}
+          </SystemText>
+        </View>
+      )}
+    </>
   );
 }
 

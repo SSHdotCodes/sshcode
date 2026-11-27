@@ -1148,6 +1148,17 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:workflows:start",
       tag: WS_METHODS.workflowsStart,
     }),
+    // Bots' memory, watches and held updates. Opened only while Settings > Bots is on with a bot.
+    botsState: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:bots:state",
+      tag: WS_METHODS.botsSubscribe,
+      idleTtlMs: 15_000,
+    }),
+    mutateBots: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:bots:mutate",
+      tag: WS_METHODS.botsMutate,
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+    }),
     // Side chats (`/btw` on Claude, `/side` on Codex) recover by thread.
     openSideChat: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:side-chat:open",
@@ -1399,6 +1410,8 @@ export function createServerEnvironmentAtoms<R, E>(
             input.fresh ?? false,
             input.refreshModels ?? false,
             input.clearOutOfCredit ?? false,
+            input.omitProviders ?? false,
+            input.workspaceSnapshotOnly ?? false,
           ]),
       },
     }),

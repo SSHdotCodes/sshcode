@@ -9,6 +9,7 @@ import IconFileDiff from "@tabler/icons-react-native/IconFileDiff";
 import { SymbolView as ExpoSymbolView } from "expo-symbols";
 import { withUniwind } from "uniwind";
 import type { AppSymbolViewProps } from "./AppSymbol";
+import { BotGlyph } from "./BotGlyph";
 
 export type { SFSymbol } from "expo-symbols";
 export type { AppSymbolName } from "./AppSymbol";
@@ -22,6 +23,7 @@ const CUSTOM_ICONS = {
   "git.pull-request.closed": IconGitPullRequestClosed,
   "git.pull-request.draft": IconGitPullRequestDraft,
   "git.commit": IconGitCommit,
+  "bot.face": BotGlyph,
 };
 
 function AppSymbolView(props: AppSymbolViewProps) {

@@ -233,29 +233,30 @@ export function rankAccountRoutes<T extends ModelRouteSource>(
   return { routes: ordered, byRoute, newChatNote };
 }
 
-const resetTime = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/New_York",
-  hour: "numeric",
-  minute: "2-digit",
-  hour12: true,
-});
-const resetWeekday = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/New_York",
-  weekday: "short",
-});
-const resetDay = new Intl.DateTimeFormat("en-US", {
-  timeZone: "America/New_York",
-  month: "short",
-  day: "numeric",
-});
+// Made on first use, so reset times follow the viewer's time zone at that moment.
+let resetFormats:
+  | {
+      readonly time: Intl.DateTimeFormat;
+      readonly weekday: Intl.DateTimeFormat;
+      readonly day: Intl.DateTimeFormat;
+    }
+  | undefined;
+const resetFormat = () =>
+  (resetFormats ??= {
+    time: new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", hour12: true }),
+    weekday: new Intl.DateTimeFormat("en-US", { weekday: "short" }),
+    day: new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }),
+  });
 const HOUR = 3_600_000;
 
-/** "Fri", "7 AM" within the day, "Nov 23" past the week; null without a reset still to come. */
+/** On the viewer's clock: "Fri", "7 AM" within the day, "Nov 23" past the week; null
+    without a reset still to come. */
 export function accountResetLabel(resetsAt: string | undefined, now: number): string | null {
   const at = resetsAt === undefined ? Number.NaN : Date.parse(resetsAt);
   if (!Number.isFinite(at) || at <= now) return null;
-  if (at - now < 18 * HOUR) return resetTime.format(at).replace(":00", "");
-  return at - now < 6.5 * 24 * HOUR ? resetWeekday.format(at) : resetDay.format(at);
+  const format = resetFormat();
+  if (at - now < 18 * HOUR) return format.time.format(at).replace(":00", "");
+  return at - now < 6.5 * 24 * HOUR ? format.weekday.format(at) : format.day.format(at);
 }
 
 /**

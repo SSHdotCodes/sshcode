@@ -6,6 +6,7 @@ import {
   type ServerSelfUpdateResult,
   WS_METHODS,
 } from "@t3tools/contracts";
+import { ServerDownloadsPublished, serverUpdateUnavailable } from "@t3tools/shared/cliRelease";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -79,6 +80,13 @@ export const updateOutdatedHost = Effect.fn("clientRuntime.connection.updateOutd
         environmentId,
         message: `Update SSHCode on ${descriptor.label} manually; it cannot update itself.`,
       });
+    }
+    const unavailable = serverUpdateUnavailable(
+      capabilities.serverSelfUpdate,
+      yield* ServerDownloadsPublished,
+    );
+    if (unavailable !== null) {
+      return yield* new OutdatedHostUpdateError({ environmentId, message: unavailable });
     }
 
     const result = yield* Effect.scoped(

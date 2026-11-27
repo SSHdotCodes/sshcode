@@ -27,8 +27,19 @@ export interface WrappedTerminalLinkLine {
 }
 
 const URL_PATTERN = /https?:\/\/[^\s"'`<>]+/giu;
-const FILE_PATH_PATTERN =
-  /(?:~\/|\.{1,2}\/|\/|[A-Za-z]:[\\/]|\\\\)[^\s"'`<>]+|[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+(?::\d+){0,2}/g;
+const PARENTHESIZED_LOCATION = String.raw`\((\d+)(?:,(\d+))?\)`;
+const COMPILER_DIAGNOSTIC = String.raw`:\s+(?:fatal\s+)?(?:error|warning)\s+[A-Za-z]+\d+:`;
+const FILE_PATH_PATTERN = new RegExp(
+  [
+    String.raw`(?:~\/|\.{1,2}\/|\/|[A-Za-z]:[\\/]|\\\\)[^\s"'\`<>]+`,
+    String.raw`[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+(?:${PARENTHESIZED_LOCATION}(?=:)|(?::\d+){0,2})`,
+    String.raw`(?<![\w.-])[A-Za-z0-9._-]+\.[A-Za-z][A-Za-z0-9_-]*${PARENTHESIZED_LOCATION}(?=${COMPILER_DIAGNOSTIC})`,
+  ].join("|"),
+  "g",
+);
+const PARENTHESIZED_POSITION = new RegExp(String.raw`(?<![\\/])${PARENTHESIZED_LOCATION}$`, "u");
+const COMPILER_DIAGNOSTIC_SUFFIX = new RegExp(`^${COMPILER_DIAGNOSTIC}`, "u");
+const PHP_STACK_FRAME_PREFIX = /^\s*#\d+\s+$/u;
 const TRAILING_PUNCTUATION_PATTERN = /[.,;!?]+$/;
 // Paths also drop a trailing colon: compilers end `file:line:col:` with one.
 const TRAILING_PATH_PUNCTUATION_PATTERN = /[.,;:!?]+$/;
@@ -77,11 +88,22 @@ function collectMatches(
     if (trimmed.length === 0) continue;
     if (kind === "path" && isTerminalUrl(trimmed)) continue;
 
+    const end = start + trimmed.length;
+    // Interpret the numeric suffix only in a compiler diagnostic or a PHP stack frame.
+    const text =
+      kind === "path" &&
+      line[end] === ":" &&
+      (COMPILER_DIAGNOSTIC_SUFFIX.test(line.slice(end)) ||
+        PHP_STACK_FRAME_PREFIX.test(line.slice(0, start)))
+        ? trimmed.replace(PARENTHESIZED_POSITION, (_, row: string, column?: string) =>
+            column === undefined ? `:${row}` : `:${row}:${column}`,
+          )
+        : trimmed;
     const candidate: TerminalLinkMatch = {
       kind,
-      text: trimmed,
+      text,
       start,
-      end: start + trimmed.length,
+      end,
     };
 
     const collides = [...existing, ...matches].some((other) => overlaps(candidate, other));

@@ -118,6 +118,7 @@ describe("XAiAcpExtension", () => {
       prompt: "Audit apps/server.",
       title: "Explore server architecture",
       model: "composer-2.5-fast",
+      nativeType: "generalPurpose",
       status: "running",
       childSessionId: null,
       result: null,
@@ -152,6 +153,7 @@ describe("XAiAcpExtension", () => {
       prompt: "Audit apps/server.",
       title: "Explore server architecture",
       model: null,
+      nativeType: "generalPurpose",
       status: "completed",
       childSessionId: "019f0220-e192-7c41-9e9d-b406bc3459c8",
       result: "Server audit complete.",
@@ -189,10 +191,31 @@ describe("XAiAcpExtension", () => {
       prompt: "Wait then ls.",
       title: "Demo subagent wait and ls",
       model: null,
+      nativeType: "general-purpose",
       status: "running",
       childSessionId: "019f44a6-4820-7402-925d-bc862ee711dd",
       result: null,
       suppressNormalTool: true,
+    });
+  });
+
+  it("extracts camelCase subagentType as nativeType for research cards", () => {
+    expect(
+      extractXAiAcpSubagentUpdate({
+        toolCallId: "task-explore-1",
+        title: "Task",
+        status: "inProgress",
+        data: {
+          rawInput: {
+            description: "Search docs",
+            prompt: "Find API limits.",
+            subagentType: "explore",
+          },
+        },
+      }),
+    ).toMatchObject({
+      nativeTaskId: "task-explore-1",
+      nativeType: "explore",
     });
   });
 

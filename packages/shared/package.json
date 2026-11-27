@@ -19,6 +19,10 @@
       "types": "./src/chatControls.ts",
       "import": "./src/chatControls.ts"
     },
+    "./bots": {
+      "types": "./src/bots.ts",
+      "import": "./src/bots.ts"
+    },
     "./agentSessionMarkers": {
       "types": "./src/agentSessionMarkers.ts",
       "import": "./src/agentSessionMarkers.ts"
@@ -111,6 +115,10 @@
       "types": "./src/logging.ts",
       "import": "./src/logging.ts"
     },
+    "./managedToolRetention": {
+      "types": "./src/managedToolRetention.ts",
+      "import": "./src/managedToolRetention.ts"
+    },
     "./observability": {
       "types": "./src/observability.ts",
       "import": "./src/observability.ts"
@@ -182,6 +190,10 @@
     "./htmlRender": {
       "types": "./src/htmlRender.ts",
       "import": "./src/htmlRender.ts"
+    },
+    "./cards": {
+      "types": "./src/cards.ts",
+      "import": "./src/cards.ts"
     },
     "./favicon": {
       "types": "./src/favicon.ts",
@@ -322,6 +334,10 @@
     "./assistantCitations": {
       "types": "./src/assistantCitations.ts",
       "import": "./src/assistantCitations.ts"
+    },
+    "./sideChatQuote": {
+      "types": "./src/sideChatQuote.ts",
+      "import": "./src/sideChatQuote.ts"
     },
     "./promptLinks": {
       "types": "./src/promptLinks.ts",
@@ -638,6 +654,14 @@
     "./modelGenerations": {
       "types": "./src/modelGenerations.ts",
       "import": "./src/modelGenerations.ts"
+    },
+    "./agentTokenEstimates": {
+      "types": "./src/agentTokenEstimates.ts",
+      "import": "./src/agentTokenEstimates.ts"
+    },
+    "./liveProgress": {
+      "types": "./src/liveProgress.ts",
+      "import": "./src/liveProgress.ts"
     },
     "./modelRankings": {
       "types": "./src/modelRankings.ts",

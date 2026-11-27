@@ -93,9 +93,10 @@ type ProviderTerminalEvent = Extract<
 
 /**
  * How long a delegated child's result waits for the agent to continue a run that ended on
- * a quiet spell. agy's next step came 4 to 6 seconds after such ends on 2026-11-21.
+ * a quiet spell, or whose awaited background work just ended. agy's next step came 4 to 6
+ * seconds after such ends on 2026-11-21; Claude's within a second of a background exit.
  */
-const PROVIDER_CONTINUATION_GRACE = { seconds: 30 } as const;
+export const PROVIDER_CONTINUATION_GRACE = { seconds: 30 } as const;
 
 function isTerminalProviderTurnStatus(status: OrchestrationV2ProviderTurn["status"]): boolean {
   return (
@@ -611,6 +612,7 @@ export interface RunExecutionServiceV2StartRootRunInput {
   readonly relatedProviderThreadIds?: ReadonlyArray<ProviderThreadId>;
   readonly shouldStartProviderTurn?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
   readonly shouldFinalizeRun?: () => Effect.Effect<boolean, ProjectionStoreV2Error>;
+  readonly settleInlinePromptDelivery?: (promptDropped: boolean) => Effect.Effect<void>;
   readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
   readonly message: ProviderAdapter.ProviderAdapterV2TurnMessage;
   readonly modelSelection: ModelSelection;
@@ -1154,6 +1156,10 @@ export const layer: Layer.Layer<
             Effect.gen(function* () {
               if (yield* Ref.get(rootRunFinalized)) {
                 return;
+              }
+              if (input.settleInlinePromptDelivery !== undefined) {
+                const turn = yield* Ref.get(latestRootProviderTurn);
+                yield* input.settleInlinePromptDelivery(turn?.promptDropped === true);
               }
               const providerThread = yield* Ref.get(latestProviderThread);
               const openSubagents = yield* Ref.get(openRunOwnedSubagents);

@@ -525,7 +525,7 @@ describe("Antigravity tool results", () => {
     });
   });
 
-  it("recovers command fields from history and keeps nonzero exits separate from tool failure", () => {
+  it("recovers command fields from history and shows nonzero exits as failed", () => {
     const event = parseToolUpdate({
       ...commandCompleted,
       update: {
@@ -540,7 +540,7 @@ describe("Antigravity tool results", () => {
     });
     expect(normalizeAntigravityToolCall(event.toolCall)).toMatchObject({
       kind: "execute",
-      status: "completed",
+      status: "failed",
       command: "test -f missing.txt",
       data: { item: { cwd: "/workspace", aggregatedOutput: "", exitCode: 1 } },
     });
@@ -771,10 +771,71 @@ describe("Antigravity served reads", () => {
   });
 });
 
+describe("Antigravity Google account verification", () => {
+  it.each([
+    ["https://accounts.google.com/v3/signin/continue?plt=fixture", true],
+    ["https://accounts.google.com.example.invalid/v3/signin/continue?plt=fixture", false],
+  ] as const)("offers only the Google sign-in continuation link", (url, allowed) => {
+    const data = {
+      error: {
+        code: 403,
+        status: "PERMISSION_DENIED",
+        details: [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            domain: "cloudcode-pa.googleapis.com",
+            reason: "VALIDATION_REQUIRED",
+            metadata: { validation_url: url },
+          },
+        ],
+      },
+    };
+    const now = DateTime.makeUnsafe("2026-11-21T21:52:58.990Z");
+    for (const error of [
+      { code: 403, message: "Permission denied", data },
+      {
+        code: 403,
+        message: `HTTP 403 Forbidden\n\n${JSON.stringify(data, null, 2)}\nError ID: fixture`,
+      },
+    ]) {
+      const failure = antigravityPromptStopFailure({
+        stopReason: "error",
+        now,
+        replyText: undefined,
+        error,
+      });
+      expect(failure).toEqual({
+        class: "permission_error",
+        code: "VALIDATION_REQUIRED",
+        message: "Verify your Google account, then retry this turn.",
+        retryable: false,
+        ...(allowed ? { verificationUrl: url } : {}),
+      });
+    }
+  });
+});
+
 describe("Antigravity CLI quota stops", () => {
   const notice = (reset: string) =>
     `⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in ${reset}.`;
   const now = DateTime.makeUnsafe("2026-11-21T21:52:58.990Z");
+
+  it("keeps the duration on an ACP quota error", () => {
+    expect(
+      antigravityPromptStopFailure({
+        stopReason: "error",
+        now,
+        replyText: undefined,
+        error: {
+          code: 429,
+          message: "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 4m42s.",
+        },
+      }),
+    ).toMatchObject({
+      class: "usage_limit",
+      resetAt: "2026-11-21T21:57:40.990Z",
+    });
+  });
 
   it.each([
     // Google AI Ultra through the agy CLI, 2026-11-21: the whole reply, wrapped in newlines.

@@ -1,6 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - Effect has no incremental digest.
 import * as EffectNodeStream from "@effect/platform-node/NodeStream";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import {
+  isManagedToolVersion,
+  pruneManagedToolVersions,
+  type ManagedToolProcesses,
+} from "@t3tools/shared/managedToolRetention";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -26,8 +31,7 @@ import { openZipArchive } from "../zipArchive.ts";
 // downloads it once; neither uses a browser the user installed. To bump the pin, pick a version
 // from https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json,
 // download each platform's chrome-headless-shell zip, and replace the version
-// and every byte count and SHA-256 below. Hosts drop the old build after the
-// new one installs.
+// and every byte count and SHA-256 below. The last build is kept for rollback.
 // The headless shell never loads Chrome's CRLSet, so a certificate block
 // reaches it only through Chromium's compiled-in SPKI blocklist. Don't pin
 // below 156.0.8078.70: earlier builds trust the compromised eMudhra
@@ -73,6 +77,40 @@ const chromePlatform = (platform: NodeJS.Platform, arch: NodeJS.Architecture) =>
       return null;
   }
 };
+
+export const prunePreviewBrowserVersions = Effect.fn("PreviewBrowser.prune")(function* (
+  baseDir: string,
+  release: PreviewBrowserRelease,
+  platform: NodeJS.Platform,
+  options?: { dryRun?: boolean; processes?: Effect.Effect<ManagedToolProcesses | null> },
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const toolsDirectory = path.join(baseDir, "tools");
+  return yield* pruneManagedToolVersions({
+    toolsDirectory,
+    versionsDirectory: path.join(toolsDirectory, "chrome-headless-shell", release.platform),
+    current: release.version,
+    isVersion: (name) =>
+      isManagedToolVersion(name) &&
+      name.localeCompare(release.version, "en", { numeric: true }) <= 0,
+    completed: (_, directory) =>
+      fs
+        .stat(
+          path.join(
+            directory,
+            platform === "win32" ? "chrome-headless-shell.exe" : "chrome-headless-shell",
+          ),
+        )
+        .pipe(
+          Effect.map(
+            (info) => info.type === "File" && (platform === "win32" || (info.mode & 0o111) !== 0),
+          ),
+          Effect.orElseSucceed(() => false),
+        ),
+    ...options,
+  });
+});
 
 export interface PreviewBrowserRelease {
   readonly version: string;
@@ -339,30 +377,28 @@ export const makePreviewBrowser = Effect.fn("PreviewBrowser.make")(function* (
         yield* fs.remove(destination, { recursive: true, force: true });
         yield* fs.rename(unpacked, destination);
       }).pipe(Effect.scoped);
-      // Older builds and abandoned staging directories. Two servers can share a
-      // home, so a staging directory touched within the last hour may be another
-      // server's install in progress and stays.
+      yield* prunePreviewBrowserVersions(options.baseDir, release, platform).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+        Effect.catch(() => Effect.logDebug("Could not prune old preview browsers")),
+      );
+      // Another server may still be writing a staging directory.
       const entries = yield* fs.readDirectory(installRoot);
       const now = yield* Clock.currentTimeMillis;
       yield* Effect.forEach(
-        entries.filter((name) => name !== release.version),
+        entries.filter((name) => name.startsWith(".install-")),
         (name) =>
           Effect.gen(function* () {
             const target = path.join(installRoot, name);
-            if (name.startsWith(".install-")) {
-              const info = yield* fs.stat(target);
-              const modifiedAt = Option.match(info.mtime, {
-                onNone: () => now,
-                onSome: (date) => date.getTime(),
-              });
-              if (now - modifiedAt < STAGING_STALE_AFTER_MS) return;
+            const info = yield* fs.stat(target);
+            const modifiedAt = Option.match(info.mtime, {
+              onNone: () => now,
+              onSome: (date) => date.getTime(),
+            });
+            if (now - modifiedAt >= STAGING_STALE_AFTER_MS) {
+              yield* fs.remove(target, { recursive: true, force: true });
             }
-            yield* fs.remove(target, { recursive: true, force: true });
-          }).pipe(
-            Effect.catch((cause) =>
-              Effect.logWarning("Could not remove an old preview browser.", { name, cause }),
-            ),
-          ),
+          }).pipe(Effect.ignore),
         { discard: true },
       );
       return path.join(installRoot, release.version, executableName);

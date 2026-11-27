@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off -- The fixture uses a temporary native conversation database.
+import * as NodeSqlite from "node:sqlite";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -13,6 +15,7 @@ import {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import { formatGenerationRate } from "@t3tools/shared/generationRate";
 import { resolveSelfInvocation } from "@t3tools/shared/nodeRuntime";
 import {
   backgroundWorkHoldsCompletion,
@@ -132,8 +135,32 @@ describe("AntigravityAdapterV2 flavor", () => {
       title: "research",
       prompt: "Check the logs",
       model: null,
+      inheritParentModel: true,
       status: "running",
     });
+    assert.isUndefined(withModel?.inheritParentModel);
+
+    // The image generator runs Google's image model, so it never shows the chat's model.
+    const painter = flavor.extractSubagentUpdate?.({
+      toolCallId: "call_subagent_3",
+      title: "Run invoke_subagent",
+      kind: "other",
+      status: "inProgress",
+      data: {
+        rawInput: {
+          Role: "Feast Art Generator",
+          Prompt: "Paint a feast",
+          TypeName: "image-generator",
+          Model: "inherit",
+        },
+      },
+    });
+    assert.deepInclude(painter, {
+      title: "Feast Art Generator",
+      model: null,
+      nativeType: "image-generator",
+    });
+    assert.isUndefined(painter?.inheritParentModel);
   });
 
   it("projects failed swarm launches with their error and leaves swarm status calls alone", () => {
@@ -1048,7 +1075,8 @@ const openSessionWithRunningCommand = Effect.fn("openSessionWithRunningCommand")
     readonly wakeSteerOnWire?: boolean;
     readonly cancelUpdates?: ReadonlyArray<EffectAcpSchema.SessionUpdate>;
   },
-  childWorkDirectory?: string,
+  childWork?: { readonly directory: string; readonly typeName: string },
+  sessionLog?: { readonly directory: string; readonly onPromptEnd: Effect.Effect<void> },
 ) {
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const path = yield* Path.Path;
@@ -1163,15 +1191,19 @@ const openSessionWithRunningCommand = Effect.fn("openSessionWithRunningCommand")
                 return { stopReason: "end_turn" as const };
               }
               yield* send(
-                childWorkDirectory === undefined
+                childWork === undefined
                   ? { sessionUpdate: "tool_call", ...command, status: "in_progress" }
                   : {
                       sessionUpdate: "tool_call",
                       toolCallId: "call_research",
                       kind: "other",
-                      title: "Run invoke_subagent",
+                      title:
+                        childWork.typeName === "swarm-worker" ? "Run swarm" : "Run invoke_subagent",
                       status: "completed",
-                      rawInput: { TypeName: "research", Role: "Researcher", Prompt: "Read it" },
+                      rawInput:
+                        childWork.typeName === "swarm-worker"
+                          ? { action: "add", name: "research", brief: "Complete the task" }
+                          : { TypeName: childWork.typeName, Prompt: "Complete the task" },
                     },
               );
               yield* send({
@@ -1179,6 +1211,7 @@ const openSessionWithRunningCommand = Effect.fn("openSessionWithRunningCommand")
                 content: { type: "text", text: "I'll render once the fetch finishes." },
               });
               yield* send(usage);
+              if (sessionLog !== undefined) yield* sessionLog.onPromptEnd;
               if (steering?.holdsFirstPrompt === true) yield* Deferred.await(steered);
               return { stopReason: "end_turn" as const };
             }),
@@ -1187,7 +1220,9 @@ const openSessionWithRunningCommand = Effect.fn("openSessionWithRunningCommand")
     },
     withProcess: (_stop, task) => task,
     defaultModel: Effect.undefined,
-    ...(childWorkDirectory === undefined ? {} : { childWorkDirectories: [childWorkDirectory] }),
+    ...(childWork === undefined && sessionLog === undefined
+      ? {}
+      : { childWorkDirectories: [childWork?.directory ?? sessionLog!.directory] }),
   });
   const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
     runtimeMode: "full-access",
@@ -1289,6 +1324,7 @@ const openSessionWithRunningCommand = Effect.fn("openSessionWithRunningCommand")
       (event) =>
         event.type === "turn_item.updated" &&
         event.turnItem.type === "assistant_message" &&
+        event.turnItem.runId !== null &&
         event.turnItem.status === "completed",
     ),
     requestPermission: (...args: Parameters<NonNullable<typeof requestPermission>>) =>
@@ -1311,9 +1347,85 @@ const openSessionWithRunningCommand = Effect.fn("openSessionWithRunningCommand")
 });
 
 describe("AntigravityAdapterV2 work after the prompt ends", () => {
-  it.effect.each([false, true])(
-    "keeps an invoke_subagent running until it reports (reported during prompt: %s)",
-    (duringPrompt) =>
+  it.effect.each(["verification", "quota", "stale"] as const)(
+    "reads the native conversation's current error step (%s)",
+    (scenario) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "antigravity-outcome-" });
+        const conversations = path.join(directory, "conversations");
+        yield* fs.makeDirectory(conversations);
+        const database = yield* Effect.acquireRelease(
+          Effect.sync(
+            () => new NodeSqlite.DatabaseSync(path.join(conversations, "mock-session-1.db")),
+          ),
+          (db) => Effect.sync(() => db.close()),
+        );
+        const verificationUrl = "https://accounts.google.com/v3/signin/continue?plt=fixture";
+        const verification = JSON.stringify({
+          error: {
+            code: 403,
+            status: "PERMISSION_DENIED",
+            details: [
+              {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                domain: "cloudcode-pa.googleapis.com",
+                reason: "VALIDATION_REQUIRED",
+                metadata: { validation_url: verificationUrl },
+              },
+            ],
+          },
+        });
+        const quota = "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 4m42s.";
+        database.exec(
+          "CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB)",
+        );
+        const add = database.prepare("INSERT INTO steps VALUES (?, ?, ?)");
+        add.run(0, 17, Buffer.from(verification));
+        const onPromptEnd = Effect.sync(() => {
+          if (scenario === "stale") return;
+          add.run(1, 14, Buffer.alloc(0));
+          add.run(
+            2,
+            17,
+            Buffer.from(`\u0012n${scenario === "quota" ? quota : verification}\nError ID: fixture`),
+          );
+        });
+
+        const { startTurn, throughTerminal } = yield* openSessionWithRunningCommand(
+          {},
+          { kind: "other", title: "Check notes" },
+          undefined,
+          undefined,
+          { directory, onPromptEnd },
+        );
+        const now = yield* DateTime.now;
+        yield* startTurn(1, false);
+        const terminal = (yield* throughTerminal).at(-1);
+        assert.equal(terminal?.type, "turn.terminal");
+        if (terminal?.type !== "turn.terminal") return;
+        if (scenario === "stale") assert.equal(terminal.status, "completed");
+        if (scenario === "verification") {
+          assert.deepInclude(terminal.failure, { class: "permission_error", verificationUrl });
+        }
+        if (scenario === "quota") {
+          assert.deepInclude(terminal.failure, {
+            class: "usage_limit",
+            resetAt: DateTime.formatIso(DateTime.add(now, { minutes: 4, seconds: 42 })),
+          });
+        }
+      }).pipe(Effect.provide(layerSession)),
+  );
+
+  it.effect.each([
+    { duringPrompt: false, typeName: "research" },
+    { duringPrompt: true, typeName: "research" },
+    { duringPrompt: false, typeName: "image-generator" },
+    { duringPrompt: false, typeName: "swarm-worker" },
+  ] as const)(
+    "projects a native subagent timeline and settles it when it reports (during prompt: $duringPrompt, type: $typeName)",
+    ({ duringPrompt, typeName }) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -1329,12 +1441,67 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
         yield* write("mock-session-1", "subagents", "child-1.json", {});
         yield* write("child-1", "messages", "launch.json", {
           sender: "mock-session-1",
-          sourceMetadata: { tool: { toolCall: { id: "call_research", name: "invoke_subagent" } } },
+          sourceMetadata: {
+            tool: {
+              toolCall: {
+                id: "call_research",
+                name: typeName === "swarm-worker" ? "swarm" : "invoke_subagent",
+              },
+            },
+          },
         });
+        const image = path.join(
+          yield* fs.realPath(dataDirectory),
+          "brain",
+          "mock-session-1",
+          "result.png",
+        );
+        yield* fs.writeFileString(image, "image");
+        const step = path.join(
+          dataDirectory,
+          "brain",
+          "child-1",
+          ".system_generated",
+          "steps",
+          "1",
+        );
+        yield* fs.makeDirectory(step, { recursive: true });
+        yield* fs.writeFileString(
+          path.join(step, "output.txt"),
+          `Generated image is saved at ${image}`,
+        );
+        const logs = path.join(dataDirectory, "brain", "child-1", ".system_generated", "logs");
+        yield* fs.makeDirectory(logs, { recursive: true });
+        const transcriptPath = path.join(logs, "transcript.jsonl");
+        const replyText = {
+          step_index: 3,
+          type: "PLANNER_RESPONSE",
+          content: "I found the answer.",
+        };
+        const transcript = [
+          {
+            step_index: 1,
+            type: "PLANNER_RESPONSE",
+            thinking: "Checking the evidence.",
+            tool_calls: [{ name: "read_file", args: { Path: '"README.md"' } }],
+          },
+          { step_index: 2, type: "GENERIC", status: "DONE", content: "A note." },
+        ];
+        const writeTranscript = (finished: boolean) =>
+          fs.writeFileString(
+            transcriptPath,
+            (finished ? [...transcript, replyText] : transcript)
+              .map((line) => JSON.stringify(line))
+              .join("\n"),
+          );
+        yield* writeTranscript(duringPrompt);
         const report = write("mock-session-1", "messages", "report.json", { sender: "child-1" });
         if (duringPrompt) yield* report;
-        const { usage, offers, send, startTurn, throughPromptSettled, throughTerminal } =
-          yield* openSessionWithRunningCommand({}, undefined, undefined, dataDirectory);
+        const { usage, offers, send, startTurn, throughPromptSettled, throughTerminal, until } =
+          yield* openSessionWithRunningCommand({}, undefined, undefined, {
+            directory: dataDirectory,
+            typeName,
+          });
         yield* startTurn(1, false);
         const statuses = (events: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>) =>
           events.flatMap((event) =>
@@ -1342,7 +1509,24 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
           );
         const prompt = yield* throughPromptSettled;
         assert.equal(statuses(prompt).at(-1), duringPrompt ? "idle" : "running");
+        let live: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event> = [];
         if (!duringPrompt) {
+          assert.isTrue(
+            prompt.some(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                event.turnItem.type === "reasoning" &&
+                event.turnItem.text === "Checking the evidence.",
+            ),
+          );
+          yield* writeTranscript(true);
+          yield* TestClock.adjust("2 seconds");
+          live = yield* until(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "assistant_message" &&
+              event.turnItem.text === replyText.content,
+          );
           yield* report;
           yield* send({
             sessionUpdate: "agent_message_chunk",
@@ -1355,6 +1539,25 @@ describe("AntigravityAdapterV2 work after the prompt ends", () => {
         const terminal = run.at(-1);
         assert.equal(terminal?.type === "turn.terminal" && terminal.status, "completed");
         assert.equal(statuses([...prompt, ...run]).at(-1), "idle");
+        const child = [...prompt, ...run].findLast((event) => event.type === "subagent.updated");
+        assert.deepEqual(
+          child?.subagent.imagePaths,
+          typeName === "image-generator" ? [image] : undefined,
+        );
+        const reply = [...prompt, ...live, ...run].flatMap((event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.threadId === child?.subagent.childThreadId
+            ? [event.turnItem]
+            : [],
+        );
+        assert.includeDeepMembers(
+          reply.map((item) => ({ type: item.type, text: "text" in item ? item.text : undefined })),
+          [
+            { type: "reasoning", text: "Checking the evidence." },
+            { type: "dynamic_tool", text: undefined },
+            { type: "assistant_message", text: "I found the answer." },
+          ],
+        );
         assert.lengthOf(offers, 0);
       }).pipe(Effect.provide(layerSession)),
   );
@@ -3821,9 +4024,50 @@ describe("AntigravityAdapterV2 per-turn usage and read-repair across steer", () 
       }).pipe(Effect.provide(layerSession), Effect.scoped),
   );
 
-  it.effect(
-    "records live and final providerTurn.tokenUsage, tool-wait-excluded generation rate, imagePath previews, and readable command/orchestration tool titles",
-    () =>
+  it.effect.each([
+    {
+      scenario: "the Neon turn with hidden reasoning",
+      thoughtTokens: 258,
+      outputTokens: 349,
+      showSummary: false,
+      useTools: true,
+      expectedRate: "~16 tok/s",
+    },
+    {
+      scenario: "hidden reasoning without tools",
+      thoughtTokens: 258,
+      outputTokens: 349,
+      showSummary: false,
+      useTools: false,
+      expectedRate: "~16 tok/s",
+    },
+    {
+      scenario: "a reasoning summary with a zero reasoning count",
+      thoughtTokens: 0,
+      outputTokens: 400,
+      showSummary: true,
+      useTools: false,
+      expectedRate: "~18 tok/s",
+    },
+    {
+      scenario: "tool calls with no reasoning count",
+      thoughtTokens: 0,
+      outputTokens: 40,
+      showSummary: false,
+      useTools: true,
+      expectedRate: "~2 tok/s",
+    },
+    {
+      scenario: "streamed text only",
+      thoughtTokens: 0,
+      outputTokens: 40,
+      showSummary: false,
+      useTools: false,
+      expectedRate: "55 tok/s",
+    },
+  ])(
+    "records Antigravity usage and generation for $scenario",
+    ({ thoughtTokens, outputTokens, showSummary, useTools, expectedRate }) =>
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const crypto = yield* Crypto.Crypto;
@@ -3873,70 +4117,74 @@ describe("AntigravityAdapterV2 per-turn usage and read-repair across steer", () 
                           update,
                         }),
                       ) ?? Effect.void;
-                    // Step 1: 1000ms of streaming thought before running a command.
-                    yield* TestClock.adjust("200 millis");
-                    yield* send({
-                      sessionUpdate: "agent_thought_chunk",
-                      content: { type: "text", text: "Planning command..." },
-                    });
-                    yield* TestClock.adjust("1000 millis");
-                    yield* send({
-                      sessionUpdate: "tool_call",
-                      toolCallId: "cmd_with_summary",
-                      title: "git status",
-                      kind: "execute",
-                      status: "in_progress",
-                      rawInput: {
-                        CommandLine: "git status",
-                        toolSummary: "Check repository status",
-                      },
-                    });
-                    // Tool runs for 60 seconds — must NOT drag down generation tok/s!
-                    yield* TestClock.adjust("60 seconds");
-                    yield* send({
-                      sessionUpdate: "tool_call_update",
-                      toolCallId: "cmd_with_summary",
-                      status: "completed",
-                      rawOutput: { output: "clean\n", exit_code: 0 },
-                    });
-                    yield* send({
-                      sessionUpdate: "tool_call",
-                      toolCallId: "cmd_plain",
-                      title: "ls -la",
-                      kind: "execute",
-                      status: "completed",
-                      rawInput: { CommandLine: "ls -la" },
-                    });
-                    yield* send({
-                      sessionUpdate: "tool_call",
-                      toolCallId: "img_gen_1",
-                      title: "generate_image",
-                      kind: "other",
-                      status: "completed",
-                      rawOutput: {
-                        imageName: "diagram",
-                        imagePath: "file:///workspace/diagram.png",
-                      },
-                    });
-                    yield* send({
-                      sessionUpdate: "tool_call",
-                      toolCallId: "manage_list",
-                      title: "Run manage_task",
-                      kind: "other",
-                      status: "completed",
-                      rawInput: { Action: "list" },
-                    });
+                    // The ACP thought stream can carry a summary of billed reasoning.
+                    yield* TestClock.adjust(200);
+                    if (showSummary) {
+                      yield* send({
+                        sessionUpdate: "agent_thought_chunk",
+                        content: { type: "text", text: "Planning command..." },
+                      });
+                    }
+                    yield* TestClock.adjust(1_000);
+                    if (useTools) {
+                      yield* send({
+                        sessionUpdate: "tool_call",
+                        toolCallId: "cmd_with_summary",
+                        title: "git status",
+                        kind: "execute",
+                        status: "in_progress",
+                        rawInput: {
+                          CommandLine: "git status",
+                          toolSummary: "Check repository status",
+                        },
+                      });
+                      yield* TestClock.adjust(19_893);
+                      yield* send({
+                        sessionUpdate: "tool_call_update",
+                        toolCallId: "cmd_with_summary",
+                        status: "completed",
+                        rawOutput: { output: "clean\n", exit_code: 0 },
+                      });
+                      yield* send({
+                        sessionUpdate: "tool_call",
+                        toolCallId: "cmd_plain",
+                        title: "ls -la",
+                        kind: "execute",
+                        status: "completed",
+                        rawInput: { CommandLine: "ls -la" },
+                      });
+                      yield* send({
+                        sessionUpdate: "tool_call",
+                        toolCallId: "img_gen_1",
+                        title: "generate_image",
+                        kind: "other",
+                        status: "completed",
+                        rawOutput: {
+                          imageName: "diagram",
+                          imagePath: "file:///workspace/diagram.png",
+                        },
+                      });
+                      yield* send({
+                        sessionUpdate: "tool_call",
+                        toolCallId: "manage_list",
+                        title: "Run manage_task",
+                        kind: "other",
+                        status: "completed",
+                        rawInput: { Action: "list" },
+                      });
+                    } else {
+                      yield* TestClock.adjust(19_893);
+                    }
                     yield* send({
                       sessionUpdate: "usage_update",
                       used: 14_200,
                       size: 1_048_576,
                     });
-                    // Step 2: 1000ms of streaming text reply.
                     yield* send({
                       sessionUpdate: "agent_message_chunk",
                       content: { type: "text", text: "All set." },
                     });
-                    yield* TestClock.adjust("1000 millis");
+                    yield* TestClock.adjust(725);
                     yield* send({
                       sessionUpdate: "usage_update",
                       used: 15_000,
@@ -3948,9 +4196,9 @@ describe("AntigravityAdapterV2 per-turn usage and read-repair across steer", () 
                         inputTokens: 3_000,
                         cachedReadTokens: 12_000,
                         cachedWriteTokens: 0,
-                        outputTokens: 400,
-                        thoughtTokens: 300,
-                        totalTokens: 15_400,
+                        outputTokens,
+                        thoughtTokens,
+                        totalTokens: 15_000 + outputTokens,
                       },
                     };
                   }),
@@ -4008,7 +4256,6 @@ describe("AntigravityAdapterV2 per-turn usage and read-repair across steer", () 
         assert.isDefined(runningWithUsage);
         assert.equal(runningWithUsage?.tokenUsage?.maxTokens, 1_048_576);
 
-        // Final providerTurn has BOTH merged tokenUsage AND tool-wait-excluded generation
         const finalTurn = turnUpdates.at(-1);
         assert.equal(finalTurn?.status, "completed");
         assert.deepInclude(finalTurn?.tokenUsage, {
@@ -4016,14 +4263,23 @@ describe("AntigravityAdapterV2 per-turn usage and read-repair across steer", () 
           maxTokens: 1_048_576,
           inputTokens: 15_000,
           cachedInputTokens: 12_000,
-          outputTokens: 400,
-          reasoningOutputTokens: 300,
+          outputTokens,
+          reasoningOutputTokens: thoughtTokens,
         });
-        assert.isDefined(finalTurn?.generation);
-        assert.equal(finalTurn?.generation?.basis, "decode");
-        assert.equal(finalTurn?.generation?.outputTokens, 400);
-        // Active decode was 2,000ms (1s thought + 1s reply), NOT 62,000ms!
-        assert.equal(finalTurn?.generation?.generatingMs, 2_000);
+        assert.deepInclude(finalTurn?.turnTokenUsage, {
+          outputTokens,
+          reasoningTokens: thoughtTokens,
+        });
+        const endToEnd = expectedRate.startsWith("~");
+        assert.deepInclude(finalTurn?.generation, {
+          basis: endToEnd ? "end-to-end" : "decode",
+          outputTokens,
+          generatingMs: endToEnd ? 21_818 : 725,
+          replies: 1,
+        });
+        assert.equal(formatGenerationRate(finalTurn?.generation), expectedRate);
+        if (endToEnd) assert.isUndefined(finalTurn?.generation?.lastReply?.firstTokenMs);
+        if (!useTools) return;
 
         const latestItem = (nativeId: string) => {
           const event = seen.findLast(

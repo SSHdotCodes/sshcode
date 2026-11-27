@@ -4,6 +4,8 @@ import * as XSearch from "../xPost/XSearch.ts";
 import { XPostToolkit } from "./toolkits/xPost/tools.ts";
 import * as XPostHandlers from "./toolkits/xPost/handlers.ts";
 import { presentXPost } from "./toolkits/xPost/result.ts";
+import { CardToolkit, cardsAreEager, registerEagerCardsCheck } from "./toolkits/cards/tools.ts";
+import * as CardHandlers from "./toolkits/cards/handlers.ts";
 import { DebugToolkit } from "./toolkits/debug/tools.ts";
 import { WorkflowToolkit } from "./toolkits/workflows/tools.ts";
 import * as WorkflowHandlers from "./toolkits/workflows/handlers.ts";
@@ -11,6 +13,9 @@ import * as DebugHandlers from "./toolkits/debug/handlers.ts";
 import { ModelPreferencesToolkit } from "./toolkits/modelPreferences/tools.ts";
 import * as ModelPreferencesHandlers from "./toolkits/modelPreferences/handlers.ts";
 import * as ModelPreferences from "../provider/ModelPreferences.ts";
+import * as LiveProgress from "../liveProgress/LiveProgress.ts";
+import { ProgressToolkit } from "./toolkits/progress/tools.ts";
+import * as ProgressHandlers from "./toolkits/progress/handlers.ts";
 import * as ComputerUseService from "../computer/ComputerUseService.ts";
 import * as ComputerHandlers from "./toolkits/computer/handlers.ts";
 import {
@@ -37,6 +42,7 @@ import { AiError, McpProtocol, McpSchema, McpServer, Tool, type Toolkit } from "
 import { HttpBody, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import * as HttpEffect from "effect/http/HttpEffect";
 import {
+  agentBehaviorLevels,
   ComputerUseError,
   DeviceToolError,
   OrchestratorMcpFailure,
@@ -52,18 +58,23 @@ import * as BrowserObservations from "../preview/BrowserObservations.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ChatControls from "../sessionBoxes/chatControls.ts";
 import * as AgentToolPolicy from "./AgentToolPolicy.ts";
+import { attachBoardToolResults } from "./teamBoardToolResults.ts";
 import {
   agentToolListVisible,
+  callerIsClaudeBot,
   callerReadsGeminiSchemas,
   rewriteToolsListBody,
   type ToolsListTransform,
   withGeminiSafeEnums,
+  withBotAlwaysLoad,
+  withToolMeta,
+  withTeamBoardToolMeta,
   withoutGrades,
   toolsListRequestIds,
 } from "./AgentToolCatalog.ts";
 import { callerUsesCompactCatalog, withCompactAgentCatalog } from "./EagerAgentToolCatalog.ts";
 import {
-  deferMcpCatalog,
+  deferMcpCatalogFor,
   deferredMcpHarness,
   layerDeferredMcpDispatcher,
 } from "./DeferredMcpCatalog.ts";
@@ -114,6 +125,11 @@ import {
 import * as HtmlHandlers from "./toolkits/html/handlers.ts";
 import { HtmlPreviewTool, HtmlPreviewToolkit, HtmlRenderToolkit } from "./toolkits/html/tools.ts";
 import { MCP_HTTP_PATH } from "../httpCors.ts";
+import * as TeamBoard from "../teamBoard/TeamBoard.ts";
+import { TEAM_BOARD_TOOL } from "../teamBoard/model.ts";
+import * as BotHandlers from "./toolkits/bots/handlers.ts";
+import { BotToolkit } from "./toolkits/bots/tools.ts";
+import { guardBotToolCall, setShowCardAvailable } from "../bots/botsRuntime.ts";
 
 /** Where an MCP client discovers how to sign in (RFC 9728), at this request's own origin. */
 const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
@@ -203,6 +219,13 @@ export const normalizeMcpHttpResponse = (
  * `tools/list` does not see the HTTP caller, so the filter runs on the
  * response. A client that cached an older list is still refused at `tools/call`.
  */
+/** Claude Code 2.1+ honors `anthropic/alwaysLoad` so High's live progress tool isn't deferred. */
+/** Eager cards (Token use High or a bot chat) must not be deferred by Claude Code either. */
+const withEagerCardToolMeta = withToolMeta({ show_card: { "anthropic/alwaysLoad": true } });
+const withHighTokenToolMeta = withToolMeta({
+  report_progress: { "anthropic/alwaysLoad": true },
+});
+
 const filterToolsListResponse = (
   response: HttpServerResponse.HttpServerResponse,
   scope: McpInvocationContext.McpInvocationScope,
@@ -221,33 +244,68 @@ const filterToolsListResponse = (
       });
     }
     const policy = current.policy;
+    const board = Option.getOrUndefined(yield* Effect.serviceOption(TeamBoard.TeamBoard));
     const chatControls = Option.getOrElse(
       yield* Effect.serviceOption(ChatControls.ChatControls),
       () => ChatControls.make().store,
     );
-    const visible = (name: string) =>
-      name !== T3_MCP_DISPATCH_TOOL && agentToolListVisible(policy, name, scope, chatControls);
+    const lowTokens = current.agentBehavior.tokens === "low";
     const deferred = deferredMcpHarness(
       current.providerInstances,
       scope.thread?.providerInstanceId,
     );
+    const instanceId = scope.thread?.providerInstanceId;
+    const instances: Readonly<Record<string, { readonly driver: string } | undefined>> =
+      current.providerInstances;
+    const claude =
+      instanceId !== undefined && (instances[instanceId]?.driver ?? instanceId) === "claudeAgent";
+    const compact = callerUsesCompactCatalog(
+      current.providerInstances,
+      scope.thread?.providerInstanceId,
+    );
+    const eagerCards = cardsAreEager(scope.thread?.threadId, current.agentBehavior);
+    const child = scope.thread !== undefined && board?.isSubagent(scope.thread.threadId) === true;
+    const visible = (name: string) => {
+      if (name === T3_MCP_DISPATCH_TOOL) return false;
+      // Compact non-deferred harnesses load every listed tool eagerly; keep show_card out unless
+      // eager. Low defers it behind t3_tool instead.
+      if (name === "show_card" && !deferred && !lowTokens && compact && !eagerCards) return false;
+      return agentToolListVisible(
+        policy,
+        name,
+        scope,
+        chatControls,
+        current.agentBehavior,
+        board?.toolListed,
+      );
+    };
     // Settings' grading switch: off removes the `grades` input, so it costs nothing.
     const transforms = [
+      ...(claude && child ? [withTeamBoardToolMeta] : []),
       ...(current.grading ? [] : [withoutGrades]),
-      ...(deferred ||
-      callerUsesCompactCatalog(current.providerInstances, scope.thread?.providerInstanceId)
-        ? [withCompactAgentCatalog]
-        : []),
+      ...(current.agentBehavior.tokens === "high" ? [withHighTokenToolMeta] : []),
+      ...(lowTokens || deferred || compact ? [withCompactAgentCatalog] : []),
       ...(callerReadsGeminiSchemas(current.providerInstances, scope.thread?.providerInstanceId)
         ? [withGeminiSafeEnums]
         : []),
+      ...(eagerCards ? [withEagerCardToolMeta] : []),
+      // Claude Code otherwise defers a bot's everyday tools behind ToolSearch.
+      ...(callerIsClaudeBot(current.providerInstances, scope) ? [withBotAlwaysLoad] : []),
     ];
     const transform: ToolsListTransform | undefined =
       transforms.length === 0
         ? undefined
         : (tool) => transforms.reduce((next, apply) => apply(next), tool);
+    const catalogTransform =
+      lowTokens || deferred
+        ? deferMcpCatalogFor({
+            low: lowTokens,
+            eagerCards,
+            eagerTeamBoard: lowTokens && child && visible(TEAM_BOARD_TOOL),
+          })
+        : undefined;
     const rewrite = (text: string) =>
-      rewriteToolsListBody(text, ids, visible, transform, deferred ? deferMcpCatalog : undefined);
+      rewriteToolsListBody(text, ids, visible, transform, catalogTransform);
     const body = response.body;
     if (body._tag === "Uint8Array") {
       const text = body.text ?? new TextDecoder().decode(body.body);
@@ -425,7 +483,9 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
           yield* live.endSession(sessionId);
         }
       }
+      const board = Option.getOrUndefined(yield* Effect.serviceOption(TeamBoard.TeamBoard));
       return yield* filterToolsListResponse(response, invocation).pipe(
+        Effect.flatMap((filtered) => attachBoardToolResults(filtered, invocation, board)),
         Effect.map(normalizeMcpHttpResponse),
       );
     });
@@ -1019,6 +1079,11 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
               }),
               handle: (payload) =>
                 AgentToolPolicy.refuseUnavailableAgentTool(entry.tool.name).pipe(
+                  Effect.flatMap((denied) =>
+                    denied !== undefined
+                      ? Effect.succeed(denied)
+                      : refuseBotToolCall(entry.tool.name, payload),
+                  ),
                   Effect.flatMap((denied) => {
                     if (denied !== undefined) return Effect.succeed(denied);
                     return entry.handle(payload).pipe(
@@ -1060,6 +1125,26 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
   return registered.pipe(Layer.provide(McpToolAccess.HandlersLayer.layer(handlers)));
 };
 
+/** A bot chat's guard on calls it may not make right now; undefined lets the call run. */
+const refuseBotToolCall = (toolName: string, payload: unknown) =>
+  Effect.serviceOption(McpInvocationContext.McpInvocationContext).pipe(
+    Effect.flatMap((scope) => {
+      const guard = Option.isNone(scope) ? null : guardBotToolCall(scope.value, toolName, payload);
+      return guard === null
+        ? Effect.succeed(undefined)
+        : guard.pipe(
+            Effect.map((message) =>
+              message === undefined
+                ? undefined
+                : new McpSchema.CallToolResult({
+                    isError: true,
+                    content: [{ type: "text", text: message }],
+                  }),
+            ),
+          );
+    }),
+  );
+
 /** A hand-registered tool, also only with handlers that declared their access. */
 const imageToolRegistration = <Tools extends Record<string, Tool.Any>, A, E, R, EX, RX>(
   register: Effect.Effect<A, E, R>,
@@ -1091,6 +1176,10 @@ const layerModelPreferencesToolkit = toolkitRegistration(
   ModelPreferencesToolkit,
   ModelPreferencesHandlers.layer,
 ).pipe(Layer.provide(ModelPreferences.layer));
+
+const layerProgressToolkit = toolkitRegistration(ProgressToolkit, ProgressHandlers.layer).pipe(
+  Layer.provide(LiveProgress.layer),
+);
 
 export const layerOrchestratorToolkit = toolkitRegistration(
   OrchestratorToolkit,
@@ -1175,19 +1264,30 @@ export const layerXPostToolkit = toolkitRegistration(
   XPostToolkit,
   XPostHandlers.layer,
   presentXPost,
-).pipe(Layer.provide(XPostReader.layer), Layer.provide(XSearch.layer));
+).pipe(Layer.provide(XSearch.layer), Layer.provide(XPostReader.layer));
+
+/**
+ * Settings > Bots. Outside `layerAgentTools` on purpose: these tools are listed only while
+ * Bots are on with a bot, so every chat's catalog and budget stay the same while they're off.
+ */
+export const layerBotToolkit = toolkitRegistration(BotToolkit, BotHandlers.layer);
 
 const layerDebugToolkit = toolkitRegistration(DebugToolkit, DebugHandlers.layer);
+const layerCardToolkit = toolkitRegistration(CardToolkit, CardHandlers.layer);
 const layerWorkflowToolkit = toolkitRegistration(WorkflowToolkit, WorkflowHandlers.layer);
+
+export { registerEagerCardsCheck };
 
 /** Every T3 tool, including latent application toolkits. */
 export const layerAllTools = Layer.mergeAll(
   layerXPostToolkit,
+  layerCardToolkit,
   layerDebugToolkit,
   layerWorkflowToolkit,
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerModelPreferencesToolkit,
+  layerProgressToolkit,
   layerThreadToolkit,
   layerAttachmentToolkit,
   layerProjectRegistration,
@@ -1210,11 +1310,13 @@ export const layerAllToolkits = layerAllTools.pipe(Layer.provideMerge(layerMcpTr
  */
 export const layerAgentTools = Layer.mergeAll(
   layerXPostToolkit,
+  layerCardToolkit,
   layerDebugToolkit,
   layerWorkflowToolkit,
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerModelPreferencesToolkit,
+  layerProgressToolkit,
   layerPendingRequestToolkit,
   layerProjectListToolkit,
   layerDeviceToolkit,
@@ -1233,7 +1335,16 @@ export const layerAgentTools = Layer.mergeAll(
 const layerAgentToolListNotifications = Layer.effectDiscard(
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
+    // Bot instructions mention cards only when a card tool is registered.
+    setShowCardAvailable(server.tools.some(({ tool }) => tool.name === "show_card"));
     const live = yield* McpLiveNotifications.McpLiveNotifications;
+    const board = yield* Effect.serviceOption(TeamBoard.TeamBoard);
+    if (Option.isSome(board)) {
+      yield* board.value.toolListChanges.pipe(
+        Stream.runForEach(live.publishToolsListChangedFor),
+        Effect.forkScoped,
+      );
+    }
     // The HTTP middleware already requires this service. Yielding it here keeps
     // one watcher on that same instance instead of a second subscription.
     const settings = yield* ServerSettings.ServerSettingsService;
@@ -1242,7 +1353,18 @@ const layerAgentToolListNotifications = Layer.effectDiscard(
       Effect.andThen(live.publishToolsListChanged),
     );
     yield* settings.streamChanges.pipe(
-      Stream.map((value) => JSON.stringify([value.agentToolPolicy ?? null, value.subagentGrading])),
+      Stream.map((value) =>
+        JSON.stringify([
+          value.agentToolPolicy ?? null,
+          value.subagentGrading,
+          // Bots on or off, and each bot's chat and permissions, change who lists the bot tools.
+          value.bots.enabled ? value.bots.list.map((bot) => [bot.threadId, bot.permissions]) : null,
+          // Low defers MCP tools behind t3_tool; High adds report_progress and eager cards.
+          agentBehaviorLevels(value.agentBehavior).tokens,
+          // Settings > Agents "None" hides subagent tools in every chat, like each chat's switch.
+          agentBehaviorLevels(value.agentBehavior).subagents === "none",
+        ]),
+      ),
       Stream.changes,
       Stream.runForEach(() => publishListChanged),
       Effect.forkScoped,
@@ -1268,7 +1390,7 @@ const layerAgentToolListNotifications = Layer.effectDiscard(
 
 export const layer = layerAgentToolListNotifications.pipe(
   Layer.provideMerge(
-    Layer.merge(layerAgentTools, layerDeferredMcpDispatcher).pipe(
+    Layer.mergeAll(layerAgentTools, layerBotToolkit, layerDeferredMcpDispatcher).pipe(
       Layer.provideMerge(layerMcpTransport),
     ),
   ),

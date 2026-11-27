@@ -747,7 +747,11 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         out("session.interrupt", { sessionID: SESSION }),
         reply("session.interrupt", { interrupted: false }),
       ]);
-      const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+      const events = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
       const started = yield* runtime
         .startTurn({
           ...turnInput(thread),
@@ -763,7 +767,10 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       // The command list times out; the stopped turn must not go on to prompt.
       yield* TestClock.adjust("6 seconds");
       yield* Fiber.join(started);
-      assert.equal((yield* Fiber.join(terminal))?.status, "interrupted");
+      const updates = Array.from(yield* Fiber.join(events));
+      assert.deepInclude(updates.at(-1), { status: "interrupted" });
+      const turn = updates.findLast((event) => event.type === "provider_turn.updated");
+      assert.deepInclude(turn?.providerTurn, { status: "interrupted", promptDropped: true });
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 

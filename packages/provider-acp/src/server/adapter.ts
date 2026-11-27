@@ -41,6 +41,7 @@ import {
 } from "@t3tools/contracts";
 import { AgentScope, AgentScopeThreadId } from "@t3tools/shared/AgentScope";
 import {
+  abandonGenerationReply,
   endGenerationReply,
   generationSnapshot,
   makeGenerationMeter,
@@ -66,6 +67,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Hash from "effect/Hash";
 import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -428,6 +430,8 @@ export interface AcpAdapterV2Flavor {
     readonly url: string;
     readonly message: string;
   }) => Effect.Effect<boolean>;
+  /** Use a field's title as the question body when its description is absent. */
+  readonly useElicitationFieldTitleAsQuestion?: boolean;
   readonly withRuntimeStartup?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   readonly makeRuntime: (
     input: AcpAdapterV2RuntimeInput,
@@ -547,6 +551,18 @@ export interface AcpAdapterV2Flavor {
   readonly subagentsOutlivingPrompt?: (input: {
     readonly sessionId: string;
     readonly nativeTaskIds: ReadonlyArray<string>;
+  }) => Effect.Effect<ReadonlyArray<string>>;
+  /** Native child work recorded outside the ACP stream. */
+  readonly readSubagentTranscript?: (input: {
+    readonly sessionId: string;
+    readonly nativeTaskId: string;
+    readonly childSessionId: string | null;
+  }) => Effect.Effect<ReadonlyArray<AcpSubagentTranscriptEntry>>;
+  /** Pictures a typed child made (agy's image-generator), read once the child stops working. */
+  readonly subagentImages?: (input: {
+    readonly sessionId: string;
+    readonly nativeTaskId: string;
+    readonly nativeType: string;
   }) => Effect.Effect<ReadonlyArray<string>>;
   readonly supportsCompaction?: boolean;
   /** Sends /compact only to sessions that advertise the command. */
@@ -671,12 +687,21 @@ export interface AcpAdapterV2Flavor {
    */
   readonly promptStopFailure?: (input: {
     readonly stopReason: EffectAcpSchema.StopReason;
+    readonly error?: EffectAcpSchema.PromptResponse["error"];
     /** The assistant text still open when the prompt ended. */
     readonly replyText: string | undefined;
     /** The turn's model selection, which may be the flavor's default alias. */
     readonly model: string;
     readonly now: DateTime.Utc;
   }) => Effect.Effect<OrchestrationV2ProviderFailure | undefined>;
+  /** Reads provider-local failure evidence scoped to this prompt. */
+  readonly watchPromptFailure?: (
+    sessionId: string,
+  ) => Effect.Effect<
+    (
+      result: EffectAcpSchema.PromptResponse,
+    ) => Effect.Effect<OrchestrationV2ProviderFailure | undefined>
+  >;
   /**
    * Kill and respawn the ACP child process before the next `session/prompt` after a
    * user interrupt. Grok can keep `task_already_running` state until the process exits.
@@ -752,6 +777,8 @@ export interface AcpAdapterV2SubagentUpdate {
   readonly model: string | null;
   /** The provider guarantees an unspecified worker model inherits the current session model. */
   readonly inheritParentModel?: boolean;
+  /** The provider's own kind for this child, such as agy's "image-generator". */
+  readonly nativeType?: string;
   readonly status:
     | "pending"
     | "running"
@@ -768,6 +795,21 @@ export interface AcpAdapterV2SubagentUpdate {
    */
   readonly suppressNormalTool?: boolean;
 }
+
+export type AcpSubagentTranscriptEntry = {
+  readonly id: string;
+  readonly createdAt?: DateTime.Utc;
+} & (
+  | { readonly kind: "assistant" | "error"; readonly text: string }
+  | { readonly kind: "reasoning"; readonly text: string; readonly running: boolean }
+  | {
+      readonly kind: "tool";
+      readonly name: string;
+      readonly input: unknown;
+      readonly output: string | null;
+      readonly status: "running" | "failed" | "completed";
+    }
+);
 
 export interface AcpAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
@@ -1739,12 +1781,8 @@ interface ActiveAcpTurn {
   promptUsage: EffectAcpSchema.Usage | undefined;
   turnTokenUsage: OrchestrationV2ProviderTurnTokenUsage | undefined;
   readonly generation: GenerationMeter;
-  /** Epoch millis when the current model step began streaming text or thoughts. */
-  generationStepFirstOutputAtMs: number | undefined;
-  /** Summed active model-streaming decode millis in the current prompt, excluding tool waits. */
-  generationActiveDecodeMs: number;
-  /** Whether the current prompt invoked tools between model steps. */
-  generationSawTools: boolean;
+  /** Whether the prompt's aggregate usage may include output before the text stream. */
+  generationRequiresEndToEnd: boolean;
   backgroundFinalizeGeneration: number;
   /** Settles once the prompt request is written, for `promptInactivityTimeout`. */
   readonly promptDispatched: Deferred.Deferred<void, never>;
@@ -1940,6 +1978,12 @@ interface ActiveAcpSubagent {
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
   readonly parentProviderThreadId: ProviderThreadId;
   childSessionId: string | null;
+  readonly transcript?: {
+    readonly sessionId: string;
+    readonly seen: Map<string, { fingerprint: number; startedAt: DateTime.Utc }>;
+    readonly open: Map<string, AcpSubagentTranscriptEntry>;
+    lastReply: string | undefined;
+  };
   assistantText: string;
   readonly assistantMessages: Map<string, string>;
   // Messages whose latest text waits for a delayed flush.
@@ -3558,6 +3602,154 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
         });
 
+        const projectSubagentTranscriptEntry = Effect.fnUntraced(function* (
+          subagent: ActiveAcpSubagent,
+          entry: AcpSubagentTranscriptEntry,
+          finalize: boolean,
+        ) {
+          const transcript = subagent.transcript;
+          if (transcript === undefined) return;
+          const status =
+            entry.kind === "tool"
+              ? entry.status
+              : entry.kind === "reasoning" && entry.running
+                ? "running"
+                : entry.kind === "error"
+                  ? "failed"
+                  : "completed";
+          const projectedStatus: ProjectedToolStatus =
+            finalize && status === "running"
+              ? entry.kind === "reasoning"
+                ? "completed"
+                : "interrupted"
+              : status;
+          const fingerprint = Hash.hash([entry, projectedStatus]);
+          const prior = transcript.seen.get(entry.id);
+          if (
+            prior?.fingerprint === fingerprint ||
+            (prior === undefined && transcript.seen.size >= 4096)
+          )
+            return;
+          const now = yield* DateTime.now;
+          const startedAt = prior?.startedAt ?? entry.createdAt ?? now;
+          transcript.seen.set(entry.id, { fingerprint, startedAt });
+          if (projectedStatus === "running") transcript.open.set(entry.id, entry);
+          else transcript.open.delete(entry.id);
+          const nativeId = `${transcript.sessionId}:${subagent.task.nativeTaskRef?.nativeId ?? subagent.task.id}:transcript:${entry.id}`;
+          const ordinal = resolveSubagentChildOrdinal(subagent, nativeId);
+          const nativeItemRef = { driver, nativeId, strength: "strong" as const };
+          if (entry.kind === "assistant") {
+            transcript.lastReply = entry.text;
+            const { message, turnItem } = makeSubagentConversationArtifacts({
+              messageId: providerMessageId(nativeId),
+              turnItemId: providerTurnItemId(nativeId),
+              threadId: subagent.childThreadId,
+              rootNodeId: subagent.childRootNodeId,
+              providerThreadId: subagent.task.providerThreadId,
+              providerTurnId: null,
+              nativeItemRef,
+              role: "assistant",
+              text: entry.text,
+              ordinal,
+              now: startedAt,
+            });
+            yield* emitProviderEvent({
+              type: "message.updated",
+              driver,
+              message: { ...message, updatedAt: now },
+            });
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver,
+              turnItem: { ...turnItem, updatedAt: now },
+            });
+            return;
+          }
+          const base = {
+            id: providerTurnItemId(nativeId),
+            threadId: subagent.childThreadId,
+            runId: null,
+            nodeId: subagent.childRootNodeId,
+            providerThreadId: subagent.task.providerThreadId,
+            providerTurnId: null,
+            nativeItemRef,
+            parentItemId: null,
+            ordinal,
+            status: projectedStatus,
+            title: null,
+            startedAt,
+            completedAt: completedAtForStatus(projectedStatus, now),
+            updatedAt: now,
+          };
+          let turnItem: OrchestrationV2TurnItem;
+          if (entry.kind === "reasoning") {
+            turnItem = {
+              ...base,
+              type: "reasoning",
+              text: entry.text,
+              streaming: projectedStatus === "running",
+            };
+          } else if (entry.kind === "tool") {
+            const args = unknownRecord(entry.input);
+            const command = args?.CommandLine ?? args?.command;
+            turnItem =
+              (entry.name === "run_command" || entry.name === "bash" || entry.name === "shell") &&
+              typeof command === "string"
+                ? {
+                    ...base,
+                    type: "command_execution",
+                    input: command,
+                    ...(entry.output === null ? {} : { output: entry.output }),
+                  }
+                : {
+                    ...base,
+                    type: "dynamic_tool",
+                    title: entry.name.trim() || "Tool",
+                    toolName: entry.name.trim() || null,
+                    input: entry.input,
+                    output: entry.output,
+                  };
+          } else {
+            turnItem = { ...base, type: "system_notice", message: entry.text };
+          }
+          yield* emitProviderEvent({ type: "turn_item.updated", driver, turnItem });
+        });
+
+        const readSubagentTranscript = Effect.fnUntraced(function* (
+          subagent: ActiveAcpSubagent,
+          finalize: boolean,
+        ) {
+          const transcript = subagent.transcript;
+          if (transcript === undefined || flavor.readSubagentTranscript === undefined) return;
+          const entries = yield* flavor.readSubagentTranscript({
+            sessionId: transcript.sessionId,
+            nativeTaskId: subagent.task.nativeTaskRef?.nativeId ?? subagent.task.id,
+            childSessionId: subagent.childSessionId,
+          });
+          for (const entry of entries)
+            yield* projectSubagentTranscriptEntry(subagent, entry, finalize);
+          if (finalize) {
+            for (const entry of transcript.open.values()) {
+              yield* projectSubagentTranscriptEntry(subagent, entry, true);
+            }
+          }
+        });
+
+        const followSubagentTranscript = Effect.fnUntraced(function* (subagent: ActiveAcpSubagent) {
+          const generation = yield* Ref.get(runtimeCallbackGeneration);
+          while (!acpSubagentStatusIsTerminal(subagent.task.status)) {
+            yield* Effect.sleep("2 seconds");
+            const result = yield* runRuntimeCallbackAtGeneration(
+              generation,
+              Effect.gen(function* () {
+                if (acpSubagentStatusIsTerminal(subagent.task.status)) return;
+                yield* readSubagentTranscript(subagent, false);
+              }),
+            );
+            if (Option.isNone(result)) return;
+          }
+        });
+
         const emitSubagent = Effect.fnUntraced(function* (
           context: ActiveAcpTurn,
           update: AcpAdapterV2SubagentUpdate,
@@ -3624,6 +3816,21 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               (yield* activeModelState)?.currentModelId ||
               context.input.modelSelection.model;
           }
+          const nativeType = update.nativeType?.trim() || existing?.task.nativeType;
+          let imagePaths = existing?.task.imagePaths;
+          if (
+            nativeType !== undefined &&
+            flavor.subagentImages !== undefined &&
+            taskStatus !== "pending" &&
+            taskStatus !== "running"
+          ) {
+            const made = yield* flavor.subagentImages({
+              sessionId: context.nativeThreadId,
+              nativeTaskId,
+              nativeType,
+            });
+            if (made.length > 0) imagePaths = made;
+          }
           const task: OrchestrationV2Subagent = {
             ...(existing?.task ?? {
               id: nodeId,
@@ -3643,6 +3850,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               startedAt: now,
             }),
             model,
+            ...(nativeType === undefined ? {} : { nativeType }),
+            ...(imagePaths === undefined ? {} : { imagePaths }),
             status: taskStatus,
             result: update.result ?? existing?.task.result ?? null,
             completedAt: acpSubagentStatusIsTerminal(taskStatus) ? now : null,
@@ -3657,6 +3866,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             providerTurnId: context.providerTurnId,
             parentProviderThreadId: context.input.providerThread.id,
             childSessionId: null,
+            ...(flavor.readSubagentTranscript === undefined
+              ? {}
+              : {
+                  transcript: {
+                    sessionId: context.nativeThreadId,
+                    seen: new Map(),
+                    open: new Map(),
+                    lastReply: undefined,
+                  },
+                }),
             assistantText: "",
             assistantMessages: new Map(),
             pendingAssistantMessages: new Set(),
@@ -3758,10 +3977,19 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             );
           }
 
+          if (subagent.transcript !== undefined) {
+            if (existing === undefined || updateIsTerminal) {
+              yield* readSubagentTranscript(subagent, updateIsTerminal);
+            }
+            if (existing === undefined && !updateIsTerminal) {
+              yield* followSubagentTranscript(subagent).pipe(Effect.forkIn(sessionScope));
+            }
+          }
           yield* flushSubagentAssistant(subagent);
           if (
             taskStatus !== "running" &&
             subagent.assistantText.length === 0 &&
+            subagent.transcript?.lastReply === undefined &&
             update.result !== null
           ) {
             yield* emitSubagentAssistant(subagent, update.result);
@@ -5750,35 +5978,25 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             }
           }
           if (
+            flavor.reportsPerTurnPromptUsage === true &&
             context !== null &&
             !context.finalized &&
-            context.nativeThreadId === notification.sessionId
+            context.nativeThreadId === notification.sessionId &&
+            !sessionUpdateIsReplay(notification)
           ) {
             if (
-              (update.sessionUpdate === "agent_message_chunk" ||
-                update.sessionUpdate === "agent_message" ||
-                update.sessionUpdate === "agent_thought_chunk" ||
+              update.sessionUpdate === "tool_call" ||
+              update.sessionUpdate === "tool_call_update" ||
+              ((update.sessionUpdate === "agent_thought_chunk" ||
                 update.sessionUpdate === "agent_thought") &&
+                acpRootSessionUpdateIngestsOutput(notification))
+            ) {
+              context.generationRequiresEndToEnd = true;
+            } else if (
+              update.sessionUpdate === "agent_message_chunk" &&
               acpRootSessionUpdateIngestsOutput(notification)
             ) {
-              const observedAt = yield* DateTime.now;
-              markGenerationOutput(context.generation, observedAt);
-              context.generationStepFirstOutputAtMs ??= DateTime.toEpochMillis(observedAt);
-            } else if (
-              update.sessionUpdate === "tool_call" ||
-              update.sessionUpdate === "usage_update"
-            ) {
-              if (update.sessionUpdate === "tool_call") {
-                context.generationSawTools = true;
-              }
-              if (context.generationStepFirstOutputAtMs !== undefined) {
-                const closedAt = yield* DateTime.now;
-                context.generationActiveDecodeMs += Math.max(
-                  0,
-                  DateTime.toEpochMillis(closedAt) - context.generationStepFirstOutputAtMs,
-                );
-                context.generationStepFirstOutputAtMs = undefined;
-              }
+              markGenerationOutput(context.generation, yield* DateTime.now);
             }
           }
           if (flavor.replyEndsWithUsageUpdate === true) {
@@ -6912,6 +7130,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           status: OrchestrationV2Subagent["status"],
           resultOverride?: string | null,
         ) {
+          if (acpSubagentStatusIsTerminal(status)) yield* readSubagentTranscript(subagent, true);
           yield* flushSubagentAssistant(subagent);
           yield* mutateCarryoverSubagentStatus(subagent, status, resultOverride);
           const now = subagent.task.updatedAt;
@@ -7814,7 +8033,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 // than guessing at their semantics.
                 return { action: "decline" } as const;
               }
-              const parsedForm = parseElicitationForm(params.requestedSchema, params.message);
+              const parsedForm = parseElicitationForm(params.requestedSchema, params.message, {
+                useFieldTitleAsQuestion: flavor.useElicitationFieldTitleAsQuestion === true,
+              });
               if (parsedForm === undefined) return { action: "decline" } as const;
               const elicitationScopeId =
                 "sessionId" in params ? params.sessionId : `request:${params.requestId}`;
@@ -8662,6 +8883,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               ? undefined
               : yield* flavor.promptStopFailure({
                   stopReason,
+                  error,
                   replyText: context.assistant.current?.text,
                   model: context.input.modelSelection.model,
                   now: yield* DateTime.now,
@@ -9212,6 +9434,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 );
           const instructionState = t3AcpInstructionState({
             runtimeHarness: flavor.runtimeHarness,
+            threadId: turnInput.threadId,
             isSubagent: turnInput.appThread.lineage.relationshipToParent === "subagent",
             interactionMode: turnInput.runtimePolicy.interactionMode,
             hasT3Mcp: mcp.servers.length > 0,
@@ -9311,7 +9534,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const sequence = ++context.promptSequence;
           const superseded = () => context.promptSequence !== sequence;
           const promptParts = settle.promptParts;
-          return prompt(superseded).pipe(
+          return Effect.gen(function* () {
+            const readFailure = yield* (
+              flavor.watchPromptFailure?.(settle.sessionId) ?? Effect.undefined
+            );
+            const result = yield* prompt(superseded);
+            return { result, readFailure };
+          }).pipe(
             Effect.tap(() =>
               Ref.update(promptInstructionStates, (current) => {
                 if (promptParts?.instructionState === undefined) return current;
@@ -9336,7 +9565,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             // Settle the wire before the completion callback's permit so a settled-soft
             // Stop sees the native return. Capture usage only before finalize: a late
             // response must not flip a settled turn.
-            Effect.tap((result) =>
+            Effect.tap(({ result }) =>
               Effect.gen(function* () {
                 if (flavor.extractContextUsage && !context.finalized) {
                   yield* observeContextUsage(settle.sessionId, result, context);
@@ -9349,38 +9578,19 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   const normalizedUsage =
                     flavor.normalizePromptUsage?.(result.usage) ?? result.usage;
                   context.promptUsage = addAcpUsage(context.promptUsage, normalizedUsage);
-                  const endedAt = yield* DateTime.now;
-                  if (context.generationStepFirstOutputAtMs !== undefined) {
-                    context.generationActiveDecodeMs += Math.max(
-                      0,
-                      DateTime.toEpochMillis(endedAt) - context.generationStepFirstOutputAtMs,
-                    );
-                    context.generationStepFirstOutputAtMs = undefined;
+                  if (!superseded() && normalizedUsage.outputTokens > 0) {
+                    const endedAt = yield* DateTime.now;
+                    // Prompt usage includes tool-only steps, and thought updates can be
+                    // summaries. The text stream cannot time all of those output tokens.
+                    endGenerationReply(context.generation, {
+                      outputTokens: normalizedUsage.outputTokens,
+                      endedAt,
+                      firstOutputHidden:
+                        (normalizedUsage.thoughtTokens ?? 0) > 0 ||
+                        context.generationRequiresEndToEnd,
+                    });
+                    context.generationRequiresEndToEnd = false;
                   }
-                  if (normalizedUsage.outputTokens > 0) {
-                    if (!context.generationSawTools) {
-                      endGenerationReply(context.generation, {
-                        outputTokens: normalizedUsage.outputTokens,
-                        endedAt,
-                      });
-                    } else if (context.generationActiveDecodeMs > 0) {
-                      // Multi-step prompts include tool/background waits between steps;
-                      // time only the summed active streaming windows.
-                      context.generation.firstOutputAt = DateTime.makeUnsafe(
-                        Math.max(
-                          0,
-                          DateTime.toEpochMillis(endedAt) - context.generationActiveDecodeMs,
-                        ),
-                      );
-                      context.generation.requestStartedAt = undefined;
-                      endGenerationReply(context.generation, {
-                        outputTokens: normalizedUsage.outputTokens,
-                        endedAt,
-                      });
-                    }
-                  }
-                  context.generationActiveDecodeMs = 0;
-                  context.generationSawTools = false;
                 }
                 if (!superseded()) {
                   yield* Deferred.succeed(context.promptWireSettled, undefined).pipe(Effect.asVoid);
@@ -9388,7 +9598,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               }),
             ),
             Effect.tap(() => options.testHooks?.afterPromptWireSettled?.() ?? Effect.void),
-            Effect.flatMap((result) =>
+            Effect.flatMap(({ result, readFailure }) =>
               runRuntimeCallbackAtGeneration(
                 settle.generation,
                 Effect.gen(function* () {
@@ -9396,7 +9606,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   // ACP v2 reports a failed prompt through its idle stop reason, not an RPC error.
                   const failure = context.interrupted
                     ? undefined
-                    : yield* stopReasonFailure(context, result.stopReason, result.error);
+                    : ((yield* readFailure?.(result) ?? Effect.undefined) ??
+                      (yield* stopReasonFailure(context, result.stopReason, result.error)));
                   const status =
                     failure !== undefined
                       ? "failed"
@@ -9688,9 +9899,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               promptUsage: undefined,
               turnTokenUsage: undefined,
               generation: makeGenerationMeter(startedAt),
-              generationStepFirstOutputAtMs: undefined,
-              generationActiveDecodeMs: 0,
-              generationSawTools: false,
+              generationRequiresEndToEnd: false,
               backgroundFinalizeGeneration: 0,
               promptDispatched,
               replyOpen: false,
@@ -9929,10 +10138,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   if (closeWakeReply) yield* closeTextStreams(context);
                   context.replyOpen = true;
                   yield* syncOpenPromptBackgroundWait(context);
+                  abandonGenerationReply(context.generation);
                   markGenerationRequest(context.generation, yield* DateTime.now);
-                  context.generationStepFirstOutputAtMs = undefined;
-                  context.generationActiveDecodeMs = 0;
-                  context.generationSawTools = false;
+                  context.generationRequiresEndToEnd = false;
                   context.lastProgressAt = yield* Clock.currentTimeMillis;
                   const watchdog = context.inactivityWatchdog;
                   context.inactivityWatchdog = undefined;

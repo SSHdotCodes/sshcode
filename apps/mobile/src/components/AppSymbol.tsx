@@ -1,4 +1,5 @@
 import type { Icon } from "@tabler/icons-react-native/types";
+import { BotGlyph } from "./BotGlyph";
 /*
  * Keep these as per-icon exports. Importing the package root eagerly registers
  * the entire Tabler icon set in Metro.
@@ -14,6 +15,7 @@ import IconArrowDown from "@tabler/icons-react-native/IconArrowDown";
 import IconArrowForwardUp from "@tabler/icons-react-native/IconArrowForwardUp";
 import IconArrowLeft from "@tabler/icons-react-native/IconArrowLeft";
 import IconArrowRight from "@tabler/icons-react-native/IconArrowRight";
+import IconBinoculars from "@tabler/icons-react-native/IconBinoculars";
 import IconArrowDownCircle from "@tabler/icons-react-native/IconArrowDownCircle";
 import IconArrowRightCircle from "@tabler/icons-react-native/IconArrowRightCircle";
 import IconArrowUp from "@tabler/icons-react-native/IconArrowUp";
@@ -120,6 +122,7 @@ import IconSunset2 from "@tabler/icons-react-native/IconSunset2";
 import IconShieldQuestion from "@tabler/icons-react-native/IconShieldQuestion";
 import IconTarget from "@tabler/icons-react-native/IconTarget";
 import IconTerminal2 from "@tabler/icons-react-native/IconTerminal2";
+import IconQuote from "@tabler/icons-react-native/IconQuote";
 import IconTextDecrease from "@tabler/icons-react-native/IconTextDecrease";
 import IconTextIncrease from "@tabler/icons-react-native/IconTextIncrease";
 import IconTool from "@tabler/icons-react-native/IconTool";
@@ -202,6 +205,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "doc.on.doc": IconCopy,
   "doc.text": IconFileText,
   "file.diff": IconFileDiff,
+  "bot.face": BotGlyph,
   ellipsis: IconDots,
   moon: IconMoon,
   "ellipsis.circle": IconDotsCircleHorizontal,
@@ -213,6 +217,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "folder.badge.plus": IconFolderPlus,
   "folder.fill": IconFolder,
   gearshape: IconSettings,
+  binoculars: IconBinoculars,
   globe: IconWorld,
   hammer: IconHammer,
   headphones: IconHeadphones,
@@ -277,6 +282,7 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "bubble.left": IconMessage,
   sparkles: IconSparkles,
   "plus.bubble": IconMessagePlus,
+  "text.quote": IconQuote,
   "text.word.spacing": IconLetterSpacing,
   "textformat.size": IconTypography,
   "textformat.size.larger": IconTextIncrease,
@@ -289,13 +295,23 @@ const ANDROID_ICON_BY_SF_SYMBOL = {
   "xmark.circle.fill": IconCircleXFilled,
 } satisfies Partial<
   Record<
-    SFSymbol | "git.pull-request.closed" | "git.pull-request.draft" | "git.commit" | "file.diff",
+    | SFSymbol
+    | "git.pull-request.closed"
+    | "git.pull-request.draft"
+    | "git.commit"
+    | "file.diff"
+    | "bot.face",
     Icon
   >
 >;
 const SF_ICON_LOOKUP: Partial<
   Record<
-    SFSymbol | "git.pull-request.closed" | "git.pull-request.draft" | "git.commit" | "file.diff",
+    | SFSymbol
+    | "git.pull-request.closed"
+    | "git.pull-request.draft"
+    | "git.commit"
+    | "file.diff"
+    | "bot.face",
     Icon
   >
 > = ANDROID_ICON_BY_SF_SYMBOL;

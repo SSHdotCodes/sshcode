@@ -1,6 +1,8 @@
 import {
   latestProviderTurnForAttempt,
   type MessageId,
+  type NodeId,
+  type ThreadId,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2Subagent,
@@ -76,6 +78,7 @@ function startedByUserNote(task: Pick<OrchestrationV2Subagent, "createdBy" | "pr
 export function delegatedCompletionWakeDetail(
   taskIds: ReadonlyArray<string>,
   tasks: ReadonlyArray<OrchestrationV2Subagent>,
+  boardNote?: (leadId: ThreadId, taskId: NodeId) => string,
 ): string {
   return taskIds
     .map((id) => {
@@ -88,7 +91,8 @@ export function delegatedCompletionWakeDetail(
         `task_status({taskId:"${reference}"${offset === undefined ? "" : `,summaryOffset:${offset}`}})`;
       const read = childChat == null ? taskRead() : `t3_thread_read({threadId:"${childChat}"})`;
       if (task === undefined) return `Subagent ${reference}: finished. Read ${read}.`;
-      const header = `Subagent ${reference}${startedByUserNote(task)}: ${task.status} (${task.providerInstanceId}/${task.model ?? "default"})${task.seen === undefined ? "" : `\n${seenLineForLead(task.seen)}`}\n`;
+      const board = boardNote?.(task.threadId, task.id) ?? "";
+      const header = `Subagent ${reference}${startedByUserNote(task)}: ${task.status} (${task.providerInstanceId}/${task.model ?? "default"})${task.seen === undefined ? "" : `\n${seenLineForLead(task.seen)}`}${board === "" ? "" : `\n${board}`}\n`;
       const text = header + (task.result ?? `No result text. Read ${read}.`);
       return clipCompletionWake(
         text,

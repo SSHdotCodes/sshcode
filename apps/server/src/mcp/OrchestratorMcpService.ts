@@ -145,9 +145,12 @@ import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import {
+  isBotThread,
+  registerAgentBehavior,
   registerGradingEnabled,
   registerRankedTaskKinds,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
+import { agentBehaviorLevels, DEFAULT_AGENT_BEHAVIOR } from "@t3tools/contracts";
 import { rankedModelRankingKinds } from "@t3tools/shared/modelRankings";
 
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
@@ -1217,6 +1220,9 @@ const make = Effect.gen(function* () {
   // Read in the background: until it lands, or if settings fail, grading stays on.
   let gradingOn = true;
   registerGradingEnabled(() => gradingOn);
+  // Settings > Agents levels; every level stays "default" until settings are read.
+  let agentBehavior = DEFAULT_AGENT_BEHAVIOR;
+  registerAgentBehavior(() => agentBehavior);
   // Null until settings are read: the general rankings rule stays until then.
   let rankedKinds: ReadonlyArray<string> | null = null;
   registerRankedTaskKinds(() => rankedKinds);
@@ -1227,6 +1233,7 @@ const make = Effect.gen(function* () {
       Stream.runForEach((settings) =>
         Effect.sync(() => {
           gradingOn = settings.subagentGrading;
+          agentBehavior = agentBehaviorLevels(settings.agentBehavior);
           rankedKinds = rankedModelRankingKinds(settings.modelRankings);
         }),
       ),
@@ -2053,9 +2060,42 @@ const make = Effect.gen(function* () {
             `Model ${model} needs provider ${instanceId} at ${withV(updateRequired.minVersion)} or newer, but the detected CLI is ${provider.version === null ? "an unknown version" : withV(provider.version)}. Ask the user to update it or point the provider's binary path at a newer install.`,
           );
         }
+        const omittedInstanceHint = (() => {
+          if (
+            requestedInstanceId !== undefined ||
+            requestedDriver !== undefined ||
+            requestedModel === undefined
+          )
+            return "";
+          const slash = requestedModel.indexOf("/");
+          if (slash > 0) {
+            const prefix = requestedModel.slice(0, slash);
+            const suffix = requestedModel.slice(slash + 1);
+            const other = input.providers.find(
+              (candidate) =>
+                candidate.instanceId === prefix &&
+                candidate.models.some((entry) => entry.slug === suffix),
+            );
+            if (other !== undefined) {
+              return ` Pass target.providerInstanceId: "${other.instanceId}" and target.model: "${suffix}" separately.`;
+            }
+          }
+          const matchingInstances = input.providers
+            .filter(
+              (candidate) =>
+                candidate.instanceId !== instanceId &&
+                candidate.enabled &&
+                candidate.models.some((entry) => entry.slug === requestedModel),
+            )
+            .map((candidate) => candidate.instanceId)
+            .slice(0, 3);
+          return matchingInstances.length > 0
+            ? ` Omitted providerInstanceId inherited ${instanceId}; ${requestedModel} is on ${matchingInstances.join(", ")}. Pass both providerInstanceId and model.`
+            : "";
+        })();
         return yield* rejectTarget(
           "model_unavailable",
-          `Model ${model} is unavailable on ${instanceId}.${advertisedModelsHint(provider.models, model)} Use an exact orchestrator_capabilities id, including for inheritance. Empty catalogs allow custom ids only if user-named with target.userNamedModel:true.`,
+          `Model ${model} is unavailable on ${instanceId}.${omittedInstanceHint}${advertisedModelsHint(provider.models, model)} Use an exact orchestrator_capabilities id, including for inheritance. Empty catalogs allow custom ids only if user-named with target.userNamedModel:true.`,
         );
       }
       const supersessions =
@@ -3007,6 +3047,9 @@ const make = Effect.gen(function* () {
               ...(input.apiKey === undefined && input.delivery === "file"
                 ? { delivery: "file" as const }
                 : {}),
+              ...(input.apiKey === undefined && input.fields !== undefined
+                ? { fields: input.fields }
+                : {}),
               secretStatus: "pending",
             })
             .pipe(Effect.mapError((error) => failure("orchestration_error", errorMessage(error))));
@@ -3027,6 +3070,30 @@ const make = Effect.gen(function* () {
             status: "api_key_saved" as const,
             note: "API key saved privately. Call list_api_keys to check availability, then prepare_api_key to get a one-use sshcode secret run command. Never ask for the value in chat.",
           };
+        if (existing?.type === "secret_request" && existing.fields !== undefined) {
+          const { fields } = existing;
+          if (existing.delivery === "file") {
+            const files = yield* Effect.forEach(fields, (_, part) =>
+              secretRequests
+                .saveToFile({ threadId, turnItemId, part })
+                .pipe(Effect.mapError((error) => failure("orchestration_error", error.message))),
+            );
+            const deletedAt = yield* Effect.forEach(files, secretRequests.fileDeletedAt);
+            return { status, files, deletedAt: deletedAt.toSorted()[0]! };
+          }
+          const refs = Option.all(
+            yield* Effect.forEach(fields, (_, part) =>
+              secretRequests.savedRef({ threadId, turnItemId, part }),
+            ),
+          );
+          if (Option.isNone(refs)) {
+            return yield* failure(
+              "orchestration_error",
+              "The user saved the secret, but it could not be read. Ask again with a new clientRequestId.",
+            );
+          }
+          return { status, secretRefs: refs.value };
+        }
         if (existing?.type === "secret_request" && existing.delivery === "file") {
           const file = yield* secretRequests
             .saveToFile({ threadId, turnItemId })
@@ -3958,13 +4025,22 @@ const make = Effect.gen(function* () {
                 Effect.mapError((error) => failure("orchestration_error", error.message)),
               )).projectId
             : yield* resolveProjectTarget(parent, input.projectId);
-        if (parent !== undefined && projectId !== parent.thread.projectId) {
+        // A bot runs the user's chats in every project; other thread callers stay in their own.
+        if (
+          parent !== undefined &&
+          projectId !== parent.thread.projectId &&
+          !isBotThread(parent.thread.id)
+        ) {
           return yield* failure(
             "invalid_request",
             "Thread callers can only create chats in their own project.",
           );
         }
-        const project = parent === undefined ? yield* requireProject(projectId) : undefined;
+        // A bot's chats get their project's own workspace, never the bot's folder.
+        const botCaller = parent !== undefined && isBotThread(parent.thread.id);
+        const workspaceParent = botCaller ? undefined : parent;
+        const project =
+          parent === undefined || botCaller ? yield* requireProject(projectId) : undefined;
         const providers = yield* Effect.cached(loadProviders);
         const key = yield* requestKey(input.clientRequestId);
         const created = yield* Effect.forEach(
@@ -4032,7 +4108,7 @@ const make = Effect.gen(function* () {
                         projectId,
                         threadId,
                         text: request.prompt ?? title,
-                        parentWorkspacePath: parent?.thread.worktreePath ?? null,
+                        parentWorkspacePath: workspaceParent?.thread.worktreePath ?? null,
                       }),
                     );
                 return yield* threadManagement.dispatch({
@@ -4046,8 +4122,8 @@ const make = Effect.gen(function* () {
                   modelSelection: target.modelSelection,
                   runtimeMode,
                   interactionMode,
-                  branch: folder === undefined ? (parent?.thread.branch ?? null) : null,
-                  worktreePath: folder ?? parent?.thread.worktreePath ?? null,
+                  branch: folder === undefined ? (workspaceParent?.thread.branch ?? null) : null,
+                  worktreePath: folder ?? workspaceParent?.thread.worktreePath ?? null,
                 });
               });
               const { sequence, storedEvents } = yield* createThreadLock

@@ -18,6 +18,7 @@ import {
   v2ShellSnapshot,
   v2ThreadShell,
 } from "./orchestrationV2TestFixtures.ts";
+import { createBotThreadIdsAtom } from "./bots.ts";
 import { applyShellStreamEvent } from "./shellReducer.ts";
 import { isThreadWorking } from "./threadInbox.ts";
 import {
@@ -198,6 +199,84 @@ describe("v2 thread shell lists", () => {
       threads: [v2ThreadShell, { ...helper, status: "completed", pendingRuntimeRequest: null }],
     });
     expect(registry.get(threads.modelManagerThreadRefAtom(environmentId))).toBeNull();
+    dispose();
+    registry.dispose();
+  });
+
+  it("keeps bot home chats out of every list while retaining direct access", () => {
+    const { registry, snapshotAtom, catalogValueAtom } = makeHarness();
+    const botChat = { ...v2ThreadShell, id: ThreadId.make("bot-home"), title: "Pip" };
+    registry.set(snapshotAtom(environmentId), {
+      ...v2ShellSnapshot,
+      threads: [v2ThreadShell, botChat],
+    });
+    const settingsAtom = Atom.make<{ bots?: { enabled: boolean; list: Array<never> } } | null>(
+      null,
+    );
+    const bot = {
+      id: "bot-1",
+      name: "Pip",
+      color: "blue",
+      target: { instanceId: "codex", model: "gpt-5" },
+      permissions: {
+        manageChats: true,
+        answerQuestions: false,
+        startSubagents: true,
+        messageFirst: true,
+      },
+      threadId: botChat.id,
+      createdAt: v2Now,
+    } as never;
+    const threads = createEnvironmentThreadShellAtoms({
+      catalogValueAtom,
+      snapshotAtom,
+      hiddenThreadIdsAtom: createBotThreadIdsAtom(() => settingsAtom),
+    });
+    const dispose = registry.mount(threads.threadShellsAtom);
+    const listed = () => ({
+      refs: registry.get(threads.threadRefsAtom).map((ref) => ref.threadId),
+      shells: registry.get(threads.threadShellsAtom).map((thread) => thread.id),
+      navigation: registry.get(threads.navigationThreadShellsAtom).map((thread) => thread.id),
+      project: registry
+        .get(
+          threads.threadShellsForProjectRefsAtom([{ environmentId, projectId: botChat.projectId }]),
+        )
+        .map((thread) => thread.id),
+    });
+    const both = [v2ThreadShell.id, botChat.id];
+    const hiddenOnlyProjects = () => [
+      ...registry.get(threads.hiddenOnlyProjectIdsAtom(environmentId)),
+    ];
+    // A chat no saved bot owns lists like any other chat.
+    expect(listed()).toEqual({ refs: both, shells: both, navigation: both, project: both });
+    // Off with the bot kept: its home chat stays hidden, waiting for Bots to come back on.
+    registry.set(settingsAtom, { bots: { enabled: false, list: [bot] } });
+    const only = [v2ThreadShell.id];
+    expect(listed()).toEqual({ refs: only, shells: only, navigation: only, project: only });
+
+    registry.set(settingsAtom, { bots: { enabled: true, list: [bot] } });
+    expect(listed()).toEqual({ refs: only, shells: only, navigation: only, project: only });
+    // Its project still holds a listed chat, so it stays in project lists.
+    expect(hiddenOnlyProjects()).toEqual([]);
+    expect(
+      registry.get(threads.threadShellAtom({ environmentId, threadId: botChat.id }))?.title,
+    ).toBe("Pip");
+    // Running-work bookkeeping still sees it.
+    expect(
+      registry.get(threads.environmentThreadsAtom(environmentId)).map((thread) => thread.id),
+    ).toEqual(both);
+
+    // A project made only for bot chats (the bot's "No project") leaves project lists.
+    registry.set(snapshotAtom(environmentId), {
+      ...v2ShellSnapshot,
+      threads: [v2ThreadShell, { ...botChat, projectId: ProjectId.make("bot-scratch") }],
+    });
+    expect(hiddenOnlyProjects()).toEqual(["bot-scratch"]);
+    // Off keeps it hidden too; only removing the bot (which deletes its chat) frees it.
+    registry.set(settingsAtom, { bots: { enabled: false, list: [bot] } });
+    expect(hiddenOnlyProjects()).toEqual(["bot-scratch"]);
+    registry.set(settingsAtom, { bots: { enabled: false, list: [] } });
+    expect(hiddenOnlyProjects()).toEqual([]);
     dispose();
     registry.dispose();
   });

@@ -1,3 +1,4 @@
+import { botAllowsSubagents } from "../bots/botsRuntime.ts";
 /**
  * Per-chat long-running placement, activity days, the subagents switch, and
  * the ask on a chat's first subagent. Saved in chat-controls.json in the state
@@ -6,13 +7,16 @@
  * Distinct days are filled once from runs and user-authored messages. Later
  * activity only records instants newer than the stored last-active time.
  */
-import { SubagentsEnabled } from "@t3tools/provider-core/server/orchestrationInstructions";
+import {
+  currentAgentBehavior,
+  SubagentsEnabled,
+} from "@t3tools/provider-core/server/orchestrationInstructions";
 import {
   ChatControlsError,
   type ChatControlsCommand,
   type FirstSubagentVerdict,
 } from "@t3tools/contracts";
-import { etCalendarDay, type LongRunningOverride } from "@t3tools/shared/chatControls";
+import { localCalendarDay, type LongRunningOverride } from "@t3tools/shared/chatControls";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -74,6 +78,14 @@ export function make(
   /** Chats whose first subagent was looked up since startup; each is looked up once. */
   const firstSubagentChecked = new Set<string>();
   const subagentListeners = new Set<() => void>();
+  // Settings > Agents "None" turns subagents off in every chat, as if each chat's own switch
+  // were off; the chat keeps its own choice for when the level changes back. A live session
+  // learns a flip the way it learns the chat's switch: one line on its next message. Flips
+  // are counted when read; a session that saw an odd number fewer is out of date.
+  let settingsOff: boolean | null = null;
+  let settingsFlips = 0;
+  /** Last effective `subagentsEnabled` state each chat's session observed in this process. */
+  const seenEffective = new Map<string, boolean>();
 
   function emptyRecord(): ChatControlRecord {
     return {
@@ -123,6 +135,13 @@ export function make(
     for (const threadId of threadIds) announceBoxChange(threadId);
   }
 
+  function subagentsOffInSettings(): boolean {
+    const off = currentAgentBehavior().subagents === "none";
+    if (settingsOff !== null && off !== settingsOff) settingsFlips += 1;
+    settingsOff = off;
+    return off;
+  }
+
   function notifySubagents() {
     for (const listener of subagentListeners) listener();
   }
@@ -137,7 +156,7 @@ export function make(
   function addActivity(record: ChatControlRecord, at: string): boolean {
     const ms = instantMs(at);
     if (ms === null) return false;
-    const day = etCalendarDay(ms);
+    const day = localCalendarDay(ms);
     let changed = false;
     if (!record.days.has(day)) {
       record.days.add(day);
@@ -243,8 +262,13 @@ export function make(
     view(threadId: string): ChatControlView {
       return viewOf(threads.get(threadId));
     },
+    /** In force for this chat: its own switch, unless Settings > Agents has subagents at None. */
     subagentsEnabled(threadId: string): boolean {
-      return threads.get(threadId)?.subagents !== false;
+      return (
+        !subagentsOffInSettings() &&
+        threads.get(threadId)?.subagents !== false &&
+        botAllowsSubagents(threadId)
+      );
     },
     /**
      * Records instants newer than the stored last-active time. History is the
@@ -286,10 +310,23 @@ export function make(
      */
     consumeSubagentNotice(threadId: string, sessionLive: boolean): boolean {
       const record = threads.get(threadId);
-      if (record?.notice !== true) return false;
-      record.notice = false;
-      touch();
-      return sessionLive;
+      const offInSettings = subagentsOffInSettings();
+      const nowEffective =
+        !offInSettings && record?.subagents !== false && botAllowsSubagents(threadId);
+      const prevEffective =
+        seenEffective.get(threadId) ??
+        (() => {
+          const initialSettingsOff = settingsFlips % 2 === 1 ? !offInSettings : offInSettings;
+          const initialOwn =
+            record?.notice === true ? !record.subagents : record?.subagents !== false;
+          return !initialSettingsOff && initialOwn && botAllowsSubagents(threadId);
+        })();
+      seenEffective.set(threadId, nowEffective);
+      if (record?.notice === true) {
+        record.notice = false;
+        touch();
+      }
+      return sessionLive && nowEffective !== prevEffective;
     },
     command(command: ChatControlsCommand): Effect.Effect<void, ChatControlsError> {
       return Effect.sync(() => {
@@ -453,9 +490,10 @@ export function make(
 const layerForStore = (store: ChatControls["Service"]) =>
   Layer.merge(
     Layer.succeed(ChatControls, store),
-    Layer.succeed(
-      SubagentsEnabled,
-      (threadId) => threadId === undefined || store.subagentsEnabled(threadId),
+    Layer.succeed(SubagentsEnabled, (threadId) =>
+      threadId === undefined
+        ? currentAgentBehavior().subagents !== "none"
+        : store.subagentsEnabled(threadId),
     ),
   );
 

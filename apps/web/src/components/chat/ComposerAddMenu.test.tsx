@@ -148,3 +148,36 @@ it("keeps the subagents switch out of the menu on desktop, new chat or not, and 
     window.sessionStorage.removeItem("sshcodePanel");
   }
 });
+
+it("shows a Quest panel's subagents switch off and locked while Settings > Agents has them at None", async () => {
+  const change = vi.fn();
+  window.history.replaceState(null, "", "?sshcodePanel=thread");
+  try {
+    await act(async () =>
+      root.render(
+        <ComposerAddMenu
+          existingThread
+          showAttachFiles={false}
+          comparisonEnabled={false}
+          comparisonDisabled={false}
+          onAttachFiles={() => {}}
+          onComparisonChange={() => {}}
+          subagentsEnabled
+          subagentsOffInSettings
+          onSubagentsChange={change}
+        />,
+      ),
+    );
+    await act(async () => addTrigger().click());
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')].find(
+      (element) => element.textContent?.includes("Subagents"),
+    )!;
+    expect(item.textContent).toContain("Off in Settings › Agents");
+    expect(item.getAttribute("aria-checked")).toBe("false");
+    await act(async () => item.click());
+    expect(change).not.toHaveBeenCalled();
+  } finally {
+    window.history.replaceState(null, "", "/");
+    window.sessionStorage.removeItem("sshcodePanel");
+  }
+});

@@ -30,6 +30,7 @@ import {
   type UnifiedSettings,
 } from "@t3tools/contracts/settings";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
+import { subagentsOffInSettings } from "@t3tools/client-runtime/state/agent-behavior";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -544,6 +545,16 @@ export function useEnvironmentServerSettings(
 ): ServerSettings | null {
   return useAtomValue(
     environmentId ? serverEnvironment.settingsValueAtom(environmentId) : noEnvironmentSettingsAtom,
+  );
+}
+
+/** True while this environment's Settings > Agents has Subagents at None: every chat's switch is off. */
+export function useSubagentsOffInSettings(
+  environmentId: EnvironmentId | null | undefined,
+): boolean {
+  return useAtomValue(
+    environmentId ? serverEnvironment.settingsValueAtom(environmentId) : noEnvironmentSettingsAtom,
+    subagentsOffInSettings,
   );
 }
 

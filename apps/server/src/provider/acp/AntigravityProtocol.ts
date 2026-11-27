@@ -1,3 +1,4 @@
+import { GoogleAccountVerificationUrl } from "@t3tools/contracts";
 import type {
   OrchestrationV2ProviderFailure,
   ProviderApprovalDecision,
@@ -665,8 +666,15 @@ export function normalizeAntigravityToolCall(toolCall: AcpToolCallState): AcpToo
   }
   const title =
     orchestrationTitle ?? (toolCall.title !== undefined ? boundText(toolCall.title) : undefined);
+  // agy marks the tool call complete once the command returns, even for a nonzero shell exit.
+  const commandFailed =
+    kind === "execute" &&
+    toolCall.status === "completed" &&
+    exitCode !== undefined &&
+    exitCode !== 0;
   return {
     ...toolCall,
+    ...(commandFailed ? { status: "failed" } : {}),
     ...(kind !== undefined ? { kind } : {}),
     ...(command !== undefined ? { command } : {}),
     ...(title !== undefined ? { title } : {}),
@@ -762,18 +770,23 @@ export function antigravitySubagentInput(toolCall: AcpToolCallState): {
   readonly prompt: string | undefined;
   readonly title: string | undefined;
   readonly model: string | undefined;
+  readonly typeName: string | undefined;
 } {
   const input = toolCall.data.rawInput;
   if (!Predicate.isObject(input)) {
-    return { prompt: undefined, title: undefined, model: undefined };
+    return { prompt: undefined, title: undefined, model: undefined, typeName: undefined };
   }
   const prompt = nonEmptyRawField(input, ["Prompt", "prompt"]);
-  const title = nonEmptyRawField(input, ["Role", "role", "TypeName", "typeName", "type_name"]);
+  const typeName = nonEmptyRawField(input, ["TypeName", "typeName", "type_name"]);
+  const title = nonEmptyRawField(input, ["Role", "role"]) ?? typeName;
   const rawModel = nonEmptyRawField(input, ["Model", "model"]);
   const model =
     rawModel !== undefined && rawModel.toLowerCase() !== "inherit" ? rawModel : undefined;
-  return { prompt, title, model };
+  return { prompt, title, model, typeName };
 }
+
+/** agy hands image requests to this built-in child; it runs Google's image model, not the chat's. */
+export const ANTIGRAVITY_IMAGE_GENERATOR_TYPE = "image-generator";
 
 /**
  * `agy acp` reports uncached input tokens in `usage.inputTokens` alongside
@@ -841,6 +854,69 @@ function cliQuotaResetAt(match: RegExpExecArray, now: DateTime.Utc): string | un
   return DateTime.formatIso(DateTime.add(now, { milliseconds: Math.round(totalSeconds * 1000) }));
 }
 
+const VerificationError = Schema.Struct({
+  code: Schema.Literal(403),
+  status: Schema.Literal("PERMISSION_DENIED"),
+  details: Schema.Array(Schema.Unknown),
+});
+const VerificationResponse = Schema.Struct({ error: VerificationError });
+const decodeVerificationResponse = Schema.decodeUnknownOption(VerificationResponse);
+const decodeVerificationBody = Schema.decodeUnknownOption(
+  Schema.fromJsonString(VerificationResponse),
+);
+const decodeVerificationDetail = Schema.decodeUnknownOption(
+  Schema.Struct({
+    "@type": Schema.Literal("type.googleapis.com/google.rpc.ErrorInfo"),
+    domain: Schema.Literal("cloudcode-pa.googleapis.com"),
+    reason: Schema.Literal("VALIDATION_REQUIRED"),
+    metadata: Schema.optional(
+      Schema.NullOr(Schema.Struct({ validation_url: Schema.optional(Schema.Unknown) })),
+    ),
+  }),
+);
+const isGoogleAccountVerificationUrl = Schema.is(GoogleAccountVerificationUrl);
+
+/** Extracts the HTTP error object when the agent includes it in diagnostic text. */
+function verificationResponseFromText(value: string) {
+  const text = value.slice(0, 64_000);
+  const start = text.search(/\{\s*"error"\s*:/u);
+  if (start === -1) return undefined;
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i += 1) {
+    const char = text[i];
+    if (inString && char === "\\") i += 1;
+    else if (char === '"') inString = !inString;
+    else if (!inString && char === "{") depth += 1;
+    else if (!inString && char === "}" && --depth === 0) {
+      return Option.getOrUndefined(decodeVerificationBody(text.slice(start, i + 1)));
+    }
+  }
+  return undefined;
+}
+
+function verificationFailure(error: NonNullable<EffectAcpSchema.PromptResponse["error"]>) {
+  const response =
+    Option.getOrUndefined(decodeVerificationResponse(error.data)) ??
+    (typeof error.data === "string" ? verificationResponseFromText(error.data) : undefined) ??
+    verificationResponseFromText(error.message);
+  for (const detail of response?.error.details ?? []) {
+    const decoded = decodeVerificationDetail(detail);
+    if (Option.isNone(decoded)) continue;
+    const url = decoded.value.metadata?.validation_url;
+    return {
+      ...makeProviderFailure({
+        class: "permission_error",
+        code: "VALIDATION_REQUIRED",
+        message: "Verify your Google account, then retry this turn.",
+        retryable: false,
+      }),
+      ...(isGoogleAccountVerificationUrl(url) ? { verificationUrl: url } : {}),
+    };
+  }
+  return undefined;
+}
+
 /**
  * Antigravity reports a spent quota as an ordinary reply and then ends the prompt. Its managed
  * ACP runtime writes its own notice, "Usage Limit Reached\n\nYou have reached your current
@@ -854,8 +930,23 @@ function cliQuotaResetAt(match: RegExpExecArray, now: DateTime.Utc): string | un
 export function antigravityPromptStopFailure(input: {
   readonly stopReason: EffectAcpSchema.StopReason;
   readonly replyText: string | undefined;
+  readonly error?: EffectAcpSchema.PromptResponse["error"];
   readonly now: DateTime.Utc;
 }): OrchestrationV2ProviderFailure | undefined {
+  if (input.stopReason === "error" && input.error != null) {
+    const error = input.error;
+    const verification = verificationFailure(error);
+    if (verification !== undefined) return verification;
+    const wrappedNotice = /RESOURCE_EXHAUSTED \(code 429\):[^\S\r\n]*([^\p{Cc}]+)/u.exec(
+      error.message.slice(0, 64_000),
+    )?.[1];
+    const message = wrappedNotice?.trim() ?? error.message.trim();
+    const notice = CLI_QUOTA_NOTICE.exec(message);
+    const resetAt = notice === null ? undefined : cliQuotaResetAt(notice, input.now);
+    return resetAt === undefined
+      ? undefined
+      : makeProviderFailure({ class: "usage_limit", code: "antigravity_quota", message, resetAt });
+  }
   if (input.stopReason !== "refusal" && input.stopReason !== "end_turn") return undefined;
   const message = input.replyText?.trim();
   if (!message) return undefined;

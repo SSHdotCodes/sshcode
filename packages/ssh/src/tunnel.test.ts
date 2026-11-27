@@ -20,6 +20,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as SshAuth from "./auth.ts";
 import { SshCommandError } from "./errors.ts";
+import { SERVER_DOWNLOADS_UNAVAILABLE, ServerDownloadsPublished } from "@t3tools/shared/cliRelease";
 import * as SshTunnel from "./tunnel.ts";
 
 const TEST_NODE_ENGINE_RANGE = "^22.16 || ^23.11 || >=24.10";
@@ -496,6 +497,61 @@ describe("ssh tunnel scripts", () => {
     }).pipe(Effect.provide(layerProcess));
   });
 
+  it.effect(
+    "refuses an SSH environment before any SSH work while releases carry no server download",
+    () =>
+      Effect.gen(function* () {
+        const spawned: Array<ReadonlyArray<string>> = [];
+        const spawner = ChildProcessSpawner.make((command) =>
+          Effect.sync(() => spawned.push(commandArgs(command))).pipe(
+            Effect.as(makeSuccessfulProcess('{"remotePort":3773}\n')),
+          ),
+        );
+        const ensure = (
+          serverDownloadsPublished: boolean,
+          runner: SshTunnel.RemoteT3RunnerOptions,
+        ) =>
+          Effect.gen(function* () {
+            const manager = yield* SshTunnel.SshEnvironmentManager;
+            return yield* Effect.result(
+              manager.ensureEnvironment({
+                alias: "devbox",
+                hostname: "devbox",
+                username: null,
+                port: null,
+              }),
+            );
+          }).pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                NodeServices.layer,
+                Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+                Layer.succeed(HttpClient.HttpClient, testHttpClient),
+                Layer.succeed(NetService.NetService, testNetService),
+                SshAuth.SshPasswordPrompt.disabledLayer,
+                SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(runner) }),
+                Layer.succeed(ServerDownloadsPublished, serverDownloadsPublished),
+              ),
+            ),
+            Effect.scoped,
+          );
+
+        const refused = yield* ensure(false, ARCHIVE);
+        assert.isTrue(Result.isFailure(refused));
+        if (Result.isFailure(refused)) {
+          assert.equal(refused.failure._tag, "SshLaunchError");
+          assert.equal(refused.failure.message, SERVER_DOWNLOADS_UNAVAILABLE);
+        }
+        assert.deepEqual(spawned, []);
+
+        // Downloads on, the archive runner goes on to resolve the host over SSH.
+        yield* Effect.forkChild(ensure(true, ARCHIVE));
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust(Duration.millis(10));
+        assert.isAbove(spawned.length, 0);
+      }),
+  );
+
   it.effect("connects and reuses a tunnel whose responses take over a second", () =>
     Effect.gen(function* () {
       // Over a ~1s RTT link each request through the forward takes a few round trips.
@@ -529,6 +585,7 @@ describe("ssh tunnel scripts", () => {
         Layer.succeed(NetService.NetService, testNetService),
         SshAuth.SshPasswordPrompt.disabledLayer,
         SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
+        Layer.succeed(ServerDownloadsPublished, true),
       );
       yield* Effect.gen(function* () {
         const manager = yield* SshTunnel.SshEnvironmentManager;
@@ -591,6 +648,7 @@ describe("ssh tunnel scripts", () => {
         Layer.succeed(NetService.NetService, testNetService),
         SshAuth.SshPasswordPrompt.disabledLayer,
         SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
+        Layer.succeed(ServerDownloadsPublished, true),
       );
       yield* Effect.gen(function* () {
         const manager = yield* SshTunnel.SshEnvironmentManager;
@@ -653,6 +711,7 @@ describe("ssh tunnel scripts", () => {
         Layer.succeed(NetService.NetService, testNetService),
         SshAuth.SshPasswordPrompt.disabledLayer,
         SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
+        Layer.succeed(ServerDownloadsPublished, true),
       );
       const target = {
         alias: "devbox",
@@ -781,6 +840,7 @@ describe("ssh tunnel scripts", () => {
           Layer.succeed(NetService.NetService, testNetService),
           SshAuth.SshPasswordPrompt.disabledLayer,
           SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
+          Layer.succeed(ServerDownloadsPublished, true),
         );
         yield* Effect.gen(function* () {
           const manager = yield* SshTunnel.SshEnvironmentManager;
@@ -885,6 +945,7 @@ describe("ssh tunnel scripts", () => {
           Layer.succeed(NetService.NetService, testNetService),
           SshAuth.SshPasswordPrompt.disabledLayer,
           SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
+          Layer.succeed(ServerDownloadsPublished, true),
         );
         yield* Effect.gen(function* () {
           const manager = yield* SshTunnel.SshEnvironmentManager;
@@ -953,6 +1014,7 @@ describe("ssh tunnel scripts", () => {
         Layer.succeed(NetService.NetService, testNetService),
         SshAuth.SshPasswordPrompt.disabledLayer,
         SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
+        Layer.succeed(ServerDownloadsPublished, true),
       );
       yield* Effect.gen(function* () {
         const manager = yield* SshTunnel.SshEnvironmentManager;

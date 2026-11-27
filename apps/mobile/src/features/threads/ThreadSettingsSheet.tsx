@@ -230,9 +230,7 @@ function ProviderHeader(props: {
       {props.collapsible ? (
         <>
           {props.collapsed ? (
-            <Text className="shrink-0 text-xs tabular-nums text-foreground-muted">
-              {props.modelCount}
-            </Text>
+            <Text className="shrink-0 text-xs text-foreground-muted">{props.modelCount}</Text>
           ) : null}
           <SymbolView
             name={props.collapsed ? "chevron.down" : "chevron.up"}

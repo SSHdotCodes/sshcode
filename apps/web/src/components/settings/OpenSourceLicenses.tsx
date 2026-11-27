@@ -18,7 +18,7 @@ import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 
 type LicenseManifestState =
   | { readonly status: "loading" }
-  | { readonly status: "error"; readonly message: string }
+  | { readonly status: "error" }
   | { readonly status: "ready"; readonly manifest: ThirdPartyLicenseManifest };
 
 let licenseManifestPromise: Promise<ThirdPartyLicenseManifest> | undefined;
@@ -194,15 +194,11 @@ function LicenseHeaderAction({
   );
 }
 
-function LicenseManifestError({ message, onRetry }: { message: string; onRetry: () => void }) {
+// The cause (a dev server's HTML fallback, a timeout, a bad manifest) is not the user's to read.
+function LicenseManifestError({ onRetry }: { onRetry: () => void }) {
   return (
     <div className="flex flex-col items-start gap-3 px-3 py-5 sm:px-4">
-      <div className="flex flex-col gap-1">
-        <h3 className="text-sm font-medium text-foreground">Open-source notices are unavailable</h3>
-        <p className="max-w-[70ch] text-pretty text-xs leading-normal text-muted-foreground/80">
-          {message}
-        </p>
-      </div>
+      <p className="text-sm text-foreground">Couldn't load the license list.</p>
       <Button type="button" size="xs" variant="outline" onClick={onRetry}>
         Try again
       </Button>
@@ -224,12 +220,8 @@ export function OpenSourceLicensesPanel() {
       (manifest) => {
         if (!cancelled) setState({ status: "ready", manifest });
       },
-      (error: unknown) => {
-        if (cancelled) return;
-        setState({
-          status: "error",
-          message: error instanceof Error ? error.message : "The license manifest could not load.",
-        });
+      () => {
+        if (!cancelled) setState({ status: "error" });
       },
     );
     return () => {
@@ -282,7 +274,7 @@ export function OpenSourceLicensesPanel() {
             )}
           </div>
         ) : state.status === "error" ? (
-          <LicenseManifestError message={state.message} onRetry={retry} />
+          <LicenseManifestError onRetry={retry} />
         ) : (
           <p className="px-3 py-5 text-sm/6 text-muted-foreground sm:px-4">
             Loading open-source notices…

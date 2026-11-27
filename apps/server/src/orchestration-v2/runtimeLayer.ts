@@ -1,5 +1,6 @@
 import * as ProviderCredentials from "../provider/ProviderCredentials.ts";
 import * as ChatVisitLog from "./ChatVisitLog.ts";
+import * as LiveProgress from "../liveProgress/LiveProgress.ts";
 import * as EventLogCompaction from "./EventLogCompaction.ts";
 import * as ProviderHealthReactor from "./ProviderHealthReactor.ts";
 import * as ProviderRecentUseReactor from "./ProviderRecentUseReactor.ts";
@@ -62,6 +63,7 @@ import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
+import * as TeamBoardRuntime from "../teamBoard/TeamBoardRuntime.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
@@ -443,6 +445,17 @@ const layerTerminalHandoffProvided = TerminalHandoffService.layer.pipe(
 );
 
 export const layerProduction = Layer.mergeAll(
+  TeamBoardRuntime.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerEventSinkProvided,
+        ProjectionStore.layer,
+        ProjectStore.layer,
+        layerThreadManagementProvided,
+        GitVcsDriver.layer,
+      ),
+    ),
+  ),
   layerTerminalHandoffProvided,
   // The effect worker prepares the workspace of a run a restart starts over.
   layer.pipe(Layer.provide(Layer.merge(layerProjectService, layerThreadLaunchProvided))),
@@ -462,6 +475,7 @@ export const layerProduction = Layer.mergeAll(
   ChatVisitLog.layer.pipe(
     Layer.provide(Layer.merge(layerOrchestratorProvided, ProjectionStore.layer)),
   ),
+  LiveProgress.layerReactor.pipe(Layer.provide(layerOrchestratorProvided)),
   ProviderHealthReactor.layer.pipe(Layer.provide(layerOrchestratorProvided)),
   ProviderRecentUseReactor.layer,
   EventLogCompaction.layer,

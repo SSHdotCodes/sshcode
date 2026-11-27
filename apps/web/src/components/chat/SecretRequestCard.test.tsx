@@ -132,3 +132,73 @@ it("uses chat and 30 days by default and refuses to answer after permission is r
     test.allowed = true;
   }
 });
+
+it("asks for a credential in parts on one card and saves only once every part is filled", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  test.answer.mockClear();
+  test.answer.mockResolvedValue({ _tag: "Success" });
+  test.allowed = true;
+  const inParts = {
+    id: TurnItemId.make("fake-modal-request"),
+    threadId: ThreadId.make("fake-thread"),
+    type: "secret_request",
+    secretStatus: "pending",
+    label: "Modal token",
+    reason: "Runs the GPU job",
+    fields: [
+      { label: "Token ID", placeholder: "ak-…" },
+      { label: "Token secret", placeholder: "as-…" },
+    ],
+  } as unknown as SecretRequestItem;
+  let renderer: ReactTestRenderer | undefined;
+  try {
+    await act(async () => {
+      renderer = create(
+        <SecretRequestCard
+          environmentId={EnvironmentId.make("fake-env")}
+          item={inParts}
+          visibility="local"
+        />,
+      );
+    });
+    const inputs = () => renderer!.root.findAllByType("input");
+    const save = () =>
+      renderer!.root.findAllByType("button").find((element) => element.props.type === "submit")!;
+    expect(inputs().map((input) => [input.props.placeholder, input.props.type])).toEqual([
+      ["ak-…", "password"],
+      ["as-…", "password"],
+    ]);
+    expect(renderer!.root.findAllByType("label").map((label) => label.children.join(""))).toEqual([
+      "Token ID",
+      "Token secret",
+    ]);
+    await act(async () => inputs()[0]!.props.onChange({ currentTarget: { value: "ak-fake-id" } }));
+    expect(save().props.disabled).toBe(true);
+    // Enter in the first part moves on instead of saving.
+    const focus = vi.fn();
+    const getElementById = vi.fn(() => ({ focus }));
+    vi.stubGlobal("document", { getElementById });
+    inputs()[0]!.props.onKeyDown({ key: "Enter", preventDefault: vi.fn() });
+    expect(getElementById).toHaveBeenCalledWith(inputs()[1]!.props.id);
+    expect(focus).toHaveBeenCalled();
+    await act(async () =>
+      inputs()[1]!.props.onChange({ currentTarget: { value: " as-fake-secret " } }),
+    );
+    expect(save().props.disabled).toBe(false);
+    await act(async () =>
+      renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }),
+    );
+    expect(test.answer).toHaveBeenLastCalledWith({
+      environmentId: "fake-env",
+      input: {
+        threadId: "fake-thread",
+        turnItemId: "fake-modal-request",
+        answer: { type: "save", secrets: ["ak-fake-id", "as-fake-secret"] },
+      },
+    });
+    expect(inputs().map((input) => input.props.value)).toEqual(["", ""]);
+  } finally {
+    await act(async () => renderer?.unmount());
+    vi.unstubAllGlobals();
+  }
+});

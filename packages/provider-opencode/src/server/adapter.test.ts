@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { OpencodeClient, ToolPart } from "@opencode-ai/sdk/v2";
 import {
   CheckpointId,
+  DEFAULT_AGENT_BEHAVIOR,
   EnvironmentId,
   NodeId,
   ProjectId,
@@ -33,6 +34,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import { registerAgentBehavior } from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import type * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
@@ -993,8 +995,9 @@ describe("OpenCodeAdapterV2", () => {
         yield* push({ type: "session.idle", properties: { sessionID: child } });
       }
       assert.isFalse(yield* hasPendingBackgroundWork, "an idle child must not pin idle release");
+      const collected = yield* Fiber.join(received);
       assert.deepEqual(
-        (yield* Fiber.join(received)).flatMap((event) =>
+        collected.flatMap((event) =>
           event.type === "subagent.updated"
             ? [`subagent ${event.subagent.status}`]
             : event.type === "turn.terminal"
@@ -1002,6 +1005,10 @@ describe("OpenCodeAdapterV2", () => {
               : [],
         ),
         ["subagent running", "subagent running", "root turn completed", `subagent ${outcome}`],
+      );
+      assert.equal(
+        collected.find((event) => event.type === "subagent.updated")?.subagent.nativeType,
+        "general",
       );
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
@@ -1421,6 +1428,117 @@ describe("OpenCodeAdapterV2", () => {
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
     ),
+  );
+
+  it.effect("marks a root prompt stopped during command discovery as dropped", () =>
+    Effect.gen(function* () {
+      const events = asyncEventStream();
+      const lookupStarted = promiseGate<void>();
+      const finishLookup = promiseGate<void>();
+      let sent = 0;
+      const harness = yield* makeOpenCodeRuntimeHarness("unsent-stop", "root", {
+        event: { subscribe: async () => ({ stream: events.stream }) },
+        command: {
+          list: async () => {
+            lookupStarted.resolve();
+            await finishLookup.promise;
+            return { data: [] };
+          },
+        },
+        session: {
+          create: async () => ({ data: { id: "root", time: { created: 1, updated: 1 } } }),
+          promptAsync: async () => {
+            sent += 1;
+            return { data: true };
+          },
+          children: async () => ({ data: [] }),
+          abort: async () => {
+            await events.push({
+              type: "session.status",
+              properties: { sessionID: "root", status: { type: "idle" } },
+            });
+            return { data: true };
+          },
+        },
+      });
+      const started = yield* harness.startTurn("/skill").pipe(Effect.forkScoped);
+      yield* Effect.promise(() => lookupStarted.promise);
+      const running = yield* harness.awaitTurn("running");
+      const stopped = yield* harness.runtime
+        .interruptTurn({ providerThread: harness.providerThread, providerTurnId: running.id })
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      finishLookup.resolve();
+      yield* Fiber.join(stopped);
+      yield* Fiber.join(started);
+      const turn = yield* harness.awaitTurn("interrupted");
+      assert.deepEqual(
+        { sent, promptDropped: turn.promptDropped },
+        { sent: 0, promptDropped: true },
+      );
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect("prompts a session bound to the thread's cwd after a worktree handoff", () =>
+    Effect.gen(function* () {
+      // OpenCode 1.x runs a session in the directory it was created in and publishes its
+      // events on that directory's /event stream, not the one the adapter subscribed to.
+      const directories = new Map<string, string>();
+      const prompted: string[] = [];
+      let created = 0;
+      const harness = yield* makeOpenCodeRuntimeHarness("worktree-handoff", "root", {
+        event: { subscribe: async () => ({ stream: asyncEventStream().stream }) },
+        session: {
+          create: async () => {
+            // The first session predates the handoff and lives in the repository root.
+            const id = created++ === 0 ? "root" : `ses_worktree_${created}`;
+            directories.set(id, id === "root" ? "/repo" : "/workspace");
+            return {
+              data: { id, directory: directories.get(id), time: { created: 1, updated: 1 } },
+            };
+          },
+          get: async ({ sessionID }: { sessionID: string }) => ({
+            data: {
+              id: sessionID,
+              directory: directories.get(sessionID),
+              time: { created: 1, updated: 1 },
+            },
+          }),
+          update: async (input: { sessionID: string }) => ({
+            data: { id: input.sessionID, time: { created: 1, updated: 2 } },
+          }),
+          promptAsync: async ({ sessionID }: { sessionID: string }) => {
+            prompted.push(sessionID);
+            return { data: true };
+          },
+          abort: async () => ({ data: true }),
+          children: async () => ({ data: [] }),
+        },
+        path: { get: async () => ({ data: { directory: "/workspace" } }) },
+        client: {
+          post: async (input: {
+            url: string;
+            body: { sessionID: string; destination: { directory: string } };
+          }) => {
+            assert.equal(input.url, "/experimental/control-plane/move-session");
+            directories.set(input.body.sessionID, input.body.destination.directory);
+            return { data: undefined };
+          },
+        },
+      });
+      assert.equal(directories.get("root"), "/repo");
+
+      const resumed = yield* harness.runtime.resumeThread({
+        providerThread: harness.providerThread,
+        runtimePolicy: harness.policy,
+      });
+      yield* harness.startTurn("continue in the worktree", resumed);
+
+      assert.equal(prompted.length, 1);
+      assert.equal(directories.get(prompted[0]!), harness.policy.cwd);
+    }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer))),
   );
 
   it.effect("sends unadvertised slash commands as ordinary prompts", () =>
@@ -3127,6 +3245,20 @@ describe("OpenCodeAdapterV2", () => {
       pattern: "/tmp/opencode-workspace/*",
       action: "allow",
     });
+
+    try {
+      registerAgentBehavior(() => ({ ...DEFAULT_AGENT_BEHAVIOR, subagents: "none" }));
+      assert.equal(
+        permissionAction(openCodePermissionRules(runtimePolicy("full-access")), "task"),
+        "deny",
+      );
+      assert.equal(
+        permissionAction(openCodePermissionRules(runtimePolicy("auto-accept-edits")), "task"),
+        "deny",
+      );
+    } finally {
+      registerAgentBehavior(() => DEFAULT_AGENT_BEHAVIOR);
+    }
   });
 
   it.effect("treats each todo update as a completed snapshot", () =>

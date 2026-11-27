@@ -5,8 +5,51 @@
  * platform key, so a rename here is a release-breaking change.
  */
 
+import type { ServerSelfUpdateCapability } from "@t3tools/contracts";
+import * as Context from "effect/Context";
+
+// SSHCode's own releases: `update` on a headless host must never install upstream T3 Code.
 const CLI_RELEASE_REPOSITORY = "SSHdotCodes/sshcode";
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
+
+/**
+ * Whether this build's GitHub releases carry the server downloads: the `t3-<version>-<platform>`
+ * archives and their `SHA256SUMS`. False turns off every flow that needs them (SSH environments,
+ * `sshcode update`, `sshcode service install|update`, updating a server that downloads its
+ * update) with {@link SERVER_DOWNLOADS_UNAVAILABLE} in their place. Flip it in the release that
+ * starts shipping the downloads.
+ */
+export const SERVER_DOWNLOADS_PUBLISHED = false;
+
+/** {@link SERVER_DOWNLOADS_PUBLISHED} for Effect code; tests provide either value. */
+export class ServerDownloadsPublished extends Context.Reference<boolean>(
+  "t3/serverDownloadsPublished",
+  { defaultValue: () => SERVER_DOWNLOADS_PUBLISHED },
+) {}
+
+/** Said wherever a flow needs the server download this build's releases do not carry. */
+export const SERVER_DOWNLOADS_UNAVAILABLE =
+  "Not available yet: SSHCode's releases don't include the server download this needs, so run the server from a source checkout instead.";
+
+/** The sentence to show instead of a flow that needs the server download, or null when it can run. */
+export function serverDownloadsUnavailable(
+  published: boolean = SERVER_DOWNLOADS_PUBLISHED,
+): string | null {
+  return published ? null : SERVER_DOWNLOADS_UNAVAILABLE;
+}
+
+/**
+ * {@link serverDownloadsUnavailable} for updating a server: only the desktop app's own update
+ * works without the download, so it is never refused here.
+ */
+export function serverUpdateUnavailable(
+  selfUpdate: ServerSelfUpdateCapability | null | undefined,
+  published: boolean = SERVER_DOWNLOADS_PUBLISHED,
+): string | null {
+  return selfUpdate === "boot-service" || selfUpdate === "respawn"
+    ? serverDownloadsUnavailable(published)
+    : null;
+}
 /** Overrides the download origin for mirrors and air-gapped installs. */
 export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
 
@@ -29,7 +72,7 @@ export const CLI_ARCHIVE_PLATFORM_KEYS = [
 export type CliArchivePlatformKey = (typeof CLI_ARCHIVE_PLATFORM_KEYS)[number];
 
 export function cliArchivePlatformKey(
-  platform: NodeJS.Platform,
+  platform: string,
   arch: string,
 ): CliArchivePlatformKey | undefined {
   const key = `${platform}-${arch}`;
@@ -42,7 +85,7 @@ export function cliArchivePlatformKey(
  * PATH cannot open the zip, so the system copy is named by absolute path.
  */
 export function cliArchiveTarCommand(
-  platform: NodeJS.Platform,
+  platform: string,
   env: Readonly<Record<string, string | undefined>>,
 ): string {
   if (platform !== "win32") return "tar";
@@ -99,6 +142,14 @@ export function cliReleaseChannelOf(version: string): CliReleaseChannel {
  */
 export function cliReleaseIndexPageUrl(page: number): string {
   return `https://api.github.com/repos/${CLI_RELEASE_REPOSITORY}/releases?per_page=100&page=${page}`;
+}
+
+/**
+ * GitHub's record of one release, listing its assets. Drafts are not visible
+ * here without credentials, so an unpublished release reads as missing.
+ */
+export function cliReleaseTagUrl(version: string): string {
+  return `https://api.github.com/repos/${CLI_RELEASE_REPOSITORY}/releases/tags/v${encodeURIComponent(version)}`;
 }
 
 /**

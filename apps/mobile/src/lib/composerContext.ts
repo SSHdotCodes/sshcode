@@ -3,11 +3,17 @@ import {
   collectComposerModelMentions,
   type ComposerModelMentionOccurrence,
 } from "@t3tools/client-runtime/composerModelMentions";
+import {
+  assistantCitationLabel,
+  collectAssistantCitations,
+  expandAssistantCitationsForProvider,
+} from "@t3tools/shared/assistantCitations";
 import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
 import { collectGithubLinks, parseLinkChip, type LinkChipSite } from "@t3tools/shared/githubLinks";
 import { filePreviewKind } from "@t3tools/shared/filePreview";
 import { videoMimeType } from "@t3tools/shared/video";
 import {
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   COMPOSER_CONTEXT_MAX_RECORDS,
   COMPOSER_CONTEXT_REVIEW_TEXT_MAX_CHARS,
   ComposerContextId,
@@ -200,16 +206,23 @@ export function composerContextEditorTokens(
   linkTokens: ReadonlyArray<ComposerLinkToken> = [],
 ) {
   const references = collectComposerContextReferences(text);
-  const taken = [...tokens, ...references, ...composerModelMathRanges(text)];
+  const citations = collectAssistantCitations(text);
+  const links = [...references, ...citations];
+  const taken = [...tokens, ...links, ...composerModelMathRanges(text)];
   const overlaps = (range: { start: number; end: number }) =>
     [...taken, ...modelTokens].some((other) => range.start < other.end && range.end > other.start);
   return [
     ...tokens.filter(
-      (token) => !references.some((ref) => token.start < ref.end && token.end > ref.start),
+      (token) => !links.some((ref) => token.start < ref.end && token.end > ref.start),
     ),
     ...references.map((ref) => ({
       type: "context" as const,
       value: ref.label,
+      ...ref,
+    })),
+    ...citations.map((ref) => ({
+      type: "citation" as const,
+      value: assistantCitationChipLabel(ref.citation),
       ...ref,
     })),
     ...modelTokens
@@ -221,6 +234,28 @@ export function composerContextEditorTokens(
       .filter((link) => !overlaps(link))
       .map((link) => ({ ...link, type: "link" as const, value: link.label })),
   ].sort((a, b) => a.start - b.start);
+}
+
+/**
+ * The Mac's prompt-length message, counting citations as the agent receives them: expanded
+ * into their quoted text. Null while the prompt fits.
+ */
+export function composerPromptLengthMessage(prompt: string): string | null {
+  const normalized = prompt.trim();
+  const length = Math.max(
+    normalized.length,
+    expandAssistantCitationsForProvider(normalized).length,
+  );
+  const excess = length - PROVIDER_SEND_TURN_MAX_INPUT_CHARS;
+  if (excess <= 0) return null;
+  return `Prompt is ${excess.toLocaleString("en-US")} ${excess === 1 ? "character" : "characters"} over the ${PROVIDER_SEND_TURN_MAX_INPUT_CHARS.toLocaleString("en-US")}-character limit. Shorten or split it before sending.`;
+}
+
+/** A citation chip names its comment once there is one, else the start of the quote. */
+export function assistantCitationChipLabel(
+  citation: Parameters<typeof assistantCitationLabel>[0],
+): string {
+  return assistantCitationLabel({ ...citation, text: citation.text.trim() }, 28);
 }
 
 /** Prunes removed references, retaining the screenshot bound to a preview annotation. */

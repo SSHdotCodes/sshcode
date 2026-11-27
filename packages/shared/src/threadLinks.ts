@@ -9,9 +9,31 @@ import * as Schema from "effect/Schema";
  */
 export const THREAD_LINK_PROTOCOL = "t3-thread";
 const THREAD_LINK_HREF_PREFIX = `${THREAD_LINK_PROTOCOL}://v1/`;
-// Code comes first in the alternation so a link written inside a code span or fence is skipped.
-const THREAD_LINK_OUTSIDE_CODE =
-  /(?<fence>(`{3,}|~{3,})[\s\S]*?(?:\2|$))|(?<span>(`+)[^\n]*?\4)|\[[^\]\n]*\]\((?<href>t3-thread:\/\/v1\/[^\s)]+)\)/g;
+const LIST_MARKERS = String.raw`(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*`;
+// CommonMark fences start on their own line (optional blockquotes, indentation, or list markers)
+// and close on a line with at least as many of the same marker; backtick info strings hold no `.
+// Quote markers are compared from the first `>`, so lines may indent them differently.
+// Space after the markers is matched only after a `>`: two adjacent `[ \t]*` backtrack quadratically.
+const AFTER_QUOTE = String.raw`(?:(?<=>)[ \t]*)?`;
+const fencedCode = (char: "`" | "~", name: string) => {
+  const bq = `${name}Bq`;
+  const info = char === "`" ? "[^`\\r\\n]*" : "[^\\r\\n]*";
+  const closer = String.raw`[ \t]*\k<${bq}>${AFTER_QUOTE}\k<${name}>${char}*(?!${char})[ \t]*\r?$`;
+  return String.raw`^[ \t]*${LIST_MARKERS}(?<${bq}>(?:>(?:[ \t]*>)*)?)(?:(?<=>)[ \t]*${LIST_MARKERS})?(?<${name}>${char}{3,}(?!${char}))${info}(?=\r?$)(?:\r?\n(?!${closer})[ \t]*\k<${bq}>[^\r\n]*)*(?:\r?\n${closer})?`;
+};
+// A code span may wrap lines but ends where its paragraph does: a blank line, heading, list item, or fence.
+const SPAN_LINE_BREAK = String.raw`\n(?![ \t>]*(?:\r?$|#{1,6}(?:[ \t]|\r?$)|(?:[-*+]|\d{1,9}[.)])[ \t]|\`{3,}[^\`\r\n]*\r?$|~{3,}))`;
+
+// Code comes first so links inside it keep their original labels.
+const THREAD_LINK_OUTSIDE_CODE = new RegExp(
+  [
+    fencedCode("`", "backticks"),
+    fencedCode("~", "tildes"),
+    String.raw`(?<span>(?<!\`)(?<spanTicks>\`+)(?!\`)(?:[^\n]|${SPAN_LINE_BREAK})*?(?<!\`)\k<spanTicks>(?!\`))`,
+    String.raw`\[[^\]\n]*\]\((?<href>t3-thread:\/\/v1\/[^\s)]+)\)`,
+  ].join("|"),
+  "gm",
+);
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 

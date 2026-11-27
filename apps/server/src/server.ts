@@ -1,4 +1,5 @@
 import * as AutoModelFeedback from "./autoModel/AutoModelFeedback.ts";
+import * as TeamBoard from "./teamBoard/TeamBoard.ts";
 import * as DebugLog from "./debug/DebugLog.ts";
 import * as DebugLogHttp from "./debug/DebugLogHttp.ts";
 import * as WorkflowsService from "./workflows/WorkflowsService.ts";
@@ -108,6 +109,7 @@ import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerOwnership from "./serverOwnership.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
+import * as BotService from "./bots/BotService.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
@@ -725,7 +727,8 @@ const layerRuntimeCoreDependenciesWithBoxNamer = Layer.mergeAll(
   // Names session boxes with the local model when it is installed; off otherwise.
   BoxNamer.layer,
 ).pipe(Layer.provideMerge(layerRuntimeCoreDependenciesBase));
-const layerRuntimeCoreDependencies = WorkflowsService.layer.pipe(
+// Bots stay idle (no subscriptions, no timers) unless Settings > Bots is on with a bot.
+const layerRuntimeCoreDependencies = Layer.merge(WorkflowsService.layer, BotService.layer).pipe(
   Layer.provideMerge(layerRuntimeCoreDependenciesWithBoxNamer),
   Layer.provideMerge(layerPtyAdapter),
   // Search, prepare, status inspection, and turn launch share one registry
@@ -1245,6 +1248,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(AgentScopeLive.layer),
       // Other services also build projection stores; all must capture the same recorder.
       Layer.provideMerge(SubagentRankings.layer),
+      Layer.provideMerge(TeamBoard.layer.pipe(Layer.provide(ChatControls.layer))),
       Layer.provideMerge(layerPlatformServices),
     );
   }),

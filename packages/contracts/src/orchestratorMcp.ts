@@ -120,7 +120,7 @@ export const OrchestratorMcpTarget = Schema.Struct({
   model: Schema.optional(
     describeInput(
       TrimmedNonEmptyString,
-      "Exact model id from orchestrator_capabilities. Omit to inherit.",
+      "Exact model id from orchestrator_capabilities (separate from providerInstanceId). Omit to inherit.",
     ),
   ),
   /**
@@ -215,14 +215,21 @@ const attachmentPaths = Schema.optional(
 );
 
 export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
-  task: describeInput(OrchestratorMcpPrompt, "Self-contained subagent brief."),
+  task: describeInput(
+    OrchestratorMcpPrompt,
+    "Self-contained subagent brief (goal, files/base, constraints, verification).",
+  ),
   attachmentPaths,
   // Some providers send the whole target object as JSON text.
   target: Schema.optional(
     Schema.Union([OrchestratorMcpTarget, Schema.fromJsonString(OrchestratorMcpTarget)]),
   ),
   title: Schema.optional(OrchestratorMcpTitle),
-  role: Schema.optional(OrchestratorMcpTaskRole),
+  role: Schema.optional(
+    OrchestratorMcpTaskRole.annotate({
+      description: "Task kind: implementation, research, review, design, test, or general.",
+    }),
+  ),
   isolation: Schema.optional(
     Schema.Literals(["shared", "worktree"]).annotate({
       description:
@@ -251,7 +258,7 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   runtimeMode: Schema.optional(
     OrchestratorMcpRuntimeMode.annotate({
       description:
-        "Default inherit. Override only for user-requested supervision. Approval modes pause for the user in the child chat. Modes above yours are rejected. State read-only limits in the brief.",
+        "Default inherit; override only for user-requested supervision (approval modes pause in the subagent chat; modes above yours fail; state read-only limits in brief).",
     }),
   ),
   interactionMode: Schema.optional(OrchestratorMcpInteractionMode),
@@ -903,6 +910,14 @@ export const OrchestratorMcpRequestSecretInput = Schema.Struct({
     description:
       "secretRef (default): for a T3 tool that takes one. file: for shell commands such as sudo or a CLI token; the result is a private file path to read inside your command, e.g. sudo -S -p '' <cmd> < <file>, ssh <host> \"sudo -S -p '' <cmd>\" < <file>, or TOKEN=\"$(cat <file>)\" <cli>.",
   }),
+  fields: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        label: TrimmedNonEmptyString,
+        placeholder: Schema.optional(TrimmedNonEmptyString),
+      }),
+    ).check(Schema.isMinLength(2), Schema.isMaxLength(4)),
+  ),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId).annotate({
     description:
       "Reuse to get the same card or its saved result again, including after the answer message.",
@@ -910,14 +925,26 @@ export const OrchestratorMcpRequestSecretInput = Schema.Struct({
 });
 export type OrchestratorMcpRequestSecretInput = typeof OrchestratorMcpRequestSecretInput.Type;
 
-export const OrchestratorMcpRequestSecretResult = Schema.Union([
-  // The tool description and the note say what "asked" means; the schema does not repeat it.
-  Schema.Struct({
-    status: Schema.Literal("asked"),
-    clientRequestId: OrchestratorMcpClientRequestId,
-    note: Schema.String,
+// The tool description and the note say what "asked" means; the schema does not repeat it.
+const RequestSecretAsked = Schema.Struct({
+  status: Schema.Literal("asked"),
+  clientRequestId: OrchestratorMcpClientRequestId,
+  note: Schema.String,
+});
+const RequestSecretApiKeySaved = Schema.Struct({
+  status: Schema.Literal("api_key_saved"),
+  note: Schema.String,
+});
+const RequestSecretUnanswered = Schema.Struct({
+  status: Schema.Literals(["declined", "cancelled"]).annotate({
+    description:
+      "declined: the user chose not to. cancelled: the card was dismissed; use a new clientRequestId to ask again.",
   }),
-  Schema.Struct({ status: Schema.Literal("api_key_saved"), note: Schema.String }),
+});
+
+export const OrchestratorMcpRequestSecretResult = Schema.Union([
+  RequestSecretAsked,
+  RequestSecretApiKeySaved,
   Schema.Struct({
     status: Schema.Literal("saved").annotate({ description: "secretRef holds the value." }),
     secretRef: SecretRef.annotate({
@@ -933,14 +960,24 @@ export const OrchestratorMcpRequestSecretResult = Schema.Union([
     }),
     deletedAt: Schema.String.annotate({ description: "When the file is deleted." }),
   }),
+  // A request with fields: one secretRef or file per field, in field order.
   Schema.Struct({
-    status: Schema.Literals(["declined", "cancelled"]).annotate({
-      description:
-        "declined: the user chose not to. cancelled: the card was dismissed; use a new clientRequestId to ask again.",
-    }),
+    status: Schema.Literal("saved"),
+    secretRefs: Schema.optional(Schema.Array(SecretRef)),
+    files: Schema.optional(Schema.Array(Schema.String)),
+    deletedAt: Schema.optional(Schema.String),
   }),
+  RequestSecretUnanswered,
 ]);
 export type OrchestratorMcpRequestSecretResult = typeof OrchestratorMcpRequestSecretResult.Type;
+
+/** An API key never comes back as a handle: it stays in the vault for prepare_api_key. */
+export const OrchestratorMcpRequestApiKeyResult = Schema.Union([
+  RequestSecretAsked,
+  RequestSecretApiKeySaved,
+  RequestSecretUnanswered,
+]);
+export type OrchestratorMcpRequestApiKeyResult = typeof OrchestratorMcpRequestApiKeyResult.Type;
 
 const OrchestratorMcpAskUserOption = Schema.Struct({
   label: TrimmedNonEmptyString.annotate({ description: "The choice as the user sees it." }),

@@ -1,4 +1,7 @@
 import { useTerminalHandoff } from "../state/terminalHandoff";
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { teamBoardHasHistory } from "@t3tools/client-runtime/state/team-board";
+import { openTeamBoardHistory, teamBoardEnvironment } from "../state/teamBoard";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
 import {
@@ -14,6 +17,9 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
+import { sendToBotLabel, serverBotsView } from "@t3tools/client-runtime/state/bots";
+import { botForThread } from "@t3tools/contracts";
+import { openSendToBot } from "../components/bots/botRequests";
 import { useCallback, useMemo } from "react";
 
 import { resolveSnoozePresets } from "../components/Sidebar.snooze";
@@ -50,6 +56,8 @@ import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
 import { useThreadActions } from "./useThreadActions";
+
+const SEND_TO_BOT_PREFIX = "send-to-bot:";
 
 function failureToast(title: string, error: unknown) {
   toastManager.add(
@@ -176,6 +184,16 @@ export function useThreadActionMenu(input: {
           supports,
           snoozePresets,
         });
+        // Bots on this chat's server, offered while they are on unless this chat is a bot's own.
+        const botsView = serverBotsView(serverConfigs.get(threadRef.environmentId));
+        const sendToBotItems =
+          botsView.active && botForThread(botsView, threadRef.threadId) === undefined
+            ? botsView.list.map((bot) => ({
+                id: `${SEND_TO_BOT_PREFIX}${bot.id}`,
+                label: sendToBotLabel(bot.name),
+                icon: "bots",
+              }))
+            : [];
         const terminalItem = {
           id: "open-terminal" as const,
           label: terminalHandoff.unavailableReason
@@ -188,11 +206,38 @@ export function useThreadActionMenu(input: {
         };
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
-            [...(terminalHandoff.showAction ? [terminalItem] : []), ...items],
+            [
+              ...(terminalHandoff.showAction ? [terminalItem] : []),
+              // Past pushes, read-only, even while a new push runs.
+              ...(teamBoardHasHistory(
+                appAtomRegistry.get(teamBoardEnvironment.summaryAtom(threadRef)),
+              )
+                ? [{ id: "team-board", label: "Team board", icon: "messages-square" }]
+                : []),
+              // Sending the chat on sits above the chat's own actions.
+              ...(botsView.active ? sendToBotItems : []),
+              ...(botsView.active && sendToBotItems.length > 0
+                ? items.map((item, index) =>
+                    index === 0 ? { ...item, separatorBefore: true } : item,
+                  )
+                : items),
+            ],
             position,
           ),
         );
         if (clicked._tag === "Failure" || clicked.value === null) return;
+        if (clicked.value === "team-board") {
+          openTeamBoardHistory(threadRef);
+          return;
+        }
+        if (clicked.value.startsWith(SEND_TO_BOT_PREFIX)) {
+          openSendToBot(
+            threadRef.environmentId,
+            threadRef.threadId,
+            clicked.value.slice(SEND_TO_BOT_PREFIX.length),
+          );
+          return;
+        }
         const action = clicked.value as ThreadActionMenuId;
         if (
           threadActionRequiresOperate(action) &&

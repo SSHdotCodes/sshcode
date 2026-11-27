@@ -701,3 +701,33 @@ it("takes a changed count of running work from a metadata refresh", () => {
   );
   expect(ended.threads[0]?.longRunningWork?.monitorCount).toBe(0);
 });
+
+it("takes live progress from a metadata refresh, and clears it when the refresh omits it", () => {
+  // A report_progress call (token use High) changes no transcript, so only a refresh carries it.
+  const progress = {
+    source: "report" as const,
+    startedAt: 1_000,
+    reportedAt: 61_000,
+    stages: [{ title: "Build", status: "active" as const, minutes: 5, startedAt: 1_000 }],
+    updates: [{ text: "Building.", at: 61_000 }],
+  };
+  const reported = mergeShellSnapshotProjects(
+    { ...v2ShellSnapshot, threads: [v2ThreadShell] },
+    { ...v2ShellSnapshot, threads: [{ ...v2ThreadShell, liveProgress: progress }] },
+    { resolvedRepositoryIdentityRoots: [] },
+  );
+  expect(reported.threads[0]?.liveProgress).toEqual(progress);
+  const next = { ...progress, stages: [{ title: "Build", status: "done" as const }] };
+  const advanced = mergeShellSnapshotProjects(
+    reported,
+    { ...v2ShellSnapshot, threads: [{ ...v2ThreadShell, liveProgress: next }] },
+    { resolvedRepositoryIdentityRoots: [] },
+  );
+  expect(advanced.threads[0]?.liveProgress?.stages[0]?.status).toBe("done");
+  const cleared = mergeShellSnapshotProjects(
+    advanced,
+    { ...v2ShellSnapshot, threads: [v2ThreadShell] },
+    { resolvedRepositoryIdentityRoots: [] },
+  );
+  expect(cleared.threads[0]?.liveProgress).toBeUndefined();
+});

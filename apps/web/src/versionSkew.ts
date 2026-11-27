@@ -1,9 +1,4 @@
-import type {
-  EnvironmentId,
-  ServerConfig,
-  ServerInstallation,
-  ServerSelfUpdateCapability,
-} from "@t3tools/contracts";
+import type { EnvironmentId, ServerConfig, ServerSelfUpdateCapability } from "@t3tools/contracts";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import * as Schema from "effect/Schema";
@@ -121,18 +116,11 @@ export function supportsServerUpdateThreadContinuation(
   return serverConfig?.environment.capabilities.serverUpdateThreadContinuation === true;
 }
 
-/** The command to hand users whose server cannot update itself. */
-export function manualServerUpdateCommand(
-  targetVersion: string,
-  installation?: ServerInstallation,
-): string {
-  if (installation?.kind === "npm-global") {
-    const prefix = `'${installation.prefix.replaceAll("'", "'\\''")}'`;
-    return `npm install --global --prefix ${prefix} sshcode@${targetVersion}`;
-  }
-  const runner =
-    installation?.kind === "pnpm-dlx" ? "pnpm dlx" : installation?.kind === "bunx" ? "bunx" : "npx";
-  return `${runner} sshcode@${targetVersion}`;
+/** The command to hand users whose server cannot update itself. SSHCode publishes no
+    npm package (the `sshcode` name there is not ours), so such a server runs from a
+    source checkout: check out the release tag and rebuild there. */
+export function manualServerUpdateCommand(targetVersion: string): string {
+  return `git fetch --tags && git checkout v${targetVersion} && vp i && vp run build:desktop`;
 }
 
 export function serverUpdateGuidance(capability: ServerSelfUpdateCapability): string {

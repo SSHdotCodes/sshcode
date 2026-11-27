@@ -273,10 +273,18 @@ export function presentSessionBox(
             : "quiet";
   const asking = pendingRequest !== null || (reason !== null && !working);
   const age = relativeAge(completedAt ?? epoch(thread.updatedAt), context.now);
+  // A chat that reports its own stages says more with the stage it is on ("Draw the phone
+  // cards") than with its latest step ("Running a command").
+  const stage = working
+    ? (thread.source.liveProgress?.stages.find((item) => item.status === "active")?.title.trim() ??
+      "")
+    : "";
   const status = asking
     ? REASON_TEXT[reason ?? "question"]
     : activity !== null
-      ? sessionBoxStepText(activity, working ? step : null)
+      ? stage !== ""
+        ? stage
+        : sessionBoxStepText(activity, working ? step : null)
       : limited
         ? "Hit a usage limit"
         : age;

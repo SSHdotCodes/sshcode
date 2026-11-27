@@ -10,6 +10,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { subagentsOffConfirmation } from "@t3tools/shared/chatControls";
+import { SUBAGENTS_OFF_IN_SETTINGS } from "@t3tools/client-runtime/state/agent-behavior";
 import { Button } from "../ui/button";
 import {
   AlertDialog,
@@ -40,6 +41,8 @@ export const ComposerAddMenu = memo(function ComposerAddMenu(props: {
   /** Absent hides the switch, so menus without a server chat stay unchanged. */
   existingThread?: boolean;
   subagentsEnabled?: boolean;
+  /** Settings > Agents has Subagents at None: the switch shows off and cannot turn on. */
+  subagentsOffInSettings?: boolean;
   onSubagentsChange?: (enabled: boolean) => void;
 }) {
   const composerFloatingLayerProps = useComposerMenuProps();
@@ -140,12 +143,20 @@ export const ComposerAddMenu = memo(function ComposerAddMenu(props: {
           <MenuCheckboxItem
             variant="switch"
             closeOnClick
-            checked={props.subagentsEnabled !== false}
+            checked={props.subagentsEnabled !== false && props.subagentsOffInSettings !== true}
+            disabled={props.subagentsOffInSettings === true}
             onCheckedChange={(checked) => props.onSubagentsChange?.(checked)}
           >
             <span className="flex items-center gap-2">
               <UsersIcon aria-hidden className="size-4 shrink-0 opacity-80" />
-              Subagents
+              {props.subagentsOffInSettings ? (
+                <span className="flex flex-col">
+                  Subagents
+                  <span className="text-xs text-muted-foreground">{SUBAGENTS_OFF_IN_SETTINGS}</span>
+                </span>
+              ) : (
+                "Subagents"
+              )}
             </span>
           </MenuCheckboxItem>
         ) : null}

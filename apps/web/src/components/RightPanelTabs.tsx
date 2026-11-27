@@ -56,6 +56,8 @@ import { isElectron } from "~/env";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
 import type { RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
+import { WebsiteLetterTile } from "./WebsiteLetterTile";
+import { useClientSettings } from "~/hooks/useSettings";
 import { resolveShortcutCommand, type ShortcutMatchContext } from "~/keybindings";
 import { readLocalApi } from "~/localApi";
 import { Button } from "~/components/ui/button";
@@ -640,11 +642,20 @@ function surfaceTitle(
 }
 
 function PreviewFavicon({ capturedUrl, url }: { capturedUrl: string | null; url: string | null }) {
-  const publicProviderUrl = faviconUrlForOrigin(url, 32);
+  const websiteIconsEnabled = useClientSettings((settings) => settings.websiteIconsEnabled);
+  // Off, only the icon the in-app browser already captured from the page shows.
+  const publicProviderUrl = websiteIconsEnabled ? faviconUrlForOrigin(url, 32) : null;
+  const globe = <Globe2 className="size-3 shrink-0" />;
   return (
     <FaviconImage
       sources={[capturedUrl, publicProviderUrl]}
-      fallback={<Globe2 className="size-3 shrink-0" />}
+      fallback={
+        websiteIconsEnabled ? (
+          globe
+        ) : (
+          <WebsiteLetterTile site={url} size={12} className="rounded-sm" fallback={globe} />
+        )
+      }
       className="size-3 shrink-0 rounded-sm object-contain"
     />
   );

@@ -14,6 +14,7 @@ import type {
   RunId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 
 /** Replies under this many output tokens count toward the turn but stay out of the rate. */
 export const GENERATION_MIN_RATED_TOKENS = 24;
@@ -200,10 +201,55 @@ export function combineGenerations(
   return { ...latest, outputTokens, generatingMs, replies, totalOutputTokens };
 }
 
+type ProviderTurnForGeneration = Pick<OrchestrationV2ProviderTurn, "runAttemptId" | "generation"> &
+  Partial<Pick<OrchestrationV2ProviderTurn, "nativeTurnRef" | "startedAt" | "turnTokenUsage">>;
+
+/** Older ACP snapshots put prompt-level reasoning counts over text-only windows. */
+function generationForProviderTurn(
+  turn: ProviderTurnForGeneration,
+): OrchestrationV2ProviderTurnGeneration | undefined {
+  const { generation, turnTokenUsage } = turn;
+  const driver = turn.nativeTurnRef?.driver;
+  if (
+    generation?.basis !== "decode" ||
+    (driver !== "antigravity" && driver !== "grok" && driver !== "acpRegistry") ||
+    (turnTokenUsage?.reasoningTokens ?? 0) <= 0
+  ) {
+    return generation;
+  }
+
+  const lastReply = generation.lastReply;
+  if (
+    generation.replies !== 1 ||
+    generation.outputTokens !== turnTokenUsage?.outputTokens ||
+    lastReply?.outputTokens !== generation.outputTokens
+  ) {
+    return undefined;
+  }
+
+  const endedAt = Option.getOrUndefined(DateTime.make(lastReply.endedAt));
+  const generatingMs =
+    endedAt === undefined ? undefined : windowMs(turn.startedAt ?? undefined, endedAt);
+  if (!rated(generation.outputTokens, generatingMs) || generatingMs < generation.generatingMs) {
+    return undefined;
+  }
+
+  return {
+    ...generation,
+    basis: "end-to-end",
+    generatingMs,
+    lastReply: {
+      outputTokens: generation.outputTokens,
+      generatingMs,
+      endedAt: lastReply.endedAt,
+    },
+  };
+}
+
 /** Each run's rate, over the provider turns of all its attempts. Subagent turns belong to no run. */
 export function generationsByRun(
   attempts: ReadonlyArray<Pick<OrchestrationV2RunAttempt, "id" | "runId">>,
-  providerTurns: ReadonlyArray<Pick<OrchestrationV2ProviderTurn, "runAttemptId" | "generation">>,
+  providerTurns: ReadonlyArray<ProviderTurnForGeneration>,
 ): ReadonlyMap<RunId, OrchestrationV2ProviderTurnGeneration> {
   const runByAttempt = new Map<string, RunId>();
   for (const attempt of attempts) runByAttempt.set(attempt.id, attempt.runId);
@@ -212,9 +258,11 @@ export function generationsByRun(
     if (turn.generation === undefined || turn.runAttemptId === null) continue;
     const runId = runByAttempt.get(turn.runAttemptId);
     if (runId === undefined) continue;
+    const generation = generationForProviderTurn(turn);
+    if (generation === undefined) continue;
     const list = byRun.get(runId);
-    if (list === undefined) byRun.set(runId, [turn.generation]);
-    else list.push(turn.generation);
+    if (list === undefined) byRun.set(runId, [generation]);
+    else list.push(generation);
   }
   const result = new Map<RunId, OrchestrationV2ProviderTurnGeneration>();
   for (const [runId, list] of byRun) {

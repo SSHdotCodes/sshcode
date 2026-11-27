@@ -21,6 +21,10 @@ import {
   type EnvironmentThreadSearchMatch,
   type ThreadSearchResultsState,
 } from "@t3tools/client-runtime/state/thread-search";
+import {
+  createBotThreadIdsAtom,
+  createVisibleThreadSearchResultsAtomFamily,
+} from "@t3tools/client-runtime/state/bots";
 import { useAtomValue } from "@effect/atom-react";
 import * as Cause from "effect/Cause";
 import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
@@ -32,6 +36,7 @@ import { appAtomRegistry } from "./atom-registry";
 import { orchestrationEnvironment } from "./orchestration";
 import { projectEnvironment } from "./projects";
 import { useEnvironmentQuery } from "./query";
+import { serverEnvironment } from "./server";
 import { vcsEnvironment } from "./vcs";
 import { composerPullRequests } from "./pull-requests";
 import {
@@ -53,12 +58,17 @@ const EMPTY_THREAD_SEARCH_ATOM = Atom.make<ThreadSearchResultsState>({
   failed: false,
 }).pipe(Atom.withLabel("mobile:thread-search:empty"));
 
-const threadSearchResultsAtom = createThreadSearchResultsAtomFamily({
-  getSearchAtom: (environmentId, query, cursor) =>
-    orchestrationEnvironment.threadSearch({
-      environmentId,
-      input: { query, ...(cursor ? { cursor } : {}) },
-    }),
+// Bot home chats show only in the Bots strip, so no chat search finds them.
+const threadSearchResultsAtom = createVisibleThreadSearchResultsAtomFamily({
+  resultsAtom: createThreadSearchResultsAtomFamily({
+    getSearchAtom: (environmentId, query, cursor) =>
+      orchestrationEnvironment.threadSearch({
+        environmentId,
+        input: { query, ...(cursor ? { cursor } : {}) },
+      }),
+    labelPrefix: "mobile:thread-search",
+  }),
+  hiddenThreadIdsAtom: createBotThreadIdsAtom(serverEnvironment.settingsValueAtom),
   labelPrefix: "mobile:thread-search",
 });
 

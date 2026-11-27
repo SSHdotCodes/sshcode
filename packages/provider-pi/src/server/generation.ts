@@ -19,27 +19,19 @@ import {
  * Reply timing for one Pi turn. A reply is one assistant message: the request
  * goes out at `agent_start`/`turn_start` or once a tool's result is back, the
  * message's first streamed block is its first output, and `message_end`
- * carries its usage. Pi's output count includes thinking but does not split
- * it out, so a message holding a thinking block that never streamed is timed
- * end-to-end.
+ * carries its usage. Pi's thinking blocks can carry provider summaries.
+ * Time reasoning output end-to-end when usage or a thinking block reports it.
  */
 export interface PiGeneration {
   readonly meter: GenerationMeter;
-  thinkingSeen: boolean;
+  sawThinking: boolean;
 }
 
 export function makePiGeneration(startedAt: DateTime.Utc): PiGeneration {
-  return { meter: makeGenerationMeter(startedAt), thinkingSeen: false };
+  return { meter: makeGenerationMeter(startedAt), sawThinking: false };
 }
 
-const OUTPUT_EVENTS = new Set([
-  "text_start",
-  "text_delta",
-  "thinking_start",
-  "thinking_delta",
-  "toolcall_start",
-  "toolcall_delta",
-]);
+const OUTPUT_EVENTS = new Set(["text_start", "text_delta", "toolcall_start", "toolcall_delta"]);
 
 /** Feeds one Pi RPC event, observed at `at`; true when an assistant message ended. */
 export function meterPiEvent(
@@ -56,21 +48,19 @@ export function meterPiEvent(
     case "message_start":
       if (recordString(event["message"], "role") !== "assistant") return false;
       abandonGenerationReply(generation.meter);
-      generation.thinkingSeen = false;
+      generation.sawThinking = false;
       return false;
     case "message_update": {
       const type = recordString(event["assistantMessageEvent"], "type");
-      if (type === undefined || !OUTPUT_EVENTS.has(type)) return false;
-      if (type.startsWith("thinking_") && generation.meter.firstOutputAt === undefined) {
-        generation.thinkingSeen = true;
-      }
-      markGenerationOutput(generation.meter, at);
+      if (type === "thinking_start" || type === "thinking_delta") generation.sawThinking = true;
+      if (type !== undefined && OUTPUT_EVENTS.has(type)) markGenerationOutput(generation.meter, at);
       return false;
     }
     case "message_end": {
       const message = event["message"];
       if (recordString(message, "role") !== "assistant") return false;
-      const outputTokens = recordNumber(recordField(message, "usage"), "output");
+      const usage = recordField(message, "usage");
+      const outputTokens = recordNumber(usage, "output");
       const stopReason = recordString(message, "stopReason");
       if (
         outputTokens === undefined ||
@@ -82,15 +72,17 @@ export function meterPiEvent(
         return false;
       }
       const content = recordField(message, "content");
-      const thought =
-        Array.isArray(content) &&
-        content.some((block) => recordString(block, "type") === "thinking");
+      const hiddenThinking =
+        (recordNumber(usage, "reasoning") ?? 0) > 0 ||
+        generation.sawThinking ||
+        (Array.isArray(content) &&
+          content.some((block) => recordString(block, "type") === "thinking"));
       endGenerationReply(generation.meter, {
         outputTokens,
         endedAt: at,
-        firstOutputHidden: thought && !generation.thinkingSeen,
+        firstOutputHidden: hiddenThinking,
       });
-      generation.thinkingSeen = false;
+      generation.sawThinking = false;
       return true;
     }
     default:

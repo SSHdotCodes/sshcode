@@ -154,6 +154,53 @@ const failed = (expect: Parameters<typeof gradeSample>[0], run: SampleRun) =>
     .filter((check) => !check.pass)
     .map((check) => check.check);
 
+const delegationCasesUrl = new URL("./cases/delegation-judgment.ndjson", import.meta.url);
+// Built from real chats, so the public repository leaves it out and skips the checks that read it.
+const hasDelegationCases = NodeFS.existsSync(delegationCasesUrl);
+const delegationCases = () =>
+  NodeFS.readFileSync(delegationCasesUrl, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => decodeCase(line));
+
+it.skipIf(!hasDelegationCases)(
+  "passes solo decisions and rejects delegation on every delegation-judgment control",
+  () => {
+    const controls = delegationCases().filter((testCase) => testCase.kind === "control");
+    expect(controls.length).toBeGreaterThan(0);
+    for (const testCase of controls) {
+      const solo = { calls: [], text: "SOLO", stopReason: "end_turn" };
+      expect(failed(testCase.expect, solo), testCase.id).toEqual([]);
+      for (const tool of ["delegate_task", "Agent", "council"]) {
+        expect(
+          failed(testCase.expect, { ...solo, calls: [{ step: 0, tool, input: {} }] }),
+          testCase.id,
+        ).toContain(`notCalls ${tool}`);
+      }
+    }
+  },
+);
+
+it.skipIf(!hasDelegationCases)(
+  "permits a lead's shell work on a solo task that asks for execution",
+  () => {
+    const testCase = delegationCases().find(({ id }) => id === "spare-quota-elsewhere-no-reason");
+    if (testCase === undefined) throw new Error("Missing hands-on solo case");
+    const solo = {
+      calls: [{ step: 0, tool: "Bash", input: { command: "printf result > result.txt" } }],
+      text: "Done.",
+      stopReason: "end_turn",
+    };
+    expect(failed(testCase.expect, solo)).toEqual([]);
+    expect(
+      failed(testCase.expect, {
+        ...solo,
+        calls: [...solo.calls, { step: 1, tool: "delegate_task", input: {} }],
+      }),
+    ).toContain("notCalls delegate_task");
+  },
+);
+
 it("passes a good run and names every rule a bad run breaks", () => {
   const expect = {
     calls: [{ tool: "delegate_task", args: { task: "~FINDING", "target.options": "~max" } }],
@@ -550,4 +597,41 @@ it("reassembles streamed function arguments and token usage", () => {
     ],
     usage: { prompt_tokens: 100, completion_tokens: 20 },
   });
+});
+
+it("--instructions swaps the lead orchestration section and leaves the rest", async () => {
+  const {
+    currentOrchestrationSection,
+    requireInstructionsApplied,
+    setInstructionsOverride,
+    withInstructionsOverride,
+  } = await import("./instructionsOverride.ts");
+  const section = currentOrchestrationSection();
+  setInstructionsOverride("## T3 Code orchestration\n\n- candidate rule\n");
+  const swapped = withInstructionsOverride(`before\n${section}\nafter`);
+  expect(swapped).toBe("before\n## T3 Code orchestration\n\n- candidate rule\nafter");
+  expect(withInstructionsOverride("other piece")).toBe("other piece");
+  expect(() => requireInstructionsApplied(["other piece"])).toThrow("--instructions");
+  expect(() => requireInstructionsApplied(["other piece", swapped])).not.toThrow();
+  setInstructionsOverride(null);
+  expect(withInstructionsOverride("unchanged")).toBe("unchanged");
+});
+
+it("callsOneOf passes when any entry of a group matches", () => {
+  const rules = {
+    callsOneOf: [
+      [
+        { tool: "monitor_start", args: { restartable: true } },
+        { tool: "monitor_start", args: { durable: true } },
+      ],
+    ],
+  };
+  const run = (input: Record<string, unknown>): SampleRun => ({
+    calls: [{ step: 0, tool: "monitor_start", input }],
+    text: "",
+    stopReason: "end_turn",
+  });
+  expect(failed(rules, run({ durable: true }))).toEqual([]);
+  expect(failed(rules, run({ restartable: true }))).toEqual([]);
+  expect(failed(rules, run({ wakeOn: false }))).toHaveLength(1);
 });

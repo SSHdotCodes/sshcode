@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
   MessageId,
@@ -41,6 +42,8 @@ import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationServic
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ServerConfig from "../config.ts";
+import * as TeamBoard from "../teamBoard/TeamBoard.ts";
 
 const threadId = ThreadId.make("thread:effect-worker-restart");
 const oldSessionId = ProviderSessionId.make("provider-session:effect-worker-restart:old");
@@ -93,6 +96,7 @@ function layerExecutorFor(input: {
   readonly threads?: Partial<ThreadManagementService.ThreadManagementService["Service"]>;
   readonly continueAfterRestart?: boolean;
   readonly interrupt?: ProviderTurnControlService.ProviderTurnControlServiceV2Shape["interrupt"];
+  readonly steer?: ProviderTurnControlService.ProviderTurnControlServiceV2Shape["steer"];
 }) {
   const record = (event: string) => Ref.update(input.events, (events) => [...events, event]);
   const layerDependencies = Layer.mergeAll(
@@ -100,7 +104,7 @@ function layerExecutorFor(input: {
       ProviderTurnControlService.ProviderTurnControlServiceV2,
       ProviderTurnControlService.ProviderTurnControlServiceV2.of({
         interrupt: input.interrupt ?? (() => Effect.void),
-        steer: () => Effect.void,
+        steer: input.steer ?? (() => Effect.void),
         interruptAndAwaitTerminal: (request) =>
           record(
             request.replacementProviderSessionId === undefined
@@ -1106,6 +1110,44 @@ it.effect.each(["confirmed", "unconfirmed", "failed"] as const)(
     }),
 );
 
+it.effect.each([true, false])(
+  "does not start a follow-up for a native-only steer (turn completed: %s)",
+  (turnCompleted) =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const events = yield* Ref.make<ReadonlyArray<string>>([]);
+      const layer = layerExecutorFor({
+        events,
+        steer: () =>
+          Effect.fail(
+            new ProviderTurnControlService.ProviderTurnControlError({
+              threadId,
+              operation: "steer",
+              providerTurnId,
+              turnCompleted,
+              queueFollowUp: !turnCompleted,
+              cause: "Steering is no longer available.",
+            }),
+          ),
+      });
+      yield* Effect.gen(function* () {
+        const executor = yield* EffectWorker.OrchestrationEffectExecutorV2;
+        yield* executor.execute({
+          ...restartEffect(now, { type: "detach" }),
+          request: {
+            type: "provider-turn.steer",
+            providerSessionId: oldSessionId,
+            providerThreadId,
+            providerTurnId,
+            messageId: MessageId.make("message:native-only"),
+            steerExistingOnly: true,
+          },
+        });
+      }).pipe(Effect.provide(layer));
+      assert.deepEqual(yield* Ref.get(events), []);
+    }),
+);
+
 it.effect("does not retry an unanswered Codex steer that may already have been accepted", () =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;
@@ -1167,6 +1209,90 @@ it.effect("does not retry an unanswered Codex steer that may already have been a
     );
     assert.deepEqual(settlements, ["succeeded"]);
   }),
+);
+
+it.effect("acknowledges a board steer only after the existing provider turn accepts it", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const events = yield* Ref.make<ReadonlyArray<string>>([]);
+    const board = yield* TeamBoard.TeamBoard;
+    // A notice only reaches a member of a live team: two subagents in one repository.
+    yield* board.updateTeam({
+      leadId: ThreadId.make("thread:effect-worker-lead"),
+      repo: "repo",
+      members: [
+        {
+          name: "Sol",
+          threadId,
+          taskId: NodeId.make("task:effect-worker-sol"),
+          runId,
+          cwd: "/worktrees/sol",
+          worktree: true,
+        },
+        {
+          name: "Neon",
+          threadId: ThreadId.make("thread:effect-worker-sibling"),
+          taskId: NodeId.make("task:effect-worker-neon"),
+          runId: RunId.make("run:effect-worker-sibling"),
+          cwd: "/worktrees/neon",
+          worktree: true,
+        },
+      ],
+    });
+    yield* board.queueNotice({ threadId, runId }, "Board information");
+    const notice = Option.getOrThrow(yield* Stream.runHead(board.notices));
+    let accepted = false;
+    const record = (event: string) => Ref.update(events, (rows) => [...rows, event]);
+    const executor = layerExecutorFor({
+      events,
+      steer: () =>
+        record("steer").pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              accepted
+                ? Effect.void
+                : Effect.fail(
+                    new ProviderTurnControlService.ProviderTurnControlError({
+                      threadId,
+                      operation: "steer",
+                      providerTurnId,
+                      turnCompleted: true,
+                      cause: "Turn ended before delivery.",
+                    }),
+                  ),
+            ),
+          ),
+        ),
+    }).pipe(Layer.provide(Layer.succeed(TeamBoard.TeamBoard, board)));
+    yield* Effect.gen(function* () {
+      const worker = yield* EffectWorker.OrchestrationEffectExecutorV2;
+      const request = worker.execute({
+        ...restartEffect(now, { type: "detach" }),
+        request: {
+          type: "provider-turn.steer",
+          providerSessionId: oldSessionId,
+          providerThreadId,
+          providerTurnId,
+          messageId: MessageId.make(`team-board:${notice.id}`),
+          steerExistingOnly: true,
+        },
+      });
+      yield* request;
+      assert.isTrue(board.hasNotices(threadId));
+      accepted = true;
+      yield* request;
+      assert.isFalse(board.hasNotices(threadId));
+      yield* request;
+    }).pipe(Effect.provide(executor));
+    assert.deepEqual(yield* Ref.get(events), ["steer", "steer"]);
+  }).pipe(
+    Effect.provide(
+      TeamBoard.layer.pipe(
+        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "team-board-steer-" })),
+        Layer.provide(NodeServices.layer),
+      ),
+    ),
+  ),
 );
 
 it.effect("drops a created-chat failure notice when its creator is missing", () =>

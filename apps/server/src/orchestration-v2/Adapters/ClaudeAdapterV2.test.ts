@@ -31,6 +31,7 @@ import {
   ChatFileAttachment,
   ChatImageAttachment,
   ClaudeSettings,
+  DEFAULT_AGENT_BEHAVIOR,
   EnvironmentId,
   MessageId,
   type ModelSelection,
@@ -53,6 +54,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as ClaudeKeepWarm from "../ClaudeKeepWarm.ts";
+import { registerAgentBehavior } from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -372,6 +374,29 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       permissionMode: "bypassPermissions",
     });
     assert.isTrue(options.allowDangerouslySkipPermissions);
+  });
+
+  it("disallows Claude's native Agent tool when Settings > Agents sets Subagents to None", () => {
+    try {
+      registerAgentBehavior(() => ({ ...DEFAULT_AGENT_BEHAVIOR, subagents: "none" }));
+      const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+        modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+        nativeThreadId: "native-no-subagents",
+        resume: false,
+        cwd: "/workspace",
+        disallowedTools: ["WebSearch"],
+      });
+      assert.deepEqual(options.disallowedTools, ["WebSearch", "Agent"]);
+    } finally {
+      registerAgentBehavior(() => DEFAULT_AGENT_BEHAVIOR);
+    }
+    const normal = ClaudeAdapterV2.makeClaudeQueryOptions({
+      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+      nativeThreadId: "native-default-subagents",
+      resume: false,
+      cwd: "/workspace",
+    });
+    assert.isUndefined(normal.disallowedTools);
   });
 
   it("passes automatic compaction and resume-dialog controls to the SDK", () => {
@@ -4717,6 +4742,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             content_block: { type: "thinking", thinking: "" },
           }),
         ],
+        [
+          1_700,
+          stream({
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "A summary" },
+          }),
+        ],
         // A subagent streams at the same time; its tokens are its own.
         [2_000, stream({ type: "message_start", message: { id: "child" } }, "child-tool")],
         [
@@ -4770,7 +4803,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           const first = latestGeneration();
           assert.deepInclude(
             first?.type === "provider_turn.updated" ? first.providerTurn.generation : undefined,
-            { basis: "decode", outputTokens: 400, generatingMs: 4_000, replies: 1 },
+            { basis: "end-to-end", outputTokens: 400, generatingMs: 5_400, replies: 1 },
           );
         }
       }
@@ -4783,14 +4816,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       assert.deepEqual(
         terminal?.type === "provider_turn.updated" ? terminal.providerTurn.generation : undefined,
         {
-          basis: "decode",
+          basis: "end-to-end",
           outputTokens: 584,
-          generatingMs: 6_000,
+          generatingMs: 8_400,
           replies: 3,
           totalOutputTokens: 594,
           lastReply: {
             outputTokens: 184,
-            generatingMs: 2_000,
+            generatingMs: 3_000,
             firstTokenMs: 1_000,
             endedAt: DateTime.formatIso(DateTime.makeUnsafe(11_100)),
           },
@@ -7855,8 +7888,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           const rosterAAfterSettle = providerThreadRosterEvents(events).findLast(
             (event) => event.providerThread.id === providerThreadA.id,
           )?.providerThread.pendingBackgroundTasks;
+          // Claude wakes the agent when the command exits, so the chat keeps waiting on it.
           assert.deepEqual(rosterAAfterSettle ?? [], [
-            { taskId: taskA, description: "work on A", kind: "command" },
+            { taskId: taskA, description: "work on A", kind: "command", wakesAgent: true },
           ]);
           assert.isTrue(yield* hasPendingBackgroundWork);
           assert.isTrue(yield* hasPendingBackgroundWorkForThread(providerThreadA));
@@ -10922,6 +10956,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const nested = finalSubagents.get(NESTED_TASK_ID);
         assert.equal(outer?.status, "completed");
         assert.equal(nested?.status, "completed");
+        assert.equal(nested?.nativeType, "general-purpose");
         assert.equal(nested?.parentNodeId, outer?.id);
         assert.deepEqual(
           subagentRouting(harness.events, []).assistantTexts(outer?.childThreadId ?? undefined),

@@ -351,6 +351,63 @@ it.effect("discards a failed monitor wake when Stop invalidates it during backof
   }).pipe(Effect.scoped),
 );
 
+it.effect("delivers a monitor exit when storage recovers after the first seven attempts", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("monitor-storage-outage");
+    const events = yield* Queue.unbounded<MonitorService.MonitorEvent>();
+    const attempts = yield* Queue.unbounded<string>();
+    const acknowledged = yield* Queue.unbounded<number>();
+    let storageAvailable = false;
+    yield* Effect.gen(function* () {
+      yield* Queue.offer(events, {
+        monitorId: "monitor:build",
+        threadId,
+        generation: 0,
+        sequence: 1,
+        text: "Build finished",
+        notification: { source: { kind: "monitor" }, outcome: "completed", summary: "Done" },
+      });
+      const originalId = yield* Queue.take(attempts);
+      // The initial dispatch and the next six retries all fail.
+      yield* TestClock.adjust("2 minutes");
+      expect(yield* Queue.size(attempts)).toBe(6);
+      expect(yield* Queue.size(acknowledged)).toBe(0);
+      storageAvailable = true;
+      yield* TestClock.adjust("1 minute");
+      expect(yield* Queue.takeAll(attempts)).toEqual(Array(7).fill(originalId));
+      expect(yield* Queue.size(acknowledged)).toBe(1);
+      expect(yield* Queue.take(acknowledged)).toBe(1);
+    }).pipe(
+      Effect.provide(
+        MonitorDelivery.layer.pipe(
+          Layer.provide(
+            Layer.mock(MonitorService.MonitorService)({
+              events: Stream.fromQueue(events),
+              acknowledge: (event) => Queue.offer(acknowledged, event.sequence).pipe(Effect.asVoid),
+              canDeliver: () => true,
+              hasOpenWork: () => true,
+              ownsCwd: () => false,
+              recover: () => Effect.void,
+            }),
+          ),
+          Layer.provide(
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              dispatch: (command) =>
+                Queue.offer(attempts, command.commandId).pipe(
+                  Effect.andThen(() =>
+                    storageAvailable
+                      ? Effect.succeed({ sequence: 0, storedEvents: [] })
+                      : new Orchestrator.OrchestratorProjectionError({ threadId }),
+                  ),
+                ),
+            }),
+          ),
+        ),
+      ),
+    );
+  }).pipe(Effect.scoped),
+);
+
 it.effect("keeps retrying adoption after startup with a bounded delay", () =>
   Effect.gen(function* () {
     const attempts = yield* Queue.unbounded<number>();

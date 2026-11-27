@@ -10,6 +10,7 @@
  * @module AnalyticsService
  */
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { isDoNotTrackSet } from "@t3tools/shared/otelEnvironment";
 import type { ClientOs } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
@@ -71,6 +72,7 @@ const TelemetryEnvConfig = Config.all({
   posthogKey: Config.String("T3CODE_POSTHOG_KEY").pipe(Config.withDefault("")),
   posthogHost: Config.String("T3CODE_POSTHOG_HOST").pipe(Config.withDefault("")),
   enabled: Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(false)),
+  doNotTrack: Config.String("DO_NOT_TRACK").pipe(Config.withDefault("")),
   flushBatchSize: Config.Number("T3CODE_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),
   maxBufferedEvents: Config.Number("T3CODE_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
     Config.withDefault(1_000),
@@ -119,7 +121,9 @@ function serverOsFromNodePlatform(platform: string): ClientOs {
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const telemetryConfig = yield* TelemetryEnvConfig;
+  // DO_NOT_TRACK=1 wins over T3CODE_TELEMETRY_ENABLED=true (upstream #42629).
   const enabled =
+    !isDoNotTrackSet({ DO_NOT_TRACK: telemetryConfig.doNotTrack }) &&
     telemetryConfig.enabled &&
     telemetryConfig.posthogKey !== "" &&
     telemetryConfig.posthogHost !== "";

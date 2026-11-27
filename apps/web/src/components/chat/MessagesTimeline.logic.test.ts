@@ -1774,6 +1774,7 @@ describe("deriveMessagesTimelineRows", () => {
     });
 
     expect(rows.map((row) => row.id)).toEqual([
+      "turn-fold:turn-1",
       "assistant-first-entry",
       "assistant-middle-entry",
       "assistant-final-entry",
@@ -1924,6 +1925,145 @@ describe("deriveMessagesTimelineRows", () => {
         label: "You stopped after 47s",
         expanded: false,
       }),
+    ]);
+  });
+
+  it("keeps an earlier turn's run timing, stopped label, and failed unfolding after a newer run starts", () => {
+    const run1 = RunId.make("turn-1");
+    const run2 = RunId.make("turn-2");
+    const run3 = RunId.make("turn-3");
+    const run4 = RunId.make("turn-4");
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "user-1",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          message: {
+            id: MessageId.make("user-1"),
+            role: "user",
+            text: "first",
+            runId: run1,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "work-1",
+          kind: "work",
+          createdAt: "2026-01-01T00:05:00.050Z",
+          entry: {
+            id: "w-1",
+            createdAt: "2026-01-01T00:05:00.050Z",
+            runId: run1,
+            label: "Read file",
+            tone: "tool" as const,
+          },
+        },
+        {
+          id: "assistant-1",
+          kind: "message",
+          createdAt: "2026-01-01T00:05:00.198Z",
+          message: {
+            id: MessageId.make("assistant-1"),
+            role: "assistant",
+            text: "done",
+            runId: run1,
+            createdAt: "2026-01-01T00:05:00.198Z",
+            updatedAt: "2026-01-01T00:05:00.198Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "user-2",
+          kind: "message",
+          createdAt: "2026-01-01T00:06:00.000Z",
+          message: {
+            id: MessageId.make("user-2"),
+            role: "user",
+            text: "second",
+            runId: run2,
+            createdAt: "2026-01-01T00:06:00.000Z",
+            updatedAt: "2026-01-01T00:06:00.000Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "work-2",
+          kind: "work",
+          createdAt: "2026-01-01T00:06:05.000Z",
+          entry: {
+            id: "w-2",
+            createdAt: "2026-01-01T00:06:05.000Z",
+            runId: run2,
+            label: "Ran command",
+            tone: "tool" as const,
+          },
+        },
+        {
+          id: "user-3",
+          kind: "message",
+          createdAt: "2026-01-01T00:07:00.000Z",
+          message: {
+            id: MessageId.make("user-3"),
+            role: "user",
+            text: "third",
+            runId: run3,
+            createdAt: "2026-01-01T00:07:00.000Z",
+            updatedAt: "2026-01-01T00:07:00.000Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "work-3",
+          kind: "work",
+          createdAt: "2026-01-01T00:07:02.000Z",
+          entry: {
+            id: "w-3",
+            createdAt: "2026-01-01T00:07:02.000Z",
+            runId: run3,
+            label: "Failed step",
+            tone: "tool" as const,
+          },
+        },
+      ],
+      latestRun: {
+        runId: run4,
+        status: "running",
+        startedAt: "2026-01-01T00:08:00.000Z",
+        completedAt: null,
+      },
+      runs: [
+        {
+          id: run1,
+          status: "completed",
+          startedAt: DateTime.makeUnsafe("2026-01-01T00:05:00.000Z"),
+          completedAt: DateTime.makeUnsafe("2026-01-01T00:05:00.198Z"),
+        },
+        {
+          id: run2,
+          status: "interrupted",
+          startedAt: DateTime.makeUnsafe("2026-01-01T00:06:00.000Z"),
+          completedAt: DateTime.makeUnsafe("2026-01-01T00:06:47.000Z"),
+        },
+        {
+          id: run3,
+          status: "failed",
+          startedAt: DateTime.makeUnsafe("2026-01-01T00:07:00.000Z"),
+          completedAt: DateTime.makeUnsafe("2026-01-01T00:07:03.000Z"),
+        },
+      ],
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:08:00.000Z",
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+
+    const folds = rows.filter((row) => row.kind === "turn-fold");
+    expect(folds).toEqual([
+      expect.objectContaining({ runId: run1, label: "Worked for 198ms" }),
+      expect.objectContaining({ runId: run2, label: "You stopped after 47s" }),
     ]);
   });
 
@@ -4045,6 +4185,57 @@ describe("computeStableMessagesTimelineRows", () => {
     expect(reordered).not.toBe(initial);
     expect(reordered.result).toEqual([initial.result[1], initial.result[0]]);
   });
+
+  it("replaces rows when hidesWork, group flags, summaryToolIcon, or live thought change", () => {
+    const plainFold: MessagesTimelineRow = {
+      kind: "turn-fold",
+      id: "turn-fold:run-1",
+      createdAt: "2026-04-01T00:00:01.000Z",
+      runId: RunId.make("run-1"),
+      label: "Worked for 12s",
+      expanded: false,
+      hidesWork: false,
+    };
+    const toggleRow: MessagesTimelineRow = {
+      kind: "work-toggle",
+      id: "work-toggle:g1",
+      createdAt: "2026-04-01T00:00:02.000Z",
+      groupId: "g1",
+      hiddenCount: 2,
+      expanded: false,
+      summary: "Used tools",
+      summaryKind: "mixed",
+      summaryToolIcon: "browser",
+      hasFailure: false,
+      startsAgentGroup: false,
+      continuesWorkLog: false,
+    };
+    const initial = computeStableMessagesTimelineRows([plainFold, toggleRow], {
+      byId: new Map(),
+      result: [],
+    });
+
+    const collapsibleFold: MessagesTimelineRow = {
+      ...plainFold,
+      hidesWork: true,
+    };
+    const updatedToggle: MessagesTimelineRow = {
+      ...toggleRow,
+      summaryToolIcon: "t3-code",
+      startsAgentGroup: true,
+      continuesWorkLog: true,
+    };
+    const updated = computeStableMessagesTimelineRows([collapsibleFold, updatedToggle], initial);
+
+    expect(updated.result[0]).toBe(collapsibleFold);
+    expect(updated.result[0]?.kind === "turn-fold" && updated.result[0].hidesWork).toBe(true);
+    expect(updated.result[1]).toBe(updatedToggle);
+    expect(updated.result[1]?.startsAgentGroup).toBe(true);
+    expect(updated.result[1]?.continuesWorkLog).toBe(true);
+    expect(updated.result[1]?.kind === "work-toggle" && updated.result[1].summaryToolIcon).toBe(
+      "t3-code",
+    );
+  });
 });
 
 describe("resolveTimelineToolPresentation", () => {
@@ -5427,6 +5618,84 @@ it.each([true, false])(
   },
 );
 
+it.each([true, false])(
+  "draws a saved secret's notice only as its card's row, working=%s",
+  (isWorking) => {
+    const time = (second: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, second)).toISOString();
+    const projected = (item: { id: string; type: string; runId: string }) => ({
+      item: { ...item, runId: RunId.make(item.runId) },
+      visibility: "local" as const,
+      sourceThreadId: "thread",
+      sourceItemId: item.id,
+    });
+    const work = (id: string, run: string, second: number, type?: "notification") => ({
+      kind: "work" as const,
+      id,
+      createdAt: time(second),
+      entry: {
+        id,
+        runId: RunId.make(run),
+        createdAt: time(second),
+        label: id,
+        tone: "info" as const,
+        ...(type ? { itemType: type, projectedItem: projected({ id, type, runId: run }) } : {}),
+      },
+    });
+    const answer = (id: string, run: string, second: number) => ({
+      kind: "message" as const,
+      id,
+      createdAt: time(second),
+      message: {
+        id: MessageId.make(id),
+        role: "assistant" as const,
+        text: id,
+        runId: RunId.make(run),
+        createdAt: time(second),
+        updatedAt: time(second),
+        streaming: false,
+      },
+    });
+    const cardId = "turn-item:secret-request:thread%3Aa:modal-token";
+    // As stored: the notice row's id encodes the message the server sent the agent.
+    const noticeId = `turn-item:message:${encodeURIComponent(`message:secret-request-answer:${cardId}`)}`;
+    const card = {
+      kind: "event" as const,
+      id: cardId,
+      createdAt: time(3),
+      projectedItem: projected({ id: cardId, type: "secret_request", runId: "initial" }),
+    };
+    const derive = (withCard: boolean) =>
+      deriveMessagesTimelineRows({
+        timelineEntries: [
+          work("launch-tools", "initial", 1),
+          ...(withCard ? [card] : []),
+          answer("asked", "initial", 5),
+          work(noticeId, "wake", 20, "notification"),
+          work("read", "wake", 21),
+          ...(!isWorking ? [answer("ack", "wake", 25)] : []),
+        ] as never,
+        latestRun: {
+          runId: RunId.make("wake"),
+          status: isWorking ? "running" : "completed",
+          startedAt: time(20),
+          completedAt: isWorking ? null : time(25),
+        },
+        isWorking,
+        activeTurnStartedAt: time(20),
+        turnDiffSummaries: [],
+        supportsConversationRollback: false,
+      }).map((row) => row.id);
+    const ids = derive(true);
+    expect(ids).toContain(cardId);
+    expect(ids).not.toContain(noticeId);
+    // The notice still starts the wake's response, so the asking turn stays folded.
+    expect(ids).toContain("turn-fold:initial");
+    expect(ids).not.toContain("launch-tools");
+    // Without its card in the list, the notice is the only record and keeps its row.
+    expect(derive(false)).toContain(noticeId);
+  },
+);
+
 it("folds a monitor's back-to-back output reports into one row and keeps its exit apart", () => {
   const time = (second: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, second)).toISOString();
   const description = "RL rollouts it1a-method: B5 on 59 tasks x2";
@@ -6171,5 +6440,143 @@ describe("workGroupViewedImagePaths", () => {
         read("screen", "/repo/screen.png"),
       ]),
     ).toEqual(["/repo/screen.png"]);
+  });
+});
+
+describe("settled turns without tool calls", () => {
+  it("keeps the worked-for header on a text-only turn", () => {
+    const runId = RunId.make("run:text-only");
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "user",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:00Z",
+          message: {
+            id: MessageId.make("user"),
+            role: "user",
+            text: "Answer directly.",
+            runId,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+            streaming: false,
+          },
+        },
+        {
+          id: "assistant",
+          kind: "message",
+          createdAt: "2026-01-01T00:00:08Z",
+          message: {
+            id: MessageId.make("assistant"),
+            role: "assistant",
+            text: "Done.",
+            runId,
+            createdAt: "2026-01-01T00:00:08Z",
+            updatedAt: "2026-01-01T00:00:08Z",
+            streaming: false,
+          },
+        },
+      ],
+      latestRun: {
+        runId,
+        status: "completed",
+        startedAt: "2026-01-01T00:00:00Z",
+        completedAt: "2026-01-01T00:00:08Z",
+      },
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+
+    expect(rows.map((row) => row.id)).toEqual(["user", `turn-fold:${runId}`, "assistant"]);
+    expect(rows[1]).toMatchObject({
+      kind: "turn-fold",
+      label: "Worked for 8.0s",
+      hidesWork: false,
+    });
+  });
+});
+
+describe("bot chat turn folds", () => {
+  const runId = RunId.make("bot-turn");
+  const time = (second: number) => `2026-01-01T00:00:${String(second).padStart(2, "0")}Z`;
+  const message = (id: string, role: "user" | "assistant", second: number, text: string) => ({
+    kind: "message" as const,
+    id,
+    createdAt: time(second),
+    message: {
+      id: MessageId.make(id),
+      role,
+      text,
+      runId,
+      createdAt: time(second),
+      updatedAt: time(second),
+      streaming: false,
+    },
+  });
+  const tool = (id: string, toolName: string, second: number) => ({
+    kind: "work" as const,
+    id,
+    createdAt: time(second),
+    entry: {
+      id,
+      createdAt: time(second),
+      runId,
+      label: toolName,
+      tone: "tool" as const,
+      itemType: "dynamic_tool" as const,
+      structuredPayload: { type: "dynamic_tool", toolName } as never,
+    },
+  });
+  const settled = (
+    timelineEntries: Parameters<typeof deriveMessagesTimelineRows>[0]["timelineEntries"],
+    botChat: boolean,
+  ) =>
+    deriveMessagesTimelineRows({
+      timelineEntries,
+      latestRun: { runId, status: "completed", startedAt: time(0), completedAt: time(6) },
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+      botChat,
+    });
+  const shownEntryIds = (rows: ReturnType<typeof deriveMessagesTimelineRows>) =>
+    rows.flatMap((row) =>
+      row.kind === "work" ? row.groupedEntries.map((entry) => entry.id) : [row.id],
+    );
+
+  it("folds a turn's tools into one plain-words row and leaves cards in the timeline", () => {
+    const entries = [
+      message("prompt", "user", 0, "What's running right now?"),
+      tool("read-1", "mcp__t3-code__t3_thread_read", 2),
+      tool("read-2", "mcp__t3-code__t3_thread_read", 3),
+      tool("card", "mcp__t3-code__show_card", 4),
+      message("reply", "assistant", 5, "Two chats are running."),
+    ];
+    const rows = settled(entries, true);
+    expect(rows.find((row) => row.kind === "turn-fold")).toMatchObject({
+      label: "Checked 2 chats",
+      hidesWork: true,
+    });
+    expect(shownEntryIds(rows)).toContain("card");
+    expect(shownEntryIds(rows)).not.toContain("read-1");
+
+    // The same turn anywhere else keeps the duration label and folds every tool.
+    const normal = settled(entries, false);
+    expect(normal.find((row) => row.kind === "turn-fold")).toMatchObject({
+      label: expect.stringMatching(/^Worked for /),
+    });
+    expect(shownEntryIds(normal)).not.toContain("card");
+  });
+
+  it("draws no fold row for a reply with no work", () => {
+    const entries = [
+      message("prompt", "user", 0, "Hi"),
+      message("reply", "assistant", 2, "Hi! What can I do for you?"),
+    ];
+    expect(settled(entries, true).some((row) => row.kind === "turn-fold")).toBe(false);
+    expect(settled(entries, false).some((row) => row.kind === "turn-fold")).toBe(true);
   });
 });

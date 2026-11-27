@@ -899,6 +899,35 @@ it.effect("continues a cut run past queued follow-ups, which stay held", () =>
   }),
 );
 
+it.effect("continues a run after the user removed a later queued message", () =>
+  Effect.gen(function* () {
+    const base = makeProjection();
+    const discarded: OrchestrationV2ThreadProjection["runs"][number] = {
+      ...base.runs[0]!,
+      ...queuedFollowUp,
+      status: "cancelled",
+      startedAt: null,
+      completedAt: DateTime.add(now, { seconds: 1 }),
+    };
+    const settled: OrchestrationV2ThreadProjection = {
+      ...base,
+      runs: [{ ...base.runs[0]!, status: "completed", completedAt: now }, discarded],
+      providerThreads: [
+        {
+          ...base.providerThreads[0]!,
+          pendingBackgroundTasks: [{ taskId: "watch", kind: "monitor", description: "Watch CI" }],
+        },
+      ],
+      providerTurns: [{ ...base.providerTurns[0]!, status: "completed" }],
+    };
+    assert.equal(restartContinuationRun(settled, discarded.completedAt!)?.id, runId);
+    const cut = cutMidTurn({ startedAt: now, completedAt: now });
+    assert.deepEqual(yield* continuationTexts({ ...cut, runs: [...cut.runs, discarded] }), [
+      "Continue where you left off.",
+    ]);
+  }),
+);
+
 it.effect("continues a resumed queued run that ran after an earlier continuation", () =>
   Effect.gen(function* () {
     // The continuation (ordinal 3) ran ahead of the held queue, then the user

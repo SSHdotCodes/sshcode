@@ -44,7 +44,7 @@ it("context file carries every path the playbook depends on", () => {
     cliVersion: "0.0.33",
     os: "linux x64 (7.0.0)",
     nodeVersion: "v24.0.0",
-    launchedAs: "npx sshcode triage",
+    launchedAs: "sshcode triage",
     server: "running (pid 42, http://127.0.0.1:4501)",
     paths: {
       stateDir: "/home/u/.t3/userdata",
@@ -68,18 +68,20 @@ it("context file carries every path the playbook depends on", () => {
   assert.include(context, "/home/u/.t3/userdata/logs/provider/events.log");
   assert.include(context, "/home/u/.t3/userdata/secrets");
   assert.include(context, "/home/u/.t3/source");
-  assert.include(context, "npx sshcode triage");
+  assert.include(context, "sshcode triage");
+  assert.include(context, "https://github.com/SSHdotCodes/sshcode");
+  assert.notInclude(context, "pingdotgg");
 });
 
 it("context file labels the CLI version as the CLI's, not the user's build", () => {
-  // `npx sshcode triage` can resolve a different `sshcode` than the app the bug
-  // happened on (#13337), so the agent must not read it as the user's version.
+  // The `sshcode` that ran triage can differ from the app the bug happened on
+  // (#13337), so the agent must not read its version as the user's.
   const context = buildTriageContext({
     generatedAt: "2026-09-24T00:00:00.000Z",
     cliVersion: "0.0.42",
     os: "linux x64 (7.2.0)",
     nodeVersion: "v26.8.2",
-    launchedAs: "npx sshcode triage",
+    launchedAs: "sshcode triage",
     server: "running (pid 42, http://127.0.0.1:3773, version 0.0.43-nightly.20260923.2173)",
     paths: {
       stateDir: "/home/u/.t3/userdata",
@@ -100,4 +102,13 @@ it("context file labels the CLI version as the CLI's, not the user's build", () 
   assert.notInclude(context, "Release tag");
   assert.include(context, "- Triage CLI version: 0.0.42 (");
   assert.include(context, "version 0.0.43-nightly.20260923.2173");
+});
+
+it("sends the agent to SSHCode's repository, never upstream T3 Code's", () => {
+  assert.notInclude(TRIAGE_PLAYBOOK, "pingdotgg");
+  assert.include(TRIAGE_PLAYBOOK, "https://raw.githubusercontent.com/SSHdotCodes/sshcode/main/");
+});
+
+it("never tells anyone to run the sshcode npm package, which is not ours", () => {
+  assert.notMatch(TRIAGE_PLAYBOOK, /npx|npm (install|i|uninstall)\b/);
 });

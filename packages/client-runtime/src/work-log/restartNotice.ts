@@ -8,7 +8,7 @@ const MESSAGE_ITEM_PREFIX = "turn-item:message:";
 const WAKE_CONTINUES_WITHIN_MS = 5 * 60_000;
 
 /** The message id a notification row was made from: `turn-item:message:<encoded message id>`. */
-function notificationMessageId(itemId: string): string | null {
+export function notificationMessageId(itemId: string): string | null {
   if (!itemId.startsWith(MESSAGE_ITEM_PREFIX)) return null;
   try {
     return decodeURIComponent(itemId.slice(MESSAGE_ITEM_PREFIX.length));

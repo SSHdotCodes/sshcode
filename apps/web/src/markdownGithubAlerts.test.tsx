@@ -38,6 +38,12 @@ describe("remarkGithubAlerts", () => {
     expect(html).toContain("Changes live transcript routing.");
   });
 
+  it("recognizes an alert whose marker line ends in a lone CR", () => {
+    expect(renderMarkdown("> [!NOTE]\r> **Bold** body.")).toBe(
+      '<blockquote data-alert="note">\n<p><strong>Bold</strong> body.</p>\n</blockquote>',
+    );
+  });
+
   it("reads the marker case-insensitively, normalizing the kind", () => {
     const html = renderMarkdown("> [!important]\n> Read this.");
 

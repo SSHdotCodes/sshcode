@@ -103,6 +103,7 @@ function ProviderLimitsCard({
       screen: "SettingsContent",
       params: {
         screen: "SettingsUsageAccount",
+        initial: false,
         params: {
           accountKey: member.account.key,
           windowId: window.id,

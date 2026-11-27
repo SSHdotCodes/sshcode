@@ -1790,6 +1790,61 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
       yield* Scope.close(scope, Exit.void);
     }),
   );
+
+  it.effect("reads a v1 whole-list plan sent on a v2 session as a plan", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const scope = yield* Scope.make();
+      const acp = yield* AcpClient.make(stdio).pipe(Effect.provideService(Scope.Scope, scope));
+      const initializeFiber = yield* acp.agent
+        .initialize({ protocolVersion: 2 })
+        .pipe(Effect.forkScoped);
+      const initializeRequest = yield* Queue.take(output).pipe(
+        Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(InitializeRequest))),
+      );
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(InitializeResponse, {
+          jsonrpc: "2.0",
+          id: initializeRequest.id,
+          result: {
+            protocolVersion: 2,
+            capabilities: {},
+            info: { name: "mock-agent", version: "0.0.0" },
+          },
+        }),
+      );
+      yield* Fiber.join(initializeFiber);
+
+      const plan = {
+        sessionUpdate: "plan",
+        entries: [
+          { content: "Read the code", priority: "medium", status: "completed" },
+          { content: "Write the fix", priority: "medium", status: "in_progress" },
+        ],
+      } as const;
+      // Entries that are not plan entries stay an unknown update instead of a broken plan.
+      const malformed = { sessionUpdate: "plan", entries: [{ title: "No content" }] } as const;
+      for (const update of [plan, malformed]) {
+        yield* Queue.offer(
+          input,
+          yield* encodeJsonl(SessionUpdateNotification, {
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: { sessionId: "session-1", update },
+          }),
+        );
+      }
+      const received = yield* acp.raw.notifications.pipe(Stream.take(2), Stream.runCollect);
+      assert.deepEqual(
+        Array.from(received, (event) =>
+          event._tag === "SessionUpdate" ? event.params.update : undefined,
+        ),
+        [plan, { sessionUpdate: "_t3_unknown", originalSessionUpdate: "plan", raw: malformed }],
+      );
+      yield* Scope.close(scope, Exit.void);
+    }),
+  );
 });
 
 const elicitationForm = {

@@ -86,6 +86,16 @@ export interface SelectableMarkdownTextProps {
   readonly plainValues?: boolean;
   readonly isStreaming?: boolean;
   readonly onLinkPress?: (href: string) => void;
+  /**
+   * Adds Cite to the native selection menu. `occurrence` is which copy of the selected text,
+   * in document order, the selection sits on, or null when its position cannot tell.
+   */
+  readonly onCiteSelection?: (selection: {
+    readonly text: string;
+    readonly occurrence: { readonly index: number; readonly count: number } | null;
+  }) => void;
+  /** Adds Side chat to the native selection menu, opened ready to ask about the text. */
+  readonly onAskAboutSelection?: (text: string) => void;
   readonly fileContextMenu?: (href: string) => MarkdownFileContextMenu | undefined;
   readonly onFileContextMenuAction?: (href: string, actionId: string) => void;
   readonly linkCustomization?: (href: string) => MarkdownLinkCustomization | undefined;

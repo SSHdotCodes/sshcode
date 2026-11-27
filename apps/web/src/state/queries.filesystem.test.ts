@@ -42,7 +42,8 @@ vi.mock("./projects", () => ({
 }));
 vi.mock("../rpc/atomRegistry", () => ({ appAtomRegistry: {} }));
 vi.mock("./orchestration", () => ({ orchestrationEnvironment: {} }));
-vi.mock("./threads", () => ({ useEnvironmentThread: vi.fn() }));
+// The search atoms hide bot chats; these queries never read them.
+vi.mock("./threads", () => ({ useEnvironmentThread: vi.fn(), botThreadIdsAtom: {} }));
 vi.mock("./vcs", () => ({ vcsEnvironment: {} }));
 vi.mock("./query", () => ({
   useEnvironmentQuery: (atom: unknown) => ({

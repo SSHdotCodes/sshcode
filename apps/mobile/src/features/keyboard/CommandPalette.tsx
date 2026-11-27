@@ -1,10 +1,15 @@
+import { useWithoutBotThreads } from "../bots/state";
 import { usePrivacyLabel, usePrivacyMode } from "../../state/use-privacy-mode";
-import { pendingThreadSearchJumpAtom } from "@t3tools/client-runtime/state/thread-search";
+import {
+  isThreadSearchMatchAbout,
+  pendingThreadSearchJumpAtom,
+  resolveThreadSearchActivityAt,
+  threadSearchContextTerms,
+} from "@t3tools/client-runtime/state/thread-search";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useNavigation } from "@react-navigation/native";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import { THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
-import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
@@ -165,7 +170,7 @@ export function CommandPalette(props: {
   const { selectThread } = useAdaptiveWorkspaceLayout();
   const runCommand = props.onCommand;
   const projects = useProjects();
-  const threads = useThreadShells();
+  const threads = useWithoutBotThreads(useThreadShells());
   const activeThreadRef = useMemo(() => parseActiveThreadPath(props.pathname), [props.pathname]);
   const activeThread = useThreadShell(activeThreadRef);
   const environments = useWorkspaceEnvironments();
@@ -186,11 +191,6 @@ export function CommandPalette(props: {
     [environments],
   );
   const search = useThreadSearch(searchEnvironmentIds, query.startsWith(">") ? "" : query);
-  const matchedThreadKeys = useMemo(
-    () =>
-      new Set(search.matches.map((match) => scopedThreadKey(match.environmentId, match.threadId))),
-    [search.matches],
-  );
   const contentMatchByKey = useMemo(
     () =>
       new Map(
@@ -199,6 +199,22 @@ export function CommandPalette(props: {
           .map((match) => [scopedThreadKey(match.environmentId, match.threadId), match]),
       ),
     [search.matches],
+  );
+  const matchOrderByKey = useMemo(
+    () =>
+      new Map(
+        [...contentMatchByKey].map(
+          ([key, match]) =>
+            [
+              key,
+              {
+                about: isThreadSearchMatchAbout(match),
+                activityAt: match.activityAt ?? match.messageCreatedAt,
+              },
+            ] as const,
+        ),
+      ),
+    [contentMatchByKey],
   );
   const items = useMemo(() => {
     const actions: CommandPaletteItem[] = [
@@ -235,7 +251,7 @@ export function CommandPalette(props: {
         run: () =>
           navigation.navigate("SettingsSheet", {
             screen: "SettingsContent",
-            params: { screen: "SettingsAppearance" },
+            params: { screen: "SettingsAppearance", initial: false },
           }),
       },
       {
@@ -246,7 +262,7 @@ export function CommandPalette(props: {
         run: () =>
           navigation.navigate("SettingsSheet", {
             screen: "SettingsContent",
-            params: { screen: "SettingsEnvironments" },
+            params: { screen: "SettingsEnvironments", initial: false },
           }),
       },
       {
@@ -257,7 +273,7 @@ export function CommandPalette(props: {
         run: () =>
           navigation.navigate("SettingsSheet", {
             screen: "SettingsContent",
-            params: { screen: "SettingsScheduledTasks" },
+            params: { screen: "SettingsScheduledTasks", initial: false },
           }),
       },
       {
@@ -268,7 +284,7 @@ export function CommandPalette(props: {
         run: () =>
           navigation.navigate("SettingsSheet", {
             screen: "SettingsContent",
-            params: { screen: "SettingsUsage" },
+            params: { screen: "SettingsUsage", initial: false },
           }),
       },
       {
@@ -279,7 +295,7 @@ export function CommandPalette(props: {
         run: () =>
           navigation.navigate("SettingsSheet", {
             screen: "SettingsContent",
-            params: { screen: "SettingsArchive" },
+            params: { screen: "SettingsArchive", initial: false },
           }),
       },
     ];
@@ -352,6 +368,7 @@ export function CommandPalette(props: {
       )
       .map((thread) => {
         const project = projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId));
+        const searchAboutTerms = threadSearchContextTerms(thread, project);
         const environment =
           savedConnectionsById[thread.environmentId]?.environmentLabel ?? thread.environmentId;
         return {
@@ -359,12 +376,9 @@ export function CommandPalette(props: {
           kind: "thread",
           title: thread.title || "Untitled chat",
           detail: [project?.title, environment].filter(Boolean).join(" · "),
-          searchTerms: [
-            project?.title ?? "",
-            environment,
-            thread.branch ?? "",
-            ...threadPullRequestSearchTerms(thread),
-          ],
+          searchTerms: [...searchAboutTerms, environment],
+          searchAboutTerms,
+          activityAt: resolveThreadSearchActivityAt(thread),
           run: () => {
             const match = contentMatchByKey.get(scopedThreadKey(thread.environmentId, thread.id));
             if (match?.messageId) appAtomRegistry.set(pendingThreadSearchJumpAtom, match);
@@ -399,8 +413,8 @@ export function CommandPalette(props: {
     threads,
   ]);
   const results = useMemo(
-    () => filterCommandPaletteItems(items, query, matchedThreadKeys),
-    [items, matchedThreadKeys, query],
+    () => filterCommandPaletteItems(items, query, matchOrderByKey),
+    [items, matchOrderByKey, query],
   );
   const selectedIndex = Math.max(
     0,

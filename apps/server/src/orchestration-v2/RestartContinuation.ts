@@ -1,4 +1,4 @@
-import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
+import { latestExecutedRun, runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
   type ChatAttachment,
@@ -149,14 +149,7 @@ export function restartContinuationRun(
   >,
   now: DateTime.Utc,
 ): OrchestrationV2Run | undefined {
-  // Queued runs never started; recovery holds them behind the cut run.
-  const run = projection.runs.reduce<OrchestrationV2Run | undefined>(
-    (latest, candidate) =>
-      candidate.status !== "queued" && (!latest || runRanAfter(candidate, latest))
-        ? candidate
-        : latest,
-    undefined,
-  );
+  const run = latestExecutedRun(projection.runs);
   if (!run) return;
   // Nothing reached the provider, so no native state is needed to start over.
   if (
@@ -261,14 +254,9 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
           ))
     )
       return;
-    // A user submission after reconciliation takes precedence over an automatic
-    // prompt. Queued runs never started and stay held behind this one.
-    if (
-      projection.runs.some(
-        (run) => run.id !== source.id && run.status !== "queued" && runRanAfter(run, source),
-      )
-    )
-      return;
+    // A newer turn takes precedence. Cancelling an unstarted queue entry does not.
+    const latest = latestExecutedRun(projection.runs);
+    if (latest !== null && latest.id !== source.id && runRanAfter(latest, source)) return;
     if (
       input.accountMove === undefined &&
       projection.thread.providerInstanceId !== source.providerInstanceId

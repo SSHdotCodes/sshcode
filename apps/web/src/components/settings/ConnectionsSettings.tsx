@@ -1,6 +1,7 @@
 import { formatSettingsTime } from "./settingsTime";
 import { SessionPermissions } from "./SessionPermissions";
 import { AUTH_SCOPE_OPTIONS as PAIRING_SCOPE_OPTIONS } from "@t3tools/shared/authScopeOptions";
+import { serverDownloadsUnavailable, serverUpdateUnavailable } from "@t3tools/shared/cliRelease";
 import {
   ChevronRightIcon,
   ChevronsLeftRightEllipsisIcon,
@@ -210,6 +211,8 @@ import {
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
+// An SSH environment installs this version's server download on the remote.
+const SSH_UNAVAILABLE = serverDownloadsUnavailable();
 const EMPTY_DISCOVERED_SSH_HOSTS: ReadonlyArray<DesktopDiscoveredSshHost> = [];
 
 // Sentinels for the consolidated WSL backend picker. The colon is
@@ -2094,7 +2097,8 @@ export function ConnectionsSettings() {
           isDesktopLocalConnectionTarget(environment.entry.target) ||
           // Manual-update machines only offer a copy command on their row.
           selfUpdate === null ||
-          (selfUpdate === "desktop-managed" && !desktopAppUpdate)
+          (selfUpdate === "desktop-managed" && !desktopAppUpdate) ||
+          serverUpdateUnavailable(selfUpdate) !== null
         ) {
           return [];
         }
@@ -2244,7 +2248,10 @@ export function ConnectionsSettings() {
     canManageLocalBackend && desktopBridge ? desktopNetworkAccessStateAtom : null,
   );
   const isSshDiscoveryActive =
-    desktopBridge !== undefined && addBackendDialogOpen && savedBackendMode === "ssh";
+    desktopBridge !== undefined &&
+    addBackendDialogOpen &&
+    savedBackendMode === "ssh" &&
+    SSH_UNAVAILABLE === null;
   const desktopSshHosts = useEnvironmentQuery(
     isSshDiscoveryActive ? desktopSshHostsStateAtom : null,
   );
@@ -4131,7 +4138,13 @@ export function ConnectionsSettings() {
                       </div>
                     ) : null}
                     <AnimatedHeight>
-                      {savedBackendMode === "ssh" ? renderSshFields() : renderRemoteModeBody()}
+                      {savedBackendMode !== "ssh" ? (
+                        renderRemoteModeBody()
+                      ) : SSH_UNAVAILABLE === null ? (
+                        renderSshFields()
+                      ) : (
+                        <p className="text-sm text-muted-foreground">{SSH_UNAVAILABLE}</p>
+                      )}
                     </AnimatedHeight>
                   </div>
                 </DialogPanel>

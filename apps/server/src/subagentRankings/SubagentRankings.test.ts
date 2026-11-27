@@ -61,6 +61,16 @@ it("names the task kinds a model does clearly better or worse at, so leads can p
   expect(rankingsSnapshot(runs, now + 8).models[0]?.yourRuns).toBe(
     "9 runs, 9 rated · 100% done · 7.7/10 · low grades 3/9 · 21m median · code 9.0/10 · research 6.0/10",
   );
+  // A dominant weak kind drags the overall average close to itself; comparing against the
+  // other kinds still surfaces it alongside the stronger kind.
+  const dominantWeakResearch = [
+    ...Array.from({ length: 19 }, (_, n) => graded(n, "research", 4)),
+    ...Array.from({ length: 9 }, (_, n) => graded(19 + n, "research", 8)),
+    ...Array.from({ length: 8 }, (_, n) => graded(28 + n, "review", 8)),
+  ];
+  expect(rankingsSnapshot(dominantWeakResearch, now + 40).models[0]?.yourRuns).toBe(
+    "36 runs, 36 rated · 100% done · 5.9/10 · low grades 19/36 · 21m median · review 8.0/10 · research 5.3/10",
+  );
   // Less than a point from the overall score says nothing useful.
   const close = [
     ...[0, 1, 2].map((n) => graded(n, "code", 9)),

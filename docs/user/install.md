@@ -52,7 +52,9 @@ vp i && vp run build:desktop
 node apps/server/dist/bin.mjs
 ```
 
-Update it with `git pull` and a rebuild.
+Update it with `git pull` and a rebuild. Where SSHCode's messages and guides say
+`sshcode <command>`, run `node apps/server/dist/bin.mjs <command>` from the checkout.
+SSHCode is not published on npm, so never use `npx sshcode`.
 
 ## Mobile app
 

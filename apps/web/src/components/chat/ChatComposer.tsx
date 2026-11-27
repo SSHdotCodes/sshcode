@@ -11,7 +11,7 @@ import { useKeptChatPaneHidden } from "./KeptChatPane";
 import { acpSpeedChoices, findAcpApprovalModes } from "@t3tools/shared/acpComposer";
 import { getProviderModelCapabilities } from "../../providerModels";
 import { formatModelLink } from "@t3tools/shared/modelLinks";
-import { useEnvironmentModelPreferences } from "../../hooks/useSettings";
+import { useEnvironmentModelPreferences, useSubagentsOffInSettings } from "../../hooks/useSettings";
 import { matchComposerModelItems } from "./composerModelMentions";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import type { CommandId } from "@t3tools/contracts";
@@ -186,6 +186,7 @@ import { ComposerSurface } from "./ComposerSurface";
 import {
   ComposerBannerStack,
   type ComposerBannerStackContent,
+  type ComposerBannerStackEntry,
   type ComposerBannerStackItem,
 } from "./ComposerBannerStack";
 import {
@@ -1657,6 +1658,8 @@ export interface ChatComposerProps {
   hasThreadShell: boolean;
   threadShellStarted: boolean;
   threadTitle: string | undefined;
+  /** The empty composer's hint when nothing else needs saying, such as "Message Pip". */
+  idlePlaceholder?: string | undefined;
   threadSubagentsEnabled: boolean | undefined;
   runtimeProviderInstanceId: ProviderInstanceId | undefined;
   runtimeActiveRunId: RunId | null;
@@ -1690,7 +1693,7 @@ export interface ChatComposerProps {
   sendDisabledReason: string | null;
   isPreparingWorktree: boolean;
   isCompacting: boolean;
-  bannerItems: readonly ComposerBannerStackItem[];
+  bannerItems: readonly ComposerBannerStackEntry[];
   /** Picking /usage-limits from the menu is the action itself; the draft keeps nothing of it. */
   onUsageLimitsCommand?: (() => void) | undefined;
   environmentUnavailable: {
@@ -1786,6 +1789,8 @@ export interface ChatComposerProps {
 
   // Queued runs strip rendered above the composer (v2 queue/steer).
   queuedRunsControl?: ReactNode;
+  /** The lead's team board pill; it shares the row after the banners, live progress included. */
+  teamBoardPill?: ReactNode;
   // Queued-message edit mode: attachments already stored on the message being
   // edited. Rendered in the attachment strip with a remove control; removal is
   // client state in ChatView until the edit is saved.
@@ -1881,6 +1886,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     hasThreadShell,
     threadShellStarted,
     threadTitle,
+    idlePlaceholder,
     threadSubagentsEnabled,
     runtimeProviderInstanceId,
     runtimeActiveRunId,
@@ -2444,6 +2450,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     reportFailure: false,
   });
   const [subagentsOffConfirmOpen, setSubagentsOffConfirmOpen] = useState(false);
+  const subagentsOffBySettings = useSubagentsOffInSettings(environmentId);
   const draftSubagentsEnabled = useComposerDraftStore((store) =>
     hasThreadShell ? undefined : store.getDraftThread(composerDraftTarget)?.subagentsEnabled,
   );
@@ -7989,6 +7996,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             </ComposerBanner.Attachment>
           ) : null}
         </ComposerBanner.Column>
+        {props.teamBoardPill}
         {!isComposerApprovalBlocked ? (
           <ComposerStashBadge
             count={stashQueue.length}
@@ -8670,7 +8678,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                   ? "Enable a provider in Settings to send a message"
                                   : discord
                                     ? `Message #${threadTitle || "new chat"}`
-                                    : COMPOSER_PLACEHOLDER
+                                    : (idlePlaceholder ?? COMPOSER_PLACEHOLDER)
                     }
                     disabled={
                       isConnecting ||
@@ -8764,6 +8772,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           ? threadSubagentsEnabled !== false
                           : draftSubagentsEnabled !== false
                       }
+                      subagentsOffInSettings={subagentsOffBySettings}
                       {...(activeThreadId === null ||
                       activeThreadEnvironmentId === undefined ||
                       !canOperateThread

@@ -39,9 +39,7 @@ const SearchXTool = Tool.make("search_x", {
     query: Schema.String.annotate({
       description: 'Keywords or X operators, e.g. from:user "exact phrase" since:2026-11-01.',
     }),
-    deep: Schema.optional(
-      Schema.Boolean.annotate({ description: "Older posts via Grok (1-4 min)." }),
-    ),
+    deep: Schema.optional(Schema.Boolean.annotate({ description: "All dates (slower)." })),
   }),
   success: XSearchToolResult,
   failure: OrchestratorMcpFailure,

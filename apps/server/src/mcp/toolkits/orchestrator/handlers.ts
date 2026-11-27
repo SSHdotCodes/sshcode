@@ -1,5 +1,9 @@
 import * as MonitorMcpService from "../../MonitorMcpService.ts";
-import { OrchestratorMcpFailure } from "@t3tools/contracts";
+import {
+  NodeId,
+  OrchestratorMcpFailure,
+  type OrchestratorMcpDelegateTaskResult,
+} from "@t3tools/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
 import * as ApiKeyStore from "../../../secrets/ApiKeyStore.ts";
 import { requireThreadScope } from "../../McpInvocationContext.ts";
@@ -14,8 +18,48 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
+import * as TeamBoard from "../../../teamBoard/TeamBoard.ts";
+import { TEAM_BOARD_TOOL } from "../../../teamBoard/model.ts";
+
+const withBoardCompletion = (
+  scope: McpInvocationContext.McpInvocationScope,
+  result: OrchestratorMcpDelegateTaskResult,
+) =>
+  Effect.gen(function* () {
+    if (scope.thread === undefined || result.summary === undefined) return result;
+    const board = Option.getOrUndefined(yield* Effect.serviceOption(TeamBoard.TeamBoard));
+    const note = board?.completion(scope.thread.threadId, NodeId.make(result.taskId));
+    return note
+      ? { ...result, notice: result.notice ? `${result.notice}\n${note}` : note }
+      : result;
+  });
 
 const handlers = {
+  team_board: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const caller = yield* requireThreadScope(scope, TEAM_BOARD_TOOL);
+      if (!scope.capabilities.has("orchestration"))
+        return yield* new OrchestratorMcpFailure({
+          code: "capability_denied",
+          message: "This credential cannot control threads.",
+        });
+      const board = yield* Effect.serviceOption(TeamBoard.TeamBoard);
+      if (Option.isNone(board))
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: "Team board is unavailable.",
+        });
+      return yield* board.value
+        .access(caller.thread.threadId, input)
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestratorMcpFailure({ code: "invalid_request", message: cause.message }),
+          ),
+        );
+    }),
+  ),
   monitor_start: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
@@ -56,7 +100,10 @@ const handlers = {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       const feedback = yield* service.gradeTasks(scope, grades);
-      const result = compactDelegateTaskResult(yield* service.delegateTask(scope, input));
+      const result = yield* withBoardCompletion(
+        scope,
+        compactDelegateTaskResult(yield* service.delegateTask(scope, input)),
+      );
       return feedback.skipped.length ? { ...result, grades: feedback } : result;
     }),
   ),
@@ -96,7 +143,9 @@ const handlers = {
         rated && (summaryOffset === undefined || status.summary === undefined)
           ? withoutResult
           : status;
-      return feedback.skipped.length ? { ...result, grades: feedback } : result;
+      const withNotice =
+        summaryOffset === undefined ? yield* withBoardCompletion(scope, result) : result;
+      return feedback.skipped.length ? { ...withNotice, grades: feedback } : withNotice;
     }),
   ),
   task_cancel: McpToolAccess.actsAsCaller((input) =>
@@ -199,7 +248,7 @@ const handlers = {
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.requestSecret(scope, {
+      const result = yield* service.requestSecret(scope, {
         label: input.label,
         reason: input.reason,
         ...(input.clientRequestId === undefined ? {} : { clientRequestId: input.clientRequestId }),
@@ -211,6 +260,10 @@ const handlers = {
             : { suggestedExpiresAt: input.suggestedExpiresAt }),
         },
       });
+      // A saved API key card answers api_key_saved; only a plain secret has a handle.
+      if (result.status === "saved")
+        return yield* Effect.die("An API key request returned a handle.");
+      return result;
     }),
   ),
   list_api_keys: McpToolAccess.actsAsCaller(() =>

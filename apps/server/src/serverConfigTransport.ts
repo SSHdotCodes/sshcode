@@ -1,4 +1,10 @@
-import type { ServerConfigStreamEvent, ServerProvider, ServerSettings } from "@t3tools/contracts";
+import type {
+  ProviderInstanceId,
+  ServerConfigStreamEvent,
+  ServerProvider,
+  ServerProviderUpdatedPayload,
+  ServerSettings,
+} from "@t3tools/contracts";
 import type {
   ReusableProviderCatalog,
   ServerConfigStreamWireEvent,
@@ -10,6 +16,41 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeUtil from "node:util";
 
 import { redactServerSettingsForClient } from "./serverSettings.ts";
+
+export function providerRefreshReply(
+  providers: ReadonlyArray<ServerProvider>,
+  {
+    instanceId,
+    cwd,
+    omitProviders,
+    workspaceSnapshotOnly,
+  }: {
+    readonly instanceId?: ProviderInstanceId | undefined;
+    readonly cwd?: string | undefined;
+    readonly omitProviders?: boolean | undefined;
+    readonly workspaceSnapshotOnly?: boolean | undefined;
+  },
+): ServerProviderUpdatedPayload {
+  if (instanceId === undefined || cwd === undefined) {
+    return { providers: omitProviders ? [] : providers };
+  }
+  if (!workspaceSnapshotOnly) return { providers };
+  const provider = providers.find((entry) => entry.instanceId === instanceId);
+  if (provider === undefined) return { providers: [] };
+  return {
+    providers: [
+      {
+        ...provider,
+        models: [],
+        skills: [],
+        slashCommands: [],
+        workspaceSnapshots: (provider.workspaceSnapshots ?? []).filter(
+          (snapshot) => snapshot.cwd === cwd,
+        ),
+      },
+    ],
+  };
+}
 
 export const serverSettingsConfigUpdates = (changes: Stream.Stream<ServerSettings>) =>
   changes.pipe(

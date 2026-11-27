@@ -5,6 +5,7 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import {
   deriveThreadQueueWorkflowState,
   getUserQueuedThreadRuns,
+  isActiveThreadRunStopping,
   type ThreadQueueWorkflowState,
 } from "./threadWorkflows.ts";
 import { deriveThreadTurnSubagents, type ThreadTurnSubagents } from "./threadSubagents.ts";
@@ -68,29 +69,43 @@ export function createEnvironmentThreadDetailAtoms<E>(
   });
 
   const queueWorkflowAtomFamily = Atom.family((key: string) => {
-    let previous: Pick<
-      OrchestrationV2ThreadProjection,
-      "thread" | "runs" | "messages" | "providerThreads" | "providerSessions" | "providerTurns"
-    > | null = null;
+    let previous:
+      | (Pick<
+          OrchestrationV2ThreadProjection,
+          "thread" | "runs" | "messages" | "providerThreads" | "providerSessions" | "providerTurns"
+        > & { readonly stopping: boolean })
+      | null = null;
     let value: ThreadQueueWorkflowState | null = null;
     return Atom.make((get) => {
       const projection = Option.getOrNull(get(threadStateValueAtomFamily(key)).data);
       if (projection === null) {
         previous = null;
         value = null;
-      } else if (
-        previous === null ||
-        projection.thread !== previous.thread ||
-        projection.runs !== previous.runs ||
-        projection.messages !== previous.messages ||
-        projection.providerThreads !== previous.providerThreads ||
-        projection.providerSessions !== previous.providerSessions ||
-        projection.providerTurns !== previous.providerTurns
-      ) {
-        value = deriveThreadQueueWorkflowState(projection);
-        const { thread, runs, messages, providerThreads, providerSessions, providerTurns } =
-          projection;
-        previous = { thread, runs, messages, providerThreads, providerSessions, providerTurns };
+      } else {
+        const stopping = isActiveThreadRunStopping(projection);
+        if (
+          previous === null ||
+          stopping !== previous.stopping ||
+          projection.thread !== previous.thread ||
+          projection.runs !== previous.runs ||
+          projection.messages !== previous.messages ||
+          projection.providerThreads !== previous.providerThreads ||
+          projection.providerSessions !== previous.providerSessions ||
+          projection.providerTurns !== previous.providerTurns
+        ) {
+          value = deriveThreadQueueWorkflowState(projection);
+          const { thread, runs, messages, providerThreads, providerSessions, providerTurns } =
+            projection;
+          previous = {
+            thread,
+            runs,
+            messages,
+            providerThreads,
+            providerSessions,
+            providerTurns,
+            stopping,
+          };
+        }
       }
       return value;
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-queue:${key}`));

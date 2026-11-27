@@ -63,7 +63,6 @@ import {
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
-  rankedContentSearchMatches,
   threadListV2ListItemsAreEqual,
 } from "../src/features/threads/threadListV2";
 import {
@@ -254,7 +253,6 @@ function homeReader() {
       (t) => t.lineage.relationshipToParent !== "subagent" && !isWorkflowThread(t),
     );
     workflowListHiddenKeys(all);
-    rankedContentSearchMatches(navigation, [], "");
     homeMachineSummaries(navigation);
     listBuilds++;
     return buildThreadListV2ListItems({

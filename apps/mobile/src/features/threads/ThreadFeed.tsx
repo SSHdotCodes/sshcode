@@ -1,4 +1,6 @@
 import { notificationChildThreadId } from "@t3tools/client-runtime/state/thread-execution";
+import { BotInboundNote, BotWakeNote } from "../bots/BotChat";
+import { botInboundLines, botWakeMessageId } from "../bots/botInboundNotes";
 import { formatTranscriptTimestamp } from "../../lib/time";
 import { createDiscordThreadFeedProjector } from "../../lib/threadFeedProjection";
 import { useModelMentions } from "../../state/model-mentions";
@@ -49,6 +51,8 @@ import {
 import { QuestionAnswerHistory } from "./QuestionAnswerHistory";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import {
+  ASSISTANT_CITATION_MAX_TEXT_LENGTH,
+  type AssistantCitation,
   type OrchestrationMessageContext,
   ThreadId,
   type ChatAttachment,
@@ -66,7 +70,10 @@ import {
   type UserInputAttachmentAnswerPayload,
 } from "@t3tools/contracts";
 import { formatSteerWaitElapsed, type SteerWait } from "@t3tools/client-runtime/state/steer-wait";
-import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
+import {
+  collectAssistantCitations,
+  renderAssistantCitationsAsText,
+} from "@t3tools/shared/assistantCitations";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 import {
@@ -94,9 +101,15 @@ import {
   viewedImageMarkdownSource,
 } from "@t3tools/client-runtime/work-log/presentation";
 import {
-  renderCodexInlineDirectivesAsMarkdown,
-  splitCodexArtifactTemplateMarkdown,
-} from "@t3tools/shared/codexMarkdownDirectives";
+  collectAssistantTextChoices,
+  resolveAssistantTextChoice,
+  splitAssistantMarkdown,
+  type AssistantCitationChoice,
+} from "../../lib/assistantCitationSelection";
+import {
+  AssistantCitationChooserSheet,
+  AssistantCitationMessageCard,
+} from "../../components/AssistantCitationSheet";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { imageMimeType } from "@t3tools/shared/image";
 import { videoMimeType } from "@t3tools/shared/video";
@@ -143,11 +156,7 @@ import { sameFilePreviewItems, threadImageGallery } from "./messageImageGallery"
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 import { MediaActionFeedbackBadge, MediaActionsMenu } from "../../components/MediaActionsMenu";
 import { useMediaActions } from "../../state/mediaActions";
-import {
-  splitMarkdownImageGroups,
-  type MarkdownImageGroupSegment,
-  type MarkdownImageReference,
-} from "../../lib/markdownImageGroups";
+import { type MarkdownImageReference } from "../../lib/markdownImageGroups";
 import {
   MESSAGE_IMAGE_STRIP_HEIGHT,
   ThreadImageStrip,
@@ -183,6 +192,7 @@ import {
   type MarkdownLinkCustomization,
   type NativeMarkdownTextStyle,
   type SelectableMarkdownSkill,
+  type SelectableMarkdownTextProps,
 } from "../../native/SelectableMarkdownText";
 
 import { AppText as Text } from "../../components/AppText";
@@ -274,6 +284,8 @@ import {
   threadFeedFinalAssistantMessageIds,
 } from "../../lib/threadFeedProjection";
 import { htmlRenderFrameHeight } from "@t3tools/shared/htmlRender";
+import { cardReplyUserBubbleText } from "@t3tools/shared/cards";
+import { AgentCard, AgentCardSkeleton, CardReplyGlyph } from "./AgentCard";
 import { htmlRenderRowHeight, ThreadHtmlRender } from "./HtmlRenderWebView";
 import { ThreadMcpApp } from "./McpAppWebView";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
@@ -394,6 +406,7 @@ export interface ThreadFeedProps {
   readonly agentAvatars?: ReadonlyMap<string, ReturnType<typeof discordAvatarIdentity>> | undefined;
   readonly visitedAtOpen?: string | null;
   readonly latestRun: ThreadFeedLatestRun | null;
+  readonly runs?: ReadonlyArray<import("../../lib/threadActivity").ThreadFeedRunTiming> | undefined;
   readonly activeWorkStartedAt: string | null;
   readonly runlessWorkActive?: boolean;
   readonly listRef: RefObject<LegendListRef | null>;
@@ -413,6 +426,14 @@ export interface ThreadFeedProps {
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
   readonly onQuoteMessage?: ((text: string) => void) | undefined;
+  /** Inserts a citation of selected reply text into the composer. */
+  readonly onCiteAssistantText?: ((citation: AssistantCitation) => void) | undefined;
+  /** Opens the side chat ready to ask about selected reply text. */
+  readonly onAskAboutText?: ((text: string) => void) | undefined;
+  /** A bot's home chat: turns fold into one plain line and SSHCode's notes read as inbound notes. */
+  readonly botChat?: boolean;
+  /** Replaces the "No messages yet" placeholder; stays tappable. */
+  readonly emptyState?: ReactNode;
 }
 
 async function waitForThreadShell(
@@ -989,14 +1010,6 @@ type ScopedMarkdownImageGroupRenderer = (
   scope?: string,
 ) => ReactNode;
 
-type AssistantMarkdownSegment = { readonly key: string } & (
-  | MarkdownImageGroupSegment
-  | Extract<
-      ReturnType<typeof splitCodexArtifactTemplateMarkdown>[number],
-      { readonly kind: "artifact-template" }
-    >
-);
-
 const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly displayOnly?: boolean;
   readonly plainValues?: boolean;
@@ -1012,6 +1025,11 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
       rewrote under the same name shows its new contents here, not a cached copy. */
   readonly assetScope?: string | undefined;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
+  /** The reply's own message, so selected text can be cited back to it. */
+  readonly citationThreadId?: ThreadId | undefined;
+  readonly citationMessageId?: MessageId | undefined;
+  readonly onCiteAssistantText?: ((citation: AssistantCitation) => void) | undefined;
+  readonly onAskAboutText?: ((text: string) => void) | undefined;
 }) {
   const models = useModelMentions(props.environmentId, props.markdown);
   const liveMarkdown = useLiveThreadLinkLabels(props.markdown, props.environmentId);
@@ -1022,23 +1040,56 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   );
   // Images sharing a line or a paragraph with text would draw as native inline glyphs;
   // lift them into block images and thumbnail strips between the text segments.
-  const segments = useMemo(
-    () =>
-      splitCodexArtifactTemplateMarkdown(liveMarkdown).flatMap(
-        (segment): AssistantMarkdownSegment[] =>
-          segment.kind === "artifact-template"
-            ? [{ ...segment, key: `artifact-template:${segment.sourceOffset}` }]
-            : splitMarkdownImageGroups(renderCodexInlineDirectivesAsMarkdown(segment.markdown)).map(
-                (part) => ({
-                  ...part,
-                  key: `${part.kind}:${segment.sourceOffset}.${part.sourceOffset}`,
-                }),
-              ),
-      ),
-    [liveMarkdown],
-  );
+  const segments = useMemo(() => splitAssistantMarkdown(liveMarkdown), [liveMarkdown]);
+  const [quoteChoices, setQuoteChoices] = useState<{
+    readonly markdown: string;
+    readonly choices: ReadonlyArray<AssistantCitationChoice>;
+  } | null>(null);
+  const { citationThreadId, citationMessageId, onCiteAssistantText, environmentId } = props;
+  const cite = (choice: AssistantCitationChoice) => {
+    if (!citationThreadId || !citationMessageId || !onCiteAssistantText) return;
+    setQuoteChoices(null);
+    onCiteAssistantText({
+      version: 1,
+      environmentId,
+      threadId: citationThreadId,
+      messageId: citationMessageId,
+      ...choice.selector,
+    });
+  };
+  const citeSelection = (
+    rowKey: string,
+    selection: Parameters<NonNullable<SelectableMarkdownTextProps["onCiteSelection"]>>[0],
+  ) => {
+    if (!selection.text.trim()) return;
+    if (selection.text.length > ASSISTANT_CITATION_MAX_TEXT_LENGTH) {
+      Alert.alert(
+        "Selection is too long to cite",
+        `Shorten the selection to ${ASSISTANT_CITATION_MAX_TEXT_LENGTH.toLocaleString("en-US")} characters or fewer.`,
+      );
+      return;
+    }
+    const choices = collectAssistantTextChoices(liveMarkdown, rowKey, selection.text);
+    if (choices.length === 0) {
+      Alert.alert(
+        "Couldn't find this passage",
+        "Select a little more of the surrounding text, then cite it again.",
+      );
+      return;
+    }
+    const choice = resolveAssistantTextChoice(choices, selection.occurrence);
+    if (choice) cite(choice);
+    else setQuoteChoices({ markdown: liveMarkdown, choices });
+  };
+  const canCite =
+    citationThreadId !== undefined &&
+    citationMessageId !== undefined &&
+    onCiteAssistantText !== undefined;
+  // A reply that changed under an open chooser offers offsets from the old text.
+  const openChoices =
+    quoteChoices !== null && quoteChoices.markdown === liveMarkdown ? quoteChoices.choices : null;
 
-  return segments.map((segment) => {
+  const rows = segments.map((segment) => {
     if (segment.kind === "artifact-template") {
       return (
         <ArtifactTemplateCard
@@ -1071,9 +1122,27 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
         preserveSoftBreaks
         {...props.linkHandlers}
         renderImage={renderImage}
+        onCiteSelection={
+          canCite && !props.displayOnly
+            ? (selection) => citeSelection(segment.key, selection)
+            : undefined
+        }
+        onAskAboutSelection={props.displayOnly ? undefined : props.onAskAboutText}
       />
     );
   });
+  return (
+    <>
+      {rows}
+      {openChoices ? (
+        <AssistantCitationChooserSheet
+          choices={openChoices}
+          onChoose={cite}
+          onClose={() => setQuoteChoices(null)}
+        />
+      ) : null}
+    </>
+  );
 });
 
 function useMarkdownStyles(): MarkdownStyleSets {
@@ -1256,7 +1325,7 @@ function FoldedMessageRow(props: {
             {props.status}
           </Text>
         ) : null}
-        <Text className="text-2xs tabular-nums text-foreground-muted">{props.timestampLabel}</Text>
+        <Text className="text-2xs text-foreground-muted">{props.timestampLabel}</Text>
         <ThreadDisclosureChevron
           expanded={expanded}
           collapsedDirection="down"
@@ -1457,6 +1526,8 @@ function renderFeedEntry(
     | "agentLabel"
     | "onUseArtifactTemplate"
     | "onQuoteMessage"
+    | "onCiteAssistantText"
+    | "onAskAboutText"
     | "skills"
     | "dispatchingMessageId"
     | "steerWait"
@@ -1513,10 +1584,29 @@ function renderFeedEntry(
     /** Width full-bleed rows (HTML renders) lay out in. */
     readonly contentWidth: number;
     readonly threadTitle: string;
+    readonly botChat: boolean;
   },
 ) {
   const entry = info.item;
   const { markdownStyles, iconSubtleColor, userBubbleColor } = props;
+
+  if (props.botChat && entry.type === "message" && entry.message.role === "user") {
+    const lines = botInboundLines(entry.message.text);
+    if (lines !== null) return <BotInboundNote lines={lines} environmentId={props.environmentId} />;
+  }
+  if (props.botChat && entry.type === "activity-group" && entry.activities.length === 1) {
+    const item = entry.activities[0]?.projectedItem.item;
+    const messageId = item?.type === "notification" ? botWakeMessageId(item.id) : null;
+    if (item?.type === "notification" && messageId !== null)
+      return (
+        <BotWakeNote
+          environmentId={props.environmentId}
+          threadId={props.threadId}
+          messageId={messageId}
+          summary={item.summary}
+        />
+      );
+  }
 
   if (entry.type === "run-fold") {
     return (
@@ -1564,6 +1654,28 @@ function renderFeedEntry(
         environmentId={props.environmentId}
         threadId={props.threadId}
         workspaceRoot={props.workspaceRoot}
+        onPressPreview={props.onPressPreview}
+      />
+    );
+  }
+
+  if (entry.type === "agent-card") {
+    if (entry.card.state === "streaming" || !entry.card.card) {
+      return <AgentCardSkeleton title={entry.card.streamingTitle} />;
+    }
+    return (
+      <AgentCard
+        key={entry.itemId}
+        itemId={String(entry.itemId)}
+        card={entry.card.card}
+        lockedState={entry.lockedState}
+        environmentId={props.environmentId}
+        threadId={entry.sourceThreadId}
+        conversationThreadId={props.threadId}
+        workspaceRoot={props.workspaceRoot}
+        themeAppearance={props.themeAppearance}
+        messageRunActive={props.messageRunActive}
+        canOperateMessage={props.canOperateMessage}
         onPressPreview={props.onPressPreview}
       />
     );
@@ -1887,37 +1999,62 @@ function renderFeedEntry(
                 })}
               </View>
             ) : null}
-            {presentation.text.trim().length > 0 ? (
-              <MarkdownImageAvailableWidthContext
-                value={
-                  userBubbleMaxWidth -
-                  (props.harnessView?.userBubble.paddingX ?? USER_BUBBLE_HORIZONTAL_PADDING) * 2
-                }
-              >
-                <UserMessageContent
-                  text={renderedText}
-                  plainValues={isAgentMessage}
-                  environmentId={props.environmentId}
-                  context={message.context}
-                  markdownStyles={styles}
-                  reviewCommentColors={props.reviewCommentColors}
-                  skills={props.skills}
-                  linkHandlers={props.markdownLinkHandlers}
-                  renderImage={props.renderMarkdownImage}
-                  disclosure={
-                    props.isEditingUserMessage
-                      ? undefined
-                      : {
-                          expanded: props.userMessageExpanded,
-                          onToggle: () =>
-                            props.onToggleWorkRow(userMessageExpansionKey(message.id), entry.id),
-                          fadeColor: props.discord ? props.screenColor : props.userBubbleFadeColor,
-                          linkColor: styles.nativeTextStyle.linkColor,
-                        }
+            {(() => {
+              const cardBubble = cardReplyUserBubbleText({
+                text: presentation.text,
+                context: message.context,
+              });
+              if (cardBubble.fromCard && cardBubble.displayText.trim().length > 0) {
+                return (
+                  <View className="flex-row items-center gap-1.5">
+                    <CardReplyGlyph
+                      size={12}
+                      color={String(styles.nativeTextStyle.color ?? iconSubtleColor)}
+                    />
+                    <Text
+                      className="shrink text-[15px] leading-snug text-user-bubble-foreground"
+                      selectable
+                    >
+                      {cardBubble.displayText}
+                    </Text>
+                  </View>
+                );
+              }
+              return presentation.text.trim().length > 0 ? (
+                <MarkdownImageAvailableWidthContext
+                  value={
+                    userBubbleMaxWidth -
+                    (props.harnessView?.userBubble.paddingX ?? USER_BUBBLE_HORIZONTAL_PADDING) * 2
                   }
-                />
-              </MarkdownImageAvailableWidthContext>
-            ) : null}
+                >
+                  <UserMessageContent
+                    // Citations stay links here and render as quote cards in the bubble.
+                    text={presentation.text}
+                    plainValues={isAgentMessage}
+                    environmentId={props.environmentId}
+                    context={message.context}
+                    markdownStyles={styles}
+                    reviewCommentColors={props.reviewCommentColors}
+                    skills={props.skills}
+                    linkHandlers={props.markdownLinkHandlers}
+                    renderImage={props.renderMarkdownImage}
+                    disclosure={
+                      props.isEditingUserMessage
+                        ? undefined
+                        : {
+                            expanded: props.userMessageExpanded,
+                            onToggle: () =>
+                              props.onToggleWorkRow(userMessageExpansionKey(message.id), entry.id),
+                            fadeColor: props.discord
+                              ? props.screenColor
+                              : props.userBubbleFadeColor,
+                            linkColor: styles.nativeTextStyle.linkColor,
+                          }
+                    }
+                  />
+                </MarkdownImageAvailableWidthContext>
+              ) : null;
+            })()}
           </UserMessageBubble>
           <View
             className={
@@ -1952,7 +2089,7 @@ function renderFeedEntry(
                 </Text>
               </Pressable>
             ) : null}
-            <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
+            <Text className="font-t3-medium text-xs text-foreground-secondary">
               {entry.serverQueued
                 ? "Queued"
                 : entry.pendingMessage && !entry.acknowledged
@@ -2095,6 +2232,10 @@ function renderFeedEntry(
                   renderImageGroup={props.renderMarkdownImageGroup}
                   assetScope={message.id}
                   skills={props.skills}
+                  citationThreadId={props.threadId}
+                  citationMessageId={message.id}
+                  onCiteAssistantText={props.onCiteAssistantText}
+                  onAskAboutText={props.onAskAboutText}
                 />
               )}
             </CasualAssistantMessage>
@@ -2169,7 +2310,7 @@ function renderFeedEntry(
                 iconColor={iconSubtleColor}
               />
             ) : null}
-            <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
+            <Text className="font-t3-medium text-xs text-foreground-secondary">
               {props.discord ? null : timestampLabel}
             </Text>
           </View>
@@ -2330,7 +2471,44 @@ function UserMessageContent(props: UserMessageContentProps) {
   );
 }
 
+/** Splits cited passages out as quote cards; the text around them stays markdown. */
 function UserMessageMarkdownContent(props: UserMessageContentProps) {
+  const citations = collectAssistantCitations(props.text);
+  if (citations.length === 0) return <UserMessageTextContent {...props} />;
+  const parts: Array<
+    | { readonly kind: "text"; readonly key: string; readonly text: string }
+    | { readonly kind: "citation"; readonly key: string; readonly citation: AssistantCitation }
+  > = [];
+  let cursor = 0;
+  for (const match of citations) {
+    const text = props.text.slice(cursor, match.start).trim();
+    if (text) parts.push({ kind: "text", key: `text:${cursor}`, text });
+    parts.push({ kind: "citation", key: `citation:${match.start}`, citation: match.citation });
+    cursor = match.end;
+  }
+  const rest = props.text.slice(cursor).trim();
+  if (rest) parts.push({ kind: "text", key: `text:${cursor}`, text: rest });
+  // Folding a long message clamps one text view; with several, each shows in full.
+  const singleText = parts.filter((part) => part.kind === "text").length === 1;
+  return (
+    <View className="gap-2">
+      {parts.map((part) =>
+        part.kind === "citation" ? (
+          <AssistantCitationMessageCard key={part.key} citation={part.citation} />
+        ) : (
+          <UserMessageTextContent
+            key={part.key}
+            {...props}
+            text={part.text}
+            disclosure={singleText ? props.disclosure : undefined}
+          />
+        ),
+      )}
+    </View>
+  );
+}
+
+function UserMessageTextContent(props: UserMessageContentProps) {
   const models = useModelMentions(props.environmentId, props.text);
   const text = props.text;
   const segments = parseReviewCommentMessageSegments(text);
@@ -3311,6 +3489,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           expandedWorkGroupIds,
           props.activeWorkStartedAt,
           props.runlessWorkActive ?? false,
+          props.runs,
+          props.botChat === true,
         ),
         props.feed,
         props.queuedMessages,
@@ -3327,8 +3507,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       expandedWorkGroupIds,
       props.activeWorkStartedAt,
       props.runlessWorkActive,
+      props.botChat,
       props.feed,
       props.latestRun,
+      props.runs,
     ],
   );
   const presentedFeed = useMemo(
@@ -3508,8 +3690,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [presentedFeed, props.anchorMessageId, anchorTopInset],
   );
   const failedRunIds = useMemo(
-    () => threadFeedFailedRunIds(feedSummary, props.latestRun),
-    [feedSummary, props.latestRun],
+    () => threadFeedFailedRunIds(feedSummary, props.latestRun, props.runs),
+    [feedSummary, props.latestRun, props.runs],
   );
   // Without foreground work (activeWorkStartedAt) an open run only waits on
   // background work, so its latest reply is finished too.
@@ -3733,7 +3915,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
               ({ projectedItem: { item } }) =>
                 item.type === "subagent" ||
                 (item.type === "notification" &&
-                  notificationChildThreadId(item.source) !== undefined),
+                  (notificationChildThreadId(item.source) !== undefined ||
+                    // A bot's wake note draws pills and text, not a compact work row.
+                    botWakeMessageId(item.id) !== null)),
             )
           ) {
             return undefined;
@@ -3771,6 +3955,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       onEditPendingMessage: props.onEditPendingMessage,
       onUseArtifactTemplate: props.onUseArtifactTemplate,
       onQuoteMessage: props.onQuoteMessage,
+      onCiteAssistantText: props.onCiteAssistantText,
+      onAskAboutText: props.onAskAboutText,
       agentLabel: props.agentLabel,
       agentDriver: props.agentDriver,
       threadId: props.threadId,
@@ -3805,6 +3991,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       markdownContentWidth,
       contentWidth,
       threadTitle: props.threadTitle,
+      botChat: props.botChat === true,
       skills: props.skills,
       workspaceRoot: props.workspaceRoot,
       draftKey: props.draftKey,
@@ -3819,6 +4006,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       props.onEditPendingMessage,
       props.onUseArtifactTemplate,
       props.onQuoteMessage,
+      props.onCiteAssistantText,
+      props.onAskAboutText,
       props.agentLabel,
       props.agentDriver,
       props.threadId,
@@ -3853,6 +4042,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       markdownContentWidth,
       contentWidth,
       props.threadTitle,
+      props.botChat,
       props.skills,
       props.workspaceRoot,
       props.draftKey,
@@ -4105,7 +4295,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         (props.showLoadingPlaceholder ||
           (props.activeWorkStartedAt === null && props.contentPresentation.kind === "ready")) ? (
           <View
-            pointerEvents="none"
+            pointerEvents={props.emptyState && !props.showLoadingPlaceholder ? "box-none" : "none"}
             style={[StyleSheet.absoluteFill, { left: contentLeftInset, right: contentRightInset }]}
           >
             {props.showLoadingPlaceholder ? (
@@ -4113,6 +4303,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                 bottomInset={bottomContentInset}
                 horizontalPadding={contentHorizontalPadding}
               />
+            ) : props.emptyState ? (
+              <View
+                pointerEvents="box-none"
+                className="flex-1 justify-center"
+                style={{ paddingTop: topContentInset, paddingBottom: bottomContentInset }}
+              >
+                {props.emptyState}
+              </View>
             ) : (
               <ThreadFeedPlaceholder
                 title="No messages yet"

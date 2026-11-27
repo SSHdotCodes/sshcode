@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
+import { serverUpdateUnavailable } from "@t3tools/shared/cliRelease";
 import { Atom } from "effect/reactivity";
 import { useMemo, useState } from "react";
 
@@ -71,7 +72,10 @@ export function useAutoBalanceUpdateBanner(
           environment.serverConfig?.settings.continueThreadsAfterServerUpdate ?? false,
         targetVersion: state.status === "idle" ? mismatch!.clientVersion : state.targetVersion,
         connected: environment.connection.phase === "connected",
-        remoteUpdate: selfUpdate !== null && (selfUpdate !== "desktop-managed" || desktopAppUpdate),
+        remoteUpdate:
+          selfUpdate !== null &&
+          (selfUpdate !== "desktop-managed" || desktopAppUpdate) &&
+          serverUpdateUnavailable(selfUpdate) === null,
         state,
         dismissKey,
       },

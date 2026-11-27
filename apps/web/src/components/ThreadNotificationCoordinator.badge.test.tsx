@@ -24,7 +24,8 @@ const state = vi.hoisted(() => ({
   loadProjection: vi.fn(),
 }));
 vi.mock("@effect/atom-react", () => ({
-  useAtomValue: ([id, kind]: [string, "shell" | "snapshot"]) => {
+  useAtomValue: ([id, kind]: [string, "shell" | "snapshot" | "bots"]) => {
+    if (kind === "bots") return new Set();
     const shell = state.shells.get(id);
     return kind === "shell" ? shell : Option.getOrNull(shell.snapshot);
   },
@@ -42,6 +43,7 @@ vi.mock("../state/environments", () => ({
 }));
 vi.mock("../state/notificationRequests", () => ({ notificationThreadProjection: "load" }));
 vi.mock("../state/threads", () => ({
+  botThreadIdsAtom: (id: string) => [id, "bots"],
   threadFamilies: { snapshotAtom: (id: string) => [id, "snapshot"] },
   threadEnvironment: {},
 }));

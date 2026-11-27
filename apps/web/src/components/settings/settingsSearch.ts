@@ -22,6 +22,8 @@ export type SettingsPath =
   | "/settings/keybindings"
   | "/settings/snap-shot"
   | "/settings/model-rankings"
+  | "/settings/agents"
+  | "/settings/bots"
   | "/settings/providers"
   | "/settings/tools"
   | "/settings/computer-use"
@@ -105,6 +107,8 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/archived": "Archived chats",
   "/settings/providers": "Providers",
   "/settings/model-rankings": "Model family rankings",
+  "/settings/agents": "Agents",
+  "/settings/bots": "Bots",
   "/settings/tools": "Skills & tools",
   "/settings/computer-use": "Computer use",
   "/settings/scheduled-tasks": "Scheduled tasks",
@@ -138,6 +142,8 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
   {
     label: "Agents & models",
     paths: [
+      "/settings/agents",
+      "/settings/bots",
       "/settings/providers",
       "/settings/model-rankings",
       "/settings/tools",
@@ -389,6 +395,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [
       "dither background horizon harness provider tint running active conversation board keep persist",
     ],
+  },
+  {
+    id: "website-icons",
+    title: "Website icons",
+    to: "/settings/appearance",
+    searchTerms: ["favicon favicons site link icons google letter tile privacy network"],
   },
   {
     id: "sidebar-peek",
@@ -866,6 +878,52 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "agents",
+    title: "Agents",
+    to: "/settings/agents",
+    searchTerms: [
+      "how agents work every chat sliders levels low default high reset token use subagents questions checking work replies",
+    ],
+  },
+  {
+    id: "agents-tokens",
+    title: "Token use",
+    to: "/settings/agents",
+    searchTerms: ["tokens usage cost native harness trimmed instructions live progress time left"],
+  },
+  {
+    id: "agents-subagents",
+    title: "Subagents",
+    to: "/settings/agents",
+    searchTerms: ["none off delegate other models councils second opinions"],
+  },
+  {
+    id: "agents-questions",
+    title: "Questions",
+    to: "/settings/agents",
+    searchTerms: ["ask fewer more check with you decide on their own"],
+  },
+  {
+    id: "agents-verification",
+    title: "Checking work",
+    to: "/settings/agents",
+    searchTerms: ["verification tests typecheck thorough light review"],
+  },
+  {
+    id: "agents-replies",
+    title: "Replies",
+    to: "/settings/agents",
+    searchTerms: ["reply length short detailed explanations"],
+  },
+  {
+    id: "bots",
+    title: "Bots",
+    to: "/settings/bots",
+    searchTerms: [
+      "personal agent assistant bot talk plain english start check tidy chats message routines memory watch new bot",
+    ],
+  },
+  {
     id: "model-rankings",
     title: "Task model family rankings",
     to: "/settings/model-rankings",
@@ -1311,6 +1369,8 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/keybindings": null,
   "/settings/providers": null,
   "/settings/model-rankings": null,
+  "/settings/agents": null,
+  "/settings/bots": null,
   "/settings/tools": null,
   "/settings/computer-use": null,
   "/settings/integrations": null,

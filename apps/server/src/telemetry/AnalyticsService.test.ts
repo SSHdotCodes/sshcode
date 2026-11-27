@@ -275,16 +275,25 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
     }),
   );
 
-  it.effect("turning telemetry on sends nothing until a PostHog project is named", () =>
+  it.effect.each([
+    { name: "until a PostHog project is named", env: { T3CODE_TELEMETRY_ENABLED: true } },
+    {
+      name: "while DO_NOT_TRACK is set",
+      env: {
+        T3CODE_TELEMETRY_ENABLED: true,
+        T3CODE_POSTHOG_KEY: "phc_test",
+        T3CODE_POSTHOG_HOST: "https://posthog.invalid",
+        DO_NOT_TRACK: "1",
+      },
+    },
+  ])("turning telemetry on sends nothing $name", ({ env }) =>
     Effect.gen(function* () {
       const requests: Array<string> = [];
       const layerRuntime = AnalyticsService.layer.pipe(
         Layer.provideMerge(
           ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "t3-telemetry-unset-" }),
         ),
-        Layer.provide(
-          ConfigProvider.layer(ConfigProvider.fromUnknown({ T3CODE_TELEMETRY_ENABLED: true })),
-        ),
+        Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(env))),
         Layer.provide(
           Layer.mergeAll(
             Layer.succeed(HostProcess.Platform, "darwin"),

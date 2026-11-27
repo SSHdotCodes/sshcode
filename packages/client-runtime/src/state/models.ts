@@ -169,7 +169,7 @@ export interface EnvironmentThreadShell {
   readonly titleRegeneration?: { readonly requestId: string; readonly startedAt: string } | null;
   /** Manual Long-running placement. Absent on older servers; null means the automatic rule. */
   readonly longRunningOverride?: "include" | "exclude" | null;
-  /** Distinct America/New_York activity days. Absent means the server predates the index. */
+  /** Distinct server-local activity days. Absent means the server predates the index. */
   readonly activityDayCount?: number;
   /** Latest activity instant, ISO. */
   readonly activityLastAt?: string | null;

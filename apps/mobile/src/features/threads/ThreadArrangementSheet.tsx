@@ -1,3 +1,4 @@
+import { useWithoutBotThreads } from "../bots/state";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -151,7 +152,9 @@ function DragHandle(props: {
 
 export function ThreadArrangementSheet(props: { onClose: () => void }) {
   const insets = useSafeAreaInsets();
-  const threads = useAtomValue(environmentThreadShells.navigationThreadShellsAtom);
+  const threads = useWithoutBotThreads(
+    useAtomValue(environmentThreadShells.navigationThreadShellsAtom),
+  );
   const configs = useAtomValue(environmentServerConfigsAtom);
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
   const queuedThreadKeys = useAtomValue(queuedThreadKeysAtom);

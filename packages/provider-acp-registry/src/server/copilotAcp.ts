@@ -156,6 +156,7 @@ export function extractCopilotSubagentUpdate(
   const input = record(tool.data.rawInput);
   if (typeof input?.agent_type !== "string" || typeof input.prompt !== "string") return undefined;
   const output = record(tool.data.rawOutput)?.content;
+  const nativeType = input.agent_type.trim();
   const background = input.mode === "background";
   const status =
     tool.status === "failed"
@@ -169,6 +170,7 @@ export function extractCopilotSubagentUpdate(
     prompt: input.prompt,
     title: typeof input.description === "string" ? input.description : null,
     model: typeof input.model === "string" ? input.model : null,
+    ...(nativeType.length === 0 ? {} : { nativeType }),
     status,
     result: status !== "running" && typeof output === "string" ? output : null,
   };

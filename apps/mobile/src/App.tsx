@@ -2,7 +2,6 @@ import { ChatTabSelectionSync } from "./features/chatTabs/ChatTabSelectionSync";
 import { PermissionUpdateNotice } from "./components/PermissionUpdateNotice";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
-import { useEffect } from "react";
 import { StatusBar } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -29,6 +28,7 @@ import { SubscriptionUsageCoordinator } from "./widgets/SubscriptionUsageCoordin
 import { VoiceInputProvider } from "./features/voice-input/VoiceInputProvider";
 import { GlobalVoiceInputControl } from "./features/voice-input/GlobalVoiceInputControl";
 import { NativeLayoutMetricsProvider } from "./native/native-layout-metrics";
+import { NavigationStartup } from "./native/NavigationStartup";
 import { OutsideAgentPromptHost } from "./features/outsideAgents/OutsideAgentPromptHost";
 
 import "../global.css";
@@ -50,16 +50,6 @@ const appLinking = {
 
 const Navigation = createStaticNavigation(RootStack);
 
-function SplashScreenCoordinator() {
-  const { isReady } = useAppearancePreferences();
-
-  useEffect(() => {
-    if (isReady) void SplashScreen.hide();
-  }, [isReady]);
-
-  return null;
-}
-
 export default function App() {
   useUiRuntimeMemoryWarningGc();
 
@@ -75,12 +65,11 @@ export default function App() {
 }
 
 function AppContent() {
-  const { themeAppearance } = useAppearancePreferences();
+  const { themeAppearance, isReady } = useAppearancePreferences();
   const navigationTheme = useMobileNavigationTheme();
 
   return (
     <>
-      <SplashScreenCoordinator />
       <SubscriptionUsageCoordinator />
       <ChatTabSelectionSync />
       <PermissionUpdateNotice />
@@ -97,7 +86,9 @@ function AppContent() {
               <GlobalVoiceInputControl>
                 <NativeLayoutMetricsProvider>
                   <IncomingShareProvider>
-                    <Navigation linking={appLinking} theme={navigationTheme} />
+                    <NavigationStartup appearanceReady={isReady}>
+                      <Navigation linking={appLinking} theme={navigationTheme} />
+                    </NavigationStartup>
                   </IncomingShareProvider>
                   <ConfirmDialogHost />
                   <OutsideAgentPromptHost />

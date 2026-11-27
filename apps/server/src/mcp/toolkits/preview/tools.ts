@@ -105,7 +105,7 @@ const PreviewOpenTool = browserTool(
 const PreviewDialogTool = browserTool(
   Tool.make("preview_dialog", {
     description:
-      "Accept or dismiss the server browser dialog reported by preview_status. For a prompt, supply promptText when accepting. Requires this agent to own the tab, or the tab to be unclaimed with no human in control. Desktop hosts may not support this operation.",
+      "Accept or dismiss a browser dialog from preview_status. Pass promptText for prompts; needs tab ownership or unclaimed tab.",
     parameters: PreviewAutomationDialogInput,
     success: PreviewAutomationStatus,
     failure: PreviewToolFailure,
@@ -207,7 +207,7 @@ export const PreviewEvaluateResult = Schema.Struct({
 const PreviewEvaluateTool = browserTool(
   Tool.make("preview_evaluate", {
     description:
-      "Evaluate JavaScript in the tab selected by tabId, or this agent session's current tab when omitted. Needs the same control as clicking: it works on your own tabs and on the user's tab only while nobody controls it. To read a tab the user is driving, use preview_snapshot. Returns {value} with a serializable result up to 64 KB; the expression may mutate page state.",
+      "Run JavaScript in a preview tab and return {value}. JSON-serializable up to 64 KB; may mutate page. Needs tab ownership or unclaimed tab; use preview_snapshot for user-driven tabs.",
     parameters: PreviewAutomationEvaluateInput,
     success: PreviewEvaluateResult,
     failure: PreviewToolFailure,
@@ -218,7 +218,7 @@ const PreviewEvaluateTool = browserTool(
 const PreviewWaitForTool = readonlyBrowserTool(
   Tool.make("preview_wait_for", {
     description:
-      "Wait in the tab selected by tabId, or this agent session's current tab when omitted, until all supplied locator, selector, text, and URL conditions match.",
+      "Wait for preview tab conditions. Matches all supplied locator, selector, text, and URL checks on tabId or your current tab.",
     parameters: PreviewAutomationWaitForInput,
     success: Schema.Struct({ ...presentationFields, notice: Schema.optional(Schema.String) }),
     failure: PreviewToolFailure,
@@ -228,8 +228,7 @@ const PreviewWaitForTool = readonlyBrowserTool(
 
 const PreviewRecordingStartTool = safeBrowserTool(
   Tool.make("preview_recording_start", {
-    description:
-      "Start recording the collaborative browser tab selected by tabId, or this agent session's current tab when omitted.",
+    description: "Start recording a collaborative browser tab (tabId or current tab).",
     parameters: PreviewAutomationTabTargetInput,
     success: Schema.Struct({ ...PreviewAutomationRecordingStatus.fields, ...presentationFields }),
     failure: PreviewToolFailure,
@@ -240,7 +239,7 @@ const PreviewRecordingStartTool = safeBrowserTool(
 const PreviewRecordingStopTool = safeBrowserTool(
   Tool.make("preview_recording_stop", {
     description:
-      "Stop recording the collaborative browser tab selected by tabId, or this agent session's current tab when omitted, and transfer the compressed recording once (up to 50 MiB) to an evidence file readable in this agent's environment. Returns its environment-local path after transfer succeeds.",
+      "Stop recording a preview tab and save it locally. Transfers the compressed recording (up to 50 MiB) and returns its path.",
     parameters: PreviewAutomationTabTargetInput,
     success: Schema.Struct({ ...PreviewAutomationRecordingArtifact.fields, ...presentationFields }),
     failure: PreviewToolFailure,

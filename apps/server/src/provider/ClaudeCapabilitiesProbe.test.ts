@@ -322,6 +322,12 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
         enabled: false,
       })).snapshot(readyMachineSnapshot, cwd);
       assert.equal(disabled, readyMachineSnapshot);
+      const missing = yield* workspaceSnapshots.snapshot(
+        readyMachineSnapshot,
+        path.join(cwd, "deleted"),
+      );
+      assert.equal(missing.slashCommandsPending, false);
+      assert.deepEqual(missing.slashCommands, [COMPACT_SLASH_COMMAND, CLAUDE_BTW_SLASH_COMMAND]);
       assert.equal(query.mock.calls.length, 2);
     }).pipe(Effect.scoped),
   );

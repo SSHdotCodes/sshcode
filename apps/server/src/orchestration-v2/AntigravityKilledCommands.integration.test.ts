@@ -27,13 +27,14 @@ const command = (toolCallId: string, commandLine: string) =>
     rawInput: { CommandLine: commandLine, WaitMsBeforeAsync: 5000 },
   });
 
-it.effect("shows a command the agent killed as stopped and a real failure as failed", () =>
+it.effect("shows killed commands as stopped and nonzero exits as failed", () =>
   Effect.gen(function* () {
     const name = "antigravity-killed-commands";
     const cwd = yield* checkpointWorkspace(name);
     // agy 1.5.13 frames: the agent kills its dev server through `manage_task`, and agy reports
     // the server failed with no exit code and no output at that moment. A test command that
     // could not run fails at the same moment with its output and exit code.
+    // A command that ran can report ACP completion even when its exit code was nonzero.
     const transcript = yield* harness.decodeTranscript({
       provider: driver,
       protocol: "acp.ndjson-jsonrpc",
@@ -55,6 +56,8 @@ it.effect("shows a command the agent killed as stopped and a real failure as fai
         request("session/prompt"),
         command("call_17286758284302709061", "npm run dev"),
         command("call_5809092998082118730", "npx vitest run"),
+        command("call_nonzero", "false"),
+        command("call_zero", "true"),
         update({
           sessionUpdate: "tool_call",
           toolCallId: "call_106207087879829302",
@@ -79,6 +82,18 @@ it.effect("shows a command the agent killed as stopped and a real failure as fai
           toolCallId: "call_106207087879829302",
           status: "completed",
           rawOutput: "Task aa85bc44-0bb1-4c7e-9a52-3f0d0b6c1e27 killed.",
+        }),
+        update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "call_nonzero",
+          status: "completed",
+          rawOutput: { combinedOutput: "", exitCode: 1 },
+        }),
+        update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: "call_zero",
+          status: "completed",
+          rawOutput: { combinedOutput: "", exit_code: 0 },
         }),
         update({
           sessionUpdate: "agent_message_chunk",
@@ -110,11 +125,13 @@ it.effect("shows a command the agent killed as stopped and a real failure as fai
       ["completed"],
     );
     const commands = projection.turnItems.flatMap((item) =>
-      item.type === "command_execution" ? [[item.input, item.status] as const] : [],
+      item.type === "command_execution" ? [[item.input, item.status, item.exitCode] as const] : [],
     );
     assert.deepEqual(commands, [
-      ["npm run dev", "interrupted"],
-      ["npx vitest run", "failed"],
+      ["npm run dev", "interrupted", undefined],
+      ["npx vitest run", "failed", 127],
+      ["false", "failed", 1],
+      ["true", "completed", 0],
     ]);
   }).pipe(Effect.scoped),
 );

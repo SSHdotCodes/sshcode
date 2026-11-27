@@ -629,6 +629,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.chatBackdropEnabled !== DEFAULT_UNIFIED_SETTINGS.chatBackdropEnabled
         ? ["Chat backdrop"]
         : []),
+      ...(settings.websiteIconsEnabled !== DEFAULT_UNIFIED_SETTINGS.websiteIconsEnabled
+        ? ["Website icons"]
+        : []),
       ...(settings.sidebarPeekEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarPeekEnabled
         ? ["Sidebar peek"]
         : []),
@@ -812,6 +815,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.glassOpacity,
       settings.panelAnimationDurationMs,
       settings.sidebarPeekEnabled,
+      settings.websiteIconsEnabled,
       settings.responseStreamingMode,
       settings.persistComposerContextStrip,
       settings.keepIdleClaudeChatsWarm,
@@ -912,6 +916,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       newChatDashboardEnabled: DEFAULT_UNIFIED_SETTINGS.newChatDashboardEnabled,
       chatBackdropEnabled: DEFAULT_UNIFIED_SETTINGS.chatBackdropEnabled,
       sidebarPeekEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarPeekEnabled,
+      websiteIconsEnabled: DEFAULT_UNIFIED_SETTINGS.websiteIconsEnabled,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       notificationMode: DEFAULT_UNIFIED_SETTINGS.notificationMode,
       notificationSoundEvents: DEFAULT_UNIFIED_SETTINGS.notificationSoundEvents,
@@ -1377,6 +1382,19 @@ export function AppearanceSettingsPanel() {
                 updateSettings({ chatBackdropEnabled: Boolean(checked) })
               }
               aria-label="Chat backdrop"
+            />
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("website-icons")}
+          description="Real site icons instead of letter tiles. Fetching them tells Google's icon service, or the site itself, which sites appear in your chats."
+          control={
+            <Switch
+              checked={settings.websiteIconsEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ websiteIconsEnabled: Boolean(checked) })
+              }
+              aria-label="Website icons"
             />
           }
         />

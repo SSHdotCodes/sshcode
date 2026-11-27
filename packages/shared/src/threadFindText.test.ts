@@ -83,6 +83,12 @@ it("searches displayed prose and file-chip labels without hidden paths", () => {
     "label main.ts · L3:C2",
   ]);
   expect(assistantSegments("[label](src/main.ts#L3C2)")).toEqual(["label"]);
+  expect(
+    assistantSegments(
+      "[![a](https://example.com/a.png)](src/index.ts) [![b](https://example.com/b.png)](lib/index.ts)",
+      "/workspace/repo",
+    ),
+  ).toEqual(["index.ts · repo/src index.ts · repo/lib"]);
 });
 
 it("includes the same parent suffixes for duplicate filenames as the renderer", () => {
@@ -158,4 +164,10 @@ it("indexes the citation chip label instead of its link text", () => {
   expect(searchableMessageSegments({ role: "user", text: commented, streaming: false })).toEqual([
     "my note",
   ]);
+});
+
+it("does not index the hidden marker of an alert written with CR-only line endings", () => {
+  expect(
+    searchableMessageSegments({ role: "assistant", text: "> [!NOTE]\r> hi", streaming: false }),
+  ).toEqual(["hi"]);
 });

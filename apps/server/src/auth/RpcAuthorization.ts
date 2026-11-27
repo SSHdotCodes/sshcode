@@ -189,6 +189,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.sharedSkillsList]: AuthOrchestrationReadScope,
   [WS_METHODS.sharedSkillsCommand]: AuthSettingsWriteScope,
   [WS_METHODS.workflowsSubscribe]: AuthOrchestrationReadScope,
+  [WS_METHODS.botsSubscribe]: AuthOrchestrationReadScope,
   [WS_METHODS.sideChatOpen]: AuthOrchestrationOperateScope,
   [WS_METHODS.sideChatSend]: AuthOrchestrationOperateScope,
   [WS_METHODS.sideChatClose]: AuthOrchestrationOperateScope,

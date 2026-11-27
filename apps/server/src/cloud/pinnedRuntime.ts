@@ -26,9 +26,8 @@ import * as ProcessRunner from "../processRunner.ts";
  * web client, and the native packages beside it. The boot service points its
  * unit or launch agent at the executable, and server self-update installs the
  * target version here before switching over. The runtime never depends on a
- * Node or npm on the machine; the only npm involvement in SSHCode is the `sshcode`
- * package for people who prefer `npx sshcode` or `npm install -g sshcode`, and even a
- * CLI installed that way pins an archive when it sets up the service.
+ * Node or npm on the machine. SSHCode publishes no npm package: the `sshcode` name on
+ * npm is not ours, so nothing may tell people to install or run it from there.
  */
 const PINNED_RUNTIME_DIR = "runtime";
 const PINNED_RUNTIME_INSTALL_TIMEOUT = Duration.minutes(10);

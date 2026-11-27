@@ -428,7 +428,7 @@ export function AdaptiveWorkspaceLayout(props: {
   const handleOpenEnvironmentSettings = useCallback(() => {
     navigation.navigate("SettingsSheet", {
       screen: "SettingsContent",
-      params: { screen: "SettingsEnvironments" },
+      params: { screen: "SettingsEnvironments", initial: false },
     });
   }, [navigation]);
 

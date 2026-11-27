@@ -28,8 +28,10 @@ import {
   ProviderSetupError,
   type SideChatActivity,
 } from "@t3tools/contracts";
+import { acpUnfinishedStopMessage } from "@t3tools/provider-acp/server/adapter";
 import { renderHistory, selectHistory } from "@t3tools/provider-core/server/handoffBudget";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -42,6 +44,7 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 import * as EffectAcpErrors from "effect-acp/errors";
 
 import { applyAntigravityAcpModelSelection } from "../../provider/acp/AntigravityAcpSupport.ts";
+import { antigravityPromptStopFailure } from "../../provider/acp/AntigravityProtocol.ts";
 import {
   removeAntigravityCliSessionFiles,
   removeAntigravitySessionFiles,
@@ -248,7 +251,24 @@ export const makeAntigravitySideChat = Effect.fn("makeAntigravitySideChat")(func
         if (result.stopReason === "cancelled") {
           return yield* sideQuestionError("Antigravity cancelled the side question");
         }
+        if (result.stopReason === "error") {
+          if (result.error == null) {
+            return yield* sideQuestionError("Antigravity could not answer the side question");
+          }
+          return yield* new EffectAcpErrors.AcpRequestError({
+            code: result.error.code,
+            errorMessage: result.error.message,
+            ...(result.error.data === undefined ? {} : { data: result.error.data }),
+          });
+        }
         const response = text.trim();
+        const failure = antigravityPromptStopFailure({
+          stopReason: result.stopReason,
+          replyText: response,
+          now: yield* DateTime.now,
+        });
+        const unfinished = failure?.message ?? acpUnfinishedStopMessage(result.stopReason);
+        if (unfinished !== undefined) return yield* sideQuestionError(unfinished);
         if (response.length === 0) {
           return yield* sideQuestionError("Antigravity returned no answer to the side question");
         }

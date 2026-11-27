@@ -1,3 +1,4 @@
+import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
 import {
   CommandId,
   DEFAULT_MODEL,
@@ -46,7 +47,8 @@ import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
-import { forkParked, forkParkedFiber } from "./serverActivation.ts";
+import { forkParked, forkParkedChore, forkParkedFiber } from "./serverActivation.ts";
+import { pruneLocalManagedTools } from "./provider/ManagedToolStartup.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -274,12 +276,29 @@ export const resolveWelcomeBase = Effect.gen(function* () {
   } as const;
 });
 
+/** Pick the same initial chat as the shell snapshot without hydrating sidebar rows. */
+export const findBootstrapThreadId = Effect.fn("ServerRuntimeStartup.findBootstrapThreadId")(
+  function* (projectId: ProjectId) {
+    const sql = yield* SqlClient.SqlClient;
+    const [row] = yield* sql<{ readonly thread_id: string }>`
+      SELECT thread_id
+      FROM orchestration_v2_projection_threads
+      WHERE project_id = ${projectId}
+        AND deleted_at IS NULL
+        AND archived_at IS NULL
+        AND json_extract(payload_json, '$.lineage.relationshipToParent') IS NOT 'subagent'
+      ORDER BY updated_at ASC, thread_id ASC
+      LIMIT 1
+    `.pipe(NodeSqliteClient.readOnly);
+    return row === undefined ? undefined : ThreadId.make(row.thread_id);
+  },
+);
+
 const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const randomUUID = crypto.randomUUIDv4();
   const serverConfig = yield* ServerConfig.ServerConfig;
   const projects = yield* ProjectService.ProjectService;
-  const threads = yield* ThreadManagement.ThreadManagementService;
   const threadLaunch = yield* ThreadLaunch.ThreadLaunchService;
   const path = yield* Path.Path;
 
@@ -296,12 +315,8 @@ const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
       title: path.basename(serverConfig.cwd) || "project",
       workspaceRoot: serverConfig.cwd,
     });
-    const shell = yield* threads.getShellSnapshot();
-    const existingThread = shell.threads.find(
-      (thread) =>
-        thread.projectId === project.id && thread.lineage.relationshipToParent !== "subagent",
-    );
-    if (existingThread === undefined) {
+    const existingThreadId = yield* findBootstrapThreadId(project.id);
+    if (existingThreadId === undefined) {
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const settings = yield* serverSettings.getSettings;
       const launched = yield* threadLaunch.launch({
@@ -322,7 +337,7 @@ const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
       bootstrapThreadId = launched.threadId;
     } else {
       bootstrapProjectId = project.id;
-      bootstrapThreadId = existingThread.id;
+      bootstrapThreadId = existingThreadId;
     }
   }
 
@@ -574,6 +589,14 @@ const make = (options?: StartupOptions) =>
           Effect.logWarning("Failed to resume queued wakes after restart", { cause }),
         ),
       );
+      const acpCatalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
+      yield* runStartupPhase(
+        "tools.prune",
+        Effect.andThen(
+          acpCatalog.pruneManagedVersions(),
+          pruneLocalManagedTools(serverConfig.baseDir),
+        ),
+      ).pipe(forkParkedChore);
       // Runs after activation: the status check fetches every enabled project's
       // remote, and awaiting it here held command readiness for that long.
       yield* runStartupPhase(
@@ -728,5 +751,3 @@ const make = (options?: StartupOptions) =>
 
 export const layerWithOptions = (options?: StartupOptions) =>
   Layer.effect(ServerRuntimeStartup, make(options));
-
-const layer = layerWithOptions();

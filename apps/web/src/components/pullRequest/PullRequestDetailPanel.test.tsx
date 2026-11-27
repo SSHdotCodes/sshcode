@@ -31,7 +31,13 @@ vi.mock("~/state/session", async (original) => ({
   readEnvironmentScope: () => true,
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => [] }));
-vi.mock("~/state/server", () => ({ primaryServerKeybindingsAtom: {} }));
+vi.mock("~/state/server", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    primaryServerKeybindingsAtom: {},
+    serverEnvironment: { settingsValueAtom: () => Atom.make(null) },
+  };
+});
 vi.mock("~/state/entities", () => ({ useProjects: () => [], useServerConfigs: () => new Map() }));
 vi.mock("~/state/environments", () => ({
   useEnvironments: () => ({ environments: [] }),

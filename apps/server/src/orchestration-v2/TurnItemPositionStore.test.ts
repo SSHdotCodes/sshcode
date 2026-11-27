@@ -56,3 +56,28 @@ it.effect("reuses an item's position without attempting another allocation inser
     );
   }).pipe(Effect.provide(layerTest)),
 );
+
+it.effect("moves a queued item into its projected run's position range", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const positions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
+    const threadId = ThreadId.make("thread:run-position");
+    const runId = RunId.make("run:position");
+    const turnItemId = TurnItemId.make("item:queued");
+    assert.equal(yield* positions.allocate({ threadId, turnItemId, runId: null }), 1);
+
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_runs (
+        run_id, thread_id, ordinal, provider, status, requested_at, payload_json
+      ) VALUES (${runId}, ${threadId}, 3, 'codex', 'running', '2026-01-01T00:00:00.000Z', '{}')
+    `;
+
+    const runningItem = { threadId, turnItemId, runId };
+    assert.equal(yield* positions.allocate(runningItem), 3_000_001);
+    assert.equal(yield* positions.allocate(runningItem), 3_000_001);
+    assert.equal(
+      yield* positions.allocate({ ...runningItem, threadId: ThreadId.make("thread:other") }),
+      1,
+    );
+  }).pipe(Effect.provide(layerTest)),
+);

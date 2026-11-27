@@ -24,6 +24,7 @@ import { composerChipSizeSuffix, contextChipPresentation } from "../lib/composer
 import { resolveMarkdownFileIcon } from "../lib/markdownLinks";
 import { useUniwindTheme } from "../lib/useUniwindTheme";
 import { createNativeComposerTheme } from "../lib/nativeComposerTheme";
+import { flattenThemeColor } from "../lib/mobileTheme";
 import { useFontFamily } from "../lib/useFontFamily";
 import { useScaledTextRole } from "../features/settings/appearance/useScaledTextRole";
 import {
@@ -137,6 +138,14 @@ function basename(path: string): string {
   return separator >= 0 ? path.slice(separator + 1) : path;
 }
 
+/** A citation chip wears the composer's accent, the colour of its send button. */
+function citationChipAccent(theme: ReturnType<typeof useUniwindTheme>): string {
+  return flattenThemeColor(
+    theme["--color-primary"],
+    flattenThemeColor(theme["--color-composer-surface"], theme["--color-screen"]),
+  );
+}
+
 function fileIconUri(path: string): string | null {
   return markdownIconAssetUri(markdownFileIconSource(resolveMarkdownFileIcon(path))) ?? null;
 }
@@ -205,19 +214,28 @@ export function ComposerEditor({
             ? props.context?.records.find((record) => record.contextId === token.contextId)
             : undefined;
         return {
-          // The editor draws models and site links as skill-style atoms with their own icon.
-          type: token.type === "model" || token.type === "link" ? "skill" : token.type,
+          // The editor draws models and site links as skill-style atoms with their own icon,
+          // and a citation as a context chip that opens its sheet.
+          type:
+            token.type === "model" || token.type === "link"
+              ? "skill"
+              : token.type === "citation"
+                ? "context"
+                : token.type,
           source: token.source,
           start: token.start,
           end: token.end,
           ...contextChipPresentation(token.type === "context" ? token.kind : token.type, record),
+          ...(token.type === "citation" ? { accent: citationChipAccent(theme) } : {}),
           label: model
             ? model.label
             : token.type === "skill" || token.type === "link"
               ? (skillLabels.get(token.value) ?? token.value)
               : token.type === "context"
                 ? `${token.label}${props.context?.records.some((record) => record.contextId === token.contextId) ? "" : " · unavailable"}`
-                : basename(token.value),
+                : token.type === "citation"
+                  ? token.value
+                  : basename(token.value),
           detail: token.type === "context" ? composerChipSizeSuffix(record) : "",
           // Only a mention wears per-filetype artwork. An attachment chip keeps the tinted
           // monochrome glyph web draws for it: coloured artwork ignores the chip's accent and
@@ -236,7 +254,7 @@ export function ComposerEditor({
         };
       }),
     );
-  }, [props.value, props.context, skillLabels, modelTokens, modelsBySource]);
+  }, [props.value, props.context, skillLabels, modelTokens, modelsBySource, theme]);
   // Every render resolves against the snapshot history, so a render whose
   // (value, selection) lags the acknowledged native state is stamped behind
   // the native revision and rejected by the editor instead of re-applying a

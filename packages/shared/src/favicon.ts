@@ -99,3 +99,63 @@ export function faviconUrlForOrigin(rawUrl: string | null | undefined, size = 32
     return null;
   }
 }
+
+/**
+ * Eight evenly spaced hues for letter tiles. Low saturation and a middle
+ * lightness keep a white letter readable on both light and dark surfaces.
+ */
+export const WEBSITE_LETTER_TILE_HUES = [0, 45, 90, 135, 180, 225, 270, 315] as const;
+
+const SECOND_LEVEL_SUFFIXES = new Set(["co", "com", "org", "net", "ac", "gov", "edu"]);
+
+/**
+ * The name a person knows the site by: `python` for docs.python.org, `bbc` for
+ * www.bbc.co.uk. A bare name or an IP address stays whole.
+ */
+function siteName(hostname: string): string {
+  const labels = hostname.split(".").filter((label) => label !== "");
+  if (labels.length < 2 || /^[\d.]+$/u.test(hostname)) return hostname;
+  const last = labels.length - 1;
+  const countryCodeSecondLevel =
+    labels.length >= 3 &&
+    labels[last]!.length === 2 &&
+    SECOND_LEVEL_SUFFIXES.has(labels[last - 1]!);
+  return labels[countryCodeSecondLevel ? last - 2 : last - 1]!;
+}
+
+function siteHostname(rawUrlOrHost: string): string | null {
+  const trimmed = rawUrlOrHost.trim();
+  if (trimmed === "" || trimmed.length > 4096) return null;
+  try {
+    const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`);
+    return url.hostname.toLowerCase().replace(/^www\./u, "") || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The icon shown in place of a website icon when Website icons is off, built
+ * without any network request: the first letter of the site's name on one of
+ * eight muted hues picked by a stable hash of that name, so a site's
+ * subdomains share one tile. Null when the input has no
+ * hostname; callers keep their generic glyph then.
+ */
+export function websiteLetterTile(
+  rawUrlOrHost: string | null | undefined,
+): { readonly letter: string; readonly background: string } | null {
+  if (!rawUrlOrHost) return null;
+  const hostname = siteHostname(rawUrlOrHost);
+  if (hostname === null) return null;
+  const name = siteName(hostname);
+  const letter = /[\p{L}\p{N}]/u.exec(name)?.[0]?.toUpperCase();
+  if (letter === undefined) return null;
+  // FNV-1a: stable across clients and sessions, so a site keeps its color everywhere.
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < name.length; index += 1) {
+    hash ^= name.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  const hue = WEBSITE_LETTER_TILE_HUES[hash % WEBSITE_LETTER_TILE_HUES.length];
+  return { letter, background: `hsl(${hue}, 22%, 40%)` };
+}

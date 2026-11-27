@@ -154,6 +154,13 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("separates team board read and post permissions", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.teamBoardSubscribe)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.teamBoardPost)).toBe(AuthOrchestrationOperateScope);
+  });
+
   it("keeps webhook delivery logs, which hold request bodies, behind operate scope", () => {
     for (const method of [
       WS_METHODS.scheduledTasksListWebhookDeliveries,

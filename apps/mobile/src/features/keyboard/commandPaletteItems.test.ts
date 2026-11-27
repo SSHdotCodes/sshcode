@@ -22,7 +22,7 @@ const items = [
   item("siva:one", "Keyboard shortcuts", "thread", ["Mobile app", "Siva"]),
   item("mac:one", "Mobile app", "thread", ["Mac"]),
 ];
-const emptyMatches = new Set<string>();
+const emptyMatches = new Map();
 
 describe("filterCommandPaletteItems", () => {
   it("shows actions and recent threads in their original order when the query is empty", () => {
@@ -57,7 +57,10 @@ describe("filterCommandPaletteItems", () => {
   });
 
   it("includes server content matches scoped to the correct environment, except in actions-only mode", () => {
-    const matches = new Set(["siva:one", "project"]);
+    const matches = new Map([
+      ["siva:one", {}],
+      ["project", {}],
+    ]);
     expect(
       filterCommandPaletteItems(items, "message content", matches).map((item) => item.key),
     ).toEqual(["siva:one"]);
@@ -75,15 +78,34 @@ describe("nextPaletteIndex", () => {
   });
 });
 
-it("keeps server relevance ahead of recent-chat order after title matches", () => {
+it("ranks chats about BetterWright first and uses activity inside both tiers", () => {
   const results = filterCommandPaletteItems(
     [
-      item("newer", "Recent discussion", "thread"),
-      item("title", "Safe storage", "thread"),
-      item("best", "Earlier discussion", "thread"),
+      {
+        ...item("fifteen-minutes", "Earlier discussion", "thread"),
+        activityAt: "2026-11-27T11:45:00.000Z",
+      },
+      {
+        ...item("old-title", "Review and Fix BetterWright Issues", "thread"),
+        activityAt: "2026-10-20T12:00:00.000Z",
+      },
+      {
+        ...item("wanted", "Review Pi Prompt Parts Change", "thread"),
+        activityAt: "2026-11-25T12:00:00.000Z",
+      },
+      item("nine-minutes", "Recent discussion", "thread"),
     ],
-    "safe storage",
-    new Set(["best", "newer"]),
+    "betterwright",
+    new Map([
+      ["wanted", { about: true }],
+      ["fifteen-minutes", { about: false }],
+      ["nine-minutes", { about: false, activityAt: "2026-11-27T11:51:00.000Z" }],
+    ]),
   );
-  expect(results.map((row) => row.key)).toEqual(["title", "best", "newer"]);
+  expect(results.map((row) => row.key)).toEqual([
+    "wanted",
+    "old-title",
+    "nine-minutes",
+    "fifteen-minutes",
+  ]);
 });

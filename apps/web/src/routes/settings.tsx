@@ -121,7 +121,8 @@ function SettingsContentLayout() {
     location.pathname === "/settings/providers" ||
     location.pathname === "/settings/tools" ||
     location.pathname === "/settings/computer-use" ||
-    location.pathname === "/settings/model-rankings"
+    location.pathname === "/settings/model-rankings" ||
+    location.pathname === "/settings/agents"
       ? environment?.environmentId
       : JSON.stringify(search);
   const [restoreSignal, setRestoreSignal] = useState(0);
@@ -163,7 +164,8 @@ function SettingsRouteLayout() {
         pathname === "/settings/providers" ||
         pathname === "/settings/tools" ||
         pathname === "/settings/computer-use" ||
-        pathname === "/settings/model-rankings"
+        pathname === "/settings/model-rankings" ||
+        pathname === "/settings/agents"
       }
       onChange={(next) => {
         // Send every axis so the retain middleware sees an explicit target

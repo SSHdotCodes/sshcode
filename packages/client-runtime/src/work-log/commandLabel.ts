@@ -198,7 +198,11 @@ const TERMINAL_SHELL_PROGRAMS = new Set([
   "while",
 ]);
 
-function shellCommandArgumentIndex(tokens: ReadonlyArray<string>, start: number): number | null {
+function shellCommandArgumentIndex(
+  shell: string,
+  tokens: ReadonlyArray<string>,
+  start: number,
+): number | null {
   for (let index = start; index < tokens.length; index += 1) {
     const option = tokens[index]!;
     if (option === "--" || !option.startsWith("-")) return null;
@@ -206,7 +210,10 @@ function shellCommandArgumentIndex(tokens: ReadonlyArray<string>, start: number)
       index += 1;
       continue;
     }
-    if (option === "--command" || /^-[a-zA-Z]*c[a-zA-Z]*$/.test(option)) return index + 1;
+    if (option === "--command" || /^-[a-zA-Z]*c[a-zA-Z]*$/.test(option)) {
+      // fish takes the next token as the script even when it is `--`.
+      return index + (shell !== "fish" && tokens[index + 1] === "--" ? 2 : 1);
+    }
   }
   return null;
 }
@@ -1234,8 +1241,9 @@ function parseCommandProgramName(
       }
       return null;
     }
-    if (tokenProgram && SHELL_PROGRAMS.has(tokenProgram.replace(/\.exe$/i, "").toLowerCase())) {
-      const scriptIndex = shellCommandArgumentIndex(tokens, index + 1);
+    const shellProgram = tokenProgram?.replace(/\.exe$/i, "").toLowerCase();
+    if (shellProgram && SHELL_PROGRAMS.has(shellProgram)) {
+      const scriptIndex = shellCommandArgumentIndex(shellProgram, tokens, index + 1);
       if (scriptIndex !== null) {
         const script = tokens[scriptIndex];
         return script
@@ -1399,9 +1407,10 @@ function withoutShellWrapper(command: string): string {
   const program = tokens?.[0]
     ?.split(/[\\/]/u)
     .at(-1)
-    ?.replace(/\.exe$/iu, "");
+    ?.toLowerCase()
+    .replace(/\.exe$/u, "");
   if (!tokens || !program || !SHELL_PROGRAMS.has(program)) return trimmed;
-  const scriptIndex = shellCommandArgumentIndex(tokens, 1);
+  const scriptIndex = shellCommandArgumentIndex(program, tokens, 1);
   // Positional arguments can affect the script; keep those invocations intact.
   if (scriptIndex === null || scriptIndex !== tokens.length - 1) return trimmed;
   return tokens[scriptIndex]?.trim() || trimmed;

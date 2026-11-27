@@ -1,3 +1,4 @@
+import { useWithoutBotThreads } from "../bots/state";
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 import type { EnvironmentId, ModelSelection, ServerConfig } from "@t3tools/contracts";
@@ -58,7 +59,7 @@ export function NewChatDashboard({
   /** The height the dashboard takes on screen, for laying out what sits above it. */
   onHeight?: (height: number) => void;
 }) {
-  const threads = useThreadShells();
+  const threads = useWithoutBotThreads(useThreadShells());
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 60_000);

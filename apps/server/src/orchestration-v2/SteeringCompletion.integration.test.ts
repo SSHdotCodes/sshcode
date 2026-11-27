@@ -1,8 +1,13 @@
 import * as Option from "effect/Option";
 import { expandDebugCommand } from "@t3tools/shared/debugCommand";
+import {
+  expandAssistantCitationsForProvider,
+  serializeAssistantCitation,
+} from "@t3tools/shared/assistantCitations";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
+  EnvironmentId,
   MessageId,
   EventId,
   NodeId,
@@ -11,6 +16,7 @@ import {
   ProviderInstanceId,
   ProviderThreadId,
   ProviderTurnId,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ThreadId,
   type ModelSelection,
   type OrchestrationV2DomainEvent,
@@ -38,6 +44,29 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 const driver = ProviderDriverKind.make("codex");
 const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "test-model" };
+
+const citedInput = (threadId: ThreadId, excerpt = "That path needs a retry.") =>
+  serializeAssistantCitation({
+    version: 1,
+    environmentId: EnvironmentId.make("env"),
+    threadId,
+    messageId: MessageId.make("assistant"),
+    text: excerpt,
+    start: 0,
+    end: excerpt.length,
+    prefix: "",
+    suffix: "",
+    comment: "Please add the retry here.",
+  });
+
+function assertProviderCitation(text: string) {
+  assert.include(text, "[assistant-quote-1]");
+  assert.include(text, "quoted reference material");
+  assert.include(text, '"text": "That path needs a retry."');
+  assert.include(text, "user-authored request or comment");
+  assert.include(text, '"comment": "Please add the retry here."');
+  assert.notInclude(text, "t3-citation://");
+}
 
 it.effect.each(
   [false, true]
@@ -679,7 +708,7 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
     { runEffectWorker: false },
   );
   // Creates the thread and starts its first turn on `runSelection`.
-  const startFirstTurn = Effect.gen(function* () {
+  const startFirstTurnWithText = Effect.fnUntraced(function* (text: string) {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
     const threadId = ThreadId.make(`thread:${name}`);
@@ -710,7 +739,7 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
       commandId: CommandId.make("first"),
       threadId,
       messageId: MessageId.make("message:first"),
-      text: "first",
+      text,
       attachments: [],
       modelSelection: runSelection,
       dispatchMode: { type: "start_immediately" },
@@ -721,8 +750,141 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
     yield* Fiber.join(running);
     return threadId;
   });
-  return { events, started, steered, layer, startFirstTurn };
+  return {
+    events,
+    started,
+    steered,
+    layer,
+    startFirstTurn: startFirstTurnWithText("first"),
+    startFirstTurnWithText,
+  };
 });
+
+it.effect.each(["steer_active", "restart_active"] as const)(
+  "delivers a cited message on start and %s while storing the original links",
+  (mode) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const name = `citation-${mode}`;
+        const { started, steered, layer, startFirstTurnWithText } = yield* nextTurnSelectionHarness(
+          name,
+          true,
+        );
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const citation = citedInput(ThreadId.make(`thread:${name}`));
+          const firstText = `Read ${citation}`;
+          const nextText = `Use ${citation}`;
+          const threadId = yield* startFirstTurnWithText(firstText);
+          const first = started[0]!;
+          assertProviderCitation(first.message.text);
+
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("next"),
+            threadId,
+            messageId: MessageId.make("message:next"),
+            text: nextText,
+            attachments: [],
+            dispatchMode: { type: mode, targetRunId: first.runId },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          yield* worker.drain();
+
+          assertProviderCitation(mode === "steer_active" ? steered[0]! : started[1]!.message.text);
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          assert.deepEqual(
+            projection.messages.map((message) => message.text),
+            [firstText, nextText],
+          );
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+);
+
+it.effect.each(["live", "deferred", "promoted"] as const)(
+  "rejects oversized citation expansion before committing a %s steer",
+  (mode) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { started, steered, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
+          `oversized-citation-${mode}`,
+        );
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const sink = yield* EventSink.EventSinkV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const threadId = yield* startFirstTurn;
+          const targetRunId = started[0]!.runId;
+          const text = `${"x".repeat(80_000)}${citedInput(threadId, "\u0001".repeat(8_000))}`;
+          assert.isBelow(text.length, PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+          assert.isAbove(
+            expandAssistantCitationsForProvider(text).length,
+            PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+          );
+          if (mode === "deferred") {
+            const turn = (yield* orchestrator.getThreadProjection(threadId)).providerTurns[0]!;
+            yield* sink.write({
+              events: [
+                {
+                  id: EventId.make("turn-not-ready"),
+                  type: "provider-turn.updated",
+                  threadId,
+                  occurredAt: yield* DateTime.now,
+                  payload: { ...turn, status: "pending" },
+                },
+              ],
+            });
+          }
+          let command: Parameters<typeof orchestrator.dispatch>[0] = {
+            type: "message.dispatch",
+            commandId: CommandId.make("oversized"),
+            threadId,
+            messageId: MessageId.make("message:oversized"),
+            text,
+            attachments: [],
+            dispatchMode: { type: "steer_active", targetRunId },
+            createdBy: "user",
+            creationSource: "web",
+          };
+          if (mode === "promoted") {
+            yield* orchestrator.dispatch({
+              ...command,
+              commandId: CommandId.make("queue"),
+              dispatchMode: { type: "queue_after_active" },
+            });
+            const queued = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+              (run) => run.status === "queued",
+            )!;
+            command = {
+              type: "queued-message.promote-to-steer",
+              commandId: CommandId.make("oversized"),
+              threadId,
+              queuedRunId: queued.id,
+              targetRunId,
+            };
+          }
+          const before = yield* orchestrator.getThreadProjection(threadId);
+          const sequence = yield* orchestrator.getThreadEventSequence(threadId);
+
+          const error = yield* orchestrator.dispatch(command).pipe(Effect.flip);
+          yield* worker.drain();
+
+          assert.instanceOf(error, Orchestrator.OrchestratorCommandRejectedError);
+          assert.equal(
+            error.cause,
+            "Message exceeds 120,000 characters after expanding quotes. Shorten it and try again.",
+          );
+          assert.equal(yield* orchestrator.getThreadEventSequence(threadId), sequence);
+          assert.deepEqual(yield* orchestrator.getThreadProjection(threadId), before);
+          assert.lengthOf(started, 1);
+          assert.isEmpty(steered);
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+);
 
 it.effect.each(["interrupt", "hold", "send-now"] as const)(
   "delivers the original queued run after %s",
@@ -742,13 +904,14 @@ it.effect.each(["interrupt", "hold", "send-now"] as const)(
           const sink = yield* EventSink.EventSinkV2;
           const afterSequence = yield* sink.latestSequence();
           const first = started[0]!;
+          const citation = citedInput(threadId);
           for (const id of ["next", "later"]) {
             yield* orchestrator.dispatch({
               type: "message.dispatch",
               commandId: CommandId.make(id),
               threadId,
               messageId: MessageId.make(id),
-              text: id,
+              text: `${id} ${citation}`,
               attachments: [],
               dispatchMode: { type: "steer_active", targetRunId: first.runId },
               createdBy: "user",
@@ -824,6 +987,11 @@ it.effect.each(["interrupt", "hold", "send-now"] as const)(
             [first.runId, selected.id],
           );
           assert.equal(started[1]?.message.messageId, selected.userMessageId);
+          assertProviderCitation(started[1]!.message.text);
+          assert.include(
+            after.messages.find((message) => message.id === selected.userMessageId)!.text,
+            citation,
+          );
           assert.lengthOf(after.runs, 3);
           assert.isUndefined(after.runs.find((run) => run.id === selected.id)?.sendNext);
           assert.isFalse(
@@ -1347,12 +1515,13 @@ it.effect("steers a promoted queued message with the selection it was queued wit
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
         const threadId = yield* startFirstTurn;
+        const citation = citedInput(threadId);
         yield* orchestrator.dispatch({
           type: "message.dispatch",
           commandId: CommandId.make("queued"),
           threadId,
           messageId: MessageId.make("message:queued"),
-          text: "queued",
+          text: citation,
           attachments: [],
           modelSelection: composerSelection,
           dispatchMode: { type: "queue_after_active" },
@@ -1372,7 +1541,12 @@ it.effect("steers a promoted queued message with the selection it was queued wit
         yield* worker.drain();
 
         const projection = yield* orchestrator.getThreadProjection(threadId);
-        assert.deepEqual(steered, ["queued"]);
+        assert.lengthOf(steered, 1);
+        assertProviderCitation(steered[0]!);
+        assert.equal(
+          projection.messages.find((message) => message.id === queuedRun.userMessageId)?.text,
+          citation,
+        );
         assert.deepEqual(projection.thread.modelSelection, composerSelection);
       }).pipe(Effect.provide(layer));
     }),

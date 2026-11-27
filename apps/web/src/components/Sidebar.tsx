@@ -309,7 +309,6 @@ import {
   resolveSidebarThreadStatus,
   resolveSidebarDisplayStatus,
   resolveThreadLastVisitedAt,
-  searchSidebarThreads,
   rankSidebarSearchResults,
   shouldCreateNewThreadInCurrentProject,
   shouldNavigateAfterThreadPark,
@@ -393,6 +392,7 @@ import { SidebarStatusDock } from "./sidebar/SidebarStatusDock";
 import { SidebarDayCard, DAY_CARD_MIN_ROOM, DAY_CARD_MIN_WIDTH } from "./sidebar/SidebarDayCard";
 import { SidebarNotesLink } from "./sidebar/SidebarNotesLink";
 import { SidebarWorkflowsLink } from "./sidebar/SidebarWorkflowsLink";
+import { SidebarBotsGroup } from "./sidebar/SidebarBotsGroup";
 import {
   useHiddenWorkflowChatKeys,
   withoutWorkflowRunChats,
@@ -4216,7 +4216,6 @@ export default memo(function Sidebar() {
     const searchable = quickFilterResult.threads.filter(
       (thread) => !isSidebarSubagentThread(thread),
     );
-    const titles = searchSidebarThreads(searchable, threadSearchQuery);
     const known = new Set(
       quickFilterResult.threads.map((thread) =>
         threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
@@ -4236,14 +4235,14 @@ export default memo(function Sidebar() {
     );
     return rankSidebarSearchResults({
       query: threadSearchQuery,
-      titles,
       matches,
-      known: quickFilterResult.threads,
-      nameable: searchable,
+      known: searchable,
+      projectOf: (thread) => projectByKey.get(`${thread.environmentId}:${thread.projectId}`),
     });
   }, [
     isSearchingThreads,
     quickFilter,
+    projectByKey,
     quickFilterResult.threads,
     threadSearchQuery,
     threadSearch.matches,
@@ -7009,6 +7008,7 @@ export default memo(function Sidebar() {
               <SidebarOverviewLink />
               <SidebarNotesLink />
               <SidebarWorkflowsLink />
+              {!showingTerminalSessions && !discordMode ? <SidebarBotsGroup /> : null}
               {!discordMode ? (
                 <Collapsible open={chatListTabsEnabled}>
                   <CollapsiblePanel inert={!chatListTabsEnabled}>

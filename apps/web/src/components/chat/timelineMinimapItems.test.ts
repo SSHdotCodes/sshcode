@@ -141,6 +141,7 @@ describe("timeline minimap previews", () => {
       createdAt: source[0]!.createdAt!,
       label: "Worked for 3s",
       expanded: false,
+      hidesWork: true,
     };
     const paged = [{ ...work, id: "older-turn" }, ...source.slice(0, 1), work, ...source.slice(1)];
     const items = deriveTimelineMinimapItems(paged);

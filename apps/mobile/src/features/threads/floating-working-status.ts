@@ -1,4 +1,8 @@
-import type { EnvironmentId, OrchestrationV2ProviderTurnGeneration } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationV2LiveProgress,
+  OrchestrationV2ProviderTurnGeneration,
+} from "@t3tools/contracts";
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import type { PendingBackgroundWorkItem } from "@t3tools/client-runtime/state/thread-execution";
 
@@ -13,6 +17,14 @@ export type FloatingWorkingStatus =
       readonly startedAt: string;
       /** The running turn's output speed, once a reply was timed. */
       readonly generation?: OrchestrationV2ProviderTurnGeneration;
+      /**
+       * Token use High: a bar along the pill's bottom edge and time left in place of the rate;
+       * a tap opens the full progress card.
+       */
+      readonly progress?: {
+        readonly value: OrchestrationV2LiveProgress;
+        readonly onPress: () => void;
+      };
     }
   | { readonly kind: "syncing"; readonly label: string; readonly showSpinner: boolean }
   | { readonly kind: "compacting" }

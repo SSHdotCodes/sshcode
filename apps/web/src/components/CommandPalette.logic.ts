@@ -7,11 +7,19 @@ import {
   THREAD_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import { filterFilesystemBrowseEntries } from "@t3tools/client-runtime/state/filesystem";
-import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
+import {
+  resolveThreadSearchActivityAt,
+  threadSearchContextTerms,
+  threadSearchMatchKey,
+} from "@t3tools/client-runtime/state/thread-search";
+import {
+  compareThreadSearchOrder,
+  makeThreadSearchContextMatcher,
+} from "@t3tools/shared/threadSearch";
 import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import { scoreSubsequenceMatch } from "@t3tools/shared/searchRanking";
 import { type ReactNode } from "react";
-import { getThreadSortTimestamp, sortThreads } from "../lib/threadSort";
+import { sortThreads } from "../lib/threadSort";
 import { normalizeSearchText } from "../lib/utils";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
 
@@ -122,7 +130,9 @@ export function reduceCommandPaletteUiState(
 }
 
 export interface CommandPaletteThreadContentMatch {
-  readonly rank?: number;
+  readonly about?: boolean;
+  readonly activityAt?: string;
+  readonly messageCreatedAt?: string | null;
   readonly archived?: boolean;
   readonly source: "user" | "assistant";
   readonly snippet: string;
@@ -146,6 +156,7 @@ export interface CommandPaletteItem {
     "description" | "activityAt" | "titleLeadingContent" | "titleTrailingContent"
   >;
   readonly searchRecency?: number;
+  readonly searchAboutTerms?: ReadonlyArray<string>;
   readonly threadSearchKey?: string;
   readonly icon: ReactNode;
   readonly disabled?: boolean;
@@ -324,6 +335,8 @@ export type BuildThreadActionItemsThread = Pick<
   pullRequests?: SidebarThreadSummary["pullRequests"];
   updatedAt: string;
   latestUserMessageAt?: string | null;
+  latestRun?: SidebarThreadSummary["latestRun"];
+  unsettledAt?: string | null;
 };
 
 export function buildThreadActionItems<TThread extends BuildThreadActionItemsThread>(input: {
@@ -339,6 +352,7 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
   /** Optional rich description (e.g. favicon + workspace icons). Falls back to text. */
   renderDescription?: (thread: TThread, meta: { projectTitle: string | undefined }) => ReactNode;
   getContentMatch?: (thread: TThread) => CommandPaletteThreadContentMatch | undefined;
+  projectOf?: (thread: TThread) => Parameters<typeof threadSearchContextTerms>[1];
   runThread: (thread: Pick<SidebarThreadSummary, "environmentId" | "id">) => Promise<void>;
   limit?: number;
   deferPresentation?: boolean;
@@ -365,6 +379,10 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
     }
 
     const contentMatch = input.getContentMatch?.(thread);
+    const project = input.projectOf?.(thread);
+    const searchAboutTerms = threadSearchContextTerms(thread, project);
+    if (!project && projectTitle) searchAboutTerms.push(projectTitle);
+    const activityAt = resolveThreadSearchActivityAt(thread) ?? thread.createdAt;
     const presentation = () => {
       const leadingContent = input.renderLeadingContent?.(thread);
       const trailingContent = input.renderTrailingContent?.(thread);
@@ -372,7 +390,7 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
         description: input.renderDescription
           ? input.renderDescription(thread, { projectTitle })
           : descriptionParts.join(` · `),
-        activityAt: thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
+        activityAt,
         ...(leadingContent ? { titleLeadingContent: leadingContent } : {}),
         ...(trailingContent ? { titleTrailingContent: trailingContent } : {}),
       };
@@ -393,7 +411,9 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
         ],
         title: thread.title,
 
-        searchRecency: getThreadSortTimestamp(thread, "updated_at"),
+        activityAt,
+        searchRecency: Date.parse(activityAt),
+        searchAboutTerms,
         threadSearchKey: threadSearchMatchKey({
           environmentId: thread.environmentId,
           threadId: thread.id,
@@ -589,7 +609,11 @@ export function filterCommandPaletteGroups(input: {
         index: number;
         rank: number;
         fuzzyScore: number;
+        about: boolean;
+        activityAt: string | null;
       }> = [];
+      const matchesContext = makeThreadSearchContextMatcher(searchQuery);
+      const isThreadGroup = group.value === "threads-search";
       for (const [index, item] of group.items.entries()) {
         const data = itemSearchData(item);
         const contentMatch =
@@ -604,21 +628,31 @@ export function filterCommandPaletteGroups(input: {
           literalRank < 950 && item.searchRecency !== undefined && fuzzyQuery.length >= 2
             ? scoreSubsequenceMatch(data.title, fuzzyQuery)
             : null;
-        if (!literalMatch && !contentMatch && fuzzyScore === null) continue;
+        const about =
+          isThreadGroup &&
+          ((contentMatch && item.threadContentMatch?.about === true) ||
+            (item.searchAboutTerms ?? [item.searchTerms[0] ?? ""]).some(matchesContext));
+        if (!literalMatch && !contentMatch && !about && fuzzyScore === null) continue;
         ranked.push({
           item,
           index,
           rank: contentMatch ? Math.max(literalRank, 800) : fuzzyScore === null ? literalRank : 950,
           fuzzyScore: fuzzyScore ?? 0,
+          about,
+          activityAt:
+            item.activityAt ??
+            item.threadContentMatch?.activityAt ??
+            item.threadContentMatch?.messageCreatedAt ??
+            null,
         });
       }
       items = ranked
         .sort(
           (left, right) =>
-            Number(left.item.secondary ?? false) - Number(right.item.secondary ?? false) ||
+            (isThreadGroup
+              ? compareThreadSearchOrder(left, right)
+              : Number(left.item.secondary ?? false) - Number(right.item.secondary ?? false)) ||
             right.rank - left.rank ||
-            (left.item.threadContentMatch?.rank ?? 0) -
-              (right.item.threadContentMatch?.rank ?? 0) ||
             (right.item.searchRecency ?? 0) - (left.item.searchRecency ?? 0) ||
             left.fuzzyScore - right.fuzzyScore ||
             left.index - right.index,
@@ -633,11 +667,20 @@ export function filterCommandPaletteGroups(input: {
     }
 
     if (group.value === "threads-search" && items.length > THREAD_SEARCH_RESULT_LIMIT) {
+      const visible = items.slice(0, THREAD_SEARCH_RESULT_LIMIT);
+      // A pasted chat ID must still be reachable when a broad match fills the page.
+      const directLookup = items.find(
+        (item, index) =>
+          index >= THREAD_SEARCH_RESULT_LIMIT &&
+          item.value.startsWith("thread:") &&
+          normalizeSearchText(item.value.slice("thread:".length)) === normalizedQuery,
+      );
+      if (directLookup) visible[visible.length - 1] = directLookup;
       return [
         {
           value: group.value,
           label: `${group.label} · ${THREAD_SEARCH_RESULT_LIMIT} of ${items.length} matches`,
-          items: items.slice(0, THREAD_SEARCH_RESULT_LIMIT),
+          items: visible,
         },
       ];
     }

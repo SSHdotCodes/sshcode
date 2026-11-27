@@ -13,6 +13,8 @@ describe("collectComposerInlineTokens", () => {
     "docs/100%.md",
     "docs/why?.md",
     "icon@2x.png",
+    "reports:final.md",
+    "file:notes.md",
   ])("opens a sent link to %s and recognises the chip when editing", (path) => {
     const link = serializeComposerFileLink(path);
     const destination = /\]\((.*)\)$/.exec(link)?.[1];
@@ -200,6 +202,18 @@ describe("collectComposerInlineTokens", () => {
     expect(collectComposerInlineTokens(`see [${label}](src/${label}) ok`)).toEqual([]);
   });
 
+  it("collects a file link after an unclosed bracket", () => {
+    expect(collectComposerInlineTokens("See [WIP and [app.ts](src/app.ts) please")).toEqual([
+      {
+        type: "mention",
+        value: "src/app.ts",
+        source: "[app.ts](src/app.ts)",
+        start: 13,
+        end: 33,
+      },
+    ]);
+  });
+
   it("leaves a context reference link alone", () => {
     expect(
       collectComposerInlineTokens("see [checkout.png](t3-context://v1/image/ctx_abc) ok"),
@@ -215,6 +229,58 @@ describe("collectComposerInlineTokens", () => {
     const started = performance.now();
     expect(collectComposerInlineTokens(" [[".repeat(40_000))).toEqual([]);
     expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it("does not treat protocol-relative links as file mentions", () => {
+    expect(collectComposerInlineTokens("[example.com](//example.com/docs) please")).toEqual([]);
+  });
+
+  it.each([
+    [String.raw`@"C:\My Files\notes.md"`, String.raw`C:\My Files\notes.md`],
+    [String.raw`@"C:\\My Files\\notes.md"`, String.raw`C:\My Files\notes.md`],
+    [String.raw`@"docs/My \"draft\".md"`, 'docs/My "draft".md'],
+  ])("decodes quoted file mention %s without losing path characters", (source, value) => {
+    expect(collectComposerInlineTokens(`${source} `)).toEqual([
+      {
+        type: "mention",
+        value,
+        source,
+        start: 0,
+        end: source.length,
+      },
+    ]);
+  });
+
+  it.each(["docs/🧪 @abc final.md", "docs/use $ui kit.md"])(
+    "does not emit nested tokens inside a file link label: %s",
+    (path) => {
+      const link = serializeComposerFileLink(path);
+      expect(collectComposerInlineTokens(`${link} remainder`)).toEqual([
+        {
+          type: "mention",
+          value: path,
+          source: link,
+          start: 0,
+          end: link.length,
+        },
+      ]);
+    },
+  );
+
+  it("keeps only the preserved trailing file link when its label contains a bare mention", () => {
+    const path = "docs/🧪 @abc final.md";
+    const link = serializeComposerFileLink(path);
+    const confirmed = collectComposerInlineTokens(`${link} `);
+
+    expect(collectComposerInlineTokens(link, { preserveTrailingFrom: confirmed })).toEqual([
+      {
+        type: "mention",
+        value: path,
+        source: link,
+        start: 0,
+        end: link.length,
+      },
+    ]);
   });
 
   it("does not turn the first word of a bracketed chat description into a file chip", () => {

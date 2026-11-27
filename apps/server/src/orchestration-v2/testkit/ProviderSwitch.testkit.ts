@@ -68,6 +68,7 @@ export function makeTestAdapter(input: {
   readonly capturedCompactions?: Ref.Ref<ReadonlyArray<ModelSelection>>;
   readonly stickyNativeThread?: boolean;
   readonly interruptedRunOrdinals?: ReadonlySet<number>;
+  readonly droppedPromptRunOrdinals?: ReadonlySet<number>;
   readonly holdRunOrdinal?: number;
   readonly holdFirstTurn?: Deferred.Deferred<void>;
   readonly releaseFirstTurn?: Deferred.Deferred<void>;
@@ -257,6 +258,9 @@ export function makeTestAdapter(input: {
                 input.responseByThreadId?.[turnInput.threadId]?.[turnInput.runOrdinal] ??
                 input.responseByRunOrdinal[turnInput.runOrdinal] ??
                 `${input.driver} response for run ${turnInput.runOrdinal}`;
+              const promptDropped =
+                terminalStatus === "interrupted" &&
+                input.droppedPromptRunOrdinals?.has(turnInput.runOrdinal) === true;
               const providerEvents: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event> = [
                 {
                   type: "provider_turn.updated",
@@ -273,6 +277,7 @@ export function makeTestAdapter(input: {
                     },
                     ordinal: turnInput.runOrdinal,
                     status: terminalStatus,
+                    ...(promptDropped ? { promptDropped: true } : {}),
                     startedAt: eventTime,
                     completedAt: eventTime,
                   },
@@ -341,6 +346,7 @@ export function makeTestAdapter(input: {
                 });
               }
               for (const event of providerEvents) {
+                if (promptDropped && event.type === "turn_item.updated") continue;
                 yield* PubSub.publish(events, event);
               }
             }),

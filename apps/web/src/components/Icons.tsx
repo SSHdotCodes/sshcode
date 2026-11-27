@@ -1,6 +1,8 @@
 import React, { type SVGProps, useId } from "react";
 import { DEVIN_MARK, GEMINI_SPARK } from "@t3tools/client-runtime/model-makers";
 import { ULTRAFAST_BOLTS } from "@t3tools/client-runtime/state/subagent-display";
+import { BOT_AVATAR_GEOMETRY } from "@t3tools/client-runtime/state/bots";
+import { createLucideIcon, type IconNode } from "lucide-react";
 import { cn } from "~/lib/utils";
 export type Icon = React.FC<SVGProps<SVGSVGElement>>;
 
@@ -804,3 +806,28 @@ export const MacAccessibilityIcon: Icon = (props) => {
     </svg>
   );
 };
+
+// The face on a 24-unit grid: a stroked circle (radius 9) with the avatar's eyes filled in.
+const GLYPH_D = 18;
+const GLYPH_EYE_W = BOT_AVATAR_GEOMETRY.eyeWidth * GLYPH_D;
+const GLYPH_EYE_H = BOT_AVATAR_GEOMETRY.eyeHeight * GLYPH_D;
+const glyphEye = (center: number, key: string): IconNode[number] => [
+  "rect",
+  {
+    x: String(3 + center * GLYPH_D - GLYPH_EYE_W / 2),
+    y: String(3 + BOT_AVATAR_GEOMETRY.eyeCenterY * GLYPH_D - GLYPH_EYE_H / 2),
+    width: String(GLYPH_EYE_W),
+    height: String(GLYPH_EYE_H),
+    rx: String(GLYPH_EYE_W / 2),
+    fill: "currentColor",
+    stroke: "none",
+    key,
+  },
+];
+
+/** The Bots glyph for nav, menus and the palette, drawn like the rest of the icon set. */
+export const BotsIcon = createLucideIcon("bots", [
+  ["circle", { cx: "12", cy: "12", r: "9", key: "face" }],
+  glyphEye(BOT_AVATAR_GEOMETRY.eyeCentersX[0], "left-eye"),
+  glyphEye(BOT_AVATAR_GEOMETRY.eyeCentersX[1], "right-eye"),
+]);

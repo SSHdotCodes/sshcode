@@ -245,6 +245,36 @@ const layerService = (input: {
   );
 
 describe("ModelManifest service", () => {
+  it.live("fetches SSHCode's own manifest and keeps the bundled copy when that fails", () => {
+    const requested: Array<string> = [];
+    return Effect.gen(function* () {
+      const service = yield* ModelManifest.make;
+      assert.deepStrictEqual(yield* service.refresh, ModelManifest.BUNDLED_MODEL_MANIFEST);
+      assert.deepStrictEqual(requested, [
+        "https://raw.githubusercontent.com/SSHdotCodes/sshcode/main/apps/server/src/provider/model-manifest.json",
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), { prefix: "model-manifest-source-test" }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(ServerSettings.layerTest({})),
+          Layer.provideMerge(
+            Layer.succeed(
+              HttpClient.HttpClient,
+              HttpClient.make((request) => {
+                requested.push(request.url);
+                return Effect.succeed(
+                  HttpClientResponse.fromWeb(request, new Response("down", { status: 503 })),
+                );
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  });
+
   it.live("explicit refresh bypasses fresh memory and disk caches", () => {
     let fetchCount = 0;
     const updated: ModelManifest.ModelManifestData = {

@@ -89,3 +89,15 @@ it("redacts and bounds the agent's explanation", () => {
     acpRequestErrorMessage(requestError("Internal error", { details: "x".repeat(5_000) })),
   ).toHaveLength(600);
 });
+
+it("classifies transport loss as retryable instead of a terminal provider error", () => {
+  expect(
+    acpPromptFailure(
+      new AcpErrors.AcpTransportError({
+        operation: "call-rpc",
+        method: "session/prompt",
+        cause: new Error("process exited"),
+      }),
+    ),
+  ).toMatchObject({ class: "transport_error", retryable: true });
+});

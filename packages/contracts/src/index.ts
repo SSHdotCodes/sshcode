@@ -41,6 +41,7 @@ export * from "./orchestrationProject.ts";
 export * from "./orchestrationV2.ts";
 export * from "./applicationEvent.ts";
 export * from "./orchestratorMcp.ts";
+export * from "./liveProgress.ts";
 export * from "./threadMetadataMcp.ts";
 export * from "./threadPullRequest.ts";
 export * from "./threadSearch.ts";
@@ -89,7 +90,9 @@ export * from "./computerUse.ts";
 export * from "./modelRankings.ts";
 
 export * from "./workflows.ts";
+export * from "./bots.ts";
 export * from "./subagentRankings.ts";
+export * from "./teamBoard.ts";
 
 export * from "./providerCredential.ts";
 

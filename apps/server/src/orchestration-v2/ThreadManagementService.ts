@@ -154,6 +154,8 @@ export interface ThreadManagementSendInput {
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly modelSelection?: ModelSelection;
   readonly mode: ThreadManagementSendMode;
+  readonly expectedRunId?: RunId;
+  readonly steerExistingOnly?: boolean;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
 }
@@ -972,7 +974,10 @@ const make = Effect.gen(function* () {
         { readonly type: "message.dispatch" }
       >["dispatchMode"];
       if (input.mode === "steer" || input.mode === "restart") {
-        if (steerableRun === undefined) {
+        if (
+          steerableRun === undefined ||
+          (input.expectedRunId !== undefined && steerableRun.id !== input.expectedRunId)
+        ) {
           return yield* new ThreadManagementNoSteerableRunError({
             threadId: input.threadId,
             mode: input.mode,
@@ -1000,7 +1005,11 @@ const make = Effect.gen(function* () {
         ...(input.notifySenderOnCompletion && { notifySenderOnCompletion: true }),
         text: input.text,
         attachments: input.attachments,
-        ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+        ...(input.steerExistingOnly === true && steerableRun !== undefined
+          ? { steerExistingOnly: true, modelSelection: steerableRun.modelSelection }
+          : input.modelSelection === undefined
+            ? {}
+            : { modelSelection: input.modelSelection }),
         ...(input.mode === "auto" ? { deliveryIntent: "auto" as const } : {}),
         dispatchMode,
         createdBy: input.createdBy,

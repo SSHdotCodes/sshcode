@@ -251,6 +251,7 @@ export const updateCommand = Command.make("update", {
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
+      yield* CliService.requireServerDownloads;
       const logLevel = yield* GlobalFlag.LogLevel;
       const config = yield* resolveCliAuthConfig(flags, logLevel);
       return yield* runUpdate({

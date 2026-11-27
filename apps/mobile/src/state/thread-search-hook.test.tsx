@@ -28,6 +28,13 @@ vi.mock("@t3tools/client-runtime/state/thread-search", () => ({
   createThreadSearchResultsAtomFamily: () => (key: string) => ({ key }),
   makeThreadSearchKey: (_ids: unknown, query: string) => query,
 }));
+// No bot chats here, so the visible results are the search results themselves.
+vi.mock("@t3tools/client-runtime/state/bots", () => ({
+  createBotThreadIdsAtom: () => ({}),
+  createVisibleThreadSearchResultsAtomFamily: (options: { readonly resultsAtom: unknown }) =>
+    options.resultsAtom,
+}));
+vi.mock("./server", () => ({ serverEnvironment: {} }));
 vi.mock("./session", () => ({}));
 vi.mock("./presentation", () => ({}));
 vi.mock("./atom-registry", () => ({}));

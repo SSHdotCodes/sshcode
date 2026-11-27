@@ -13,6 +13,7 @@ import {
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
+import { cn } from "../../lib/cn";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { discordSurfaces } from "./discordTheme";
 
@@ -41,13 +42,16 @@ export function HomeMachines(props: {
         ])
       : props.machines.keys()),
   ];
-  return (
+  const pinned = !props.rail && props.trailing != null;
+  const list = (
     <ScrollView
       horizontal={!props.rail}
       showsHorizontalScrollIndicator={false}
       showsVerticalScrollIndicator={false}
       style={
-        props.rail ? { width: 72, flexGrow: 0, backgroundColor: colors.rail } : { flexGrow: 0 }
+        props.rail
+          ? { width: 72, flexGrow: 0, backgroundColor: colors.rail }
+          : { flexGrow: 0, flexShrink: 1 }
       }
       contentContainerStyle={
         props.rail
@@ -57,7 +61,7 @@ export function HomeMachines(props: {
               gap: 8,
               alignItems: "center",
             }
-          : { paddingHorizontal: 14, paddingBottom: 12, gap: 8 }
+          : { paddingLeft: 14, paddingRight: pinned ? 8 : 14, paddingBottom: 12, gap: 8 }
       }
     >
       {entries.map((id) => {
@@ -99,7 +103,10 @@ export function HomeMachines(props: {
               className={
                 props.rail
                   ? "size-[48px] items-center justify-center"
-                  : `min-h-[36px] flex-row items-center gap-2 rounded-full border border-border px-3${selected ? " bg-subtle-strong" : ""}`
+                  : cn(
+                      "min-h-[36px] flex-row items-center gap-2 rounded-full border px-3 active:opacity-70",
+                      selected ? "border-border bg-grouped-card" : "border-transparent bg-subtle",
+                    )
               }
               style={
                 props.rail
@@ -118,13 +125,29 @@ export function HomeMachines(props: {
                 <SymbolView
                   name="bubble.left.and.bubble.right"
                   size={props.rail ? 24 : 16}
-                  tintColorClassName={props.rail && selected ? "accent-white" : "accent-foreground"}
+                  tintColorClassName={
+                    props.rail
+                      ? selected
+                        ? "accent-white"
+                        : "accent-foreground"
+                      : selected
+                        ? "accent-foreground"
+                        : "accent-foreground-muted"
+                  }
                 />
               ) : (
                 <EnvironmentMachineSymbol
                   kind={config ? resolveEnvironmentMachineKind(config) : "server"}
                   size={props.rail ? 24 : 16}
-                  tintColorClassName={props.rail && selected ? "accent-white" : "accent-foreground"}
+                  tintColorClassName={
+                    props.rail
+                      ? selected
+                        ? "accent-white"
+                        : "accent-foreground"
+                      : selected
+                        ? "accent-foreground"
+                        : "accent-foreground-muted"
+                  }
                 />
               )}
               {props.rail && id !== null && summary.needsYou === 0 ? (
@@ -153,7 +176,14 @@ export function HomeMachines(props: {
                 />
               ) : null}
               {!props.rail ? (
-                <Text className="text-sm font-t3-medium">{id === null ? "All" : label}</Text>
+                <Text
+                  className={cn(
+                    "text-sm",
+                    selected ? "font-t3-medium text-foreground" : "text-foreground-muted",
+                  )}
+                >
+                  {id === null ? "All" : label}
+                </Text>
               ) : null}
               {countsKnown && summary.needsYou > 0 ? (
                 <View
@@ -202,7 +232,20 @@ export function HomeMachines(props: {
           </View>
         );
       })}
-      {props.trailing}
+      {pinned ? null : props.trailing}
     </ScrollView>
+  );
+  if (!pinned) return list;
+  // Shortcuts (Overview) stay pinned at the trailing edge; the machine pills scroll under them,
+  // so several machines never push Overview off screen.
+  return (
+    <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
+      {list}
+      <View
+        style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingRight: 14, height: 32 }}
+      >
+        {props.trailing}
+      </View>
+    </View>
   );
 }

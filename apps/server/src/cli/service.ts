@@ -1,9 +1,11 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { ServerDownloadsPublished, serverDownloadsUnavailable } from "@t3tools/shared/cliRelease";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Terminal from "effect/Terminal";
 import { Command, Flag, GlobalFlag, Prompt } from "effect/cli";
+import * as CliError from "effect/cli/CliError";
 import { FetchHttpClient } from "effect/http";
 
 import packageJson from "../../package.json" with { type: "json" };
@@ -23,6 +25,14 @@ export const layer = (config: ServerConfig.ServerConfig["Service"]) =>
     // Archive-distributed versions download the release archive here.
     Layer.provide(FetchHttpClient.layer),
   );
+
+/** Refuses a command that installs a server download, before it does any work, while releases carry none. */
+export const requireServerDownloads = Effect.gen(function* () {
+  const unavailable = serverDownloadsUnavailable(yield* ServerDownloadsPublished);
+  if (unavailable !== null) {
+    return yield* new CliError.UserError({ cause: unavailable, userMessage: unavailable });
+  }
+});
 
 export type ServiceReconcileResult =
   | {
@@ -104,7 +114,9 @@ export function formatServiceStatus(
 const runServiceCommand = Effect.fn("cli.service.run")(function* <A, E>(
   flags: { readonly baseDir: Parameters<typeof resolveCliAuthConfig>[0]["baseDir"] },
   run: Effect.Effect<A, E, BootService.BootService>,
+  options?: { readonly installsDownload?: boolean },
 ) {
+  if (options?.installsDownload) yield* requireServerDownloads;
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel);
   return yield* run.pipe(Effect.provide(layer(config)));
@@ -135,6 +147,7 @@ const serviceInstallCommand = Command.make("install", serviceReconcileFlags).pip
           `${result.previouslyInstalled ? "Updated" : "Installed"} SSHCode service with sshcode@${packageJson.version}.\nLogs: ${result.plan.logPath}`,
         );
       }),
+      { installsDownload: true },
     ),
   ),
 );
@@ -160,6 +173,7 @@ const serviceUpdateCommand = Command.make("update", serviceReconcileFlags).pipe(
           `${result.previouslyInstalled ? "Updated" : "Installed"} SSHCode service with sshcode@${packageJson.version}.\nLogs: ${result.plan.logPath}`,
         );
       }),
+      { installsDownload: true },
     ),
   ),
 );
@@ -224,6 +238,11 @@ export const offerServiceDuringOnboarding = Effect.gen(function* () {
   if (installed && current) {
     yield* Console.log("SSHCode is already set up to run in the background on this machine.");
     return true;
+  }
+  const unavailable = serverDownloadsUnavailable(yield* ServerDownloadsPublished);
+  if (unavailable !== null) {
+    yield* Console.log(`Background service: ${unavailable}`);
+    return false;
   }
   for (const problem of status.problems ?? []) {
     yield* Console.warn(`[${problem}] ${BootService.formatBootServiceProblem(problem)}`);

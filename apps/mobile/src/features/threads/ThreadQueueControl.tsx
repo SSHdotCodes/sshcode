@@ -633,7 +633,7 @@ function QueueAttachmentThumbnails(props: {
       ))}
       {overflow > 0 ? (
         <View className="h-6 min-w-6 items-center justify-center rounded bg-subtle px-1">
-          <Text className="text-2xs tabular-nums text-foreground-muted">
+          <Text className="text-2xs text-foreground-muted">
             {shown.length === 0 ? `${overflow}` : `+${overflow}`}
           </Text>
         </View>

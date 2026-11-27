@@ -126,7 +126,7 @@ download() {
 case "$(uname -s)" in
   Darwin) platform="darwin" ;;
   Linux) platform="linux" ;;
-  *) fail "unsupported operating system $(uname -s); use the desktop app or npm" ;;
+  *) fail "unsupported operating system $(uname -s); use the desktop app or a source checkout" ;;
 esac
 case "$(uname -m)" in
   arm64 | aarch64) arch="arm64" ;;
@@ -180,8 +180,19 @@ target_dir="${versions_dir}/${version}"
 if [ -f "${target_dir}/.install-complete" ] && [ "$(cat "${target_dir}/.install-complete")" = "$version" ]; then
   step "Version ${version} is already downloaded."
 else
+  # A release without server downloads has no checksum file. Say so before writing anything;
+  # the sentence matches SERVER_DOWNLOADS_UNAVAILABLE in packages/shared/src/cliRelease.ts.
+  sums="$(mktemp)"
+  fetch_status=0
+  fetch "${base_url}/v${version}/SHA256SUMS" "$sums" || fetch_status=$?
+  if [ "$fetch_status" -ne 0 ]; then
+    rm -f "$sums"
+    [ "$fetch_status" -ne 44 ] || fail "Not available yet: SSHCode's releases don't include the server download this needs, so run the server from a source checkout instead."
+    fail "could not download the release checksums"
+  fi
   mkdir -p "$versions_dir"
   staging="$(mktemp -d "${versions_dir}/.staging-XXXXXX")"
+  mv "$sums" "${staging}/SHA256SUMS"
   download_pid=
   trap '[ -z "$download_pid" ] || { kill "$download_pid" 2>/dev/null || true; wait "$download_pid" 2>/dev/null || true; }; rm -rf "$staging"' EXIT
   trap 'printf "\n" >&2; exit 130' INT
@@ -190,13 +201,6 @@ else
   if "$interactive"; then printf '\r\033[2K' >&2; fi
   printf '  %sInstalling%s SSHCode %s%s%s\n\n' "$muted" "$reset" "$bold" "$version" "$reset" >&2
   step "Downloading..."
-  fetch_status=0
-  fetch "${base_url}/v${version}/SHA256SUMS" "${staging}/SHA256SUMS" || fetch_status=$?
-  if [ "$fetch_status" -eq 44 ]; then
-    fail "sshcode ${version} has no release archive for ${platform}-${arch}; releases before the self-contained CLI can only be installed with \`npm install -g sshcode@${version}\`"
-  elif [ "$fetch_status" -ne 0 ]; then
-    fail "could not download the release checksums"
-  fi
   download "${base_url}/v${version}/${archive}" "${staging}/${archive}"
 
   step "Verifying the download..."

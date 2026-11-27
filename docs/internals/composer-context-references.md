@@ -68,7 +68,8 @@ links, so a context link is never mistaken for a mention.
    so a terminal line or PR comment cannot forge a record.
 
 Attachment bytes travel on the existing attachment channel; the envelope only carries metadata.
-Text without references is returned unchanged.
+Assistant citation links expand into inline quote markers and a separate
+`<assistant_citations>` block that identifies the quoted text and user comments.
 
 ## Legacy messages
 

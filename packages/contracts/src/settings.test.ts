@@ -14,6 +14,7 @@ import {
   resolveProviderInstanceEnabled,
   ServerSettings,
   ServerSettingsPatch,
+  WEBSITE_ICONS_DEFAULT,
 } from "./settings.ts";
 
 const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
@@ -1263,6 +1264,20 @@ describe("ClientSettings chat backdrop", () => {
       expect(encodeClientSettings(decodeClientSettings(preference))).toMatchObject(preference);
     },
   );
+});
+
+describe("ClientSettings website icons", () => {
+  it("follows the branch default until a device chooses, and keeps an explicit choice", () => {
+    expect(decodeClientSettings({}).websiteIconsEnabled).toBe(WEBSITE_ICONS_DEFAULT);
+    for (const enabled of [true, false]) {
+      expect(decodeClientSettings({ websiteIconsEnabled: enabled }).websiteIconsEnabled).toBe(
+        enabled,
+      );
+      expect(decodeClientSettingsPatch({ websiteIconsEnabled: enabled })).toEqual({
+        websiteIconsEnabled: enabled,
+      });
+    }
+  });
 });
 
 describe("ServerSettings Claude keep-warm", () => {

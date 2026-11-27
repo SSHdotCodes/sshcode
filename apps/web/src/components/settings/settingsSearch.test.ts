@@ -80,6 +80,14 @@ describe("searchSettings", () => {
       );
     },
   );
+  it.each(["favicon", "website icons", "google", "letter tile"])(
+    "finds the Website icons switch with %s",
+    (query) => {
+      expect(searchSettings(query)).toContainEqual(
+        expect.objectContaining({ id: "website-icons", to: "/settings/appearance" }),
+      );
+    },
+  );
   it.each(["auto", "suggest model", "simple task", "recommend a model"])(
     "finds the Auto model suggestions switch with %s",
     (query) => {

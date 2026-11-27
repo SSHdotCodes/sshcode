@@ -165,6 +165,36 @@ export const WEBHOOK_SIGNATURE_DEFAULTS = {
   signaturePrefix: "sha256=",
 } as const;
 
+export function createEmptyDraft(projectId: string, now = Date.now()): DraftState {
+  return {
+    editingId: null,
+    title: "",
+    prompt: "",
+    enabled: true,
+    scheduleMode: "fixed",
+    intervalMinutes: "15",
+    timeOfDay: "09:00",
+    onceAt: scheduledMessageLocalDateTime(now + 3_600_000),
+    prepareWorkspace: false,
+    weekdays: new Set([1, 2, 3, 4, 5]),
+    projectId,
+    threadId: "",
+    workspaceMode: "worktree",
+    baseRef: "main",
+    startFromOrigin: true,
+    existingWorktreePath: "",
+    modelKey: "",
+    accountPinned: false,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    baseModelSelection: null,
+    signatureEnabled: false,
+    ...WEBHOOK_SIGNATURE_DEFAULTS,
+    signatureSecret: "",
+    maxDeliveryAgeMinutes: "",
+  };
+}
+
 /** Null when the draft's webhook age limit is invalid; the caller reports it and does not save. */
 export function scheduleFromDraft(draft: DraftState): ScheduledTaskUpsertSchedule | null {
   if (draft.scheduleMode === "once") {

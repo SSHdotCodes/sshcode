@@ -513,7 +513,8 @@ function ConnectAccountOption({
             <p className="text-sm text-muted-foreground">
               Run this on each computer you want to connect.
             </p>
-            <CommandBlock command="npx sshcode connect" className="mt-3" />
+            <CommandBlock command="sshcode connect" className="mt-3" />
+            <SshcodeCommandSource subcommand="connect" />
             <p className="mt-3 text-xs text-muted-foreground">
               Keep SSHCode running. Select the computers you want to set up above.
             </p>
@@ -521,6 +522,17 @@ function ConnectAccountOption({
         </CollapsiblePanel>
       </Collapsible>
     </div>
+  );
+}
+
+/** Where the `sshcode` command comes from: SSHCode publishes no npm package, and the
+    `sshcode` name on npm is not ours, so the hint never suggests `npx`. */
+function SshcodeCommandSource({ subcommand }: { readonly subcommand: string }) {
+  return (
+    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+      On a Mac with SSHCode, install the command from Settings → General → About. In a source
+      checkout, run <code className="font-mono">node apps/server/dist/bin.mjs {subcommand}</code>.
+    </p>
   );
 }
 
@@ -627,11 +639,12 @@ function PairingForm({
             <p className="pt-3 text-sm text-muted-foreground">
               Run this on the computer with your code.
             </p>
-            <CommandBlock command="npx sshcode pair" className="mt-2" />
+            <CommandBlock command="sshcode pair" className="mt-2" />
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              Start SSHCode first, or run <code className="font-mono">npx sshcode serve</code>. Add{" "}
+              Start SSHCode first, or run <code className="font-mono">sshcode serve</code>. Add{" "}
               <code className="font-mono">--tailscale</code> to use your tailnet.
             </p>
+            <SshcodeCommandSource subcommand="pair" />
           </CollapsiblePanel>
         </Collapsible>
       </form>

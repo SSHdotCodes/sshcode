@@ -27,6 +27,7 @@ import * as Fiber from "effect/Fiber";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -46,6 +47,7 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as DelegatedTaskReconcileWorker from "./DelegatedTaskReconcileWorker.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -2904,6 +2906,115 @@ it.layer(layerTest)("delegated tasks across a server restart", (it) => {
     }),
   );
 
+  // 2026-11-22: a restart cut a lead 4 minutes into the wake it was answering, and the same
+  // result arrived again as a second wake, so the lead redid its review.
+  it.effect("does not re-offer a cut delivery the lead already answered", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:delivery-answered");
+      const runId = RunId.make("run:delivery-answered");
+      const taskId = NodeId.make("node:delivery-answered-task");
+      const messageId = MessageId.make(`message:delegated-delivery:${threadId}`);
+      const deliveryRunId = RunId.make("run:delivery-answered:delivery");
+      yield* seedParentWithTerminalTask({
+        threadId,
+        projectId: ProjectId.make("project:delivery-answered"),
+        runId,
+        rootNodeId: NodeId.make("node:delivery-answered-root"),
+        taskId,
+        deliveryState: "claimed",
+        completionWake: "always",
+        deliveryTaskIds: [taskId],
+        now,
+      });
+      yield* eventSink.writeWithEffects({
+        commandId: reconcileCommandId("delivery-answered"),
+        events: [
+          {
+            id: EventId.make("event:delivery-answered:message"),
+            type: "message.updated",
+            threadId,
+            runId: deliveryRunId,
+            occurredAt: now,
+            payload: {
+              id: messageId,
+              threadId,
+              runId: deliveryRunId,
+              nodeId: null,
+              role: "user",
+              text: `Delegated task ${taskId} reached a terminal state.`,
+              attachments: [],
+              streaming: false,
+              createdBy: "agent",
+              creationSource: "server",
+              createdAt: now,
+              updatedAt: now,
+              delegatedCompletion: { parentRunId: runId, generation: 1, taskIds: [taskId] },
+            },
+          },
+          {
+            id: EventId.make("event:delivery-answered:reply"),
+            type: "turn-item.updated",
+            threadId,
+            runId: deliveryRunId,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make("turn-item:delivery-answered:reply"),
+              type: "assistant_message",
+              threadId,
+              runId: deliveryRunId,
+              nodeId: null,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 1,
+              status: "completed",
+              title: null,
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              messageId: MessageId.make("message:delivery-answered:reply"),
+              text: "Reviewing the subagent's diff.",
+              streaming: false,
+            },
+          },
+          runEvent({
+            threadId,
+            runId: deliveryRunId,
+            ordinal: 2,
+            status: "cancelled",
+            now,
+            providerThreadId: parentProviderThreadId(threadId),
+            userMessageId: messageId,
+          }),
+        ],
+        effects: [
+          {
+            id: `effect:restart-continuation:${deliveryRunId}`,
+            commandId: reconcileCommandId("delivery-answered"),
+            threadId,
+            request: { type: "provider-runtime.continue", sourceRunId: deliveryRunId },
+          },
+        ],
+      });
+
+      yield* orchestrator.recoverDelegatedTasks;
+
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.deepEqual(projection.subagents.find((row) => row.id === taskId)?.completionDelivery, {
+        state: "acknowledged",
+        observedByRunId: deliveryRunId,
+      });
+      const cohort = projection.runs.find((row) => row.id === runId)?.delegatedCompletion;
+      assert.isNull(cohort?.delivery);
+      assert.isUndefined(projection.runs.find((row) => row.ordinal === 3));
+    }),
+  );
+
   it.effect.each(["failed", "interrupted"] as const)(
     "carries a %s unread wake to an independent turn without waking the parent again",
     (status) =>
@@ -4011,5 +4122,109 @@ it.layer(layerTest)("delegated tasks whose wait ends without a run", (it) => {
       assert.equal((yield* taskRow(waiting.threadId, waiting.taskId))?.status, "running");
       assert.isTrue(yield* orchestrator.delegatedTaskResultPending(waiting.childThreadId));
     }),
+  );
+
+  // 2026-11-23 to 11-25: three Claude children went on by themselves within a second of
+  // their last background command or monitor ending, after their tasks had already
+  // settled with the interim reply.
+  it.effect("holds a task for the turn its awaited background work starts as it ends", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const now = yield* DateTime.now;
+      const seed = (name: string) =>
+        Effect.gen(function* () {
+          const seeded = yield* seedFinishedChild(name, now);
+          yield* eventSink.write(
+            childRoster({
+              childThreadId: seeded.childThreadId,
+              key: `${name}:running`,
+              pendingBackgroundTasks: [
+                { taskId: "bash-1", kind: "command", description: "npm test", wakesAgent: true },
+              ],
+              now,
+            }),
+          );
+          yield* eventSink.write(
+            childRoster({
+              childThreadId: seeded.childThreadId,
+              key: `${name}:ended`,
+              pendingBackgroundTasks: [],
+              now,
+            }),
+          );
+          // Every settle after the roster empties reads this hold.
+          const holdId = `effect:provider-continuation:${seeded.childRunId}:background-wake`;
+          while (Option.isNone(yield* outbox.get(holdId))) yield* outbox.awaitAvailable;
+          return seeded;
+        });
+      const continued = yield* seed("background-wake-continued");
+      const ended = yield* seed("background-wake-ended");
+
+      // One agent goes on: its turn opens on the command's exit, and its report is the result.
+      const settled = yield* settledEvent(continued.taskId);
+      const nextRunId = RunId.make("run:background-wake-continued:2");
+      const wakeId = MessageId.make("message:background-wake-continued:wake");
+      yield* eventSink.write({
+        commandId: CommandId.make("command:background-wake-continued:2"),
+        events: [
+          {
+            id: EventId.make("event:background-wake-continued:wake"),
+            type: "message.updated",
+            threadId: continued.childThreadId,
+            runId: nextRunId,
+            occurredAt: now,
+            payload: {
+              id: wakeId,
+              threadId: continued.childThreadId,
+              runId: nextRunId,
+              nodeId: null,
+              role: "user",
+              text: "npm test finished.",
+              attachments: [],
+              streaming: false,
+              createdBy: "agent",
+              creationSource: "provider",
+              notification: {
+                source: { kind: "command" },
+                outcome: "completed",
+                summary: "npm test finished",
+              },
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+          childReport({
+            threadId: continued.childThreadId,
+            runId: nextRunId,
+            text: "Tests pass.",
+            now,
+          }),
+          runEvent({
+            threadId: continued.childThreadId,
+            runId: nextRunId,
+            ordinal: 2,
+            status: "completed",
+            userMessageId: wakeId,
+            now,
+          }),
+        ],
+      });
+      yield* Fiber.join(settled);
+      assert.equal((yield* taskRow(continued.threadId, continued.taskId))?.result, "Tests pass.");
+
+      // The other never does: once the grace passes, its turn's own report is the result.
+      assert.equal((yield* taskRow(ended.threadId, ended.taskId))?.status, "running");
+      yield* TestClock.adjust("30 seconds");
+      yield* worker.drain();
+      const endedTask = yield* taskRow(ended.threadId, ended.taskId);
+      assert.equal(endedTask?.status, "completed");
+      assert.equal(endedTask?.result, "Review: no blockers.");
+    }).pipe(
+      // The same build shares the orchestrator's outbox, so its wake signal reaches this test.
+      Effect.provide(EffectOutbox.layer.pipe(Layer.provideMerge(layerTest))),
+      Effect.scoped,
+    ),
   );
 });

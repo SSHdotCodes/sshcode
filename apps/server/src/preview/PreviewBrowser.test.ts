@@ -128,7 +128,13 @@ it.layer(NodeServices.layer)("PreviewBrowser", (it) => {
   it.effect("installs a verified download with its file modes and then reuses it", () =>
     Effect.gen(function* () {
       const { browser, fs, path, installRoot, requests } = yield* makeHarness();
-      yield* fs.makeDirectory(path.join(installRoot, "1.0.0"), { recursive: true });
+      for (const version of ["1.0.0", "1.1.0"]) {
+        const directory = path.join(installRoot, version);
+        yield* fs.makeDirectory(directory, { recursive: true });
+        const entry = path.join(directory, executableName);
+        yield* fs.writeFileString(entry, "old browser");
+        if (hostPlatform !== "win32") yield* fs.chmod(entry, 0o755);
+      }
       // Another server's install in progress, and one abandoned two hours ago.
       const active = path.join(installRoot, ".install-other");
       const abandoned = path.join(installRoot, ".install-abandoned");
@@ -150,9 +156,10 @@ it.layer(NodeServices.layer)("PreviewBrowser", (it) => {
         expect(yield* mode("libEGL.so")).toBe(0o755);
         expect(yield* mode(path.join("locales", "en-US.pak"))).toBe(0o644);
       }
-      // The old build and stale staging directories are gone; a fresh one stays.
+      // Keep one rollback build and fresh staging directories.
       expect((yield* fs.readDirectory(installRoot)).toSorted()).toEqual([
         ".install-other",
+        "1.1.0",
         "1.2.3",
       ]);
       expect(yield* browser.executable).toBe(executable);

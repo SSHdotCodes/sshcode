@@ -67,6 +67,8 @@ import { GitCommitSheet } from "./features/threads/git/GitCommitSheet";
 import { GitConfirmSheet } from "./features/threads/git/GitConfirmSheet";
 import { GitOverviewSheet } from "./features/threads/git/GitOverviewSheet";
 import { ThreadAgentsSheet } from "./features/threads/ThreadAgentsSheet";
+import { ThreadProgressSheet } from "./features/threads/ThreadProgressSheet";
+import { ThreadTeamBoardSheet } from "./features/threads/ThreadTeamBoardSheet";
 import { TerminalSessionRouteScreen } from "./features/terminalSessions/TerminalSessionRouteScreen";
 import { ThreadSideChatSheet } from "./features/threads/ThreadSideChatSheet";
 import { ThreadQueueSheet } from "./features/threads/ThreadQueueControl";
@@ -161,6 +163,33 @@ const SettingsModelRankingsRouteScreen = deferredScreen(
     (
       require("./features/settings/SettingsModelRankingsRouteScreen") as typeof import("./features/settings/SettingsModelRankingsRouteScreen")
     ).SettingsModelRankingsRouteScreen,
+);
+const SettingsBotsRouteScreen = deferredScreen(
+  () =>
+    (
+      require("./features/settings/SettingsBotsRouteScreen") as typeof import("./features/settings/SettingsBotsRouteScreen")
+    ).SettingsBotsRouteScreen,
+);
+const BotEditorSheet = deferredScreen(
+  () =>
+    (require("./features/bots/BotEditorSheet") as typeof import("./features/bots/BotEditorSheet"))
+      .BotEditorSheet,
+);
+const BotInfoSheet = deferredScreen(
+  () =>
+    (require("./features/bots/BotInfoSheet") as typeof import("./features/bots/BotInfoSheet"))
+      .BotInfoSheet,
+);
+const BotSendSheet = deferredScreen(
+  () =>
+    (require("./features/bots/BotSendSheet") as typeof import("./features/bots/BotSendSheet"))
+      .BotSendSheet,
+);
+const SettingsAgentsRouteScreen = deferredScreen(
+  () =>
+    (
+      require("./features/settings/SettingsAgentsRouteScreen") as typeof import("./features/settings/SettingsAgentsRouteScreen")
+    ).SettingsAgentsRouteScreen,
 );
 const SettingsToolsRouteScreen = deferredScreen(
   () =>
@@ -470,6 +499,16 @@ const SettingsContentStack = createV5SheetStackNavigator({
       screen: SettingsModelRankingsRouteScreen,
       linking: "model-rankings",
       options: { title: "Model family rankings" },
+    }),
+    SettingsAgents: createNativeStackScreen({
+      screen: SettingsAgentsRouteScreen,
+      linking: "agents",
+      options: { title: "Agents" },
+    }),
+    SettingsBots: createNativeStackScreen({
+      screen: SettingsBotsRouteScreen,
+      linking: "bots",
+      options: { title: "Bots" },
     }),
     SettingsTools: createNativeStackScreen({
       screen: SettingsToolsRouteScreen,
@@ -824,8 +863,13 @@ const WORKSPACE_OVERLAY_ROUTES = new Set([
   "SettingsLegal",
   "SettingsSheet",
   "ThreadAgents",
+  "ThreadProgress",
+  "ThreadTeamBoard",
   "ThreadQueue",
   "ThreadSideChat",
+  "BotEditor",
+  "BotInfo",
+  "BotSend",
   "ThreadReviewComment",
   "ThreadDevicePreview",
   "ThreadBrowserPreview",
@@ -1179,6 +1223,34 @@ const RootStackConfig = createWorkspaceStackNavigator({
             }),
       },
     }),
+    // Bots: New/Edit bot, a bot's info (from its chat's header) and "Send to <bot>…".
+    BotEditor: createNativeStackScreen({
+      screen: BotEditorSheet,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.92],
+        sheetGrabberVisible: true,
+      },
+    }),
+    BotInfo: createNativeStackScreen({
+      screen: BotInfoSheet,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.6, 0.92],
+        sheetGrabberVisible: true,
+      },
+    }),
+    BotSend: createNativeStackScreen({
+      screen: BotSendSheet,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.5],
+        sheetGrabberVisible: true,
+      },
+    }),
     ThreadAgents: createNativeStackScreen({
       screen: ThreadAgentsSheet,
       options: {
@@ -1186,6 +1258,30 @@ const RootStackConfig = createWorkspaceStackNavigator({
         headerShown: false,
         sheetAllowedDetents: [0.5, 0.9],
         sheetGrabberVisible: true,
+      },
+    }),
+    // Token use High: the working pill opens the chat's live progress card.
+    ThreadProgress: createNativeStackScreen({
+      screen: ThreadProgressSheet,
+      options: {
+        ...FORM_SHEET_PRESENTATION_OPTIONS,
+        headerShown: false,
+        sheetAllowedDetents: [0.5, 0.9],
+        sheetGrabberVisible: true,
+      },
+    }),
+    // The lead's team board: medium to start, pulled up to large.
+    ThreadTeamBoard: createNativeStackScreen({
+      screen: ThreadTeamBoardSheet,
+      options: {
+        headerShown: false,
+        ...(Platform.OS === "android"
+          ? { presentation: "fullScreenModal" as const }
+          : {
+              ...FORM_SHEET_PRESENTATION_OPTIONS,
+              sheetAllowedDetents: [0.5, 1],
+              sheetGrabberVisible: true,
+            }),
       },
     }),
     GitOverview: createNativeStackScreen({

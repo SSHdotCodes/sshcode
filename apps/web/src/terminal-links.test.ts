@@ -115,6 +115,51 @@ describe("extractTerminalLinks", () => {
       { kind: "path", text, start, end: start + text.length },
     ]);
   });
+
+  it.each([
+    [
+      "/app/src/Program.cs(12,5): error CS1002: ; expected",
+      "/app/src/Program.cs(12,5)",
+      "/app/src/Program.cs:12:5",
+    ],
+    [
+      String.raw`C:\app\UnitTest1.cs(12): error VSTEST1: Assert.True() Failure`,
+      String.raw`C:\app\UnitTest1.cs(12)`,
+      String.raw`C:\app\UnitTest1.cs:12`,
+    ],
+    [
+      "#0 /var/www/html/index.php(110): handle()",
+      "/var/www/html/index.php(110)",
+      "/var/www/html/index.php:110",
+    ],
+    [
+      "src/Program.cs(12,5): warning CS0168: unused variable",
+      "src/Program.cs(12,5)",
+      "src/Program.cs:12:5",
+    ],
+    [
+      "source.cpp(12): warning C4101: unreferenced local variable",
+      "source.cpp(12)",
+      "source.cpp:12",
+    ],
+    ["wrote /app/report(1): done", "/app/report(1)", "/app/report(1)"],
+    ["see /(60)", "/(60)", "/(60)"],
+    [
+      "see https://example.com/wiki/Dune_(2021)",
+      "https://example.com/wiki/Dune_(2021)",
+      "https://example.com/wiki/Dune_(2021)",
+    ],
+  ])("preserves the clickable range of %s", (line, printed, target) => {
+    const start = line.indexOf(printed);
+    expect(extractTerminalLinks(line)).toEqual([
+      {
+        kind: isTerminalUrl(printed) ? "url" : "path",
+        text: target,
+        start,
+        end: start + printed.length,
+      },
+    ]);
+  });
 });
 
 describe("collectWrappedTerminalLinkLine", () => {

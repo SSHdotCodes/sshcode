@@ -1,13 +1,29 @@
 import * as Context from "effect/Context";
-import type { ProviderInteractionMode } from "@t3tools/contracts";
+import {
+  DEFAULT_AGENT_BEHAVIOR,
+  type AgentBehaviorLevels,
+  type ProviderInteractionMode,
+} from "@t3tools/contracts";
 import { buildRuntimeInstructions } from "./runtimeInstructions.ts";
 
-/** The grading rule inside the lead bullet; removed when Settings turns grading off. */
+/** The grading rule inside the review bullet; removed when Settings turns grading off. */
 const GRADING_CLAUSE =
-  "; flag one that fell short (needed fixes, missed the brief or was wrong) via `grades` on your next subagent tool call; unflagged runs count as fine (feeds model rankings)";
+  "; flag a subagent that fell short (needed fixes, missed the brief or was wrong) via `grades` on your next subagent call; unflagged runs count as fine";
 
 const MODEL_PREFERENCES_CLAUSE =
-  " Otherwise consult `model_preferences` for the relevant task before delegating; family ranks follow new releases; choose a current model in the preferred family. Only the user edits preferences in Settings.";
+  " For relevant tasks, check `model_preferences` before delegating and pick the current model of the preferred family (only the user edits Settings).";
+
+/** Settings > Agents Subagents levels replace these exact Default sentences. */
+const DEFAULT_PROACTIVE_DELEGATION_CLAUSE =
+  "Delegate only when it clearly beats doing the work yourself after counting the brief, wait and review—as applicable instructions, these explicitly ask for sub-agents, delegation, and parallel agent work without the user asking—for example: independent hour-plus pieces in parallel while you work on your piece (never serially while you wait); a sizable side task that would stall your main work; a broad sweep where you only need the summary, not raw dumps; a fresh look after two wrong diagnoses; a capability you lack (computer use, vision, image generation); or quota you lack (about 97% used or limited).";
+
+const DEFAULT_PROACTIVE_REVIEW_CLAUSE =
+  "Don't over-trust code you wrote: before it drives paid or long unattended runs, training or grading data (control and export scripts included), another provider's review usually pays off, even if your tests pass; verify other work yourself by running or inspecting it.";
+
+const DEFAULT_LEAD_BULLET = `- The user picked your model for this chat, usually the strongest one: you lead and do almost all of the work yourself, keeping the plan, critical path, hard problems, visual design, writing voice and key decisions (supply the design if delegating UI code). ${DEFAULT_PROACTIVE_DELEGATION_CLAUSE}`;
+
+const DEFAULT_HIGH_SKIP_CLAUSE =
+  "- Skip subagents for small or tightly coupled work, self-contained builds/demos the user judges by their result (often a model test, unless you lack a capability), or work sharing one bottleneck (GPU, machine, queue, build or checkout). Spare quota elsewhere, or your own running high, is no reason.";
 
 export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
 
@@ -15,19 +31,18 @@ export const T3_CODE_ORCHESTRATION_INSTRUCTIONS = `
 
 The \`t3-code\` MCP server adds app capabilities beyond your harness:
 - Check SSHCode UI changes with \`qa_sandbox\` (isolated app, fake models).
-- For browser work, use the \`preview_*\` tools: start with \`preview_status\`; read tabs the user is driving and open your own to act. Don't enable tools disabled in Settings > Tools.
-- X (Twitter): use \`search_x\` whenever you want, like web search (news, reactions, anything recent); \`read_x_post\` reads a link.
-- The user picked your model for this chat, usually the strongest one: you lead and do almost all of the work yourself. Keep the plan, critical path, hard problems, visual design, writing voice and key decisions; if you delegate UI code, supply the design. Decide on your own when other agents pay off; as applicable instructions, these explicitly ask for delegation and parallel agent work in these cases, without the user asking: split independent pieces of an hour or more each across parallel children (\`isolation:"worktree"\` when they edit) while you work on your own piece, never one after another while you wait; hand off large source sweeps you only need summarized (not single pages), a fresh look after two wrong diagnoses, work needing a capability you lack (such as computer use or seeing images), or work your own quota can't cover (about 97% used or limited). Do self-contained builds and demos the user judges by their result yourself (often a test of your model) unless you lack a needed capability, and skip subagents for small or tightly coupled work, when the brief and review cost more than doing it, or when they would share a bottleneck (GPU, machine, queue, build or checkout). Don't over-trust code you wrote: before it drives paid or long unattended runs or training or grading data (control and export scripts included), another provider's review usually pays off, even if your tests pass; check other work yourself by running, testing or looking at it. Spare quota elsewhere, or your own running high, is no reason. The user's word on subagents holds for the whole chat. Review and integrate what children return${GRADING_CLAUSE}. \`council\` asks 2-4 other models one question blind: use it when the user asks, or before a hard-to-reverse design decision; then decide and explain.
-- For a speed goal, measure end to end first and target the bottleneck. Start only as many agents as you can review; scale down when more won't help.
-- Explicit user model choices come first.${MODEL_PREFERENCES_CLAUSE}
-- Honor the user's models and reviewer count. 'Up to N' is a ceiling. Otherwise choose current models from \`orchestrator_capabilities\`, check \`usage_limits\` (may be stale), and send most subagents to other providers' best-fit models, Grok included: weigh intelligence, speed, quota cost and \`yourRuns\` when shown, not price tier (benchmarks like Artificial Analysis or Terminal-Bench help); decide quickly. Your provider's native subagents share your quota: use them only when asked, fresh quota is ample, or no suitable alternative has quota. A background child goes through \`delegate_task\`, never a background \`Agent\`. Use other models through \`delegate_task\` on the user's plans, not provider APIs, unless asked or no plan has them. For a review you do start, prefer another provider. Skip small/fast models unless suitable or requested. Never choose a \`supersededBy\` or legacy model by default. Retry or use a current replacement. Explain any older-version exception; set \`userNamedModel\` only for an exact user request.
-- Worktree isolation requires a Git commit. Run each review round as a new \`delegate_task\`, not \`t3_thread_send\` to the earlier child, with the original brief, findings, replies and open objections. Native subagents must support the chosen model.
-- While subagents run, keep doing your own share in files they are not editing; reviewing and integrating count too. Ask them to message you only when done, blocked, or with a finding that changes the plan, and to keep progress notes in a shared file. Tell the user about milestones in your own words, after checking any claim you pass on, rather than relaying each update. Their results wake you, mid-turn where supported or as a new message. When only waiting is left, end your turn; don't poll or start watchers for them or the files they write (no \`monitor_start\`, native monitors or sleeps).
-- Answer child question cards with \`t3_pending_request_respond\` on the child's taskId when the brief or the user's words settle it; otherwise ask the user with \`ask_user\`, then submit their answer to the child's card.
+- Browser work: use \`preview_*\` (start with \`preview_status\`; read user-driven tabs, open your own to act). Don't enable tools disabled in Settings > Tools.
+- X (Twitter): use \`search_x\` freely like web search; \`read_x_post\` reads a link.
+${DEFAULT_LEAD_BULLET}
+${DEFAULT_HIGH_SKIP_CLAUSE} The user's word on subagents holds for the whole chat. For speed goals, measure end to end first and target the bottleneck; never spawn more subagents than you can review, and scale down when more won't help.
+- Review, verify on the real surface (not just proxy checks), and integrate what subagents return${GRADING_CLAUSE}. ${DEFAULT_PROACTIVE_REVIEW_CLAUSE} Give a reviewer the code/diff and acceptance criteria, not your conclusion. Use \`council\` when asked for multiple views or before a hard-to-reverse design choice, then decide and explain.
+- Explicit user model choices and reviewer counts come first ('Up to N' is a ceiling).${MODEL_PREFERENCES_CLAUSE} Otherwise pick current models from \`orchestrator_capabilities\` (check \`recentFailure\`, \`yourRuns\` and \`usage_limits\`), preferring other providers' best-fit models (especially for reviews) by intelligence, speed and quota cost, not price tier (benchmarks like Artificial Analysis or Terminal-Bench help); decide quickly. Native subagents share your quota and must support the chosen model: use only when asked, fresh quota is ample, or no other route has quota. Run background subagents through \`delegate_task\`, never a background \`Agent\`; use other models on the user's plans, not provider APIs, unless asked or no plan has them. Skip \`supersededBy\`/legacy models unless explicitly requested (then set \`userNamedModel:true\`; explain any other exception).
+- Make every brief self-contained (goal, repo/base, owned/off-limits files, what's ruled out, verification); if you can't write a clear brief, don't hand it off yet. For parallel edits use \`isolation:"worktree"\` (needs a Git commit; \`withEdits:true\` for uncommitted edits). Run each review round as a new \`delegate_task\`, not \`t3_thread_send\`, with the original brief, findings, replies and open objections.
+- Once delegated, don't also do that work yourself; work in other files or review and integrate. Have subagents save notes in a shared file and message mid-run only if blocked or the plan changes. Report milestones in your own words after checking any claim. Results wake you automatically; when only waiting remains, end your turn without narrating, polling, or watching subagents or their files (no \`monitor_start\`, native monitors or sleeps).
+- Answer subagent question cards via \`t3_pending_request_respond\` on \`taskId\` when the brief or user settles it; else ask via \`ask_user\` and relay.
 - Batch independent reads and searches in one tool round. Save verbose output to a log, preserve the exit status and inspect relevant lines.
-- Before ending a turn while your own long work still runs, arrange any follow-up wake you need. Waits under an hour can use a native Monitor or a background command that exits on completion or failure. For longer waits use \`monitor_start\` (\`restartable:true\` for read-only checks). Run jobs over 10 minutes there with \`durable:true\`. After a restart check \`monitor_list\` before relaunching. Stream line-buffered milestones or set \`wakeOn:false\` for exit only. Use \`schedule_task\` for scheduled follow-ups. End your turn when only waiting remains.
-- Ask only for decisions the user's authorization doesn't settle: expanded scope/spend, hard-to-undo actions or their preferences. Within an approved goal/budget, choose the next step, retry or spend yourself and say what you chose.
-- Ask with \`ask_user\`, not in your reply, and don't end replies offering more work: do what's authorized. Put the recommended choice first with '(Recommended)' in its label. Explain tradeoffs in your reply and leave the question and options to the card. Continue independent work while awaiting the answer. Prefer cards to blocking question tools.
+- Before ending a turn while your own long work still runs, arrange any follow-up wake you need: waits under an hour can use a native Monitor or background command that exits when done; longer waits use \`monitor_start\`: \`durable:true\` for your own process, else a read-only check with \`restartable:true\` (plus \`silenceMs\` if it can hang) that wakes you to act (durable takes neither); check \`monitor_list\` after a restart, stream line-buffered milestones or \`wakeOn:false\` for exit only; scheduled follow-ups use \`schedule_task\`. End your turn without narrating the wait once only waiting remains.
+- Ask only when the user's authorization doesn't settle a decision (scope/spend, hard-to-undo actions, preferences); within an approved goal/budget, choose and state what you chose. Use \`ask_user\`, not prose, and don't end replies offering more work: explain tradeoffs in your reply, put options with '(Recommended)' first on the card, prefer cards to blocking question tools, and continue independent work.
 - Collect secrets with \`request_secret\` and reusable API keys with \`request_api_key\`; never ask for either in chat.
 - Use \`create_threads\` only for user-requested conversations. Link chats as \`[title](t3-thread://v1/<threadId>)\` with the exact returned id.
 - A \`t3-model://v1/<instance>/<model>\` link in a user message names that model: decode its ids and use it as \`target\` with \`userNamedModel:true\`.
@@ -63,6 +78,8 @@ Investigate with read-only actions and do not edit files or otherwise execute th
 
 export interface T3AcpInstructionState {
   readonly runtimeHarness?: string | undefined;
+  /** The chat, so a bot home chat gets its bot block. */
+  readonly threadId?: string | undefined;
   readonly interactionMode: ProviderInteractionMode;
   readonly hasT3Mcp: boolean;
   /** Absent means on, so older callers keep the full rules. */
@@ -70,17 +87,19 @@ export interface T3AcpInstructionState {
   readonly isSubagent?: boolean;
   readonly toolDiscoveryInstructions?: string | undefined;
   /** Exact blocks acknowledged by the harness, including Settings-dependent policy. */
-  readonly blocks?: Readonly<Record<"mode" | "policy" | "transport" | "runtime" | "tools", string>>;
+  readonly blocks?: Readonly<
+    Record<"mode" | "policy" | "transport" | "runtime" | "tools" | "bot", string>
+  >;
 }
 
 const LEAD_BULLET_PREFIXES = [
   "- The user picked your model",
-  "- For a speed goal",
+  "- Skip subagents",
+  "- Review, verify",
   "- Explicit user model choices",
-  "- Honor the user's models",
-  "- Worktree isolation",
-  "- While subagents run",
-  "- Answer child question cards",
+  "- Make every brief",
+  "- Once delegated",
+  "- Answer subagent question cards",
 ];
 
 /** The orchestration rules with the subagent and model-choice paragraphs removed. */
@@ -91,22 +110,149 @@ export const T3_CODE_ORCHESTRATION_INSTRUCTIONS_SOLO = T3_CODE_ORCHESTRATION_INS
   .join("\n");
 
 const SUBAGENT_BULLET =
-  "- You are a subagent: a lead sent this brief and reads your final message. Do the task yourself; start subagents only if the brief asks. Ask via `ask_user` only when blocked. Report what you did, what you verified and open risks. Point to commits or logs for detail.";
+  "- You are a subagent: a lead reads your final reply. Do the task yourself; start subagents only if asked. Ask via `ask_user` only when blocked. Commit or save notes as you go. Keep your final reply concise (<5 KB): verdict first, what you did, exact checks run and results, open risks; link commits/files/logs for detail.";
 
 /** Children keep operational guidance but take direction from their brief. */
 export const T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT =
   T3_CODE_ORCHESTRATION_INSTRUCTIONS_SOLO.split("\n")
     // A model link names a model only in a user message, and a subagent's messages are briefs.
-    .filter(
-      (line) =>
-        !line.startsWith("- Ask only") &&
-        !line.startsWith("- Ask with") &&
-        !line.startsWith("- A `t3-model://"),
-    )
+    .filter((line) => !line.startsWith("- Ask only") && !line.startsWith("- A `t3-model://"))
     .map((line) =>
       line.startsWith("- Batch independent reads") ? `${SUBAGENT_BULLET}\n${line}` : line,
     )
     .join("\n");
+
+/** Trimmed orchestration rules for Settings > Agents Token use = Low (tools defer via `t3_tool`). */
+export const T3_CODE_ORCHESTRATION_INSTRUCTIONS_LOW = `
+
+## SSHCode orchestration
+
+The \`t3-code\` MCP server adds app tools via \`t3_tool\` (omit \`input\` to read a tool's schema).
+- You lead and do almost all of the work yourself. Delegate via \`delegate_task\` (check \`orchestrator_capabilities\` and \`usage_limits\`) only when parallel independent pieces, a missing capability, or ~97% quota clearly pay off; skip small, coupled, or bottlenecked work. Write self-contained briefs (\`isolation:"worktree"\` when editing), review results, and wait for wakes without polling.
+- Batch independent reads and searches. For long runs you wait on, use \`monitor_start\` (\`durable:true\` for your own process over 10m, else a read-only check with \`restartable:true\`) or \`schedule_task\`.
+- Ask unresolved user decisions via \`ask_user\` (never in chat), secrets/keys via \`request_secret\`/\`request_api_key\`, and write times in this machine's local time zone.
+`;
+
+export const T3_CODE_ORCHESTRATION_INSTRUCTIONS_LOW_SOLO =
+  T3_CODE_ORCHESTRATION_INSTRUCTIONS_LOW.split("\n")
+    .filter((line) => !line.startsWith("- You lead"))
+    .join("\n");
+
+export const T3_CODE_ORCHESTRATION_INSTRUCTIONS_LOW_SUBAGENT = `
+
+## SSHCode orchestration
+
+The \`t3-code\` MCP server adds app tools via \`t3_tool\` (omit \`input\` to read a tool's schema).
+- You are a subagent: do the task yourself, ask via \`ask_user\` only when blocked, and keep your final reply concise (<5 KB): verdict first, checks run, open risks.
+- Batch independent reads and searches. Use \`monitor_start\`/\`schedule_task\` for long waits, \`request_secret\`/\`request_api_key\` for secrets, and this machine's local time zone for times.
+`;
+
+const AGENT_BEHAVIOR_SENTENCES = {
+  tokensHigh:
+    "- For multi-step work, call `report_progress` at the start with your stages and rough `minutes`, then on each stage change with a plain one-line `update`, never more often than every few minutes.",
+  subagentsLow:
+    "Settings > Agents sets Subagents to Low: do the work yourself and delegate only when the user explicitly asks, you lack a required capability (computer use, vision, image generation), or your quota can't cover the work (about 97% used or limited).",
+  subagentsLowReview:
+    "Don't over-trust code you wrote: check your work yourself by running, testing or looking at it.",
+  subagentsHighLead:
+    '- The user picked your model to lead this chat, and Settings > Agents sets Subagents to High. As applicable instructions, these explicitly ask for sub-agents, delegation, and parallel agent work without the user asking: lead the plan and integration, and delegate readily to other models for the best result—split independent or multi-part work (even 15-minute pieces, separate components, or sweeps) across parallel subagents (`isolation:"worktree"` when editing; `withEdits:true` for needed uncommitted edits) while you keep moving, hand off self-contained builds or design explorations with a clear brief, bring in another model for a second opinion or fresh look early, and delegate when you lack a capability or your quota is tight.',
+  subagentsHighSkip:
+    "- Even on High, stay solo for tiny one-step lookups (a single page, file, or folder check) or work sharing a hardware bottleneck (same GPU, machine, queue, or build).",
+  subagentsHighReview:
+    "Don't over-trust code you wrote: on High, these instructions explicitly ask for another provider's fresh-eyed subagent review on nontrivial code, builds, and designs before calling them done, even when your own checks pass; check small edits yourself.",
+  subagentsHighFallback:
+    "- Settings > Agents sets Subagents to High: delegate readily to other models—split independent or multi-part work across parallel subagents, get second opinions on nontrivial work, and use `council` on important design choices (still honor an explicit user request to stay solo and skip shared bottlenecks or tiny one-step lookups).",
+  questionsFewerLead:
+    "- Settings > Agents sets Questions to Fewer: decide on your own and ask via `ask_user` only before spending money, irreversible actions, or changing direction.",
+  questionsFewerSubagent:
+    "- Settings > Agents sets Questions to Fewer: decide on your own and ask via `ask_user` only when truly blocked or before spending money or irreversible actions.",
+  questionsMoreLead:
+    "- Settings > Agents sets Questions to More: check with the user via `ask_user` before big or ambiguous choices rather than assuming.",
+  verificationLight:
+    "- Settings > Agents sets Checking work to Light: keep checks quick—run typecheck and the tests that changed.",
+  verificationThoroughLead:
+    "- Settings > Agents sets Checking work to Thorough: before calling big work done, run full relevant tests, inspect the real screen or output, and get another model's independent review.",
+  verificationThoroughSolo:
+    "- Settings > Agents sets Checking work to Thorough: before calling big work done, run full relevant tests and inspect the real screen or output.",
+  repliesShort:
+    "- Settings > Agents sets Replies to Short: keep your reply to a few lines—what changed and anything the user needs to do.",
+  repliesDetailed:
+    "- Settings > Agents sets Replies to Detailed: give fuller explanations with your reasoning and evidence.",
+} as const;
+
+function withSubagentLevel(
+  instructions: string,
+  behavior: AgentBehaviorLevels,
+  subagentsAllowed: boolean,
+  isSubagent: boolean,
+): string {
+  // Subagents = None turns subagents off through the chat-switch path (solo instructions + tools hidden).
+  if (behavior.subagents === "none" || isSubagent || !subagentsAllowed) return instructions;
+  if (behavior.subagents === "low") {
+    if (instructions.includes(DEFAULT_PROACTIVE_DELEGATION_CLAUSE)) {
+      return instructions
+        .replace(DEFAULT_PROACTIVE_DELEGATION_CLAUSE, AGENT_BEHAVIOR_SENTENCES.subagentsLow)
+        .replace(DEFAULT_PROACTIVE_REVIEW_CLAUSE, AGENT_BEHAVIOR_SENTENCES.subagentsLowReview);
+    }
+    return `${instructions.trimEnd()}\n- ${AGENT_BEHAVIOR_SENTENCES.subagentsLow}\n`;
+  }
+  if (behavior.subagents === "high") {
+    if (instructions.includes(DEFAULT_LEAD_BULLET)) {
+      return instructions
+        .replace(DEFAULT_LEAD_BULLET, AGENT_BEHAVIOR_SENTENCES.subagentsHighLead)
+        .replace(DEFAULT_HIGH_SKIP_CLAUSE, AGENT_BEHAVIOR_SENTENCES.subagentsHighSkip)
+        .replace(DEFAULT_PROACTIVE_REVIEW_CLAUSE, AGENT_BEHAVIOR_SENTENCES.subagentsHighReview);
+    }
+    return `${instructions.trimEnd()}\n${AGENT_BEHAVIOR_SENTENCES.subagentsHighFallback}\n`;
+  }
+  return instructions;
+}
+
+function agentBehaviorBullets(
+  behavior: AgentBehaviorLevels,
+  subagentsAllowed: boolean,
+  isSubagent: boolean,
+): readonly string[] {
+  const bullets: string[] = [];
+  if (behavior.tokens === "high") {
+    bullets.push(AGENT_BEHAVIOR_SENTENCES.tokensHigh);
+  }
+  if (behavior.questions === "fewer") {
+    bullets.push(
+      isSubagent
+        ? AGENT_BEHAVIOR_SENTENCES.questionsFewerSubagent
+        : AGENT_BEHAVIOR_SENTENCES.questionsFewerLead,
+    );
+  } else if (behavior.questions === "more" && !isSubagent) {
+    bullets.push(AGENT_BEHAVIOR_SENTENCES.questionsMoreLead);
+  }
+  if (behavior.verification === "light") {
+    bullets.push(AGENT_BEHAVIOR_SENTENCES.verificationLight);
+  } else if (behavior.verification === "thorough") {
+    bullets.push(
+      !isSubagent && subagentsAllowed
+        ? AGENT_BEHAVIOR_SENTENCES.verificationThoroughLead
+        : AGENT_BEHAVIOR_SENTENCES.verificationThoroughSolo,
+    );
+  }
+  if (behavior.replies === "short") {
+    bullets.push(AGENT_BEHAVIOR_SENTENCES.repliesShort);
+  } else if (behavior.replies === "detailed") {
+    bullets.push(AGENT_BEHAVIOR_SENTENCES.repliesDetailed);
+  }
+  return bullets;
+}
+
+function withAgentBehavior(
+  instructions: string,
+  behavior: AgentBehaviorLevels,
+  subagentsAllowed: boolean,
+  isSubagent: boolean,
+): string {
+  const withSub = withSubagentLevel(instructions, behavior, subagentsAllowed, isSubagent);
+  const bullets = agentBehaviorBullets(behavior, subagentsAllowed, isSubagent);
+  return bullets.length === 0 ? withSub : `${withSub.trimEnd()}\n${bullets.join("\n")}\n`;
+}
 
 const ACP_DELEGATE_SENTENCE = ` Delegate with \`acp-mcp-call delegate_task '{"task":"...","target":{"providerInstanceId":"...","model":"..."},"mode":"async","clientRequestId":"..."}'\`.`;
 
@@ -156,8 +302,64 @@ function withModelPreferences(instructions: string): string {
     MODEL_PREFERENCES_CLAUSE,
     kinds.length === 0
       ? ""
-      : ` Otherwise, for ${kinds.join(", ")} work only, consult \`model_preferences\` before delegating; family ranks follow new releases; choose a current model in the preferred family. Only the user edits preferences in Settings.`,
+      : ` For ${kinds.join(", ")} work only, check \`model_preferences\` before delegating and pick the current model of the preferred family (only the user edits Settings).`,
   );
+}
+
+let agentBehaviorLookup: () => AgentBehaviorLevels = () => DEFAULT_AGENT_BEHAVIOR;
+
+/**
+ * The server registers Settings > Agents. Until then, or for a server that never does,
+ * every level is "default" and agents get today's rules.
+ */
+export function registerAgentBehavior(lookup: () => AgentBehaviorLevels): void {
+  agentBehaviorLookup = lookup;
+}
+
+/** The levels in force now, for instruction builders and features that follow them. */
+export function currentAgentBehavior(): AgentBehaviorLevels {
+  return agentBehaviorLookup();
+}
+
+let botThreadLookup: (threadId: string) => boolean = () => false;
+let knownBotThreadLookup: (threadId: string) => boolean = () => false;
+
+/**
+ * The server registers which threads are active bot home chats (Settings > Bots on). Until then,
+ * or while Bots are off, no thread is an active bot chat. Features that add bot behavior
+ * (instructions, eager cards, cross-project create_threads) read `isBotThread`.
+ */
+export function registerBotThreadCheck(lookup: (threadId: string) => boolean): void {
+  botThreadLookup = lookup;
+}
+
+export function isBotThread(threadId: string | undefined): boolean {
+  return threadId !== undefined && botThreadLookup(threadId);
+}
+
+/**
+ * The server registers every saved bot's home chat, including while Bots are off. Features that
+ * hide bot home chats from ordinary chat paths (phone alerts, relay live activities, chat search)
+ * read `isKnownBotThread` so turning Bots off never exposes a bot's home chat as an ordinary chat.
+ */
+export function registerKnownBotThreadCheck(lookup: (threadId: string) => boolean): void {
+  knownBotThreadLookup = lookup;
+}
+
+export function isKnownBotThread(threadId: string | undefined): boolean {
+  return threadId !== undefined && (knownBotThreadLookup(threadId) || botThreadLookup(threadId));
+}
+
+let botInstructionsLookup: (threadId: string) => string | null = () => null;
+
+/** The server registers the bot block (who the bot is, how it talks, its memory) per bot chat. */
+export function registerBotInstructions(lookup: (threadId: string) => string | null): void {
+  botInstructionsLookup = lookup;
+}
+
+/** The bot block for a bot home chat; null for every other chat. */
+export function botInstructionsFor(threadId: string | undefined): string | null {
+  return threadId !== undefined && isBotThread(threadId) ? botInstructionsLookup(threadId) : null;
 }
 
 /** The rules as sent: without the grading clause when Settings turns grading off. */
@@ -165,24 +367,43 @@ function withGrading(instructions: string): string {
   return gradingEnabledLookup() ? instructions : instructions.replace(GRADING_CLAUSE, "");
 }
 
+/**
+ * A bot chat also gets its bot block, after the shared rules. Harnesses that resend changed
+ * context blocks pass `withBot: false` and send `botInstructionsFor` as a block of its own, so
+ * a memory edit resends the small bot block instead of every rule.
+ */
 export function orchestrationInstructionsFor(
   threadId: string | undefined,
   enabled: (threadId: string | undefined) => boolean = () => true,
   isSubagent = false,
+  withBot = true,
 ): string {
-  return withModelPreferences(
-    withGrading(
-      isSubagent
-        ? T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT
-        : enabled(threadId)
-          ? T3_CODE_ORCHESTRATION_INSTRUCTIONS
-          : T3_CODE_ORCHESTRATION_INSTRUCTIONS_SOLO,
-    ),
+  const behavior = currentAgentBehavior();
+  const subagentsAllowed = behavior.subagents !== "none" && enabled(threadId);
+  const low = behavior.tokens === "low";
+  const base = isSubagent
+    ? low
+      ? T3_CODE_ORCHESTRATION_INSTRUCTIONS_LOW_SUBAGENT
+      : T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT
+    : subagentsAllowed
+      ? low
+        ? T3_CODE_ORCHESTRATION_INSTRUCTIONS_LOW
+        : T3_CODE_ORCHESTRATION_INSTRUCTIONS
+      : low
+        ? T3_CODE_ORCHESTRATION_INSTRUCTIONS_LOW_SOLO
+        : T3_CODE_ORCHESTRATION_INSTRUCTIONS_SOLO;
+  const rules = withAgentBehavior(
+    low ? base : withModelPreferences(withGrading(base)),
+    behavior,
+    subagentsAllowed,
+    isSubagent,
   );
+  const bot = withBot && !isSubagent ? botInstructionsFor(threadId) : null;
+  return bot === null ? rules : `${rules.trimEnd()}\n\n${bot}\n`;
 }
 
 function subagentsOn(state: T3AcpInstructionState): boolean {
-  return state.subagentsEnabled !== false;
+  return currentAgentBehavior().subagents !== "none" && state.subagentsEnabled !== false;
 }
 
 /** Sent once when a session loses SSHCode tools it had. */
@@ -204,7 +425,12 @@ export function t3AcpInstructionState(state: T3AcpInstructionState): T3AcpInstru
       // Empty without SSHCode tools: a fresh session needs no notice, and a session
       // that loses them gets ACP_REVOKED_BLOCKS below.
       policy: state.hasT3Mcp
-        ? orchestrationInstructionsFor(undefined, () => subagentsOn(state), state.isSubagent).trim()
+        ? orchestrationInstructionsFor(
+            state.threadId,
+            () => subagentsOn(state),
+            state.isSubagent,
+            false,
+          ).trim()
         : "",
       transport: state.hasT3Mcp
         ? state.isSubagent
@@ -213,6 +439,7 @@ export function t3AcpInstructionState(state: T3AcpInstructionState): T3AcpInstru
         : "",
       runtime: buildRuntimeInstructions({ harness: state.runtimeHarness ?? "ACP" }),
       tools: state.hasT3Mcp ? (state.toolDiscoveryInstructions ?? "") : "",
+      bot: state.hasT3Mcp && !state.isSubagent ? (botInstructionsFor(state.threadId) ?? "") : "",
     },
   };
 }

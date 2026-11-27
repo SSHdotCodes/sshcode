@@ -1,4 +1,6 @@
-import { ThreadSearchExtraMatches } from "./ThreadSearchExtraMatches";
+import { useWithoutBotThreads } from "../bots/state";
+import { ThreadSearchResultRow } from "./ThreadSearchResultRow";
+import { ThreadSearchMoreButton } from "./thread-search-match";
 import { pendingThreadSearchJumpAtom } from "@t3tools/client-runtime/state/thread-search";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { DefaultHarnessMascot } from "../../components/DefaultHarnessMascot";
@@ -11,7 +13,7 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 import {
   threadSearchMatchKey,
-  type EnvironmentThreadSearchMatch,
+  threadSearchContextTerms,
 } from "@t3tools/client-runtime/state/thread-search";
 import { LegendList } from "@legendapp/list/react-native";
 import { useAtomValue } from "@effect/atom-react";
@@ -29,7 +31,7 @@ import { SymbolView } from "../../components/AppSymbol";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import { useNavigationThreadShells } from "../../state/entities";
+import { useNavigationThreadShells, useProjects } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2ShelfPreferences } from "./use-thread-list-v2-shelf-preferences";
 import { usePendingThreadOrder } from "../../state/thread-order";
@@ -60,7 +62,8 @@ import {
 import { useThreadRowProviderInstanceResolver } from "./thread-provider-instance";
 import {
   buildThreadListV2Items,
-  rankedContentSearchMatches,
+  mergeMobileThreadSearchResults,
+  type ThreadListV2SearchListItem,
   getThreadListV2OrderedSection,
   buildThreadListV2ListItems,
   threadListV2ListItemsAreEqual,
@@ -121,7 +124,7 @@ function ThreadNavigationSidebarPane(
 
   const insets = useSafeAreaInsets();
   const { fabClearance } = useAndroidControlSizing();
-  const threads = useNavigationThreadShells();
+  const threads = useWithoutBotThreads(useNavigationThreadShells());
   const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
   const searchInputRef = useRef<TextInputInstance>(null);
   const searchBarRef = useRef<SearchBarCommands>(null);
@@ -151,18 +154,26 @@ function ThreadNavigationSidebarPane(
     [workspaceEnvironments],
   );
   const threadSearch = useThreadSearch(searchEnvironmentIds, props.searchQuery);
-  const threadSearchMatchByKey = useMemo(() => {
-    const matches = new Map<string, EnvironmentThreadSearchMatch>();
-    for (const match of threadSearch.matches) {
-      if (match.source === "user" || match.source === "assistant") {
-        matches.set(threadSearchMatchKey(match), match);
-      }
-    }
-    return matches;
-  }, [threadSearch.matches]);
-  const extraSearchMatches = useMemo(
-    () => rankedContentSearchMatches(threads, threadSearch.matches, props.searchQuery),
-    [threads, threadSearch.matches, props.searchQuery],
+  const searchMatches = threadSearch.matches;
+  const threadSearchMatchByKey = useMemo(
+    () => new Map(searchMatches.map((match) => [threadSearchMatchKey(match), match] as const)),
+    [searchMatches],
+  );
+  const projects = useProjects();
+  const projectByKey = useMemo(
+    () =>
+      new Map(
+        projects.map((project) => [`${project.environmentId}:${project.id}`, project] as const),
+      ),
+    [projects],
+  );
+  const searchContextOf = useCallback(
+    (thread: EnvironmentThreadShell) =>
+      threadSearchContextTerms(
+        thread,
+        projectByKey.get(`${thread.environmentId}:${thread.projectId}`),
+      ),
+    [projectByKey],
   );
   // Same flat list as the compact Home list (HomeScreen.tsx): pinned, then
   // live work, then everything else by recent activity.
@@ -236,6 +247,8 @@ function ThreadNavigationSidebarPane(
         pendingOrder,
         threads: threads.filter((thread) => thread.archivedAt === null),
         searchQuery: props.searchQuery,
+        searchContextOf,
+        matchedThreadKeys: threadSearchMatchByKey,
         settlementEnvironmentIds,
         snoozeEnvironmentIds,
         queuedThreadKeys,
@@ -253,6 +266,8 @@ function ThreadNavigationSidebarPane(
       snoozedShelfExpanded,
       props.selectedThreadKey,
       props.searchQuery,
+      searchContextOf,
+      threadSearchMatchByKey,
       settlementEnvironmentIds,
       snoozeEnvironmentIds,
       threads,
@@ -304,6 +319,18 @@ function ThreadNavigationSidebarPane(
     snoozedShelfExpanded,
     threadListV2Layout,
   ]);
+  const searchListItems = useMemo(
+    () =>
+      props.searchQuery.trim()
+        ? mergeMobileThreadSearchResults({
+            items: listItems,
+            matches: searchMatches,
+            query: props.searchQuery,
+            contextOf: searchContextOf,
+          })
+        : listItems,
+    [listItems, searchMatches, props.searchQuery, searchContextOf],
+  );
 
   const [measuredHeaderHeight, setMeasuredHeaderHeight] = useState<number | null>(null);
   const { height, paddingTop, paddingBottom } = useMaterialToolbarLayout();
@@ -362,7 +389,7 @@ function ThreadNavigationSidebarPane(
     }),
     [props.selectedThreadKey, listEnvironments, threadSearchMatchByKey],
   );
-  useThreadJumpShortcuts(listItems, handleSelectThread);
+  useThreadJumpShortcuts(searchListItems, handleSelectThread);
   const focusSearch = useCallback(() => {
     if (Platform.OS === "android") return false;
     const focus = () => {
@@ -382,8 +409,16 @@ function ThreadNavigationSidebarPane(
   }, [props.nativeChrome, props.onRequestVisibility, props.visible]);
   useHardwareKeyboardCommand("focusSearch", focusSearch);
   const renderListItem = useCallback(
-    ({ item }: { readonly item: ThreadListV2ListItem }) => {
+    ({ item }: { readonly item: ThreadListV2ListItem | ThreadListV2SearchListItem }) => {
       switch (item.type) {
+        case "v2-search-match":
+          return (
+            <ThreadSearchResultRow
+              match={item.match}
+              query={props.searchQuery}
+              onSelectThread={props.onSelectThread}
+            />
+          );
         case "v2-pending":
           return (
             <ThreadListV2PendingRow
@@ -479,6 +514,7 @@ function ThreadNavigationSidebarPane(
       }
     },
     [
+      props.onSelectThread,
       archiveThread,
       confirmDeletePendingTask,
       confirmDeleteThread,
@@ -584,7 +620,7 @@ function ThreadNavigationSidebarPane(
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
             <GestureDetector gesture={sidebarScrollGesture}>
               <LegendList
-                data={listItems}
+                data={searchListItems}
                 drawDistance={500}
                 estimatedItemSize={64}
                 extraData={listExtraData}
@@ -611,16 +647,9 @@ function ThreadNavigationSidebarPane(
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
-                ListEmptyComponent={
-                  extraSearchMatches.length || threadSearch.pagination ? null : listEmpty
-                }
+                ListEmptyComponent={threadSearch.pagination ? null : listEmpty}
                 ListFooterComponent={
-                  <ThreadSearchExtraMatches
-                    matches={extraSearchMatches}
-                    pagination={threadSearch.pagination}
-                    query={props.searchQuery}
-                    onSelectThread={props.onSelectThread}
-                  />
+                  <ThreadSearchMoreButton pagination={threadSearch.pagination} />
                 }
               />
             </GestureDetector>
@@ -654,16 +683,13 @@ function ThreadNavigationSidebarPane(
             : { paddingBottom: insets.bottom }
         }
       >
-        {Platform.OS === "android" &&
-        listItems.length === 0 &&
-        extraSearchMatches.length === 0 &&
-        !threadSearch.pagination ? (
+        {Platform.OS === "android" && searchListItems.length === 0 && !threadSearch.pagination ? (
           <View className="flex-1 items-center justify-center">{listEmpty}</View>
         ) : (
           <SwipeableScrollGateProvider enabled={swipeEnabled}>
             <GestureDetector gesture={sidebarScrollGesture}>
               <LegendList
-                data={listItems}
+                data={searchListItems}
                 drawDistance={500}
                 estimatedItemSize={64}
                 extraData={listExtraData}
@@ -689,16 +715,9 @@ function ThreadNavigationSidebarPane(
                 scrollEventThrottle={16}
                 showsVerticalScrollIndicator={false}
                 style={styles.threadList}
-                ListEmptyComponent={
-                  extraSearchMatches.length || threadSearch.pagination ? null : listEmpty
-                }
+                ListEmptyComponent={threadSearch.pagination ? null : listEmpty}
                 ListFooterComponent={
-                  <ThreadSearchExtraMatches
-                    matches={extraSearchMatches}
-                    pagination={threadSearch.pagination}
-                    query={props.searchQuery}
-                    onSelectThread={props.onSelectThread}
-                  />
+                  <ThreadSearchMoreButton pagination={threadSearch.pagination} />
                 }
               />
             </GestureDetector>

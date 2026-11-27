@@ -122,6 +122,7 @@ import {
   AuthTerminalReadScope,
   AuthTerminalOperateScope,
   type AssistantCitation,
+  botForThread,
   type ChatFileAttachment,
   CommandId,
   DEFAULT_MODEL,
@@ -601,6 +602,19 @@ import {
 } from "./chat/PanelLayoutControls";
 import { expandedImageKey, type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./chat/ThreadDetailsPanel";
+import {
+  BotChatHeader,
+  BotEmptyState,
+  BotInfoPanel,
+  BotParkedHeader,
+  BotsOffBar,
+} from "./bots/BotChat";
+import {
+  botComposerPlaceholder,
+  botWakeNotesByRun,
+  parkedBotForThread,
+  serverBotsView,
+} from "@t3tools/client-runtime/state/bots";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   type EnvironmentOption,
@@ -633,7 +647,9 @@ import {
   type EditQueuedRunRequest,
 } from "./chat/QueuedRunsControl";
 import { useLinkedThreadPullRequest } from "./ThreadStatusIndicators";
-import type { ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import type { ComposerBannerStackEntry, ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import { LiveProgressPanel } from "./chat/LiveProgress";
+import { TeamBoardDialog, TeamBoardPill } from "./chat/TeamBoard";
 import { ThreadStatusLine } from "./chat/ThreadStatusLine";
 import { formatRelativeTimeLabel, formatRelativeTimeUntilLabel } from "../timestampFormat";
 import { ComposerSurface } from "./chat/ComposerSurface";
@@ -2902,10 +2918,14 @@ export default function ChatView(props: ChatViewProps) {
     () => deriveActivePlanState(serverProjection, activeActivityRun?.runId),
     [activeActivityRun?.runId, serverProjection],
   );
+  // The live progress card (token use High) shows the same stages with times, so it replaces
+  // the Tasks tab while it is up.
+  const activeLiveProgress = activeThreadShell?.source.liveProgress;
   // Tasks progress for the running turn's own plan only — deriveActivePlanState
   // falls back to older runs' plans, which must not label fresh work.
   const activeComposerTasksProgress = useMemo(() => {
     if (
+      activeLiveProgress !== undefined ||
       isLatestRunSettled(activeActivityRun, activeRuntime) ||
       !activePlan ||
       activePlan.runId !== (activeActivityRun?.runId ?? null)
@@ -2920,7 +2940,7 @@ export default function ChatView(props: ChatViewProps) {
       activePlan.steps.find((candidate) => candidate.status === "pending")?.step ??
       activePlan.steps.at(-1)!.step;
     return { step, completedSteps, totalSteps };
-  }, [activeActivityRun, activePlan, activeRuntime]);
+  }, [activeActivityRun, activeLiveProgress, activePlan, activeRuntime]);
   const activeComposerTaskSteps =
     activeComposerTasksProgress && activePlan ? activePlan.steps : null;
   const activeProjectRef = useMemo(
@@ -3445,6 +3465,22 @@ export default function ChatView(props: ChatViewProps) {
   const serverConfig = activeThread
     ? (activeEnvironment?.serverConfig ?? null)
     : (primaryEnvironment?.serverConfig ?? null);
+  // A bot's home chat reads as a conversation with the bot. Derived from settings this view
+  // already reads, so other chats gain no subscription and no render.
+  const serverBots = serverBotsView(serverConfig);
+  const homeBot = isServerThread ? botForThread(serverBots, activeThread?.id) : undefined;
+  // A kept bot's chat opened while Bots are off: it reads as the bot's but takes no messages,
+  // and opens no bot stream. Turning Bots on brings back the normal bot chat in place.
+  const parkedBot = isServerThread ? parkedBotForThread(serverBots, activeThread?.id) : undefined;
+  const chatBot = homeBot ?? parkedBot;
+  const isBotChat = chatBot !== undefined;
+  const botWakeNotes = useMemo(
+    () =>
+      isBotChat
+        ? botWakeNotesByRun(serverProjection?.runs ?? [], serverProjection?.messages ?? [])
+        : undefined,
+    [isBotChat, serverProjection?.runs, serverProjection?.messages],
+  );
   const providerStatuses = serverConfig?.providers ?? EMPTY_PROVIDERS;
   // A new chat follows the account with room until it is sent, whoever picked its model:
   // its draft may have been seeded before the limits were read, or left open while they
@@ -4728,7 +4764,7 @@ export default function ChatView(props: ChatViewProps) {
       state.threadPanelVisibilityByThreadKey,
       activeThreadRef,
       threadPanelPresentation,
-      !isDraftHeroState,
+      !isDraftHeroState && chatBot === undefined,
     ),
   );
   // Appearance > New chat dashboard; off keeps the plain centered composer.
@@ -5040,8 +5076,11 @@ export default function ChatView(props: ChatViewProps) {
   // composer and its strips. Its approvals and questions are asked on the
   // top-level parent thread.
   const showProviderSubagentBar = isProviderSubagent;
+  // A bar stands in for the composer and its strips: a provider subagent, or a bot chat
+  // while Bots are off.
+  const composerReplaced = showProviderSubagentBar || parkedBot !== undefined;
   const composerMounted =
-    !showProviderSubagentBar &&
+    !composerReplaced &&
     (!props.comparisonColumn || pendingApprovals.length > 0 || activePendingUserInput !== null);
   const providerSubagentModels = selectedProviderEntry?.models ?? EMPTY_PROVIDER_MODELS;
   // Providers can report a dated id or alias (claude-haiku-4-5-20251001).
@@ -5069,7 +5108,7 @@ export default function ChatView(props: ChatViewProps) {
   const mountComposerContextStrip = shouldShowComposerContextStrip({
     isDraftHeroState,
     persistInActiveThreads: settings.persistComposerContextStrip,
-    hasActiveProject: activeProject !== null && !showProviderSubagentBar,
+    hasActiveProject: activeProject !== null && !composerReplaced,
     isGitRepo,
     showEnvironmentIndicator: showComposerEnvironmentIndicator,
     hostsRestingComposerControls: routeKind === "server",
@@ -5077,13 +5116,13 @@ export default function ChatView(props: ChatViewProps) {
   const showComposerContextStrip = shouldShowComposerContextStrip({
     isDraftHeroState,
     persistInActiveThreads: settings.persistComposerContextStrip,
-    hasActiveProject: activeProject !== null && !showProviderSubagentBar,
+    hasActiveProject: activeProject !== null && !composerReplaced,
     isGitRepo,
     showEnvironmentIndicator: showComposerEnvironmentIndicator,
     hostsRestingComposerControls: routeKind === "server" && restingComposerControlsVisible,
   });
   const mountComposerModelStrip =
-    routeKind === "server" && !mountComposerContextStrip && !showProviderSubagentBar;
+    routeKind === "server" && !mountComposerContextStrip && !composerReplaced;
   const showComposerModelStrip = mountComposerModelStrip && restingComposerControlsVisible;
   const terminalShortcutLabelOptions = useMemo(
     () => ({
@@ -5501,6 +5540,51 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
   const sendAppMessageStable = useStableCallback(sendAppMessage);
+  // A bot's empty state offers starters; tapping one sends it as the user's first message.
+  const sendBotStarter = (text: string) => {
+    void sendAppMessage(text).catch((error: unknown) =>
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Message not sent",
+          description: error instanceof Error ? error.message : "Try again.",
+        }),
+      ),
+    );
+  };
+  const sendBotStarterStable = useStableCallback(sendBotStarter);
+  // A native card action or input submission sends through the normal turn path,
+  // steering if a run is currently active.
+  const sendCardReply = async (payload: {
+    readonly text: string;
+    readonly context: import("@t3tools/contracts").OrchestrationMessageContext;
+  }) => {
+    if (!isServerThread || activeThreadId === null) {
+      throw new Error("Card replies need a started chat.");
+    }
+    const dispatchMode = phase === "running" ? "steer" : "auto";
+    const result = await startThreadTurn({
+      environmentId,
+      input: {
+        threadId: activeThreadId,
+        message: {
+          messageId: newMessageId(),
+          role: "user",
+          text: payload.text,
+          context: payload.context,
+          attachments: [],
+        },
+        runtimeMode,
+        interactionMode,
+        dispatchMode,
+      },
+    });
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      throw error instanceof Error ? error : new Error("Could not send the card reply.");
+    }
+  };
+  const sendCardReplyStable = useStableCallback(sendCardReply);
   // The provider runs a native subagent, so its parent passes a message on,
   // steering in when it's working, as a typed message would.
   const sendThroughParent = async (text: string) => {
@@ -8489,6 +8573,19 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
   const sendStandaloneCommandStable = useStableCallback(sendStandaloneCommand);
+  // Settings > Agents token use High: the agent's stages, time left and short updates. The
+  // server sends it only at High and only while the chat works.
+  const liveProgressBannerItem = useMemo<ComposerBannerStackEntry | null>(() => {
+    if (!activeThread || activeLiveProgress === undefined) return null;
+    return {
+      id: `live-progress:${activeThread.id}`,
+      variant: "default",
+      priority: "activity",
+      content: (
+        <LiveProgressPanel progress={activeLiveProgress} fallbackTitle={activeThread.title} />
+      ),
+    };
+  }, [activeLiveProgress, activeThread]);
   // A native /goal keeps the agent working across turns. Stop pauses a Codex
   // goal; once the thread is idle the row offers the native follow-ups.
   const activeGoal = activeThreadShell?.goal ?? null;
@@ -8832,10 +8929,11 @@ export default function ChatView(props: ChatViewProps) {
           },
         })
       : null;
-  const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
+  const composerBannerItems = useMemo<ComposerBannerStackEntry[]>(() => {
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
     const backgroundWorkItems = [
       childInputBannerItem,
+      liveProgressBannerItem,
       goalBannerItem,
       backgroundWorkBannerItem,
     ].filter((item) => item !== null);
@@ -8911,6 +9009,7 @@ export default function ChatView(props: ChatViewProps) {
     backgroundWorkBannerItem,
     childInputBannerItem,
     goalBannerItem,
+    liveProgressBannerItem,
     localCheckoutBranchMismatch,
     projectCloneBannerItem,
     showBranchMismatchBanner,
@@ -12485,6 +12584,17 @@ export default function ChatView(props: ChatViewProps) {
       optimisticUserMessages,
     ],
   );
+  // The board renders nothing (and subscribes to nothing) unless this chat leads a team.
+  const teamBoardPill = useMemo(
+    () =>
+      isServerThread && activeThreadRef !== null ? (
+        <>
+          <TeamBoardPill threadRef={activeThreadRef} />
+          <TeamBoardDialog threadRef={activeThreadRef} />
+        </>
+      ) : null,
+    [activeThreadRef, isServerThread],
+  );
   // Side chats need a started thread, and only some harnesses have one.
   const sideChatKind =
     isServerThread && activeThread
@@ -12797,7 +12907,8 @@ export default function ChatView(props: ChatViewProps) {
     ) : null
   ) : null;
   const threadDetailsPanelProps: ThreadDetailsPanelProps = {
-    defaultInlineOpen: !isDraftHeroState,
+    // A bot chat keeps its info panel closed until asked, like a contact card.
+    defaultInlineOpen: !isDraftHeroState && chatBot === undefined,
     usage: {
       providerInstanceId: activeProviderInstanceId,
       providers: providerStatuses,
@@ -12878,7 +12989,7 @@ export default function ChatView(props: ChatViewProps) {
           onStart={startSideChat}
         />
       }
-      showThreadPanelControl={!inlineRightPanelOwnsTitleBar}
+      showThreadPanelControl={!inlineRightPanelOwnsTitleBar && chatBot === undefined}
     />
   );
   const threadPanelHeaderControl = (
@@ -13002,37 +13113,72 @@ export default function ChatView(props: ChatViewProps) {
             ? panelLayoutControls
             : null}
           {inlineRightPanelOwnsTitleBar ? threadPanelHeaderControl : null}
-          <ChatHeader
-            activeThreadEnvironmentId={activeThread.environmentId}
-            activeThreadId={activeThread.id}
-            isServerThread={isServerThread}
-            activeThreadTitle={activeThread.title}
-            activeProject={activeProjectIsScratch ? null : (activeProject ?? null)}
-            activeFolderPath={
-              activeProjectIsScratch
-                ? pickedScratchFolder(
-                    activeThread.worktreePath,
-                    environmentById.get(activeThread.environmentId)?.serverConfig
-                      ?.scratchWorkspaceRoot,
-                  )
-                : null
-            }
-            parentThreadLink={parentThreadLink}
-            onOpenThread={onOpenRelatedThreadStable}
-            rightPanelOpen={inlineRightPanelOwnsTitleBar}
-            membersPanelUnavailable={rightPanelOpen || threadPanelOpen}
-            sideChatControlShown={sideChatKind !== null || sideChat.session !== null}
-            inSplitPane={inSplitPane && splitPane?.controls != null}
-            onNewThreadInProject={handleNewThreadInActiveProjectStable}
-            onOpenMedia={
-              !mediaSearch && (hasThreadMedia || serverThreadHistory.historyCursor)
-                ? () => void openMediaGallery()
-                : undefined
-            }
-            {...(activeDraftLogicalProjectKey && !activeProjectIsScratch
-              ? { onOpenProjectSettings: handleOpenDraftProjectSettingsStable }
-              : {})}
-          />
+          {parkedBot ? (
+            <BotParkedHeader
+              bot={parkedBot}
+              reserveClassName={
+                inlineRightPanelOwnsTitleBar
+                  ? "pr-10"
+                  : inSplitPane && splitPane?.controls != null
+                    ? "pr-2"
+                    : sideChatKind !== null || sideChat.session !== null
+                      ? "pr-32"
+                      : "pr-24"
+              }
+            />
+          ) : homeBot ? (
+            <BotChatHeader
+              environmentId={activeThread.environmentId}
+              bot={homeBot}
+              info={{
+                open: threadPanelOpen,
+                presentation: threadPanelPresentation,
+                popoverHandle: threadPanelPopoverHandle,
+                onToggle: toggleThreadPanelStable,
+              }}
+              reserveClassName={
+                inlineRightPanelOwnsTitleBar
+                  ? "pr-10"
+                  : inSplitPane && splitPane?.controls != null
+                    ? "pr-2"
+                    : sideChatKind !== null || sideChat.session !== null
+                      ? "pr-32"
+                      : "pr-24"
+              }
+            />
+          ) : (
+            <ChatHeader
+              activeThreadEnvironmentId={activeThread.environmentId}
+              activeThreadId={activeThread.id}
+              isServerThread={isServerThread}
+              activeThreadTitle={activeThread.title}
+              activeProject={activeProjectIsScratch ? null : (activeProject ?? null)}
+              activeFolderPath={
+                activeProjectIsScratch
+                  ? pickedScratchFolder(
+                      activeThread.worktreePath,
+                      environmentById.get(activeThread.environmentId)?.serverConfig
+                        ?.scratchWorkspaceRoot,
+                    )
+                  : null
+              }
+              parentThreadLink={parentThreadLink}
+              onOpenThread={onOpenRelatedThreadStable}
+              rightPanelOpen={inlineRightPanelOwnsTitleBar}
+              membersPanelUnavailable={rightPanelOpen || threadPanelOpen}
+              sideChatControlShown={sideChatKind !== null || sideChat.session !== null}
+              inSplitPane={inSplitPane && splitPane?.controls != null}
+              onNewThreadInProject={handleNewThreadInActiveProjectStable}
+              onOpenMedia={
+                !mediaSearch && (hasThreadMedia || serverThreadHistory.historyCursor)
+                  ? () => void openMediaGallery()
+                  : undefined
+              }
+              {...(activeDraftLogicalProjectKey && !activeProjectIsScratch
+                ? { onOpenProjectSettings: handleOpenDraftProjectSettingsStable }
+                : {})}
+            />
+          )}
           {splitPane?.controls}
         </header>
 
@@ -13137,14 +13283,19 @@ export default function ChatView(props: ChatViewProps) {
               data-empty-chat={displayedTimeline.entries.length === 0 ? "true" : undefined}
               style={{ containerType: "inline-size" }}
             >
-              {!isDraftHeroState && displayedTimeline.entries.length > 0 ? (
+              {!isDraftHeroState &&
+              displayedTimeline.entries.length > 0 &&
+              chatBot === undefined ? (
                 <DesktopMascot key={routeThreadKey} state={mascotState} moment={mascotMoment} />
               ) : null}
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
                 visitWatermark={visitWatermark ?? undefined}
                 mascotState={
-                  harnessMascotForDriver(mascot.driver, mascot.agentId) ? mascotState : "idle"
+                  // A bot has its own face; the harness mascot stays out of its chat.
+                  chatBot === undefined && harnessMascotForDriver(mascot.driver, mascot.agentId)
+                    ? mascotState
+                    : "idle"
                 }
                 citationRequest={paintOnlyDisplayedTimeline ? null : citationRequest}
                 citationHistoryLoading={threadDetailLoading}
@@ -13174,6 +13325,7 @@ export default function ChatView(props: ChatViewProps) {
                 }
                 activeTurnStartedAt={paintOnlyDisplayedTimeline ? null : activeWorkStartedAt}
                 generationByRunId={generationByRunId}
+                liveProgress={activeLiveProgress}
                 worktreeSetup={paintOnlyDisplayedTimeline ? null : worktreeSetup}
                 onCancelWorktreeSetup={onCancelWorktreeSetupStable}
                 {...(paintOnlyDisplayedTimeline
@@ -13253,6 +13405,8 @@ export default function ChatView(props: ChatViewProps) {
                   ? {
                       onUseArtifactTemplate: useArtifactTemplateStable,
                       onSendAppMessage: sendAppMessageStable,
+                      // A bot chat while Bots are off takes no card replies: cards show locked.
+                      ...(parkedBot ? {} : { onSendCardReply: sendCardReplyStable }),
                     }
                   : {})}
                 isRevertingCheckpoint={isRevertingCheckpoint}
@@ -13286,13 +13440,24 @@ export default function ChatView(props: ChatViewProps) {
                 onToolOutputCollapsedAtEnd={onToolOutputCollapsedAtEndStable}
                 onManualNavigation={cancelTimelineLiveFollowForUserNavigationStable}
                 cancelPositionRestoreRef={cancelPositionRestoreRef}
-                hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
+                hideEmptyPlaceholder={
+                  isDraftHeroState || threadDetailLoading || chatBot !== undefined
+                }
+                botChat={chatBot !== undefined}
+                botWakeNotes={botWakeNotes}
                 topFadeEnabled={!hasTimelineTopBanner}
                 {...(paintOnlyDisplayedTimeline || threadHistoryControls === undefined
                   ? {}
                   : { historyControls: threadHistoryControls })}
               />
 
+              {chatBot && displayedTimeline.entries.length === 0 && !threadDetailLoading ? (
+                <BotEmptyState
+                  bot={chatBot}
+                  disabled={!canOperateThread}
+                  onSend={parkedBot ? null : sendBotStarterStable}
+                />
+              ) : null}
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
               {showScrollToBottom && !isThreadFindActive && (
                 <div
@@ -13390,6 +13555,7 @@ export default function ChatView(props: ChatViewProps) {
                                   : "These chats share a folder and can see each other’s changes."}
                             </p>
                           ) : null}
+                          {parkedBot ? <BotsOffBar bot={parkedBot} /> : null}
                           {showProviderSubagentBar ? (
                             <ProviderSubagentBar
                               provider={selectedProviderEntry ?? null}
@@ -13442,6 +13608,9 @@ export default function ChatView(props: ChatViewProps) {
                               threadShellStarted={threadShellHasStarted(activeThreadShell)}
                               hasThreadShell={activeThreadShell !== null}
                               threadTitle={activeThread?.title || activeThreadShell?.title}
+                              {...(homeBot
+                                ? { idlePlaceholder: botComposerPlaceholder(homeBot.name) }
+                                : {})}
                               threadSubagentsEnabled={activeThreadShell?.subagentsEnabled}
                               runtimeProviderInstanceId={activeThread?.runtime?.providerInstanceId}
                               runtimeActiveRunId={activeThread?.runtime?.activeRunId ?? null}
@@ -13490,6 +13659,7 @@ export default function ChatView(props: ChatViewProps) {
                               }
                               isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
                               queuedRunsControl={queuedRunsControl}
+                              teamBoardPill={teamBoardPill}
                               bannerItems={
                                 composerBannerItems.length === 0
                                   ? EMPTY_COMPOSER_BANNER_ITEMS
@@ -13775,7 +13945,18 @@ export default function ChatView(props: ChatViewProps) {
               </AlertDialogPopup>
             </AlertDialog>
 
-            {questPanelRole() === null ? <ThreadDetailsPanel {...threadDetailsPanelProps} /> : null}
+            {questPanelRole() !== null || parkedBot ? null : homeBot ? (
+              <BotInfoPanel
+                environmentId={activeThread.environmentId}
+                bot={homeBot}
+                anchor={threadDetailsPanelProps.anchor}
+                handle={threadDetailsPanelProps.handle}
+                onPresentationChange={threadDetailsPanelProps.onPresentationChange}
+                defaultInlineOpen={false}
+              />
+            ) : (
+              <ThreadDetailsPanel {...threadDetailsPanelProps} />
+            )}
 
             {pullRequestDialogState ? (
               <PullRequestThreadDialog

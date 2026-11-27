@@ -71,18 +71,26 @@ export const DEFAULT_SCHEDULE: ScheduleDraft = {
   maxDeliveryAgeMinutes: "",
 };
 
+function defaultSchedule(now = Date.now()): ScheduleDraft {
+  return {
+    ...DEFAULT_SCHEDULE,
+    onceAt: scheduledMessageLocalDateTime(now + 3_600_000),
+  };
+}
+
 export function scheduleDraftForTask(task: Pick<ScheduledTask, "schedule">): ScheduleDraft {
+  const base = defaultSchedule();
   switch (task.schedule.type) {
     case "once":
       return {
-        ...DEFAULT_SCHEDULE,
+        ...base,
         mode: "once",
         onceAt: scheduledMessageLocalDateTime(task.schedule.runAt),
         prepareWorkspace: task.schedule.prepareWorkspace === true,
       };
     case "fixed_time":
       return {
-        ...DEFAULT_SCHEDULE,
+        ...base,
         timeOfDay: task.schedule.timeOfDay,
         weekdays: task.schedule.weekdays?.length
           ? [...new Set(task.schedule.weekdays)].sort((a, b) => a - b)
@@ -90,13 +98,13 @@ export function scheduleDraftForTask(task: Pick<ScheduledTask, "schedule">): Sch
       };
     case "interval":
       return {
-        ...DEFAULT_SCHEDULE,
+        ...base,
         mode: "interval",
         intervalMinutes: String(Math.max(1, task.schedule.everyMs / 60_000)),
       };
     case "webhook":
       return {
-        ...DEFAULT_SCHEDULE,
+        ...base,
         mode: "webhook",
         signature: task.schedule.signature,
         maxDeliveryAgeMinutes:
@@ -213,7 +221,7 @@ export function createDraft(
     projectId,
     modelSelection,
     modelSelectionIsExplicit: false,
-    schedule: DEFAULT_SCHEDULE,
+    schedule: defaultSchedule(),
     workspace: "worktree",
     baseRef: "main",
     checkoutPath: "",

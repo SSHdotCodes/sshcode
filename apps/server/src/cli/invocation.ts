@@ -8,8 +8,6 @@ import type { ServerInstallation } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { isCommandAvailable } from "@t3tools/shared/shell";
 
-import packageJson from "../../package.json" with { type: "json" };
-
 export type CliRunner = "npx" | "pnpm dlx" | "bunx";
 
 /**
@@ -105,43 +103,13 @@ export const resolveServerInstallation = Effect.gen(function* () {
 }).pipe(Effect.orElseSucceed(() => null));
 
 /**
- * The `sshcode` package spec to suggest. The literal spec the user typed (e.g.
- * `sshcode@nightly`) is resolved away before our process starts, so re-derive it
- * from the running version: nightly builds re-suggest the nightly channel,
- * anything else suggests the bare package.
+ * `sshcode <subcommand>` for a person to run. Never a package runner (`npx sshcode …`)
+ * or an npm install: no `sshcode` package is published on npm, so whoever registers
+ * the name would run code on everyone who followed the hint. A run from a runner
+ * cache gets the plain command like any other install.
  */
-function suggestedPackageSpec(version: string): string {
-  const channel = /^[^-+]+-(nightly|preview)\./.exec(version)?.[1];
-  return channel === undefined ? "sshcode" : `sshcode@${channel}`;
-}
-
-/**
- * Render a `sshcode <subcommand>` suggestion that matches how this process was
- * launched, so copy/pasting it actually works: `npx sshcode connect` suggests
- * `npx sshcode serve`, a global install suggests `sshcode serve`, and a nightly build
- * keeps the `@nightly` tag.
- */
-export function formatCliCommand(input: {
-  readonly subcommand: string;
-  readonly entryPath: string;
-  readonly version: string;
-}): string {
-  const runner = detectCliRunner(input.entryPath);
-  if (runner === null) {
-    return `sshcode ${input.subcommand}`;
-  }
-  return `${runner} ${suggestedPackageSpec(input.version)} ${input.subcommand}`;
-}
-
-/** `formatCliCommand` against this process's real entry path and version. */
 export const resolveCliCommand = (subcommand: string, args: ReadonlyArray<string> = []) =>
-  Effect.map(HostProcess.Arguments, (processArguments) =>
-    formatCliCommand({
-      subcommand: [subcommand, ...args.map(shellWord)].join(" "),
-      entryPath: processArguments[1] ?? "",
-      version: packageJson.version,
-    }),
-  );
+  Effect.succeed(`sshcode ${[subcommand, ...args.map(shellWord)].join(" ")}`);
 
 /** Quotes `value` for a POSIX shell when it needs it. */
 const shellWord = (value: string) =>
@@ -166,13 +134,12 @@ const resolveInstallLauncher = Effect.gen(function* () {
 
 /**
  * `sshcode <subcommand>` for a person to run on this host: `sshcode` when it is on PATH,
- * the package runner this process came from, or else the absolute path of the
- * launcher for this install, such as the one the desktop app installs.
+ * or else the absolute path of the launcher for this install, such as the one the
+ * desktop app installs.
  */
 export const resolveHostCliCommand = (subcommand: string) =>
   Effect.gen(function* () {
     const command = yield* resolveCliCommand(subcommand);
-    if (command !== `sshcode ${subcommand}`) return { command, launcher: false };
     if (yield* isCommandAvailable("sshcode")) return { command, launcher: false };
     const launcher = yield* resolveInstallLauncher;
     return Option.isSome(launcher)
@@ -183,7 +150,7 @@ export const resolveHostCliCommand = (subcommand: string) =>
 /**
  * `sshcode <subcommand>` as root, for setup a person runs once on the host. `sudo`
  * resets PATH on most distributions, which drops a user-installed Node (nvm,
- * fnm, a tarball) and with it `npx` or a global `sshcode`, so the command carries
+ * fnm, a tarball) and with it a global `sshcode`, so the command carries
  * PATH through unless Node is on root's PATH too. An absolute launcher needs
  * neither.
  */

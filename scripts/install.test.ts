@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Drives the real shell installer through a PTY and a gated HTTP fixture.
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { SERVER_DOWNLOADS_UNAVAILABLE } from "@t3tools/shared/cliRelease";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
@@ -110,6 +111,58 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("installer term
         }
       } finally {
         if (child.exitCode === null) child.kill();
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await NodeFSP.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+describe("installer without server downloads", () => {
+  it("both installers say the shared sentence", async () => {
+    for (const script of ["install.sh", "install.ps1"]) {
+      const source = await NodeFSP.readFile(NodePath.join(import.meta.dirname, script), "utf8");
+      expect(source).toContain(SERVER_DOWNLOADS_UNAVAILABLE);
+    }
+  });
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "says so before writing anything when the release has no checksum file",
+    async () => {
+      const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-install-unavailable-"));
+      const server = NodeHttp.createServer((_request, response) => response.writeHead(404).end());
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") throw new Error("Expected a TCP listener");
+        // Async, so this process can answer the installer's requests.
+        const child = NodeChildProcess.spawn(
+          "sh",
+          [NodePath.join(import.meta.dirname, "install.sh")],
+          {
+            env: {
+              ...process.env,
+              T3CODE_VERSION: "1.2.3",
+              T3CODE_HOME: NodePath.join(root, "home"),
+              T3CODE_INSTALL_BIN_DIR: NodePath.join(root, "bin"),
+              T3CODE_RELEASE_BASE_URL: `http://127.0.0.1:${address.port}`,
+            },
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+        let stderr = "";
+        child.stderr.on("data", (chunk: Buffer) => {
+          stderr += chunk.toString();
+        });
+        const code = await new Promise<number | null>((resolve, reject) => {
+          child.on("error", reject);
+          child.on("close", resolve);
+        });
+        expect(code).toBe(1);
+        expect(stderr).toContain(SERVER_DOWNLOADS_UNAVAILABLE);
+        expect(await NodeFSP.readdir(root)).toEqual([]);
+      } finally {
         server.closeAllConnections();
         await new Promise<void>((resolve) => server.close(() => resolve()));
         await NodeFSP.rm(root, { recursive: true, force: true });

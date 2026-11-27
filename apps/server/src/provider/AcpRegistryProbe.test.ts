@@ -56,6 +56,7 @@ describe("ACP Registry probe", () => {
           prepare: () => Effect.die("unused"),
           inspect: () => Effect.die("unused"),
           maintenance: () => Effect.die("unused maintenance"),
+          pruneManagedVersions: () => Effect.die("unused"),
           uninstallManagedBinary: () => Effect.die("unused"),
           resolve: (_settings, _cwd, environment) => {
             expect(
@@ -560,6 +561,7 @@ describe("ACP Registry probe", () => {
           prepare: () => Effect.die("unused prepare"),
           inspect: () => Effect.die("unused inspect"),
           maintenance: () => Effect.die("unused maintenance"),
+          pruneManagedVersions: () => Effect.die("unused"),
           uninstallManagedBinary: () => Effect.die("unused uninstall"),
           resolve: () =>
             Effect.succeed({
@@ -595,6 +597,7 @@ describe("ACP Registry probe", () => {
         prepare: () => Effect.die("unused prepare"),
         inspect: () => Effect.die("unused inspect"),
         maintenance: () => Effect.die("unused maintenance"),
+        pruneManagedVersions: () => Effect.die("unused"),
         uninstallManagedBinary: () => Effect.die("unused uninstall"),
         resolve: () =>
           Deferred.succeed(resolveStarted, undefined).pipe(Effect.andThen(Effect.never)),
@@ -626,6 +629,7 @@ describe("ACP Registry probe", () => {
       prepare: () => Effect.die("unused prepare"),
       inspect: () => Effect.die("unused inspect"),
       maintenance: () => Effect.die("unused maintenance"),
+      pruneManagedVersions: () => Effect.die("unused"),
       uninstallManagedBinary: () => Effect.die("unused uninstall"),
       resolve: () =>
         Effect.succeed({
@@ -683,6 +687,7 @@ describe("ACP Registry probe", () => {
       prepare: () => Effect.die("unused prepare"),
       inspect: () => Effect.die("unused inspect"),
       maintenance: () => Effect.die("unused maintenance"),
+      pruneManagedVersions: () => Effect.die("unused"),
       uninstallManagedBinary: () => Effect.die("unused uninstall"),
       resolve: () =>
         Effect.succeed({

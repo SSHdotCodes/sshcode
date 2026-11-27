@@ -15,6 +15,7 @@ import {
   TurnItemId,
 } from "@t3tools/contracts";
 import { RelayAgentActivityState } from "@t3tools/contracts/relay";
+import { registerBotThreadCheck } from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -769,6 +770,17 @@ describe("AgentAwarenessRelay", () => {
       yield* relay.drain;
       assert.equal(publications.length, 0);
     }),
+  );
+
+  it.effect("keeps a bot's own chat out of Live Activities", () =>
+    Effect.gen(function* () {
+      const { relay, publications } = yield* makeTestRelay();
+      registerBotThreadCheck((threadId) => threadId === String(THREAD_ID));
+      yield* relay.publishThread(THREAD_ID);
+      yield* TestClock.adjust("5 seconds");
+      yield* relay.drain;
+      assert.equal(publications.length, 0);
+    }).pipe(Effect.ensuring(Effect.sync(() => registerBotThreadCheck(() => false)))),
   );
 
   it.effect("confirms a first completed state and respects disabling during confirmation", () =>

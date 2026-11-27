@@ -239,6 +239,78 @@ export function subagentCardDetail(detail: string | null | undefined): string | 
   );
 }
 
+/** Built-in provider research subagents: code search (Explore/explorer) and web readers. */
+const RESEARCH_NATIVE_TYPES = new Set(["explore", "explorer", "web-fetch"]);
+
+/** A subagent whose job is finding things out: delegated as research, or a provider's research agent. */
+export function isResearchSubagent(
+  agent: Pick<OrchestrationV2Subagent, "role" | "nativeType">,
+): boolean {
+  if (agent.role === "research") return true;
+  const type = agent.nativeType?.trim().toLowerCase();
+  return type !== undefined && (RESEARCH_NATIVE_TYPES.has(type) || type.includes("research"));
+}
+
+export interface ResearchSource {
+  /** The first link the report gives to this site. */
+  readonly url: string;
+  /** The site, without "www.". */
+  readonly site: string;
+}
+
+const REPORT_LINK = /https?:\/\/[^\s<>()[\]"'`]+/giu;
+
+/**
+ * The web pages a research report links to: each site once, in the order the report
+ * first cites it, and how many distinct pages it linked in all.
+ */
+export function researchSources(report: string | null | undefined): {
+  readonly sites: ReadonlyArray<ResearchSource>;
+  readonly pages: number;
+} {
+  if (!report) return { sites: [], pages: 0 };
+  const pages = new Set<string>();
+  const sites = new Map<string, ResearchSource>();
+  for (const [raw] of report.matchAll(REPORT_LINK)) {
+    let url: URL;
+    try {
+      url = new URL(raw.replace(/[.,;:!?*_]+$/u, ""));
+    } catch {
+      continue;
+    }
+    pages.add(url.href);
+    const site = url.hostname.replace(/^www\./u, "");
+    if (site && !sites.has(site)) sites.set(site, { url: url.href, site });
+  }
+  return { sites: [...sites.values()], pages: pages.size };
+}
+
+/** The opening of a research report as one plain paragraph: no headings, bullets, links or tables. */
+export function researchReportPreview(
+  report: string | null | undefined,
+  maxChars = 280,
+): string | null {
+  if (!report) return null;
+  const words: string[] = [];
+  let length = 0;
+  for (const rawLine of report.split("\n")) {
+    const line = rawLine
+      .replace(/!?\[([^\]]+)\]\((?:\\.|[^\\()]|\((?:\\.|[^\\()])*\))*\)/g, "$1")
+      .replace(/^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s*)/u, "")
+      .replace(/[`*_]|^\|.*\|$|^-{3,}$/gu, "")
+      .replace(REPORT_LINK, "")
+      .replace(/\s+/gu, " ")
+      .trim();
+    if (!line) continue;
+    words.push(line);
+    length += line.length + 1;
+    if (length > maxChars) break;
+  }
+  const text = words.join(" ");
+  if (!text) return null;
+  return text.length > maxChars ? `${text.slice(0, maxChars).trimEnd()}…` : text;
+}
+
 /** An independent chat's card reads its live shell, including old creation receipts. */
 export function createdChatPresentation(
   item: Pick<

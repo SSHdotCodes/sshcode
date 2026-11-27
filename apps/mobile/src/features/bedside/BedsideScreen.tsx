@@ -1,3 +1,4 @@
+import { useWithoutBotThreads } from "../bots/state";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useKeepAwake } from "expo-keep-awake";
@@ -126,7 +127,7 @@ function BedsideContent(props: {
   }));
 
   // The same shells Home lists, live for as long as the screen shows.
-  const allThreads = useAtomValue(homeThreadShells.threadShellsAtom);
+  const allThreads = useWithoutBotThreads(useAtomValue(homeThreadShells.threadShellsAtom));
   const environments = useWorkspaceEnvironments();
   const snapshot = useMemo(
     () =>

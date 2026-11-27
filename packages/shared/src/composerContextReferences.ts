@@ -6,6 +6,7 @@ import {
   type ElementContextDetails,
   type KnownComposerContextRecord,
 } from "@t3tools/contracts";
+import { expandAssistantCitationsForProvider } from "./assistantCitations.ts";
 
 /**
  * Canonical inline reference: `[label](t3-context://v1/<kind>/<contextId>)`, or the image
@@ -345,17 +346,19 @@ export function projectComposerContextForProvider(input: {
   records: ReadonlyArray<ComposerContextRecord>;
 }): string {
   const occurrences = collectComposerContextReferences(input.text);
-  if (occurrences.length === 0) return input.text;
+  if (occurrences.length === 0) return expandAssistantCitationsForProvider(input.text);
   const recordsById = new Map<ComposerContextId, ComposerContextRecord | undefined>();
   for (const record of input.records) {
     // Even callers that bypass the wire schema must not silently select an ambiguous payload.
     recordsById.set(record.contextId, recordsById.has(record.contextId) ? undefined : record);
   }
-  const body = replaceComposerContextReferences(input.text, (occurrence) =>
-    formatComposerContextProviderMarker(
-      recordsById.get(occurrence.contextId)?.kind ?? occurrence.kind,
-      occurrence.label,
-      occurrence.contextId,
+  const body = expandAssistantCitationsForProvider(
+    replaceComposerContextReferences(input.text, (occurrence) =>
+      formatComposerContextProviderMarker(
+        recordsById.get(occurrence.contextId)?.kind ?? occurrence.kind,
+        occurrence.label,
+        occurrence.contextId,
+      ),
     ),
   );
   const seen = new Set<ComposerContextId>();

@@ -9,6 +9,7 @@ import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeI
 
 import {
   T3_CODE_BROWSER_TOOL_INSTRUCTIONS,
+  botInstructionsFor,
   orchestrationInstructionsFor,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 
@@ -224,16 +225,19 @@ export function buildCodexAdditionalContext(
   isSubagent?: boolean,
 ): Record<string, V2TurnStartParams__AdditionalContextEntry> {
   const tools = toolInstructions(toolsAvailable);
+  // Its own entry, so a memory edit resends this block alone.
+  const bot = isSubagent ? null : botInstructionsFor(threadId);
   // Separate keys keep each value under Codex's per-entry token cap.
   return {
     t3_code_orchestration: {
       kind: "application",
-      value: orchestrationInstructionsFor(threadId, subagentsEnabled, isSubagent),
+      value: orchestrationInstructionsFor(threadId, subagentsEnabled, isSubagent, false),
     },
     t3_code_runtime: {
       kind: "application",
       value: buildRuntimeInstructions({ harness: "Codex", ...runtime }),
     },
     ...(tools ? { t3_code_tools: { kind: "application", value: tools } } : {}),
+    ...(bot === null ? {} : { t3_code_bot: { kind: "application", value: bot } }),
   };
 }

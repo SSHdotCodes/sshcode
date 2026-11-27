@@ -169,6 +169,58 @@ describe("AcpMcpOverAcpBridge", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("keeps tools/list behind MCP reinitialization on an existing connection", () =>
+    Effect.gen(function* () {
+      const reinitializeStarted = Promise.withResolvers<void>();
+      const releaseReinitialize = Promise.withResolvers<void>();
+      const listSessions: Array<string | null> = [];
+      let initialized = 0;
+      const bridge = yield* makeAcpMcpOverAcpBridge({
+        endpoint: "http://127.0.0.1:1/mcp",
+        authorization: "Bearer bridge-test",
+        allocateConnectionId: Effect.succeed("connection-1"),
+        fetchImplementation: async (_url, init) => {
+          if (init?.method === "DELETE") return new Response(null, { status: 204 });
+          const { id, method } = JSON.parse(String(init?.body)) as { id: number; method: string };
+          if (method === "initialize") {
+            const session = ++initialized;
+            if (session === 2) {
+              reinitializeStarted.resolve();
+              await releaseReinitialize.promise;
+            }
+            return new Response(
+              JSON.stringify({ jsonrpc: "2.0", id, result: { protocolVersion: "2025-06-18" } }),
+              {
+                headers: {
+                  "content-type": "application/json",
+                  "mcp-session-id": `session-${session}`,
+                },
+              },
+            );
+          }
+          const session = new Headers(init?.headers).get("mcp-session-id");
+          listSessions.push(session);
+          if (session !== "session-2") return new Response(null, { status: 400 });
+          return Response.json({ jsonrpc: "2.0", id, result: { tools: [] } });
+        },
+      });
+      const { connectionId } = yield* bridge.connect({ serverId: "t3-code" });
+      yield* bridge.message({ connectionId, method: "initialize" });
+
+      const reinitialize = yield* bridge
+        .message({ connectionId, method: "initialize" })
+        .pipe(Effect.forkChild);
+      yield* Effect.promise(() => reinitializeStarted.promise);
+      const list = yield* bridge
+        .message({ connectionId, method: "tools/list" })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      releaseReinitialize.resolve();
+      yield* Fiber.join(reinitialize);
+      expect(yield* Fiber.join(list)).toEqual({ tools: [] });
+      expect(listSessions).toEqual(["session-2"]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("closes all MCP sessions within one disconnect timeout during runtime cleanup", () =>
     Effect.gen(function* () {
       const deleteStarted = Promise.withResolvers<void>();

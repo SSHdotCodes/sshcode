@@ -8,7 +8,12 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeUtil from "node:util";
 import * as NodeVM from "node:vm";
-import { runCliSample } from "./codex-cli.ts";
+import { requireChatGptLogin, runCliSample } from "./codex-cli.ts";
+import {
+  requireInstructionsApplied,
+  setInstructionsOverride,
+  withInstructionsOverride,
+} from "./instructionsOverride.ts";
 import * as NodeZlib from "node:zlib";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -97,6 +102,8 @@ type McpToolUseCall = typeof McpToolUseCall.Type;
 const McpToolUseExpect = Schema.Struct({
   /** Each entry needs one matching call. */
   calls: Schema.optional(Schema.Array(McpToolUseCall)),
+  /** Each group needs one call matching any of its entries. */
+  callsOneOf: Schema.optional(Schema.Array(Schema.Array(McpToolUseCall))),
   /** No call may match any entry. */
   callsMustNot: Schema.optional(Schema.Array(McpToolUseCall)),
   notCalls: Schema.optional(Schema.Array(Schema.String)),
@@ -343,7 +350,9 @@ export const t3SystemAppend = (model: Model) => {
     mcpServers: { "t3-code": { type: "http", url: "http://127.0.0.1/mcp" } },
   });
   if (isRecord(systemPrompt) && systemPrompt.type === "preset" && systemPrompt.append) {
-    return systemPrompt.append;
+    const append = withInstructionsOverride(systemPrompt.append);
+    requireInstructionsApplied([append]);
+    return append;
   }
   throw new Error("makeClaudeQueryOptions no longer appends T3 text to a preset prompt.");
 };
@@ -519,9 +528,11 @@ export const buildCodexBase = (
     { model: options.model, reasoningEffort: effort },
     { browser: true, device: true },
   );
-  input.push(
-    ...Object.entries(context).map(([key, entry]) => message(`<${key}>${entry.value}</${key}>`)),
+  const contextPieces = Object.entries(context).map(
+    ([key, entry]) => [key, withInstructionsOverride(entry.value)] as const,
   );
+  requireInstructionsApplied(contextPieces.map(([, value]) => value));
+  input.push(...contextPieces.map(([key, value]) => message(`<${key}>${value}</${key}>`)));
   const nativeTools = input
     .flatMap((item) =>
       item.type === "additional_tools" && Array.isArray(item.tools)
@@ -884,6 +895,17 @@ const t3Default = (sample: Sample, name: string, input: Readonly<Record<string, 
         htmlRender: { attachmentId: "att-1", title: input.title ?? "Visual", height: 560 },
         message: HTML_RENDERED,
       };
+    case "monitor_start":
+      // Mirrors MonitorService: a durable job cannot also be restartable or use silenceMs.
+      if (input.durable === true && (input.restartable === true || input.silenceMs !== undefined))
+        return {
+          error: {
+            code: "invalid_request",
+            message:
+              "Use a valid wakeOn regex or false; durable jobs cannot use restartable or silenceMs.",
+          },
+        };
+      return { monitorId: "monitor-1" };
     case "preview_status":
       return {
         available: false,
@@ -1164,6 +1186,8 @@ export const gradeSample = (expect: McpToolUseCase["expect"], run: SampleRun) =>
     calls.some((call) => tool.split("|").includes(call.tool) && matches(args, call.input));
   const label = ({ tool, args }: McpToolUseCall) => (args ? `${tool} ${valueText(args)}` : tool);
   for (const call of expect.calls ?? []) add(`calls ${label(call)}`, found(call));
+  for (const group of expect.callsOneOf ?? [])
+    add(`callsOneOf ${group.map(label).join(" | ")}`, group.some(found));
   for (const call of expect.callsMustNot ?? []) add(`callsMustNot ${label(call)}`, !found(call));
   for (const tool of expect.notCalls ?? []) add(`notCalls ${tool}`, count(tool) === 0);
   if (expect.order !== undefined) {
@@ -1765,7 +1789,7 @@ const summarize = (
     `- Agent tokens: ${agent.tokens}${codex ? "." : ` ($${agent.cost.toFixed(2)}).`}`,
     ...(options.runner === "codex-cli"
       ? [
-          "- Installed Codex CLI and native tools, read-only synthetic fixture, local mock MCP. No shell simulator.",
+          "- Installed Codex CLI, disposable writable fixture, offline native commands and local mock MCP.",
         ]
       : [
           `- Shell simulator (${options.shellModel}) tokens: ${shell.tokens} (usage only; no price estimate).`,
@@ -1812,7 +1836,9 @@ const Flags = Schema.Struct({
   "dry-run": Schema.Boolean,
   "stop-on-regression": Schema.Boolean,
   "regression-budget": Schema.optional(PositiveIntOrZero),
+  "native-agents": Schema.Boolean,
   context: Schema.Boolean,
+  instructions: Schema.optional(Schema.String),
 });
 const decodeFlags = Schema.decodeUnknownEffect(Flags);
 const decodeCapture = Schema.decodeUnknownEffect(Schema.fromJsonString(Capture));
@@ -1852,8 +1878,12 @@ const main = Effect.gen(function* () {
       "dry-run": { type: "boolean", default: false },
       "stop-on-regression": { type: "boolean", default: false },
       "regression-budget": string,
+      // Keep Codex's native multi-agent mode & <multi_agent_mode> prompt enabled.
+      "native-agents": { type: "boolean", default: false },
       // Prints the size of T3's text and tool schemas, then exits. Needs no template or key.
       context: { type: "boolean", default: false },
+      // A file with a candidate orchestration section, swapped into every prompt.
+      instructions: string,
     },
   });
   const flags = yield* decodeFlags({
@@ -1863,6 +1893,10 @@ const main = Effect.gen(function* () {
     ...values,
   });
   surface = flags.surface;
+  if (flags.instructions !== undefined) {
+    const fsForOverride = yield* FileSystem.FileSystem;
+    setInstructionsOverride(yield* fsForOverride.readFileString(flags.instructions));
+  }
   if (flags.context) {
     process.stdout.write(`${t3ContextReport(flags.model)}\n`);
     return;
@@ -1959,6 +1993,8 @@ const main = Effect.gen(function* () {
       "Provide a prepared key via --api-key-env and pass --out <directory>. Harness credentials are never read.";
     return yield* Effect.die(new Error(message));
   }
+  const codexHome =
+    flags.runner === "codex-cli" ? yield* Effect.tryPromise(requireChatGptLogin) : undefined;
   const config: Config = {
     apiKey,
     model: flags.model,
@@ -2026,12 +2062,14 @@ const main = Effect.gen(function* () {
       { readonly _tag: string } | Error,
       HttpClient.HttpClient
     > =
-      flags.runner === "codex-cli"
+      codexHome !== undefined
         ? Effect.tryPromise(() =>
             runCliSample(testCase, {
               model: flags.model,
               effort,
               fixtureRoot: flags["fixture-root"],
+              codexHome,
+              nativeAgents: flags["native-agents"],
               definitions: baseForCase.t3.map((tool) => ({
                 name: normalizeToolName(tool.name),
                 description: valueText(tool.description),

@@ -190,6 +190,7 @@ import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
 import { useAssetUrlRefresh, useAssetUrlState } from "../assets/assetUrls";
 import { cn } from "../lib/utils";
+import { WebsiteLetterTile } from "./WebsiteLetterTile";
 import { useRemoteOpenResolution, type RemoteOpenMode } from "../remoteOpen";
 import { useRightPanelStore } from "../rightPanelStore";
 import { readThreadShell, useProjects } from "../state/entities";
@@ -1297,6 +1298,7 @@ function brandLinkIcon(host: string): typeof GitHubIcon | null {
 
 const MarkdownLinkFavicon = memo(function MarkdownLinkFavicon({ host }: { host: string }) {
   const [failedHost, setFailedHost] = useState<string | null>(null);
+  const websiteIconsEnabled = useClientSettings((settings) => settings.websiteIconsEnabled);
   const BrandIcon = brandLinkIcon(host);
   const faviconUrl = BrandIcon ? null : faviconUrlForOrigin(`https://${host}`);
   return (
@@ -1306,6 +1308,13 @@ const MarkdownLinkFavicon = memo(function MarkdownLinkFavicon({ host }: { host: 
     >
       {BrandIcon ? (
         <BrandIcon className={MARKDOWN_LINK_FAVICON_CLASS_NAME} />
+      ) : !websiteIconsEnabled ? (
+        <WebsiteLetterTile
+          site={host}
+          size={14}
+          className="rounded-sm"
+          fallback={<GlobeIcon className={MARKDOWN_LINK_FAVICON_CLASS_NAME} />}
+        />
       ) : faviconUrl === null || failedHost === host || failedFaviconHosts.has(host) ? (
         <GlobeIcon className={MARKDOWN_LINK_FAVICON_CLASS_NAME} />
       ) : (
@@ -3636,6 +3645,9 @@ function ChatMarkdown({
   extraRemarkPlugins = EMPTY_REMARK_PLUGINS,
   ...props
 }: ChatMarkdownProps) {
+  const isStreaming = props.isStreaming === true;
+  const [hasStreamed, setHasStreamed] = useState(isStreaming);
+  if (isStreaming && !hasStreamed) setHasStreamed(true);
   const emojiSupport = useEmojiSupport(text);
   const [mathPlugin, setMathPlugin] = useState<typeof import("remark-math").default | null>(null);
   const mayContainMath = text.includes("$") || text.includes("\\(") || text.includes("\\[");
@@ -3654,12 +3666,13 @@ function ChatMarkdown({
   const emojiOnly = isEmojiOnlyMessage(emojiSupport?.emojiText(text) ?? text);
   const { componentState, handleCopy, markdownRef, localMediaPreview, setLocalMediaPreview } =
     useChatMarkdownState({ text, ...props });
+  // Keep the settled blocks mounted when the final text can still be split safely.
   const streamingBlocks =
-    props.isStreaming === true && extraRemarkPlugins.length === 0 && !props.onTaskListChange
+    (isStreaming || hasStreamed) && extraRemarkPlugins.length === 0 && !props.onTaskListChange
       ? splitMarkdownBlocks(text)
       : null;
   const incrementalParsing =
-    props.isStreaming === true &&
+    isStreaming &&
     streamingBlocks === null &&
     extraRemarkPlugins.length === 0 &&
     /(?:^|\n) {0,3}(?:`{3}|~{3})/.test(text);
@@ -3724,7 +3737,7 @@ function ChatMarkdown({
                 : CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
             }
             shared={!uncachedPlugins}
-            cache={props.isStreaming !== true || index < blocks.length - 1}
+            cache={!isStreaming || index < blocks.length - 1}
           />
         ))}
       </ChatMarkdownRendererContext>

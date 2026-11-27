@@ -26,6 +26,7 @@ import {
   PaletteIcon,
   SearchIcon,
   Settings2Icon,
+  SlidersHorizontalIcon,
   WrenchIcon,
   XIcon,
 } from "lucide-react";
@@ -55,6 +56,7 @@ import {
   type SettingsSearchItem,
 } from "./settingsSearch";
 import { useAvailableSettingsSearchItems } from "./useAvailableSettingsSearchItems";
+import { BotsIcon } from "../Icons";
 import { validateSettingsScopeSearch } from "./settingsScope";
 
 const SnapShotIcon = createLucideIcon("snap-shot", [
@@ -91,6 +93,8 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/archived": ArchiveIcon,
   "/settings/providers": BotIcon,
   "/settings/model-rankings": ListOrderedIcon,
+  "/settings/agents": SlidersHorizontalIcon,
+  "/settings/bots": BotsIcon,
   "/settings/tools": WrenchIcon,
   "/settings/computer-use": MonitorIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,

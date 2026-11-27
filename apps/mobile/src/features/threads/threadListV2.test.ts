@@ -1,3 +1,4 @@
+import { threadSearchContextTerms } from "@t3tools/client-runtime/state/thread-search";
 import { presentThreadShell } from "@t3tools/client-runtime/state/models";
 import * as DateTime from "effect/DateTime";
 import { planPinnedMove } from "@t3tools/client-runtime/state/thread-sort";
@@ -29,7 +30,7 @@ import { makeRawThreadShell, makeThreadShellFixture } from "../../test-fixtures"
 import { threadJumpTarget } from "../keyboard/threadKeyboardShortcuts";
 import {
   buildThreadListV2Items,
-  rankedContentSearchMatches,
+  mergeMobileThreadSearchResults,
   buildThreadListV2ListItems,
   getThreadListV2OrderedSection,
   resolveThreadListV2SnoozeMenuSelection,
@@ -1225,10 +1226,13 @@ describe("pending mobile thread moves", () => {
     }
   });
 
-  it("keeps search results in the full pending section order", () => {
+  it("keeps search results in activity order during a pending pin move", () => {
     const { rows, assignments, pending, update } = fixture("pinned");
-    const current = update(update(rows, assignments[0]!), assignments[1]!);
-    expect(layout(current, pending, "match")).toEqual(["c", "b"]);
+    const current = update(update(rows, assignments[0]!), assignments[1]!).map((row) =>
+      row.id === "b" ? { ...row, latestUserMessageAt: "2026-06-03T12:00:00.000Z" } : row,
+    );
+    expect(layout(current, pending)).toEqual(["a", "c", "b"]);
+    expect(layout(current, pending, "match")).toEqual(["b", "c"]);
   });
 
   it("releases for real section membership and foreign key changes", () => {
@@ -2414,28 +2418,58 @@ describe("connection-aware thread status", () => {
   });
 });
 
-it("renders ranked content matches separately from local title rows, including archived chats", () => {
-  const title = makeThread({ id: ThreadId.make("title"), title: "Battery issue" });
-  const recent = makeThread({ id: ThreadId.make("recent"), title: "Recent discussion" });
-  const best = makeThread({ id: ThreadId.make("best"), title: "Earlier discussion" });
-  const archived = makeThread({
-    id: ThreadId.make("archived"),
-    title: "Battery notes",
-    archivedAt: NOW,
+it("interleaves loaded rows and archive hits in topic and activity order, including pinned chats", () => {
+  const searchQuery = "betterwright";
+  const title = makeThread({
+    id: ThreadId.make("old-title"),
+    title: "Review and Fix BetterWright Issues",
+    latestUserMessageAt: "2026-10-20T12:00:00.000Z",
+    pinnedAt: NOW,
   });
-  const matches = [best, recent, title, archived].map((thread) => ({
+  const olderBody = makeThread({
+    id: ThreadId.make("one-day"),
+    title: "Follow up",
+    latestUserMessageAt: "2026-11-26T12:00:00.000Z",
+  });
+  const newerTopic = makeThread({
+    id: ThreadId.make("wanted"),
+    title: "Review Pi Prompt Parts Change",
+    worktreePath: "/work/https-github-com-betterwright-betterwright",
+    latestUserMessageAt: "2026-11-25T12:00:00.000Z",
+  });
+  const matches = [
+    { id: "one-day", about: false, activityAt: "2026-10-01T12:00:00.000Z" },
+    { id: "nine-minutes", about: false, activityAt: "2026-11-27T11:51:00.000Z" },
+    { id: "chromium", about: true, activityAt: "2026-11-01T12:00:00.000Z" },
+    { id: "fifteen-minutes", about: false, activityAt: "2026-11-27T11:45:00.000Z" },
+  ].map(({ id, ...order }) => ({
+    ...order,
     environmentId,
-    threadId: thread.id,
-    projectId: thread.projectId,
-    source: "assistant" as const,
-    snippet: "The computer loses charge overnight",
+    threadId: ThreadId.make(id),
+    projectId: title.projectId,
+    source: "user" as const,
+    snippet: "BetterWright",
     messageCreatedAt: NOW,
   }));
+  const layout = buildThreadListV2Items({
+    threads: [title, olderBody, newerTopic],
+    searchQuery,
+    now: NOW,
+    matchedThreadKeys: new Set(matches.map(threadSearchMatchKey)),
+  });
+  const rows = mergeMobileThreadSearchResults({
+    items: buildThreadListV2ListItems({ layout, pendingTasks: [] }),
+    matches,
+    query: searchQuery,
+    contextOf: threadSearchContextTerms,
+  });
   expect(
-    rankedContentSearchMatches([recent, title, best, archived], matches, "battery").map(
-      (match) => match.threadId,
+    rows.map((row) =>
+      row.type === "v2-thread"
+        ? row.item.thread.id
+        : row.type === "v2-search-match"
+          ? row.match.threadId
+          : row.type,
     ),
-    // The archived chat is named by the search ("Battery notes"), so it leads the chats
-    // that only mention a battery; those keep the server's order.
-  ).toEqual(["archived", "best", "recent"]);
+  ).toEqual(["wanted", "chromium", "old-title", "nine-minutes", "fifteen-minutes", "one-day"]);
 });

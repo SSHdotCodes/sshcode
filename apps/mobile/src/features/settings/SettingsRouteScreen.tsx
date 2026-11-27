@@ -1,4 +1,7 @@
 import { useWorkflowsEnabled } from "../workflows/state";
+import { useBotEntries, useBotsEnabled } from "../bots/state";
+import { agentBehaviorSummary } from "@t3tools/client-runtime/state/agent-behavior";
+import { useSyncedAgentBehavior } from "./agents/useSyncedAgentBehavior";
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
 import { useAuth, useUser } from "@clerk/expo";
 import { useNavigation } from "@react-navigation/native";
@@ -90,6 +93,50 @@ function ConfiguredSettingsRouteScreen() {
 
 function LocalSettingsRouteScreen() {
   return <SettingsIndexSections />;
+}
+
+/** Settings > Agents, with the levels that differ from Default under its name. */
+function AgentsSettingsRow(props: { readonly disabled: boolean }) {
+  const navigation = useNavigation();
+  const { levels } = useSyncedAgentBehavior();
+  return (
+    <SettingsRow
+      icon="slider.horizontal.3"
+      tint={SETTINGS_TINT.blue}
+      label="Agents"
+      value={agentBehaviorSummary(levels)}
+      valuePosition="below"
+      onPress={() =>
+        navigation.navigate("SettingsSheet", {
+          screen: "SettingsContent",
+          params: { screen: "SettingsAgents" },
+        })
+      }
+      disabled={props.disabled}
+    />
+  );
+}
+
+/** Settings > Bots, with whether they are on and how many there are. */
+function BotsSettingsRow(props: { readonly disabled: boolean }) {
+  const navigation = useNavigation();
+  const { enabled } = useBotsEnabled();
+  const count = useBotEntries().length;
+  return (
+    <SettingsRow
+      icon="bot.face"
+      tint={SETTINGS_TINT.indigo}
+      label="Bots"
+      value={!enabled ? "Off" : count === 1 ? "1 bot" : count > 1 ? `${count} bots` : "On"}
+      onPress={() =>
+        navigation.navigate("SettingsSheet", {
+          screen: "SettingsContent",
+          params: { screen: "SettingsBots" },
+        })
+      }
+      disabled={props.disabled}
+    />
+  );
 }
 
 /** The Overview prototype's switch; saved on this phone. */
@@ -209,6 +256,8 @@ function SettingsIndexSections(props: {
         </SettingsSection>
 
         <SettingsSection title="Agents & models" separated>
+          <AgentsSettingsRow disabled={noServerTargets} />
+          <BotsSettingsRow disabled={noServerTargets} />
           <SettingsRow
             icon="text.bubble"
             tint={SETTINGS_TINT.green}

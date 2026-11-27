@@ -145,6 +145,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadSettlement: Schema.optionalKey(Schema.Boolean),
   /** Server evaluates merge and inactivity settlement without a client. */
   threadAutoSettlement: Schema.optionalKey(Schema.Boolean),
+  /** Server runs Settings > Bots (bots.subscribe / bots.mutate). Absent on older servers, which
+      would drop the connection on those calls, so clients hide Bots for them. */
+  bots: Schema.optionalKey(Schema.Boolean),
   storageCleanup: Schema.optionalKey(Schema.Boolean),
   storageCleanupRun: Schema.optionalKey(Schema.Boolean),
   storageMaintenance: Schema.optionalKey(Schema.Boolean),

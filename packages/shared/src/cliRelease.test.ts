@@ -9,6 +9,9 @@ import {
   cliReleaseIndexPageUrl,
   newestCliReleaseVersion,
   parseChecksums,
+  SERVER_DOWNLOADS_UNAVAILABLE,
+  serverDownloadsUnavailable,
+  serverUpdateUnavailable,
 } from "./cliRelease.ts";
 
 describe("cliRelease", () => {
@@ -90,5 +93,18 @@ describe("cliRelease", () => {
       "https://api.github.com/repos/SSHdotCodes/sshcode/releases?per_page=100&page=1",
     );
     expect(cliReleaseIndexPageUrl(3)).toContain("page=3");
+  });
+
+  it("turns server-download flows off or on with the one switch", () => {
+    expect(serverDownloadsUnavailable(false)).toBe(SERVER_DOWNLOADS_UNAVAILABLE);
+    expect(serverDownloadsUnavailable(true)).toBeNull();
+    for (const selfUpdate of ["boot-service", "respawn"] as const) {
+      expect(serverUpdateUnavailable(selfUpdate, false)).toBe(SERVER_DOWNLOADS_UNAVAILABLE);
+      expect(serverUpdateUnavailable(selfUpdate, true)).toBeNull();
+    }
+    // The desktop app's own update and a manual update never need the download.
+    for (const selfUpdate of ["desktop-managed", null, undefined] as const) {
+      expect(serverUpdateUnavailable(selfUpdate, false)).toBeNull();
+    }
   });
 });

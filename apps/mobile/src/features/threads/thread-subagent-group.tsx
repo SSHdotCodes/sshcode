@@ -1,4 +1,5 @@
 import { FirstSubagentAsk } from "./FirstSubagentAsk";
+import { TeamBoardPresenceChip } from "./TeamBoardPresenceChip";
 import { SubagentGradeBadge } from "./SubagentGradeBadge";
 import { useAtomValue } from "@effect/atom-react";
 import { connectionWorkLabel, connectionWorkStatus } from "@t3tools/client-runtime/connection";
@@ -9,6 +10,9 @@ import {
   type SubagentSpeed,
   subagentSpeed,
   summarizeSubagentStatuses,
+  isResearchSubagent,
+  researchReportPreview,
+  researchSources,
 } from "@t3tools/client-runtime/state/subagent-display";
 import { isActiveSubagentStatus } from "@t3tools/client-runtime/state/subagentRuntime";
 import type {
@@ -18,7 +22,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AppState, Pressable, View, type ColorValue } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
@@ -29,9 +33,18 @@ import { cn } from "../../lib/cn";
 import type { ThreadFeedActivity } from "../../lib/threadActivity";
 import { serverEnvironment } from "../../state/server";
 import { environmentThreadDetails } from "../../state/threads";
-import { subagentCardElapsed } from "./subagent-card-presentation";
+import { subagentCardDetail, subagentCardElapsed } from "./subagent-card-presentation";
+import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { liveSubagentThreadId, shouldOverlaySubagentStatus } from "./subagentLiveStatus";
-import { SUBAGENT_TRANSCRIPT_CARD_CLASS_NAME, SubagentRow } from "./SubagentRow";
+import {
+  IMAGE_GENERATOR_NATIVE_TYPE,
+  ImageGenerationPictures,
+  ImageGenerationRow,
+  ResearchReport,
+  ResearchRow,
+  SUBAGENT_TRANSCRIPT_CARD_CLASS_NAME,
+  SubagentRow,
+} from "./SubagentRow";
 import { WorkLogBlock } from "./work-log-layout";
 
 const EMPTY_LIVE_SUBAGENTS = Atom.make<ReadonlyArray<OrchestrationV2Subagent> | undefined>(
@@ -69,9 +82,7 @@ export function SubagentElapsed({ agents }: { readonly agents: ReadonlyArray<Age
     return () => clearInterval(intervalId);
   }, [appActive, focused, live]);
   const elapsed = subagentCardElapsed(agents, nowMs);
-  return elapsed ? (
-    <Text className="shrink-0 text-xs tabular-nums text-foreground-muted">{elapsed}</Text>
-  ) : null;
+  return elapsed ? <Text className="shrink-0 text-xs text-foreground-muted">{elapsed}</Text> : null;
 }
 
 function SubagentAvatar(props: {
@@ -97,9 +108,16 @@ export function ThreadSubagentGroup(props: {
   readonly expandedRows: Readonly<Record<string, boolean>>;
   readonly iconSubtleColor: ColorValue;
   readonly onToggleRow: (rowId: string, anchorKey: string) => void;
+  /** Shows a picture a subagent made, the way the feed shows pictures an agent opened. */
+  readonly renderImage?: (image: {
+    href: string;
+    alt: string | null;
+    title: string | null;
+  }) => ReactNode;
 }) {
   const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
   const navigation = useNavigation();
+  const openLink = useOpenPullRequest();
   const members = props.activities.flatMap(({ projectedItem }) =>
     projectedItem.item.type === "subagent"
       ? [
@@ -133,6 +151,9 @@ export function ThreadSubagentGroup(props: {
       model: live?.model ?? null,
       modelSelection: live?.modelSelection,
       remote: live?.remote,
+      nativeType: live?.nativeType,
+      role: live?.role,
+      imagePaths: live?.imagePaths,
     };
   });
   const connection = useRemoteEnvironmentRuntime(props.environmentId);
@@ -204,6 +225,11 @@ export function ThreadSubagentGroup(props: {
         <View className="mb-1 gap-1.5">
           {agents.map((agent) => {
             const threadId = agent.childThreadId;
+            const report =
+              isResearchSubagent(agent) && agent.status === "completed" ? agent.result : null;
+            const research = isResearchSubagent(agent)
+              ? { sources: researchSources(report), preview: researchReportPreview(report) }
+              : null;
             return (
               <View key={agent.item.id}>
                 <Pressable
@@ -226,20 +252,70 @@ export function ThreadSubagentGroup(props: {
                   }}
                   className={SUBAGENT_TRANSCRIPT_CARD_CLASS_NAME}
                 >
-                  <SubagentRow
-                    environmentId={props.environmentId}
-                    subagent={agent}
-                    elapsed={<SubagentElapsed agents={[agent]} />}
-                    grade={
-                      <SubagentGradeBadge
-                        environmentId={props.environmentId}
-                        taskId={agent.id}
-                        origin={agent.origin}
-                        status={agent.status}
-                      />
-                    }
-                  />
+                  {research ? (
+                    <ResearchRow
+                      environmentId={props.environmentId}
+                      subagent={agent}
+                      title={agent.title ?? "Research"}
+                      status={agent.status}
+                      pages={research.sources.pages}
+                      elapsed={<SubagentElapsed agents={[agent]} />}
+                      canOpenThread={threadId !== null}
+                    />
+                  ) : agent.nativeType === IMAGE_GENERATOR_NATIVE_TYPE ? (
+                    <ImageGenerationRow
+                      title={agent.title ?? "Image generation"}
+                      status={agent.status}
+                      imageCount={agent.imagePaths?.length ?? 0}
+                      elapsed={<SubagentElapsed agents={[agent]} />}
+                      canOpenThread={threadId !== null}
+                    />
+                  ) : (
+                    <SubagentRow
+                      environmentId={props.environmentId}
+                      subagent={agent}
+                      elapsed={<SubagentElapsed agents={[agent]} />}
+                      grade={
+                        <>
+                          {agent.origin === "app_owned" ? (
+                            <TeamBoardPresenceChip
+                              environmentId={props.environmentId}
+                              threadId={agent.threadId}
+                              taskId={agent.id}
+                            />
+                          ) : null}
+                          <SubagentGradeBadge
+                            environmentId={props.environmentId}
+                            taskId={agent.id}
+                            origin={agent.origin}
+                            status={agent.status}
+                          />
+                        </>
+                      }
+                    />
+                  )}
                 </Pressable>
+                {research ? (
+                  <ResearchReport
+                    working={isActiveSubagentStatus(agent.status)}
+                    progress={subagentCardDetail(agent.progress ?? null)}
+                    preview={research.preview}
+                    failure={
+                      agent.status === "failed"
+                        ? subagentCardDetail(agent.result || agent.progress || null)
+                        : null
+                    }
+                    sites={research.sources.sites}
+                    onOpenSite={(url) => void openLink(url)}
+                  />
+                ) : null}
+                {agent.nativeType === IMAGE_GENERATOR_NATIVE_TYPE ? (
+                  <ImageGenerationPictures
+                    imagePaths={agent.imagePaths ?? []}
+                    working={isActiveSubagentStatus(agent.status)}
+                    renderImage={props.renderImage}
+                  />
+                ) : null}
                 {agent.origin === "app_owned" && isActiveSubagentStatus(agent.status) ? (
                   <FirstSubagentAsk environmentId={props.environmentId} subagent={agent} />
                 ) : null}

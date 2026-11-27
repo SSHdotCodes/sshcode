@@ -1335,4 +1335,37 @@ describe("mergeUsage", () => {
     expect(merged.daily).toHaveLength(1);
     expect(merged.daily[0]?.costUsd).toBe(10);
   });
+  it("marks daily and hourly costs unknown when every record is unpriced", () => {
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [
+              bucket({
+                costUsd: 0,
+                costSource: "unpriced",
+                records: 2,
+                unpricedRecords: 2,
+                hourStart: "2026-08-07T09:37:00.000Z",
+              }),
+            ],
+            [{ provider: "claude", hostId: "mac", homePath: "/a/.claude" }],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.daily[0]).toMatchObject({ records: 2, unpricedRecords: 2 });
+    expect(merged.daily[0]?.byProvider.get("claude")).toMatchObject({
+      records: 2,
+      unpricedRecords: 2,
+    });
+    expect(merged.hourly[0]).toMatchObject({ records: 2, unpricedRecords: 2 });
+    expect(merged.hourly[0]?.byProvider.get("claude")).toMatchObject({
+      records: 2,
+      unpricedRecords: 2,
+    });
+  });
 });

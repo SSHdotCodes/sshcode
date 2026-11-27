@@ -1,11 +1,18 @@
 import {
   EnvironmentId,
+  type OrchestrationProjectShell,
   TurnItemId,
   type OrchestrationV2ProjectedTurnItem,
   OrchestrationSearchThreadsInput,
   type OrchestrationSearchThreadsResult,
   type OrchestrationThreadSearchMatch,
 } from "@t3tools/contracts";
+import {
+  compareThreadSearchOrder,
+  makeThreadSearchContextMatcher,
+  threadSearchFolderName,
+} from "@t3tools/shared/threadSearch";
+import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
@@ -54,6 +61,116 @@ export function threadSearchMatchKey(
   match: Pick<EnvironmentThreadSearchMatch, "environmentId" | "threadId">,
 ): string {
   return JSON.stringify([match.environmentId, match.threadId]);
+}
+
+export function threadSearchContextTerms(
+  thread: {
+    readonly title: string;
+    readonly worktreePath?: string | null;
+    readonly branch?: string | null;
+  } & Parameters<typeof threadPullRequestSearchTerms>[0],
+  project?: Pick<OrchestrationProjectShell, "title" | "workspaceRoot" | "repositoryIdentity">,
+): string[] {
+  const folder = (path: string | null | undefined) => path?.split(/[\\/]/).findLast(Boolean);
+  const worktree = folder(thread.worktreePath);
+  // Project names count only for a real repository: "No project" and its
+  // scratch folder are shared by every scratch chat.
+  const repository = project?.repositoryIdentity ? project : undefined;
+  return [
+    thread.title,
+    worktree ? threadSearchFolderName(worktree) : undefined,
+    thread.branch,
+    repository?.title,
+    folder(repository?.workspaceRoot),
+    project?.repositoryIdentity?.canonicalKey,
+    project?.repositoryIdentity?.origin?.canonicalKey,
+    project?.repositoryIdentity?.displayName,
+    ...threadPullRequestSearchTerms(thread),
+  ].filter((term): term is string => !!term);
+}
+
+export function resolveThreadSearchActivityAt(thread: {
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly unsettledAt?: string | null | undefined;
+  readonly latestUserMessageAt?: string | null | undefined;
+  readonly latestRun?:
+    | {
+        readonly requestedAt: string | null;
+        readonly startedAt: string | null;
+        readonly completedAt: string | null;
+      }
+    | null
+    | undefined;
+}): string | null {
+  let latest: string | null = null;
+  let latestMs = Number.NEGATIVE_INFINITY;
+  for (const candidate of [
+    thread.unsettledAt,
+    thread.latestUserMessageAt,
+    thread.latestRun?.requestedAt,
+    thread.latestRun?.startedAt,
+    thread.latestRun?.completedAt,
+  ]) {
+    if (!candidate) continue;
+    const parsed = Date.parse(candidate);
+    if (parsed > latestMs) {
+      latest = candidate;
+      latestMs = parsed;
+    }
+  }
+  if (latest !== null) return latest;
+  if (Number.isFinite(Date.parse(thread.updatedAt))) return thread.updatedAt;
+  return Number.isFinite(Date.parse(thread.createdAt)) ? thread.createdAt : null;
+}
+
+export function isThreadSearchMatchAbout(match: OrchestrationThreadSearchMatch): boolean {
+  return (
+    match.about ??
+    (match.messageId === null &&
+      !match.matchedModel &&
+      !match.matchedHarness &&
+      !match.titleCorrection)
+  );
+}
+
+export function mergeThreadSearchResults<T, R>(input: {
+  readonly query: string;
+  readonly threads: ReadonlyArray<T>;
+  readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
+  readonly keyOf: (thread: T) => string;
+  readonly activityAt: (thread: T) => string | null;
+  readonly contextTerms: (thread: T) => ReadonlyArray<string>;
+  readonly fromMatch: (match: EnvironmentThreadSearchMatch) => R;
+}): Array<T | R> {
+  const matchesContext = makeThreadSearchContextMatcher(input.query);
+  const matches = new Map(input.matches.map((match) => [threadSearchMatchKey(match), match]));
+  const rows: Array<{ row: T | R; key: string; about: boolean; activityAt: string | null }> = [];
+  for (const thread of input.threads) {
+    const key = input.keyOf(thread);
+    const match = matches.get(key);
+    matches.delete(key);
+    const about =
+      input.contextTerms(thread).some(matchesContext) ||
+      (match !== undefined && isThreadSearchMatchAbout(match));
+    if (about || match)
+      rows.push({ row: thread, key, about, activityAt: input.activityAt(thread) });
+  }
+  for (const [key, match] of matches) {
+    rows.push({
+      row: input.fromMatch(match),
+      key,
+      about:
+        isThreadSearchMatchAbout(match) ||
+        (match.title !== undefined && matchesContext(match.title)),
+      activityAt: match.activityAt ?? match.messageCreatedAt,
+    });
+  }
+  return rows
+    .sort(
+      (left, right) => compareThreadSearchOrder(left, right) || left.key.localeCompare(right.key),
+    )
+    .map(({ row }) => row);
 }
 
 /**
@@ -115,7 +232,19 @@ export function createThreadSearchResultsAtomFamily<E>(options: {
         }
       }
 
-      const visible = [...matches.values()];
+      const visible = [...matches.values()].sort(
+        (left, right) =>
+          compareThreadSearchOrder(
+            {
+              about: isThreadSearchMatchAbout(left),
+              activityAt: left.activityAt ?? left.messageCreatedAt,
+            },
+            {
+              about: isThreadSearchMatchAbout(right),
+              activityAt: right.activityAt ?? right.messageCreatedAt,
+            },
+          ) || threadSearchMatchKey(left).localeCompare(threadSearchMatchKey(right)),
+      );
       const base = {
         matches: visible,
         isLoading: pending === null && isLoading,

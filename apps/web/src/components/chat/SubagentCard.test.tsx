@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { STATUS_CROSSFADE_EXIT_MS } from "../StatusCrossfade";
-import { SubagentCard } from "./SubagentCard";
+import { ResearchCard, SubagentCard } from "./SubagentCard";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -68,5 +68,78 @@ describe("SubagentCard status crossfade", () => {
     expect(outgoingFailed?.textContent).toBe("Completed");
     expect(incomingFailed?.textContent).toBe("Failed");
     expect(incomingFailed?.innerHTML).toContain("text-destructive");
+  });
+});
+
+describe("ResearchCard", () => {
+  const research = {
+    title: "X API pricing",
+    modelLabel: "Haiku 5.5",
+    elapsed: "1m 4s",
+    threadId: ThreadId.make("research-1"),
+    onOpenThread: () => {},
+    failure: null,
+  };
+
+  it("shows what it is reading while it works", async () => {
+    await act(async () => {
+      root.render(
+        <ResearchCard
+          {...research}
+          status="running"
+          statusLabel="Researching…"
+          progress="Reading docs.x.com pricing"
+          preview={null}
+          sources={{ sites: [], pages: 0 }}
+          onOpenSource={() => {}}
+        />,
+      );
+    });
+    expect(container.textContent).toContain("Researching…");
+    expect(container.textContent).toContain("Reading docs.x.com pricing");
+    expect(container.querySelector('[aria-label="Sources"]')).toBeNull();
+  });
+
+  it("shows the report's opening and its sites once done, and opens a site on click", async () => {
+    const onOpenSource = vi.fn();
+    const onOpenThread = vi.fn();
+    const sites = ["a.com", "b.com", "c.com", "d.com", "e.com", "f.com"].map((site) => ({
+      site,
+      url: `https://${site}/page`,
+    }));
+    await act(async () => {
+      root.render(
+        <ResearchCard
+          {...research}
+          onOpenThread={onOpenThread}
+          status="completed"
+          statusLabel="Research done"
+          progress={null}
+          preview="Full-archive search is on pay-per-use."
+          sources={{ sites, pages: 9 }}
+          onOpenSource={onOpenSource}
+        />,
+      );
+    });
+    expect(container.textContent).toContain("Research done");
+    expect(container.textContent).toContain("Haiku 5.5 · 9 pages");
+    expect(container.textContent).toContain("Full-archive search is on pay-per-use.");
+    const chips = container.querySelectorAll('[aria-label="Sources"] a');
+    expect([...chips].map((chip) => chip.textContent)).toEqual([
+      "a.com",
+      "b.com",
+      "c.com",
+      "d.com",
+    ]);
+    expect(container.textContent).toContain("+2");
+    await act(async () => (chips[1] as HTMLAnchorElement).click());
+    expect(onOpenSource).toHaveBeenCalledWith("https://b.com/page", expect.anything());
+    expect(onOpenThread).not.toHaveBeenCalled();
+    await act(async () =>
+      (
+        container.querySelector('button[aria-label="Open X API pricing"]') as HTMLButtonElement
+      ).click(),
+    );
+    expect(onOpenThread).toHaveBeenCalledWith("research-1");
   });
 });

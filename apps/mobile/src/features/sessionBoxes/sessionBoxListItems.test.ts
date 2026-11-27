@@ -7,6 +7,7 @@ import {
   buildSessionBoxListItems,
   homeListItemsAreEqual,
   matchExcerpt,
+  resolveSessionBoxMenuActions,
 } from "./sessionBoxListItems";
 
 function threadItem(
@@ -108,6 +109,131 @@ describe("buildSessionBoxListItems", () => {
       null,
       "…session boxes grid",
     ]);
+  });
+
+  it("changes box-row signature when mascot provider/model, title, or connection status changes", () => {
+    const now = Date.parse("2026-10-23T12:00:00.000Z");
+    const rowFor = (
+      overrides: Parameters<typeof makeThreadShellFixture>[0],
+      options?: Pick<Parameters<typeof buildSessionBoxListItems>[0], "connectionPhases" | "search">,
+    ) => {
+      const items = buildSessionBoxListItems({
+        columns: 2,
+        now,
+        items: [threadItem("chat-1", overrides)],
+        ...options,
+      });
+      return items.find((item) => item.type === "box-row")!;
+    };
+
+    const baseline = rowFor({
+      title: "Fix sidebar layout bug",
+      modelSelection: {
+        instanceId: "codex" as never,
+        model: "gpt-5.4",
+      },
+    });
+    const switchedModel = rowFor({
+      title: "Fix sidebar layout bug",
+      modelSelection: {
+        instanceId: "claude" as never,
+        model: "claude-opus-4-6",
+      },
+    });
+    const renamedSameLabel = rowFor({
+      title: "Fix sidebar layout bug!",
+      modelSelection: {
+        instanceId: "codex" as never,
+        model: "gpt-5.4",
+      },
+    });
+    const switchedRuntime = rowFor({
+      title: "Fix sidebar layout bug",
+      modelSelection: {
+        instanceId: "codex" as never,
+        model: "gpt-5.4",
+      },
+      runtime: {
+        providerInstanceId: "claude" as never,
+        sessionStatus: "ready",
+        status: "idle",
+      } as never,
+    });
+    const searchOnline = rowFor(
+      {
+        title: "Fix sidebar layout bug",
+        runtime: {
+          status: "running",
+          sessionStatus: "running",
+          providerInstanceId: "codex" as never,
+        } as never,
+        modelSelection: {
+          instanceId: "codex" as never,
+          model: "gpt-5.4",
+        },
+      },
+      {
+        search: { query: "sidebar", snippetFor: () => "sidebar layout details" },
+      },
+    );
+    const searchOffline = rowFor(
+      {
+        title: "Fix sidebar layout bug",
+        runtime: {
+          status: "running",
+          sessionStatus: "running",
+          providerInstanceId: "codex" as never,
+        } as never,
+        modelSelection: {
+          instanceId: "codex" as never,
+          model: "gpt-5.4",
+        },
+      },
+      {
+        connectionPhases: new Map([[baseline.entries[0]!.thread.environmentId, "reconnecting"]]),
+        search: { query: "sidebar", snippetFor: () => "sidebar layout details" },
+      },
+    );
+
+    expect(homeListItemsAreEqual(baseline, switchedModel)).toBe(false);
+    expect(homeListItemsAreEqual(baseline, switchedRuntime)).toBe(false);
+    expect(homeListItemsAreEqual(baseline, renamedSameLabel)).toBe(false);
+    expect(homeListItemsAreEqual(searchOnline, searchOffline)).toBe(false);
+  });
+
+  it("exposes Unsettle for settled boxes, Unsnooze for snoozed boxes, and respects capabilities", () => {
+    const allSupported = {
+      pinningSupported: true,
+      settlementSupported: true,
+      snoozeSupported: true,
+    };
+    expect(
+      resolveSessionBoxMenuActions(
+        { pinned: false, settled: false, snoozed: false },
+        allSupported,
+      ).map((action) => action.label),
+    ).toEqual(["Open", "Pin", "Settle", "Rename", "Archive"]);
+
+    expect(
+      resolveSessionBoxMenuActions(
+        { pinned: true, settled: true, snoozed: false },
+        allSupported,
+      ).map((action) => action.label),
+    ).toEqual(["Open", "Unpin", "Unsettle", "Rename", "Archive"]);
+
+    expect(
+      resolveSessionBoxMenuActions(
+        { pinned: false, settled: false, snoozed: true },
+        allSupported,
+      ).map((action) => action.label),
+    ).toEqual(["Open", "Pin", "Unsnooze", "Rename", "Archive"]);
+
+    expect(
+      resolveSessionBoxMenuActions(
+        { pinned: false, settled: false, snoozed: false },
+        { pinningSupported: false, settlementSupported: false, snoozeSupported: false },
+      ).map((action) => action.label),
+    ).toEqual(["Open", "Rename", "Archive"]);
   });
 });
 

@@ -21,6 +21,8 @@ import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Exit from "effect/Exit";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as TestClock from "effect/testing/TestClock";
@@ -311,6 +313,64 @@ describe("AcpRegistrySupport", () => {
       ),
     );
   });
+
+  it.effect("waits out a self-updating CLI's dangling launcher when a session starts", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-acp-selfupdate-" });
+      const versions = `${cacheDir}/versions`;
+      yield* fileSystem.makeDirectory(`${versions}/1/bin`, { recursive: true });
+      // The updater repointed `current` at a version that is still unpacking.
+      yield* fileSystem.symlink(`${versions}/2`, `${versions}/current`);
+      const launcher = `${cacheDir}/agent`;
+      yield* fileSystem.symlink(`${versions}/current/bin/agent`, launcher);
+      const environment = { PATH: "/missing-bin" };
+      const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+        cacheDir,
+        toolsDir: `${cacheDir}/tools`,
+        registryUrl,
+      }).pipe(Effect.provideService(HostProcess.Environment, environment));
+      const settings = decodeAcpRegistrySettings({ source: "local", commandPath: launcher });
+
+      // Status checks and probes still answer at once.
+      const probe = yield* resolver.resolve(settings, "/workspace", environment).pipe(Effect.flip);
+      expect(probe.reason).toBe("runner_unavailable");
+
+      // Real time for the forked fiber's file checks between virtual clock steps.
+      const settle = TestClock.withLive(Effect.sleep("20 millis"));
+      const starting = yield* resolver
+        .resolve(settings, "/workspace", environment, { waitForSelfUpdate: true })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      for (let poll = 0; poll < 3; poll++) {
+        yield* settle;
+        yield* TestClock.adjust("2 seconds");
+      }
+      yield* settle;
+      expect(starting.pollUnsafe()).toBeUndefined();
+
+      yield* fileSystem.makeDirectory(`${versions}/2/bin`, { recursive: true });
+      yield* fileSystem.writeFileString(`${versions}/2/bin/agent`, "#!/bin/sh\n");
+      yield* fileSystem.chmod(`${versions}/2/bin/agent`, 0o755);
+      for (let poll = 0; poll < 5 && starting.pollUnsafe() === undefined; poll++) {
+        yield* TestClock.adjust("2 seconds");
+        yield* settle;
+      }
+      expect((yield* Fiber.join(starting)).spawn.command).toBe(launcher);
+
+      // A command that was never there fails at once, also at session start.
+      const missing = decodeAcpRegistrySettings({
+        source: "local",
+        commandPath: `${cacheDir}/never-installed`,
+      });
+      const failed = yield* resolver
+        .resolve(missing, "/workspace", environment, { waitForSelfUpdate: true })
+        .pipe(Effect.flip);
+      expect(failed.reason).toBe("runner_unavailable");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(layerResolver(() => Effect.die("unexpected registry request"))),
+    ),
+  );
 
   it.effect("resolves a local executable path and inherits the host environment", () =>
     Effect.gen(function* () {
@@ -2557,7 +2617,15 @@ it.effect.each(["npx", "uvx"] as const)(
       );
       const config = settings({ enabled: true, distribution });
       yield* catalog.prepare({ agentId: agent.id });
-      const old = yield* catalog.resolve(config, root, toolchain.environment);
+      const launchScope = yield* Scope.make();
+      yield* Effect.addFinalizer((exit) => Scope.close(launchScope, exit));
+      const old = yield* catalog
+        .resolve(config, root, toolchain.environment)
+        .pipe(Effect.provideService(Scope.Scope, launchScope));
+      const legacy = `${root}/tools/${agent.id}/1.2.2`;
+      const legacyBin = `${legacy}/${distribution === "npx" ? "npm" : "python"}/bin`;
+      yield* fs.makeDirectory(legacyBin, { recursive: true });
+      yield* fs.writeFileString(`${legacyBin}/legacy-agent`, "old");
       availableVersion = "1.2.4";
       const maintenance = yield* catalog.maintenance(config, toolchain.environment);
       expect(maintenance.latestVersion).toBe("1.2.4");
@@ -2569,6 +2637,26 @@ it.effect.each(["npx", "uvx"] as const)(
       expect(updated.spawn.command).toContain("1.2.4");
       expect(updated.spawn.command).not.toBe(old.spawn.command);
       expect(yield* fs.exists(old.spawn.command)).toBe(true);
+      expect(yield* fs.exists(legacy)).toBe(false);
+
+      // An older release carried forward from an earlier server is also pruned
+      // on startup, while the recorded rollback is kept.
+      yield* fs.makeDirectory(legacyBin, { recursive: true });
+      yield* fs.writeFileString(`${legacyBin}/legacy-agent`, "old");
+      yield* catalog.pruneManagedVersions();
+      expect(yield* fs.exists(legacy)).toBe(false);
+      expect(yield* fs.exists(old.spawn.command)).toBe(true);
+
+      // A second update moves the rollback forward, but the old launch still
+      // needs its release until its runtime scope closes.
+      availableVersion = "1.2.5";
+      const secondUpdate = yield* catalog.maintenance(config, toolchain.environment);
+      yield* secondUpdate.update!.run!;
+      expect(yield* fs.exists(old.spawn.command)).toBe(true);
+      yield* Scope.close(launchScope, Exit.void);
+      yield* catalog.pruneManagedVersions();
+      expect(yield* fs.exists(old.spawn.command)).toBe(false);
+      expect(yield* fs.exists(updated.spawn.command)).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(layerResolver(() => Effect.die("Unexpected network"))));
   },
 );

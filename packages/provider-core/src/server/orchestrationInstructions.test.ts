@@ -1,10 +1,15 @@
 import { assert, describe, it } from "@effect/vitest";
+import { DEFAULT_AGENT_BEHAVIOR } from "@t3tools/contracts";
 
 import {
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+  T3_CODE_ORCHESTRATION_INSTRUCTIONS_LOW,
+  T3_CODE_ORCHESTRATION_INSTRUCTIONS_LOW_SOLO,
+  T3_CODE_ORCHESTRATION_INSTRUCTIONS_LOW_SUBAGENT,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS_SOLO,
   T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT,
   orchestrationInstructionsFor,
+  registerAgentBehavior,
   registerGradingEnabled,
   registerRankedTaskKinds,
   t3AcpPromptWithInstructions,
@@ -50,41 +55,49 @@ describe("T3 orchestration provider instructions", () => {
       // (Alex 2026-11-10, after two weeks of use showed about 1.3 children at once in some chats).
       "usually the strongest one: you lead and do almost all of the work yourself",
       "hard problems",
-      "while you work on your own piece, never one after another while you wait",
+      "as applicable instructions, these explicitly ask for sub-agents, delegation, and parallel agent work without the user asking",
+      "while you work on your piece (never serially while you wait)",
+      // Leads stalled main work on side tasks; reviewers kept this example (11-26 evals).
+      "a sizable side task that would stall your main work",
       // A fresh agent found a startup bug its lead had misdiagnosed twice (2026-11-10).
       "a fresh look after two wrong diagnoses",
       "Check SSHCode UI changes with `qa_sandbox`",
-      "Decide on your own when other agents pay off",
-      "split independent pieces of an hour or more each",
-      "Do self-contained builds and demos the user judges by their result yourself",
-      "skip subagents for small or tightly coupled work",
+      "Delegate only when it clearly beats doing the work yourself after counting the brief, wait and review",
+      "independent hour-plus pieces in parallel",
+      "withEdits:true",
+      "self-contained builds/demos the user judges by their result",
+      "Skip subagents for small or tightly coupled work",
       "control and export scripts included",
-      "if you delegate UI code, supply the design",
-      "check other work yourself by running, testing or looking at it",
-      "`council` asks 2-4 other models one question blind",
+      "supply the design if delegating UI code",
+      "verify on the real surface (not just proxy checks)",
+      "Give a reviewer the code/diff and acceptance criteria, not your conclusion",
+      "verify other work yourself by running or inspecting it",
+      "Use `council` when asked for multiple views or before a hard-to-reverse design choice",
       "Spare quota elsewhere, or your own running high, is no reason",
       "about 97% used or limited",
-      "A background child goes through `delegate_task`, never a background `Agent`.",
+      "Run background subagents through `delegate_task`, never a background `Agent`",
       "holds for the whole chat",
-      "Keep the plan, critical path",
-      "Honor the user's models and reviewer count",
+      "keeping the plan, critical path",
+      "Explicit user model choices and reviewer counts come first",
       "ceiling",
       "measure end to end first",
-      "native subagents share your quota",
-      "For a review you do start, prefer another provider",
-      "Skip small/fast models",
-      "not price tier",
-      "Never choose a `supersededBy` or legacy model by default",
+      "Native subagents share your quota",
+      "recentFailure",
+      "preferring other providers' best-fit models (especially for reviews)",
+      "not price tier (benchmarks like Artificial Analysis or Terminal-Bench help)",
+      "Skip `supersededBy`/legacy models unless explicitly requested",
       'isolation:"worktree"',
-      "When only waiting is left, end your turn",
-      "don't poll or start watchers for them",
-      "after checking any claim you pass on",
-      "done, blocked, or with a finding that changes the plan",
+      "Make every brief self-contained",
+      "if you can't write a clear brief, don't hand it off yet",
+      "Once delegated, don't also do that work yourself",
+      "when only waiting remains, end your turn without narrating, polling",
+      "after checking any claim",
+      "message mid-run only if blocked or the plan changes",
       "shared file",
       "`t3_pending_request_respond`",
-      "ask the user with `ask_user`",
-      "Ask with `ask_user`, not in your reply",
-      "Continue independent work",
+      "ask via `ask_user`",
+      "Use `ask_user`, not prose",
+      "continue independent work",
       "'(Recommended)'",
       // The 10-minute default, important cards, secret delivery and the other monitor
       // options live in those tools' descriptions (apps/server orchestrator tools.test.ts).
@@ -93,34 +106,38 @@ describe("T3 orchestration provider instructions", () => {
       "Use `create_threads` only for user-requested",
       "exact returned id",
       "`monitor_start`",
-      "or the files they write",
+      "or their files",
       "Batch independent reads and searches in one tool round",
       "preserve the exit status",
       "line-buffered milestones",
       "wakeOn:false",
-      "Waits under an hour can use a native Monitor or a background command",
-      "For longer waits use `monitor_start`",
-      "`restartable:true` for read-only checks",
-      "Run jobs over 10 minutes there with `durable:true`",
-      "After a restart check `monitor_list` before relaunching",
+      "waits under an hour can use a native Monitor or background command",
+      "longer waits use `monitor_start`",
+      "`durable:true` for your own process",
+      "read-only check with `restartable:true`",
+      "(durable takes neither)",
+      "check `monitor_list` after a restart",
       "Before ending a turn while your own long work still runs",
     ])
       assert.include(T3_CODE_ORCHESTRATION_INSTRUCTIONS, guidance);
     // The chat already shows what an agent waits on; listing it again is noise.
     assert.notInclude(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "what will wake you");
+    assert.notInclude(T3_CODE_ORCHESTRATION_INSTRUCTIONS.toLowerCase(), "helper");
+    // Model choice is judgment: no provider nudges (owner, 11-26) and no research push.
+    assert.notInclude(T3_CODE_ORCHESTRATION_INSTRUCTIONS, "Grok");
+    assert.notInclude(T3_CODE_ORCHESTRATION_INSTRUCTIONS.toLowerCase(), "research");
   });
 
   it("gives subagents their brief and operational rules without lead policies", () => {
     for (const enabled of [false, true]) {
       const rules = orchestrationInstructionsFor("child", () => enabled, true);
       assert.equal(rules, T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT);
-      assert.include(
-        rules,
-        "You are a subagent: a lead sent this brief and reads your final message.",
-      );
-      assert.include(rules, "start subagents only if the brief asks");
+      assert.include(rules, "You are a subagent: a lead reads your final reply.");
+      assert.include(rules, "start subagents only if asked");
       assert.include(rules, "Ask via `ask_user` only when blocked");
-      assert.include(rules, "what you did, what you verified and open risks");
+      assert.include(rules, "Commit or save notes as you go");
+      assert.include(rules, "Keep your final reply concise (<5 KB): verdict first,");
+      assert.include(rules, "what you did, exact checks run and results, open risks");
       for (const dropped of [
         "you lead",
         "model_preferences",
@@ -327,7 +344,10 @@ describe("T3 orchestration provider instructions", () => {
     try {
       const rules = orchestrationInstructionsFor(undefined);
       assert.notInclude(rules, "grades");
-      assert.include(rules, "Review and integrate what children return. `council`");
+      assert.include(
+        rules,
+        "Review, verify on the real surface (not just proxy checks), and integrate what subagents return. Don't over-trust",
+      );
       const acp = t3AcpPromptWithInstructions({
         prompt: "hi",
         state: { interactionMode: "default", hasT3Mcp: true },
@@ -336,7 +356,7 @@ describe("T3 orchestration provider instructions", () => {
     } finally {
       registerGradingEnabled(() => true);
     }
-    assert.include(orchestrationInstructionsFor(undefined), "flag one that fell short");
+    assert.include(orchestrationInstructionsFor(undefined), "flag a subagent that fell short");
   });
 
   it("keeps the default rules byte-identical and drops subagent paragraphs when off", () => {
@@ -352,13 +372,13 @@ describe("T3 orchestration provider instructions", () => {
     assert.notEqual(solo, T3_CODE_ORCHESTRATION_INSTRUCTIONS);
     for (const dropped of [
       "The user picked your model",
-      "For a speed goal",
+      "For speed goals",
       "Explicit user model choices",
       "Honor the user's models",
       "`delegate_task` starts",
       "Worktree isolation",
       "While subagents run",
-      "flag one that fell short",
+      "flag a subagent that fell short",
       "Answer child question cards",
     ]) {
       assert.notInclude(solo, dropped);
@@ -411,17 +431,224 @@ describe("model rankings rule", () => {
       registerRankedTaskKinds(() => []);
       const none = orchestrationInstructionsFor(undefined);
       assert.notInclude(none, "model_preferences");
-      assert.include(none, "- Explicit user model choices come first.\n");
+      assert.include(
+        none,
+        "- Explicit user model choices and reviewer counts come first ('Up to N' is a ceiling). Otherwise pick current models",
+      );
 
       registerRankedTaskKinds(() => ["review"]);
       assert.include(
         orchestrationInstructionsFor(undefined),
-        "Otherwise, for review work only, consult `model_preferences` before delegating;",
+        "For review work only, check `model_preferences` before delegating and pick the current model",
       );
     } finally {
       registerRankedTaskKinds(() => null);
     }
     // Not known yet: the general rule stays.
     assert.equal(orchestrationInstructionsFor(undefined), T3_CODE_ORCHESTRATION_INSTRUCTIONS);
+  });
+});
+
+describe("Settings > Agents behavior levels", () => {
+  it("keeps every default level byte-identical to today across lead, solo, subagent and ACP", () => {
+    registerAgentBehavior(() => DEFAULT_AGENT_BEHAVIOR);
+    assert.equal(orchestrationInstructionsFor(undefined), T3_CODE_ORCHESTRATION_INSTRUCTIONS);
+    assert.equal(
+      orchestrationInstructionsFor("solo", () => false),
+      T3_CODE_ORCHESTRATION_INSTRUCTIONS_SOLO,
+    );
+    assert.equal(
+      orchestrationInstructionsFor("child", () => true, true),
+      T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT,
+    );
+  });
+
+  it("handles subagents none, low and high cleanly for leads and subagents", () => {
+    try {
+      registerAgentBehavior(() => ({ ...DEFAULT_AGENT_BEHAVIOR, subagents: "none" }));
+      const noneLead = orchestrationInstructionsFor("team", () => true, false);
+      assert.equal(noneLead, T3_CODE_ORCHESTRATION_INSTRUCTIONS_SOLO);
+      assert.notInclude(noneLead, "delegate_task");
+      assert.notInclude(noneLead, "orchestrator_capabilities");
+      const noneAcp = t3AcpPromptWithInstructions({
+        prompt: "Continue.",
+        state: t3AcpInstructionState({
+          interactionMode: "default",
+          hasT3Mcp: true,
+          subagentsEnabled: true,
+        }),
+      });
+      assert.notInclude(noneAcp, "acp-mcp-call delegate_task");
+
+      const noneSub = orchestrationInstructionsFor("child", () => true, true);
+      assert.equal(noneSub, T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT);
+
+      registerAgentBehavior(() => ({ ...DEFAULT_AGENT_BEHAVIOR, subagents: "low" }));
+      const lowLead = orchestrationInstructionsFor("team", () => true, false);
+      assert.include(lowLead, "Subagents to Low");
+      assert.include(lowLead, "user explicitly asks");
+      assert.notInclude(lowLead, "Delegate only when it clearly beats");
+      assert.include(
+        lowLead,
+        "Don't over-trust code you wrote: check your work yourself by running, testing or looking at it.",
+      );
+      assert.notInclude(lowLead, "another provider's review usually pays off");
+      assert.equal(
+        orchestrationInstructionsFor("child", () => true, true),
+        T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT,
+      );
+
+      registerAgentBehavior(() => ({ ...DEFAULT_AGENT_BEHAVIOR, subagents: "high" }));
+      const highLead = orchestrationInstructionsFor("team", () => true, false);
+      assert.include(highLead, "Subagents to High");
+      assert.include(highLead, "council");
+      assert.include(highLead, "The user's word on subagents holds for the whole chat.");
+      assert.notInclude(highLead, "do almost all of the work yourself");
+      assert.include(highLead, "Even on High, stay solo for tiny one-step lookups");
+      assert.notInclude(highLead, "Skip subagents for small or tightly coupled work");
+      assert.include(
+        highLead,
+        "on High, these instructions explicitly ask for another provider's fresh-eyed subagent review",
+      );
+      assert.notInclude(highLead, "another provider's review usually pays off");
+      assert.equal(
+        orchestrationInstructionsFor("child", () => true, true),
+        T3_CODE_ORCHESTRATION_INSTRUCTIONS_SUBAGENT,
+      );
+
+      // ACP subagent transport fallback replaces `orchestrator_capabilities` with `t3_thread_list`
+      // and drops the delegate example sentence.
+      registerAgentBehavior(() => DEFAULT_AGENT_BEHAVIOR);
+      const acpSub = t3AcpPromptWithInstructions({
+        prompt: "Continue.",
+        state: t3AcpInstructionState({
+          interactionMode: "default",
+          hasT3Mcp: true,
+          isSubagent: true,
+        }),
+      });
+      assert.include(acpSub, "acp-mcp-call t3_thread_list");
+      assert.notInclude(acpSub, "acp-mcp-call orchestrator_capabilities");
+      assert.notInclude(acpSub, "acp-mcp-call delegate_task");
+    } finally {
+      registerAgentBehavior(() => DEFAULT_AGENT_BEHAVIOR);
+    }
+  });
+
+  it("applies questions, verification and replies levels where appropriate", () => {
+    try {
+      registerAgentBehavior(() => ({
+        ...DEFAULT_AGENT_BEHAVIOR,
+        questions: "more",
+        verification: "thorough",
+        replies: "detailed",
+      }));
+      const lead = orchestrationInstructionsFor("team", () => true, false);
+      assert.include(lead, "Questions to More");
+      assert.include(lead, "Checking work to Thorough");
+      assert.include(lead, "another model's independent review");
+      assert.include(lead, "Replies to Detailed");
+
+      // Subagents ignore questions:more (still ask only when blocked) and solo review hint.
+      const sub = orchestrationInstructionsFor("child", () => true, true);
+      assert.notInclude(sub, "Questions to More");
+      assert.include(sub, "Ask via `ask_user` only when blocked");
+      assert.include(sub, "Checking work to Thorough");
+      assert.notInclude(sub, "another model's independent review");
+      assert.include(sub, "Replies to Detailed");
+
+      registerAgentBehavior(() => ({
+        ...DEFAULT_AGENT_BEHAVIOR,
+        questions: "fewer",
+        verification: "light",
+        replies: "short",
+      }));
+      const leadLight = orchestrationInstructionsFor("team", () => true, false);
+      assert.include(leadLight, "Questions to Fewer");
+      assert.include(leadLight, "Checking work to Light");
+      assert.include(leadLight, "Replies to Short");
+      const subLight = orchestrationInstructionsFor("child", () => true, true);
+      assert.include(subLight, "Questions to Fewer");
+      assert.include(subLight, "Checking work to Light");
+      assert.include(subLight, "Replies to Short");
+    } finally {
+      registerAgentBehavior(() => DEFAULT_AGENT_BEHAVIOR);
+    }
+  });
+
+  it("trims instructions for tokens=low and adds report_progress guidance for tokens=high", () => {
+    try {
+      registerAgentBehavior(() => ({ ...DEFAULT_AGENT_BEHAVIOR, tokens: "low" }));
+      const lowLead = orchestrationInstructionsFor("team", () => true, false);
+      assert.equal(lowLead, T3_CODE_ORCHESTRATION_INSTRUCTIONS_LOW);
+      assert.isBelow(lowLead.length, 1400);
+      assert.include(lowLead, "t3_tool");
+      assert.include(lowLead, "delegate_task");
+      assert.include(lowLead, "ask_user");
+      assert.equal(
+        orchestrationInstructionsFor("solo", () => false, false),
+        T3_CODE_ORCHESTRATION_INSTRUCTIONS_LOW_SOLO,
+      );
+      assert.notInclude(T3_CODE_ORCHESTRATION_INSTRUCTIONS_LOW_SOLO, "delegate_task");
+      assert.equal(
+        orchestrationInstructionsFor("child", () => true, true),
+        T3_CODE_ORCHESTRATION_INSTRUCTIONS_LOW_SUBAGENT,
+      );
+
+      registerAgentBehavior(() => ({ ...DEFAULT_AGENT_BEHAVIOR, tokens: "high" }));
+      const highLead = orchestrationInstructionsFor("team", () => true, false);
+      assert.include(highLead, "`report_progress`");
+      assert.include(highLead, "minutes");
+      assert.include(highLead, "every few minutes");
+      const highSub = orchestrationInstructionsFor("child", () => true, true);
+      assert.include(highSub, "`report_progress`");
+    } finally {
+      registerAgentBehavior(() => DEFAULT_AGENT_BEHAVIOR);
+    }
+  });
+
+  it("keeps forbidden words out of every non-default level combination", () => {
+    try {
+      for (const tokens of ["low", "default", "high"] as const) {
+        for (const subagents of ["none", "low", "default", "high"] as const) {
+          for (const questions of ["fewer", "default", "more"] as const) {
+            for (const verification of ["light", "default", "thorough"] as const) {
+              for (const replies of ["short", "default", "detailed"] as const) {
+                registerAgentBehavior(() => ({
+                  tokens,
+                  subagents,
+                  questions,
+                  verification,
+                  replies,
+                }));
+                for (const isSubagent of [false, true]) {
+                  const text = orchestrationInstructionsFor(
+                    "t",
+                    () => true,
+                    isSubagent,
+                  ).toLowerCase();
+                  for (const word of [
+                    "risky",
+                    "delet",
+                    "always review",
+                    "helper",
+                    "grok",
+                    "research",
+                  ]) {
+                    assert.notInclude(
+                      text,
+                      word,
+                      `${tokens}/${subagents}/${questions}/${verification}/${replies}/sub=${isSubagent}`,
+                    );
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } finally {
+      registerAgentBehavior(() => DEFAULT_AGENT_BEHAVIOR);
+    }
   });
 });

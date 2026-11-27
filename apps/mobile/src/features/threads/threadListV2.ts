@@ -1,13 +1,10 @@
 import {
-  chatTitleSearchScore,
-  liftNamedChats,
-  rankChatsByTitleSearch,
-  type SearchableChat,
-} from "@t3tools/client-runtime/composerThreadItems";
+  compareThreadSearchOrder,
+  makeThreadSearchContextMatcher,
+} from "@t3tools/shared/threadSearch";
 import { groupComparisonThreads } from "@t3tools/client-runtime/state/model-comparison";
 import { threadHasUnseenCompletion } from "../../lib/thread-summaries";
 export { threadHasUnseenCompletion };
-import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import {
   effectiveSnoozed,
   hasQueuedTurnStart,
@@ -26,6 +23,9 @@ import { presentBackgroundWaitInThreadRow } from "@t3tools/client-runtime/state/
 import { longRunningFactsForShell, pinnedWaitingLine } from "@t3tools/shared/chatControls";
 import {
   type EnvironmentThreadSearchMatch,
+  mergeThreadSearchResults,
+  resolveThreadSearchActivityAt,
+  threadSearchContextTerms,
   threadSearchMatchKey,
 } from "@t3tools/client-runtime/state/thread-search";
 import { sessionBoxFacesFor } from "@t3tools/client-runtime/state/session-boxes";
@@ -502,10 +502,12 @@ export type ThreadListV2ListItem =
     only flips equality on rows whose visible text (or snooze menu) actually
     moved. Thread references are stable across rebuilds. */
 export function threadListV2ListItemsAreEqual(
-  previous: ThreadListV2ListItem,
-  item: ThreadListV2ListItem,
+  previous: ThreadListV2ListItem | ThreadListV2SearchListItem,
+  item: ThreadListV2ListItem | ThreadListV2SearchListItem,
 ): boolean {
   switch (item.type) {
+    case "v2-search-match":
+      return previous.type === "v2-search-match" && previous.match === item.match;
     case "v2-thread":
       return (
         previous.type === "v2-thread" &&
@@ -555,9 +557,12 @@ export function threadListV2ListItemsAreEqual(
 function resolveThreadListV2ItemTimeLabel(
   item: ThreadListV2Item,
   showSnoozeWakeLabel: boolean,
+  searching: boolean,
 ): string {
   if (showSnoozeWakeLabel || item.longRunningStatus) return "";
   if (resolveThreadListV2Status(item.thread) !== "ready") return "";
+  if (searching)
+    return relativeTime(resolveThreadSearchActivityAt(item.thread) ?? item.thread.createdAt);
   // The Settled shelf orders by when each thread settled; label it the same way.
   const settledAt = item.settled ? resolveSettledThreadTimestamp(item.thread) : null;
   return relativeTime(settledAt ?? resolveThreadListV2ActivityAt(item.thread));
@@ -602,7 +607,11 @@ export function buildThreadListV2ListItems(input: {
       key: `v2-thread:${threadKey}`,
       item,
       snoozeWakeLabelText,
-      timeLabel: resolveThreadListV2ItemTimeLabel(item, snoozeWakeLabelText !== undefined),
+      timeLabel: resolveThreadListV2ItemTimeLabel(
+        item,
+        snoozeWakeLabelText !== undefined,
+        layout.settledShelfSearchExpanded === true,
+      ),
       showTrailingDivider: false,
       hasQueuedMessages: queuedThreadKeys?.has(threadKey) === true,
       canMoveUp: move?.canMoveUp === true,
@@ -662,71 +671,43 @@ export function buildThreadListV2ListItems(input: {
  * user, then everything else by most recent activity. Settled threads join
  * a collapsed history shelf. Snoozed threads have their own shelf until they wake.
  */
-/** A chat as the list search reads it: title, model, harness and pull request. */
-function searchableChat(thread: EnvironmentThreadShell): SearchableChat {
-  return {
-    title: thread.title,
-    model: thread.modelSelection?.model,
-    providerInstanceId: thread.providerInstanceId,
-    extraTerms: threadPullRequestSearchTerms(thread),
-  };
-}
+export type ThreadListV2SearchListItem = {
+  readonly type: "v2-search-match";
+  readonly key: string;
+  readonly match: EnvironmentThreadSearchMatch;
+};
 
-function matchesListTitle(thread: EnvironmentThreadShell, query: string) {
-  return chatTitleSearchScore(query, searchableChat(thread)) !== null;
-}
-
-/**
- * Local title rows stay instant; content rows keep server rank regardless of chat age or
- * shelf, except that the chats the words name come first (`liftNamedChats`): the server
- * ranks what was said and cannot see which model a chat ran on.
- */
-export function rankedContentSearchMatches(
-  threads: ReadonlyArray<EnvironmentThreadShell>,
-  matches: ReadonlyArray<EnvironmentThreadSearchMatch>,
-  query: string,
-) {
-  const normalized = query.trim().toLocaleLowerCase();
-  const titles = new Set(
-    groupComparisonThreads(threads)
-      .filter(
-        (thread) =>
-          thread.archivedAt === null &&
-          thread.lineage.relationshipToParent !== "subagent" &&
-          matchesListTitle(thread, normalized),
-      )
-      .map((thread) =>
+export function mergeMobileThreadSearchResults(input: {
+  readonly items: ReadonlyArray<ThreadListV2ListItem>;
+  readonly matches: ReadonlyArray<EnvironmentThreadSearchMatch>;
+  readonly query: string;
+  readonly contextOf: (thread: EnvironmentThreadShell) => ReadonlyArray<string>;
+}): Array<ThreadListV2ListItem | ThreadListV2SearchListItem> {
+  return [
+    ...mergeThreadSearchResults({
+      query: input.query,
+      threads: input.items.filter((item) => item.type === "v2-thread"),
+      matches: input.matches,
+      keyOf: ({ item: { thread } }) =>
         threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
-      ),
-  );
-  const shells = new Map(
-    threads.map((thread) => [
-      threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
-      thread,
-    ]),
-  );
-  return liftNamedChats({
-    query,
-    results: matches.filter((match) => !titles.has(threadSearchMatchKey(match))),
-    chatOf: (match) => {
-      const shell = shells.get(threadSearchMatchKey(match));
-      if (shell) {
-        return {
-          title: shell.title,
-          model: shell.modelSelection?.model,
-          providerInstanceId: shell.providerInstanceId,
-        };
-      }
-      return match.title === undefined ? null : { title: match.title };
-    },
-  });
+      activityAt: ({ item }) => resolveThreadSearchActivityAt(item.thread),
+      contextTerms: ({ item }) => input.contextOf(item.thread),
+      fromMatch: (match): ThreadListV2SearchListItem => ({
+        type: "v2-search-match",
+        key: threadSearchMatchKey(match),
+        match,
+      }),
+    }),
+    ...input.items.filter((item) => item.type !== "v2-thread"),
+  ];
 }
 
 export function buildThreadListV2Items(input: {
   readonly pendingOrder?: PendingThreadOrder | null;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
   readonly searchQuery: string;
-  readonly matchedThreadKeys?: ReadonlySet<string>;
+  readonly matchedThreadKeys?: Pick<ReadonlySet<string>, "has">;
+  readonly searchContextOf?: (thread: EnvironmentThreadShell) => ReadonlyArray<string>;
   /** Environments whose server supports thread.settle/unsettle. A settled
       thread there leaves the pinned block (parity with web), matching the
       pinned section Move up/down plans against. Absent = no gating (tests). */
@@ -763,7 +744,10 @@ export function buildThreadListV2Items(input: {
           getThreadListV2OrderedSection({ ...input, section: "pinned", pendingOrder: null }),
         )
       : null;
-  const query = input.searchQuery.trim().toLocaleLowerCase();
+  const query = input.searchQuery.trim();
+  const matchesContext = makeThreadSearchContextMatcher(query);
+  const searchContextOf = input.searchContextOf ?? threadSearchContextTerms;
+  const aboutThreads = new Set<EnvironmentThreadShell>();
 
   const pinned: EnvironmentThreadShell[] = [];
   const waitingOnYou: EnvironmentThreadShell[] = [];
@@ -776,17 +760,15 @@ export function buildThreadListV2Items(input: {
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
   for (const thread of groupComparisonThreads(input.threads)) {
     if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent") continue;
-    if (
-      query.length > 0 &&
-      !matchesListTitle(thread, query) &&
-      input.matchedThreadKeys?.has(
-        threadSearchMatchKey({
-          environmentId: thread.environmentId,
-          threadId: thread.id,
-        }),
-      ) !== true
-    ) {
-      continue;
+    if (query.length > 0) {
+      if (searchContextOf(thread).some(matchesContext)) {
+        aboutThreads.add(thread);
+      } else if (
+        !input.matchedThreadKeys?.has(
+          threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+        )
+      )
+        continue;
     }
     const supportsSnooze = input.snoozeEnvironmentIds?.has(thread.environmentId) ?? true;
     // Snooze outranks pinning until the thread wakes.
@@ -828,39 +810,30 @@ export function buildThreadListV2Items(input: {
     }
   }
 
-  // A search lists what it names best first, in one list: the usual order (pinned, working,
-  // then settled history) buried the chat a search named under weaker matches.
   if (query.length > 0) {
-    // In the usual order, which settles equal matches.
-    const flags = new Map<EnvironmentThreadShell, ThreadListV2Item>();
-    for (const thread of applyPendingThreadOrder(
-      sortPinnedThreadsByOrderKey(pinned),
-      "pinned",
-      pending,
-    )) {
-      flags.set(thread, { thread, snoozed: false, pinned: true });
-    }
-    for (const thread of [
-      ...sortThreadsByActivity(waitingOnYou),
-      ...sortThreadsByAsked(leading),
-      ...sortThreadsByActivity(rest),
-    ]) {
-      flags.set(thread, { thread, snoozed: false, pinned: false });
-    }
-    for (const thread of snoozed) flags.set(thread, { thread, snoozed: true, pinned: false });
-    for (const thread of sortSettledThreads(settled)) {
-      flags.set(thread, { thread, settled: true, snoozed: false, pinned: false });
-    }
-    const ranked = rankChatsByTitleSearch([...flags.keys()], query, searchableChat);
-    // Chats only the message search found keep their place after the title matches.
-    const found = new Set(ranked);
-    const items = [...ranked, ...[...flags.keys()].filter((thread) => !found.has(thread))].map(
-      (thread) => {
-        const item = flags.get(thread)!;
-        const line = item.settled || item.snoozed ? null : threadRowWaitingLine(thread, nowMs);
+    const items = [
+      ...pinned.map((thread) => ({ thread, snoozed: false, pinned: true })),
+      ...[...waitingOnYou, ...leading, ...rest].map((thread) => ({
+        thread,
+        snoozed: false,
+        pinned: false,
+      })),
+      ...snoozed.map((thread) => ({ thread, snoozed: true, pinned: false })),
+      ...settled.map((thread) => ({ thread, settled: true, snoozed: false, pinned: false })),
+    ]
+      .map((item) => ({
+        item,
+        about: aboutThreads.has(item.thread),
+        activityAt: resolveThreadSearchActivityAt(item.thread),
+      }))
+      .sort(compareThreadSearchOrder)
+      .map(({ item }): ThreadListV2Item => {
+        const line =
+          ("settled" in item && item.settled) || item.snoozed
+            ? null
+            : threadRowWaitingLine(item.thread, nowMs);
         return line === null ? item : { ...item, longRunningStatus: line };
-      },
-    );
+      });
     return {
       items,
       pendingTasksIndex: items.length,

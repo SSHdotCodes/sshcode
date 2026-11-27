@@ -20,6 +20,7 @@ import {
   OrchestratorMcpDeleteScheduledTaskResult,
   OrchestratorMcpAskUserInput,
   OrchestratorMcpAskUserResult,
+  OrchestratorMcpRequestApiKeyResult,
   OrchestratorMcpRequestSecretInput,
   OrchestratorMcpRequestSecretResult,
   OrchestratorMcpFailure,
@@ -56,6 +57,8 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
+import { TeamBoardToolInput } from "../../../teamBoard/TeamBoard.ts";
+import { TEAM_BOARD_DESCRIPTION, TEAM_BOARD_TOOL } from "../../../teamBoard/model.ts";
 
 import { UsageLimitsInput, UsageLimitsResult } from "../../OrchestratorUsageLimits.ts";
 
@@ -72,7 +75,7 @@ const threadMetadataDependencies = [
 
 const OrchestratorCapabilitiesTool = Tool.make("orchestrator_capabilities", {
   description:
-    "Pick providers and models. Overview shows 6 models per provider. Filter by providerInstanceId or modelSearch and page with cursor=nextCursor for more. includeOptions adds model settings. Search for legacy/superseded ids explicitly. images:false means text only. Avoid accountUnavailable. Credit warnings allow retry. See usage_limits for quotas.",
+    "Pick providers and models. Defaults to 6 per provider; filter with providerInstanceId or modelSearch and page via cursor=nextCursor. includeOptions adds model settings. Search explicitly for legacy/superseded ids. images:false means text only. Avoid accountUnavailable or recentFailure; credit warnings allow retry. Quotas: usage_limits.",
   parameters: OrchestratorMcpCapabilitiesInput,
   success: OrchestratorMcpCapabilitiesResult,
   failure: OrchestratorMcpFailure,
@@ -86,7 +89,7 @@ const OrchestratorCapabilitiesTool = Tool.make("orchestrator_capabilities", {
 
 const UsageLimitsTool = Tool.make("usage_limits", {
   description:
-    "Provider quotas, credits, resets and freshness. Refreshes stale readings for up to 3s. Use to choose subagent providers; spare quota is no reason to delegate. The limited flag is authoritative. 100% can be rounded.",
+    "Provider quotas, credits, resets and freshness. Refreshes stale readings for up to 3s. Use to choose subagent providers; spare quota is no reason to delegate. limited is authoritative; 100% can be rounded.",
   parameters: UsageLimitsInput,
   success: UsageLimitsResult,
   failure: OrchestratorMcpFailure,
@@ -101,7 +104,7 @@ const UsageLimitsTool = Tool.make("usage_limits", {
 
 export const DelegateTaskTool = Tool.make("delegate_task", {
   description:
-    "Start a child owned by this thread with a self-contained task brief and no parent history. worktree starts at the last local commit, without uncommitted edits unless withEdits=true. In a scratch chat pass an absolute repositoryPath. Settings inherit. Permission modes may step down. Use a new clientRequestId for each task or independent review round and reuse only for retries. Follow up via t3_thread_send with its taskId. Task ids or unique request keys work in every thread tool and task_status/cancel until workspace removal. wait returns on completion, a question or waitTimedOut. Read more at nextSummaryOffset via task_status.",
+    "Start a child owned by this thread with a self-contained task brief and no parent history (async by default; wakes you when done). worktree starts at the last local commit, without uncommitted edits unless withEdits=true. In a scratch chat pass an absolute repositoryPath. Settings inherit; modes may step down. Use a new clientRequestId for each task or independent review round; reuse only for retries. Follow up via t3_thread_send with its taskId; task ids or unique keys work in every thread tool and task_status/cancel until workspace removal. wait returns on completion, a question or waitTimedOut. Read clipped output at nextSummaryOffset via task_status.",
   parameters: OrchestratorMcpDelegateTaskInput,
   success: OrchestratorMcpDelegateTaskResult,
   failure: OrchestratorMcpFailure,
@@ -114,7 +117,7 @@ export const DelegateTaskTool = Tool.make("delegate_task", {
 
 const TaskStatusTool = Tool.make("task_status", {
   description:
-    "Read subagent status and report. summary is the original result. Pass nextSummaryOffset or a wake's UTF-16 offset as summaryOffset. latestTerminal* describes later non-monitor turns, omitted when they would repeat summary. workState distinguishes working, waiting_for_children and result_available. failure may be retryable. hasPendingChildRuns flags later turns. Wakes and terminal reads acknowledge delivery.",
+    "Read one subagent's status or clipped report. Don't poll running tasks—wakes deliver results. summary is the original result; pass nextSummaryOffset or a wake's UTF-16 offset as summaryOffset. latestTerminal* covers later non-monitor turns, omitted when they would repeat summary. workState: working, waiting_for_children or result_available. failure may be retryable; hasPendingChildRuns flags later turns. Wakes and terminal reads ack delivery.",
   parameters: OrchestratorMcpTaskStatusInput,
   success: OrchestratorMcpDelegateTaskResult,
   failure: OrchestratorMcpFailure,
@@ -128,7 +131,7 @@ const TaskStatusTool = Tool.make("task_status", {
 
 const TaskCancelTool = Tool.make("task_cancel", {
   description:
-    "Stop a task owned by this parent, including its later child turns, nested delegates and PR watches; remove a still-queued send; otherwise hold queued turns and dispose automatic parent delivery. Works after the original task ends. Terminal status and published results stay available.",
+    "Stop an owned subagent. Stops later child turns, nested delegates and PR watches; removes a queued send or holds queued turns and disposes automatic parent delivery. Works after the original task ends; terminal status/results stay readable.",
   parameters: OrchestratorMcpTaskCancelInput,
   success: OrchestratorMcpTaskCancelResult,
   failure: OrchestratorMcpFailure,
@@ -140,7 +143,7 @@ const TaskCancelTool = Tool.make("task_cancel", {
 
 const WorkflowStopTool = Tool.make("t3_workflow_stop", {
   description:
-    "Stop one running Claude workflow in a SSHCode thread. Use the workflow coordinator's subagentId returned by t3_thread_read with view='activity'. Stops the whole workflow, including its phases and agents. Does not stop the parent thread or other workflows. Individual workflow phases and agents cannot be stopped separately.",
+    "Stop one running Claude workflow. Pass the coordinator's subagentId from t3_thread_read(view='activity'). Stops all phases/agents without affecting the parent or other workflows.",
   parameters: OrchestrationV2StopWorkflowInput,
   success: Schema.Record(Schema.String, Schema.Never),
   failure: OrchestratorMcpFailure,
@@ -152,7 +155,7 @@ const WorkflowStopTool = Tool.make("t3_workflow_stop", {
 
 export const ScheduleTaskTool = Tool.make("schedule_task", {
   description:
-    "Create, edit or pause scheduled work. Creation needs prompt and schedule. Updates with scheduledTaskId change supplied fields only. enabled=false pauses. The schedule is an object such as {type:'interval',everyMs:3600000}, {type:'fixed_time',timeOfDay:'09:00',weekdays:[1,2,3,4,5]}, {type:'once',runAt:'2027-01-15T14:30:00.000Z'} or {type:'webhook'}. One-shots steer active threads or start idle ones, even after reconnect. Report nextRunAt or share webhookUrl (creation only with T3 Connect and run permission). See webhookSetup. Bind to this project's thread or start new ones. Inherits caller or project defaults.",
+    "Create, edit or pause scheduled work. Creation needs prompt and schedule; scheduledTaskId updates supplied fields only; enabled=false pauses. The schedule is an object: {type:'interval',everyMs:3600000}, {type:'fixed_time',timeOfDay:'09:00',weekdays:[1,2,3,4,5]}, {type:'once',runAt:'2027-01-15T14:30:00.000Z'} or {type:'webhook'}. One-shots steer active threads or start idle ones. Report nextRunAt or share webhookUrl (creation only with T3 Connect and run permission; see webhookSetup). Binds to this thread or starts new ones; inherits defaults.",
   parameters: OrchestratorMcpSaveScheduledTaskInput,
   success: OrchestratorMcpScheduleTaskResult,
   failure: OrchestratorMcpFailure,
@@ -209,7 +212,7 @@ const DeleteScheduledTaskTool = Tool.make("delete_scheduled_task", {
 
 const RequestApiKeyTool = Tool.make("request_api_key", {
   description:
-    "Ask for a missing/expired API key on a private card, never in chat. Returns at once: keep working, the answer arrives as a message. Check list_api_keys first. The user chooses chat-only or all-session scope and expiry (default chat, 30 days); values stay in the host vault. Then call prepare_api_key and run its command in a shell on the server host.",
+    "Request a reusable API key privately. Returns at once; reply arrives as a message. Check list_api_keys first. User picks chat/all-session scope and expiry (default chat, 30d); values stay in host vault. Use via prepare_api_key on the server host.",
   parameters: Schema.Struct({
     name: ApiKeyName,
     label: OrchestratorMcpRequestSecretInput.fields.label,
@@ -218,7 +221,7 @@ const RequestApiKeyTool = Tool.make("request_api_key", {
     suggestedExpiresAt: Schema.optional(ApiKeyExpiry),
     clientRequestId: OrchestratorMcpRequestSecretInput.fields.clientRequestId,
   }),
-  success: OrchestratorMcpRequestSecretResult,
+  success: OrchestratorMcpRequestApiKeyResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
   dependencies,
@@ -226,7 +229,7 @@ const RequestApiKeyTool = Tool.make("request_api_key", {
 
 const ListApiKeysTool = Tool.make("list_api_keys", {
   description:
-    "List this chat's available API key names, scopes and expiries, never values. Excludes other threads' private keys and removes expired ones. Missing: request_api_key. To use: prepare_api_key.",
+    "List available API keys without values. Returns names, scopes and expiries (drops expired/other-thread keys). Missing: request_api_key. Use: prepare_api_key.",
   parameters: Tool.EmptyParams,
   success: Schema.Struct({
     keys: Schema.Array(
@@ -244,7 +247,7 @@ const ListApiKeysTool = Tool.make("list_api_keys", {
 
 const PrepareApiKeyTool = Tool.make("prepare_api_key", {
   description:
-    "Prepare saved keys without seeing them. Pass name for one key (returns command) or names for several (returns commands, one per key). Each command carries a one-use, 60-second ticket bound to this thread and key. Run on the server host; the child receives an environment variable and exact echoed values are redacted. Never print, encode, write or extract credentials. Shell access requires a ticket.",
+    "Prepare saved keys without seeing them. Pass name (returns command) or names (returns commands). Each carries a one-use, 60-second ticket bound to this thread/key. Run on the server host; child gets env var and echoed values are redacted. Never print, encode, write or extract credentials.",
   parameters: Schema.Struct({
     name: Schema.optional(ApiKeyName),
     names: Schema.optional(
@@ -270,7 +273,7 @@ const PrepareApiKeyTool = Tool.make("prepare_api_key", {
 
 const CouncilTool = Tool.make("council", {
   description:
-    "Ask 2-4 other models the same question independently and get their answers side by side; each runs as a delegated task told to stay read-only, with only your question and context. Use it when the user asks for a council or several models' views, or before a hard-to-reverse decision where capable models may disagree (architecture, research calls). Not for routine work. Waits up to timeoutMs (default 15 min).",
+    "Ask 2-4 models one question blind. Each runs as a subagent told to stay read-only, seeing only question and context. Use when asked or before hard-to-reverse decisions (architecture, research calls), not routine work. Waits up to timeoutMs (default 15m).",
   parameters: OrchestratorMcpCouncilInput,
   success: OrchestratorMcpCouncilResult,
   failure: OrchestratorMcpFailure,
@@ -283,8 +286,11 @@ const CouncilTool = Tool.make("council", {
 
 const RequestSecretTool = Tool.make("request_secret", {
   description:
-    "Ask for a secret on a private card. Returns at once: keep working, the answer arrives as a message. Never ask in chat or invent one. By default the value stays in the app and you receive a one-use secretRef for tools such as schedule_task's signature. For a sudo password (this host or over ssh) or a shell CLI token, set delivery:'file' and read the returned private file inside commands; never print it. The file is deleted after 24 hours: a key needed longer uses request_api_key.",
-  parameters: OrchestratorMcpRequestSecretInput,
+    "Ask for a secret on a private card. Returns at once; reply arrives as a message. Never ask in chat or invent one. Pass fields for multi-part credentials. Default returns a one-use secretRef for tools (e.g. schedule_task signature). For a sudo password or shell CLI token, set delivery:'file' (deleted after 24h; read inside commands, never print). Longer-lived keys use request_api_key.",
+  // API keys are asked for with request_api_key; offering them here too only cost tokens.
+  parameters: OrchestratorMcpRequestSecretInput.mapFields(
+    ({ apiKey: _apiKey, ...fields }) => fields,
+  ),
   success: OrchestratorMcpRequestSecretResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
@@ -295,7 +301,7 @@ const RequestSecretTool = Tool.make("request_secret", {
 
 const AskUserTool = Tool.make("ask_user", {
   description:
-    "Ask up to four user questions on a card. Put the '(Recommended)' choice first. Answers arrive as messages, possibly mid-turn.",
+    "Ask up to four user questions on a card. Put '(Recommended)' first. Answers arrive as messages, possibly mid-turn.",
   parameters: OrchestratorMcpAskUserInput,
   success: OrchestratorMcpAskUserResult,
   failure: OrchestratorMcpFailure,
@@ -307,7 +313,7 @@ const AskUserTool = Tool.make("ask_user", {
 
 export const CreateThreadsTool = Tool.make("create_threads", {
   description:
-    'Create top-level chats only when the user asks. Use delegate_task for delegation. Outside a thread, omit projectId to start in this machine\'s "No project" scratch project (created if missing), or pass one from t3_project_list. Inherit caller settings. Share checkouts or use fresh scratch folders. Override target and modes per entry. Waits up to 20s for startup. Later first-run failures notify the calling chat.',
+    'Create top-level chats only when the user asks. Use delegate_task for delegation. Outside a thread, omit projectId for "No project" scratch (auto-created) or pick from t3_project_list. Inherits caller settings; Share checkouts or use fresh scratch folders. Override target/modes per entry. Waits up to 20s for startup; later first-run failures notify this chat.',
   parameters: OrchestratorMcpCreateThreadsInput,
   success: OrchestratorMcpCreateThreadsResult,
   failure: OrchestratorMcpFailure,
@@ -320,7 +326,7 @@ export const CreateThreadsTool = Tool.make("create_threads", {
 
 const ThreadListTool = Tool.make("t3_thread_list", {
   description:
-    "List project threads, newest first. Defaults to this thread's project and 20 rows. Filter by run status, title, settled or snoozed. Page with nextCursor. includeDetails adds metadata. Snoozed threads wake on a question, failure or completion.",
+    "List project threads, newest first. Defaults to this project and 20 rows. Filter by status, title, settled or snoozed; page via nextCursor. includeDetails adds metadata. Snoozed threads wake on questions, failure or completion.",
   parameters: OrchestratorMcpThreadListInput,
   success: OrchestratorMcpThreadListResult,
   failure: OrchestratorMcpFailure,
@@ -334,7 +340,7 @@ const ThreadListTool = Tool.make("t3_thread_list", {
 
 const ThreadReadTool = Tool.make("t3_thread_read", {
   description:
-    "Read thread state and latest items by default (max ~30k chars). fromEnd=false starts at the beginning. messages includes plans; activity includes tools. Continue with afterPosition=nextPosition or beforePosition=prevPosition. query is a case-insensitive all-words match, newest first, with snippets. Scans at most 1000 items. Keep query/view and page back even past empty pages. search.hasMoreMatches is true for more, false if exhausted, null unknown past search.scanLimitReached. Read full text with itemId, then textOffset=nextTextOffset (UTF-16). itemId excludes query/backward paging. Reading a full child result acknowledges delivery. Omitted sourceThreadId means this thread.",
+    "Read thread state and latest items. Max ~30k chars; fromEnd=false starts at 0. messages includes plans; activity includes tools. Page via afterPosition=nextPosition or beforePosition=prevPosition. query does case-insensitive all-words match newest first with snippets (scans at most 1000 items; keep query/view across empty pages; search.hasMoreMatches is true/false or null unknown past search.scanLimitReached). Full text: itemId, then textOffset=nextTextOffset (UTF-16; excludes query/backward paging). Full child read acks delivery. Omitted sourceThreadId means this thread.",
   parameters: OrchestratorMcpThreadReadInput,
   success: OrchestratorMcpThreadReadResult,
   failure: OrchestratorMcpFailure,
@@ -350,7 +356,7 @@ const ThreadReadTool = Tool.make("t3_thread_read", {
 
 export const ThreadUpdateTool = Tool.make("t3_thread_update", {
   description:
-    "Update a thread. Omit threadId for this thread. rename uses title, link_pull_request uses pullRequest, cancel_queued uses runId. settle removes from active; this thread settles when your turn ends; unsettle restores. Workspace and branch unsupported. clientRequestId dedupes retries.",
+    "Update thread metadata. Omit threadId for this thread. rename: title; link_pull_request: pullRequest; cancel_queued: runId; settle/unsettle (this thread settles when turn ends). Workspace and branch unsupported. clientRequestId dedupes retries.",
   parameters: ThreadMetadataMcpUpdateInput,
   success: ThreadMetadataMcpUpdateResult,
   failure: OrchestratorMcpFailure,
@@ -363,7 +369,7 @@ export const ThreadUpdateTool = Tool.make("t3_thread_update", {
 
 const ThreadSendTool = Tool.make("t3_thread_send", {
   description:
-    "Message a T3 thread within your permission modes. A peer run wakes you on completion. Independent review rounds use delegate_task with the full brief and a new key. For child history use its taskId. A completed task gets a new short taskId and wakes its parent on completion. If its workspace was removed, delegate again. Answer pending questions with t3_pending_request_respond, never a message. auto starts idle or steers/queues busy threads. Child-to-parent auto holds text-only progress up to 2 min, queue wakes now. queue starts a separate turn, steer updates it, restart interrupts it. Reuse clientRequestId only for retries.",
+    "Message a T3 thread within your permission modes. Peer runs wake you on completion. Independent review rounds use delegate_task with full brief and new key. Child follow-ups use taskId; a completed task gets a new short taskId and wakes its parent (if workspace was removed, delegate again). Answer pending questions with t3_pending_request_respond, never a message. mode: auto starts idle or steers/queues busy (child-to-parent auto holds text-only progress up to 2m, queue wakes now); queue/steer/restart choose explicitly. Reuse clientRequestId only for retries.",
   parameters: OrchestratorMcpThreadSendInput,
   success: OrchestratorMcpThreadSendResult,
   failure: OrchestratorMcpFailure,
@@ -376,7 +382,7 @@ const ThreadSendTool = Tool.make("t3_thread_send", {
 
 const ThreadWaitTool = Tool.make("t3_thread_wait", {
   description:
-    "Wait for a SSHCode thread run to reach a terminal durable state. Without runId, the latest run at call time is selected; an idle thread returns immediately. Timeout does not interrupt work, so call again or use t3_thread_read/list after timedOut=true. Waiting reports status only and does not acknowledge a delegated result.",
+    "Wait for a thread run to finish. Prefer wakes for subagents and peer sends. Omits runId for latest run; idle returns immediately. Timeout leaves work running without acking delegated results.",
   parameters: OrchestratorMcpThreadWaitInput,
   success: OrchestratorMcpThreadWaitResult,
   failure: OrchestratorMcpFailure,
@@ -390,7 +396,7 @@ const ThreadWaitTool = Tool.make("t3_thread_wait", {
 
 const ThreadInterruptTool = Tool.make("t3_thread_interrupt", {
   description:
-    "Request interruption of a running turn in any SSHCode thread in this environment. Without runId, the newest interruptible run is selected. Terminal runs and threads without an active turn return without another side effect. clientRequestId makes retries idempotent.",
+    "Interrupt a running turn in any accessible thread. Default: newest interruptible run; terminal/idle threads no-op. clientRequestId dedupes retries.",
   parameters: OrchestratorMcpThreadInterruptInput,
   success: OrchestratorMcpThreadInterruptResult,
   failure: OrchestratorMcpFailure,
@@ -408,7 +414,7 @@ const monitorDependencies = [
 
 const MonitorStartTool = Tool.make("monitor_start", {
   description:
-    "Run a shell command in this thread's directory (full-access/default). Returns monitorId now and wake on output or exit. For work over 10 min use durable:true to survive restarts and retain output at logPath. Ordinary monitors default to 1 h unless persistent:true and stop on excessive output. Use line-buffered output, wakeOn for milestones, restartable:true for read-only waits, and silenceMs for stalled output. Repeating errors can wake once. timeoutMs up to 24 h. Stop, archive or removal kills the entire process group. At most 8 per thread. Reuse clientRequestId only for retries.",
+    "Run a monitored shell command (full-access/default). Returns monitorId and wakes on output/exit. Your own process over 10m: durable:true survives restarts and keeps logPath. Waiting on anything else: a read-only check with restartable:true (relaunched after restarts) and silenceMs for stalls; durable takes neither. Default 1h timeout unless persistent:true (max 24h); stops on excessive output. Use line-buffered output and wakeOn regex for milestones. Stop/archive/removal kills the entire process group. Max 8/thread; reuse clientRequestId only for retries.",
   parameters: MonitorStartInput,
   success: MonitorStartResult,
   failure: OrchestratorMcpFailure,
@@ -421,7 +427,7 @@ const MonitorStartTool = Tool.make("monitor_start", {
 
 const MonitorStopTool = Tool.make("monitor_stop", {
   description:
-    "Stop one of this thread's monitors and its entire process group. Returns stopped=false if it already ended. Prefer the native Monitor tool for native Claude Code monitors.",
+    "Stop a monitor and its process group. stopped=false if already ended. Prefer native Monitor for native Claude monitors.",
   parameters: MonitorStopInput,
   success: MonitorStopResult,
   failure: OrchestratorMcpFailure,
@@ -434,7 +440,7 @@ const MonitorStopTool = Tool.make("monitor_stop", {
 
 const MonitorListTool = Tool.make("monitor_list", {
   description:
-    "List this thread's monitors. includeOutput=true adds recent output. Wait for wakes instead of polling. Claude's native monitors use Monitor.",
+    "List this thread's monitors. includeOutput=true adds recent output. Wait for wakes instead of polling. Native Claude monitors use Monitor.",
   parameters: Schema.Struct({ includeOutput: Schema.optional(Schema.Boolean) }),
   success: MonitorListResult,
   failure: OrchestratorMcpFailure,
@@ -443,6 +449,52 @@ const MonitorListTool = Tool.make("monitor_list", {
 })
   .annotate(Tool.Title, "List monitors")
   .annotate(Tool.Readonly, true);
+
+const TeamBoardTool = Tool.make(TEAM_BOARD_TOOL, {
+  description: TEAM_BOARD_DESCRIPTION,
+  parameters: TeamBoardToolInput,
+  success: Schema.Struct({
+    claimed: Schema.optionalKey(Schema.Array(Schema.String)),
+    notGranted: Schema.optionalKey(Schema.Array(Schema.String)),
+    conflicts: Schema.optionalKey(
+      Schema.Array(
+        Schema.Struct({ file: Schema.String, owner: Schema.String, claim: Schema.String }),
+      ),
+    ),
+    handoffs: Schema.optionalKey(
+      Schema.Array(
+        Schema.Struct({
+          by: Schema.String,
+          commit: Schema.String,
+          files: Schema.optionalKey(Schema.Array(Schema.String)),
+        }),
+      ),
+    ),
+    posts: Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        by: Schema.String,
+        kind: Schema.String,
+        repo: Schema.optionalKey(Schema.String),
+        text: Schema.String,
+        files: Schema.optionalKey(Schema.Array(Schema.String)),
+        to: Schema.optionalKey(Schema.String),
+        replyTo: Schema.optionalKey(Schema.String),
+        commit: Schema.optionalKey(Schema.String),
+        pinned: Schema.optionalKey(Schema.Boolean),
+        part: Schema.optionalKey(Schema.Int),
+      }),
+    ),
+    more: Schema.optionalKey(Schema.Int),
+    notice: Schema.optionalKey(Schema.String),
+  }),
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "Team board")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.OpenWorld, false);
 
 export const OrchestratorToolkit = Toolkit.make(
   MonitorStartTool,
@@ -472,4 +524,5 @@ export const OrchestratorToolkit = Toolkit.make(
   ThreadSendTool,
   ThreadWaitTool,
   ThreadInterruptTool,
+  TeamBoardTool,
 );

@@ -46,26 +46,30 @@ export const layer: Layer.Layer<TurnItemPositionStoreV2, never, SqlClient.SqlCli
       runOrdinal: suppliedRunOrdinal,
     }) =>
       Effect.gen(function* () {
-        const existing = yield* sql<{ readonly ordinal: number }>`
-          SELECT ordinal
-          FROM orchestration_v2_turn_item_positions
-          WHERE thread_id = ${threadId} AND turn_item_id = ${turnItemId}
-          LIMIT 1
+        // A streaming item checks both its saved position and its run's range.
+        const [existing] = yield* sql<{
+          readonly ordinal: number | null;
+          readonly run_ordinal: number | null;
+        }>`
+          SELECT (
+            SELECT ordinal
+            FROM orchestration_v2_turn_item_positions
+            WHERE thread_id = ${threadId} AND turn_item_id = ${turnItemId}
+          ) AS ordinal, ${
+            runId === null || suppliedRunOrdinal !== undefined
+              ? sql`${suppliedRunOrdinal ?? null}`
+              : sql`(
+                  SELECT ordinal
+                  FROM orchestration_v2_projection_runs
+                  WHERE thread_id = ${threadId} AND run_id = ${runId}
+                )`
+          } AS run_ordinal
         `;
-        const runRows =
-          runId === null || suppliedRunOrdinal !== undefined
-            ? []
-            : yield* sql<{ readonly ordinal: number }>`
-                SELECT ordinal
-                FROM orchestration_v2_projection_runs
-                WHERE thread_id = ${threadId} AND run_id = ${runId}
-                LIMIT 1
-              `;
-        const runOrdinal = suppliedRunOrdinal ?? runRows[0]?.ordinal ?? null;
+        const runOrdinal = existing?.run_ordinal ?? null;
         const lowerBound = runOrdinal === null ? 0 : runOrdinal * 1_000_000;
         const upperBound = runOrdinal === null ? 999_999 : lowerBound + 999_999;
-        const current = existing[0]?.ordinal;
-        if (current !== undefined) {
+        const current = existing?.ordinal ?? null;
+        if (current !== null) {
           // A steer that missed its turn starts the next run; it moves into that run's range.
           if (runOrdinal === null || (current >= lowerBound && current <= upperBound)) {
             return current;

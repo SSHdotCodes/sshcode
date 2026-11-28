@@ -5788,15 +5788,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ) {
         dispatchMode = { type: "queue_after_active" };
       }
-      // An agent's automatic send must not overtake an earlier agent message still queued
-      // (for example behind /compact), or the agent receives them out of send order.
+      // Keep the send order for automatically queued agent messages (for example behind
+      // /compact). The sender explicitly requested a separate turn for the other messages.
       if (
         command.deliveryIntent === "auto" &&
         command.createdBy === "agent" &&
         (dispatchMode.type === "steer_active" || dispatchMode.type === "restart_active")
       ) {
         const queuedRuns = projection.runs.filter(
-          (run) => run.status === "queued" && run.queueHeld !== true,
+          (run) => run.status === "queued" && run.queueHeld !== true && run.explicitQueue !== true,
         );
         if (queuedRuns.length > 0) {
           const { messages } = yield* projectionStore
@@ -6258,6 +6258,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           rootNodeId,
           activeAttemptId: attemptId,
           status: "queued",
+          ...(command.explicitQueue === true ? { explicitQueue: true as const } : {}),
           ...(steerWhenLiveRunId === undefined ? {} : { steerWhenLiveRunId }),
           ...(worktreeMissingRun !== undefined ||
           (heldRunsToRelease.length === 0 &&
@@ -8254,6 +8255,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       result: null,
     };
     const emitEvent = emit(events, command);
+    // Stop disposed the tasks it interrupted. A follow-up has a new result to deliver.
+    if (owner.delegatedCompletion?.disposition === "stopped") {
+      const { runs } = yield* projectionStore
+        .getThreadRecords(parentThreadId, ["runs"], { runIds: [owner.id] })
+        .pipe(mapDispatchError(command));
+      const currentOwner = runs[0];
+      if (currentOwner?.delegatedCompletion?.disposition === "stopped") {
+        yield* emitEvent({
+          type: "run.updated",
+          threadId: parentThreadId,
+          runId: currentOwner.id,
+          nodeId: owner.rootNodeId,
+          providerInstanceId: currentOwner.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            ...currentOwner,
+            delegatedCompletion: { ...currentOwner.delegatedCompletion, disposition: "open" },
+          },
+        });
+      }
+    }
     yield* emitEvent({
       type: "run.updated",
       threadId: child.id,

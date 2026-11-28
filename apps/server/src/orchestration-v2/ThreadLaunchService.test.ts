@@ -123,6 +123,7 @@ interface HarnessOptions {
   readonly renameBranch?: GitWorkflow.GitWorkflowService["Service"]["renameBranch"];
   readonly runSetup?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"];
   readonly claimWarm?: WarmWorktreePool.WarmWorktreePool["Service"]["claim"];
+  readonly recordWarmSetup?: WarmWorktreePool.WarmWorktreePool["Service"]["recordSetup"];
   readonly generateTitle?: TextGeneration.TextGeneration["Service"]["generateThreadTitle"];
   readonly generateBranchName?: TextGeneration.TextGeneration["Service"]["generateBranchName"];
   readonly serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
@@ -239,7 +240,7 @@ function makeHarness(options: HarnessOptions = {}) {
     }),
     Layer.succeed(WarmWorktreePool.WarmWorktreePool, {
       claim: options.claimWarm ?? (() => Effect.succeed(null)),
-      recordSetup: () => Effect.void,
+      recordSetup: options.recordWarmSetup ?? (() => Effect.void),
       recycle: () => Effect.succeed("unavailable"),
     }),
     Layer.mock(TextGeneration.TextGeneration)({
@@ -1308,6 +1309,93 @@ it.effect("runs at most two subagent setups of one repository at a time", () =>
       assert.equal((yield* Ref.get(entered))[2], waiting);
       assert.isNull(yield* setupDetail(waiting));
       for (const done of finished.values()) yield* Deferred.succeed(done, undefined);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("starts the next subagent setup while the previous receipt is being recorded", () =>
+  Effect.gen(function* () {
+    const firstStarted = yield* Deferred.make<void>();
+    const secondStarted = yield* Deferred.make<void>();
+    const thirdWaiting = yield* Deferred.make<void>();
+    const thirdStarted = yield* Deferred.make<void>();
+    const firstExited = yield* Deferred.make<void>();
+    const releaseRemaining = yield* Deferred.make<void>();
+    const receiptStarted = yield* Deferred.make<void>();
+    const finishReceipt = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      runSetup: (input) =>
+        Effect.gen(function* () {
+          const name = String(input.threadId).slice(-1);
+          yield* Deferred.succeed(
+            name === "a" ? firstStarted : name === "b" ? secondStarted : thirdStarted,
+            undefined,
+          );
+          return {
+            status: "started" as const,
+            scriptId: "setup",
+            scriptName: "Setup",
+            scriptCommand: "vp i",
+            terminalId: `setup-${name}`,
+            cwd: input.worktreePath,
+            async: false,
+            completion: Deferred.await(name === "a" ? firstExited : releaseRemaining).pipe(
+              Effect.as({ exitCode: 0, durationMs: 0 }),
+            ),
+          };
+        }),
+      wrapSetupTracker: (tracker) => ({
+        ...tracker,
+        stageStatus: (threadId, stage, status, detail) =>
+          tracker
+            .stageStatus(threadId, stage, status, detail)
+            .pipe(
+              Effect.tap(() =>
+                detail === "Waiting for other subagent setups"
+                  ? Deferred.succeed(thirdWaiting, undefined)
+                  : Effect.void,
+              ),
+            ),
+      }),
+      recordWarmSetup: () =>
+        Deferred.succeed(receiptStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(finishReceipt)),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const launch = (name: string) => {
+        const subagentLaunch = {
+          ...launchInput({
+            command: `command:launch:setup-receipt-${name}`,
+            thread: `thread:launch:setup-receipt-${name}`,
+            message: "Work",
+            workspace: { type: "worktree", baseRef: "main" },
+          }),
+          holdForSetup: true,
+        };
+        return launches.launch(subagentLaunch);
+      };
+      yield* launch("a");
+      yield* launch("b");
+      yield* Deferred.await(firstStarted);
+      yield* Deferred.await(secondStarted);
+      yield* launch("c");
+      yield* Deferred.await(thirdWaiting);
+      yield* Deferred.succeed(firstExited, undefined);
+      yield* Deferred.await(receiptStarted);
+      const waitForNextSetup = yield* Deferred.await(thirdStarted).pipe(
+        Effect.timeoutOption("1 second"),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("1 second");
+      const nextSetup = yield* Fiber.join(waitForNextSetup);
+      yield* Deferred.succeed(finishReceipt, undefined);
+      yield* Deferred.succeed(releaseRemaining, undefined);
+      assert.isTrue(
+        Option.isSome(nextSetup),
+        "the next setup starts before receipt recording finishes",
+      );
     }).pipe(Effect.provide(harness.layer));
   }),
 );

@@ -80,7 +80,14 @@ import {
   SIDEBAR_QUIET_AFTER_MS,
 } from "./Sidebar.logic";
 import { sortSettledThreads } from "@t3tools/client-runtime/state/thread-sort";
-import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  MessageId,
+  ProjectId,
+  ProviderInstanceId,
+  RunId,
+  ThreadId,
+} from "@t3tools/contracts";
 
 import {
   DEFAULT_INTERACTION_MODE,
@@ -169,6 +176,25 @@ describe("sidebarMessagePreview", () => {
     expect(sidebarMessagePreview({ ...message, role: "system" })?.label).toBe("System");
   });
 
+  it("never labels a team board note as the person's, stored with or without its id", () => {
+    const steer =
+      "SSHCode team board (from sibling subagents, not the user): Sol posted (reply ab12). Use upper case tags";
+    // The shell's latest message keeps the note's `team-board:` id.
+    expect(
+      sidebarMessagePreview({
+        ...message,
+        id: MessageId.make("team-board:n1"),
+        role: "user",
+        text: "Claim exact paths before shared edits.",
+      })?.label,
+    ).toBe("Team board");
+    // A preview cached before this rule keeps only the role and the text.
+    expect(sidebarMessagePreview({ role: "user", text: steer })).toEqual({
+      label: "Team board",
+      text: "Sol posted",
+    });
+  });
+
   it("omits empty summaries and bounds long previews", () => {
     expect(sidebarMessagePreview(null)).toBeNull();
     expect(sidebarMessagePreview({ ...message, text: " \n\t " })).toBeNull();
@@ -188,6 +214,16 @@ describe("sidebarLastMessagePreview", () => {
       text: "Continue",
     });
     expect(sidebarLastMessagePreview([])).toBeNull();
+    // A chat recorded before notes were notifications holds one as a `team-board:` user message.
+    const items = makeStreamingTimelineFixture().visibleTurnItems.map((entry) =>
+      entry.item.type === "user_message"
+        ? {
+            ...entry,
+            item: { ...entry.item, messageId: MessageId.make("team-board:n2"), text: "Hi" },
+          }
+        : entry,
+    );
+    expect(sidebarLastMessagePreview(items)).toEqual({ label: "Team board", text: "Hi" });
   });
 });
 

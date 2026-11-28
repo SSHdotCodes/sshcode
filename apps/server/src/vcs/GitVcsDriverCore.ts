@@ -793,16 +793,10 @@ const gb18030Decoder = new TextDecoder("gb18030", { ignoreBOM: true });
 const CONSECUTIVE_CJK = /[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]{2}/u;
 const CJK_BETWEEN_ASCII_LETTERS = /[A-Za-z][\u3000-\u303f\u4e00-\u9fff\uff00-\uffef][A-Za-z]/u;
 
-// A byte cap can end inside a UTF-8 character; that tail is not evidence of another encoding.
+// Leave an incomplete character at the output cap buffered while still rejecting invalid UTF-8.
 const decodeStrictUtf8 = (bytes: Uint8Array, truncated: boolean): string => {
   if (!truncated) return strictUtf8Decoder.decode(bytes);
-  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-  const text = decoder.decode(bytes, { stream: true });
-  try {
-    return text + decoder.decode();
-  } catch {
-    return `${text}\uFFFD`;
-  }
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes, { stream: true });
 };
 
 const decodeUtf8OrGb18030 = (bytes: Uint8Array, truncated: boolean): string => {

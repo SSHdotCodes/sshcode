@@ -1220,6 +1220,34 @@ it.effect("memory live chat lookup lists unarchived chats with a turn in flight"
   liveThreadModelsReadOnlyChatsInFlight.pipe(Effect.provide(ProjectionStore.layerMemory)),
 );
 
+const explicitQueueSurvivesStaleRunUpdate = Effect.gen(function* () {
+  const store = yield* ProjectionStore.ProjectionStoreV2;
+  const threadId = yield* addRolledBackRecoveryCandidate("explicit-queue-stale-update");
+  const run = (yield* store.getThreadProjection(threadId)).runs[0]!;
+  const now = yield* DateTime.now;
+  for (const [id, payload] of [
+    ["marked", { ...run, explicitQueue: true as const }],
+    ["completed", { ...run, status: "completed" as const, completedAt: now }],
+  ] as const) {
+    yield* store.apply({
+      id: EventId.make(`event:explicit-queue-stale-update:${id}`),
+      type: "run.updated",
+      threadId,
+      runId: run.id,
+      providerInstanceId,
+      occurredAt: now,
+      payload,
+    });
+  }
+  const updated = (yield* store.getThreadProjection(threadId)).runs[0];
+  assert.equal(updated?.status, "completed");
+  assert.propertyVal(updated, "explicitQueue", true);
+});
+
+it.effect("memory projection keeps explicit queue intent through a stale run.updated", () =>
+  explicitQueueSurvivesStaleRunUpdate.pipe(Effect.provide(ProjectionStore.layerMemory)),
+);
+
 it.effect("memory projection keeps restart-cancelled work through a stale run.updated", () =>
   restartCancelledWorkSurvivesStaleRunUpdate.pipe(Effect.provide(ProjectionStore.layerMemory)),
 );
@@ -2072,6 +2100,10 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
   it.effect(
     "keeps restart-cancelled work through a stale run.updated",
     () => restartCancelledWorkSurvivesStaleRunUpdate,
+  );
+  it.effect(
+    "keeps explicit queue intent through a stale run.updated",
+    () => explicitQueueSurvivesStaleRunUpdate,
   );
   it.effect(
     "keeps a follow-up task's run binding through a stale run.updated",

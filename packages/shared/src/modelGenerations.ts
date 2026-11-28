@@ -44,10 +44,18 @@ export const MODEL_GENERATION_RULES: Readonly<Record<string, ModelGenerationRule
       /\b(?<line>mistral[- ](?:large|medium|small)|ministral|devstral|codestral)[- ]?(?<generation>\d{1,2})(?![\dbk])/i,
   },
   minimax: { pattern: /\b(?:minimax[- ]?)?m(?<generation>\d+)/i },
-  // Gemini keeps the newest flagship (Argon, formerly Pro) and the newest Flash.
+  // Gemini keeps the newest flagship (Argon, formerly Pro) and the newest fast model
+  // (Hydrogen, formerly Flash): Gemini 4 Hydrogen retires 3.8 Flash and Flash Lite.
   gemini: {
-    pattern: /\bgemini[- ]?(?<generation>\d+(?:[.-]\d+)?)[- ]?(?<line>argon|pro|ultra|flash)?/i,
-    lineAliases: { argon: "flagship", pro: "flagship", ultra: "flagship" },
+    pattern:
+      /\bgemini[- ]?(?<generation>\d+(?:[.-]\d+)?)[- ]?(?<line>argon|pro|ultra|flash|hydrogen)?/i,
+    lineAliases: {
+      argon: "flagship",
+      pro: "flagship",
+      ultra: "flagship",
+      flash: "fast",
+      hydrogen: "fast",
+    },
   },
   // The first Inkling has no number; "256k" is a context size, not a generation.
   inkling: {

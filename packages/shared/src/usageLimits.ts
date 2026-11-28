@@ -44,6 +44,8 @@ export function usesChatGptSharing(provider: ServerProvider | null | undefined):
   return provider?.auth.status === "authenticated" && provider.auth.subscriptionSharing === true;
 }
 
+export const MISTRAL_USAGE_URL = "https://admin.mistral.ai/subscription";
+
 export const CURSOR_USAGE_WINDOWS = [
   {
     id: "totalPercentUsed",
@@ -123,11 +125,12 @@ export function collectExternalUsageLinks(presentations: LimitPresentations) {
   for (const presentation of presentations.values()) {
     for (const provider of providersWithLimits(presentation.serverConfig?.providers ?? [])) {
       const external = provider.usageLimits?.externalUsage;
-      if (external && provider.auth.status === "authenticated") {
+      const isMistral = external?.url === MISTRAL_USAGE_URL;
+      if (external && (provider.auth.status === "authenticated" || isMistral)) {
         const account = `${provider.displayName ?? provider.instanceId} on ${presentation.entry.target.label}`;
         links.set(external.url, {
           ...external,
-          message: provider.usageLimits?.unavailable?.message,
+          message: isMistral ? undefined : provider.usageLimits?.unavailable?.message,
           accounts: [...new Set([...(links.get(external.url)?.accounts ?? []), account])],
         });
       }
@@ -213,6 +216,8 @@ export interface LimitAccount {
   readonly email: string | undefined;
   readonly plan: string | undefined;
   readonly accentColor: string | undefined;
+  /** The instance's own mark, so a registry agent (Devin, Mistral Vibe) is not drawn as the generic one. */
+  readonly iconUrl?: string;
   /** Set on the instance to stay out of compact rows; unset where only a hub reports it. */
   readonly hideRing?: boolean;
   /** Environments the account is signed in on; empty when only a hub reports it. */
@@ -352,6 +357,9 @@ export function collectLimitAccounts(
       primary: previous.primary || next.primary,
       plan: previous.plan ?? next.plan,
       accentColor: previous.accentColor ?? next.accentColor,
+      ...((previous.iconUrl ?? next.iconUrl) === undefined
+        ? {}
+        : { iconUrl: previous.iconUrl ?? next.iconUrl }),
       // Hidden only when every instance that has a say hides it.
       ...((previous.hideRing ?? next.hideRing) === undefined
         ? {}
@@ -402,6 +410,7 @@ export function collectLimitAccounts(
         notice !== null &&
         (options?.withNotices !== true ||
           (provider.driver !== "antigravity" &&
+            provider.usageLimits.requiredApiKey === undefined &&
             provider.usageLimits.unavailable?.reason === "unsupported"))
       ) {
         continue;
@@ -415,6 +424,7 @@ export function collectLimitAccounts(
         email: provider.auth.email,
         plan: provider.auth.label,
         accentColor: provider.accentColor,
+        ...(provider.iconUrl ? { iconUrl: provider.iconUrl } : {}),
         hideRing: provider.hideLimitRing === true,
         environments: [{ environmentId, label }],
         sourceLabel: null,
@@ -567,6 +577,13 @@ export interface LimitPool {
   readonly unread: readonly LimitAccount[];
 }
 
+/** The mark for a limits section or ring: the first plan in it that has its own. */
+export function limitPoolIconUrl(pool: Pick<LimitPool, "accounts" | "unread">): string | undefined {
+  for (const account of pool.accounts) if (account.iconUrl) return account.iconUrl;
+  for (const account of pool.unread) if (account.iconUrl) return account.iconUrl;
+  return undefined;
+}
+
 /** Order provider limit windows for display (pairing Antigravity buckets, showing Cursor's two pools). */
 export function displayProviderUsageWindows<
   W extends Pick<ServerProviderUsageWindow, "id" | "kind">,
@@ -594,6 +611,36 @@ export function displayProviderUsageWindows<
 /** Show Cursor's two usable pools instead of a combined percentage when both are available. */
 export function displayLimitWindows(pool: LimitPool) {
   return displayProviderUsageWindows(pool.driver, pool.windows);
+}
+
+export function monthlyBudgetDetail(window: LimitPoolWindow): string | undefined {
+  const budget = window.members[0]?.window.includedBudget;
+  if (
+    !budget ||
+    !window.members.every(
+      ({ window }) =>
+        window.includedBudget?.amount === budget.amount &&
+        window.includedBudget.currency === budget.currency,
+    )
+  ) {
+    return undefined;
+  }
+  const amount = new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: budget.currency,
+    minimumFractionDigits: 0,
+  }).format(budget.amount);
+  return `of ${amount} a month`;
+}
+
+export function mistralPayAsYouGoNotices(windows: readonly LimitPoolWindow[]): string[] {
+  return windows.flatMap((window) =>
+    window.members.some(({ window }) => window.payAsYouGo === true)
+      ? [
+          `${window.label} pay-as-you-go is on at Mistral: ${window.label} use past the included amount is billed.`,
+        ]
+      : [],
+  );
 }
 
 const WINDOW_KIND_ORDER: Record<ServerProviderUsageWindow["kind"], number> = {

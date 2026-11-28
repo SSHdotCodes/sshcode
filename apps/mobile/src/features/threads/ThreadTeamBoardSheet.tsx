@@ -1,9 +1,14 @@
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { LegendList } from "@legendapp/list/react-native";
-import { type StaticScreenProps, useNavigation } from "@react-navigation/native";
+import { StackActions, type StaticScreenProps, useNavigation } from "@react-navigation/native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
+  teamBoardHoldsLabel,
+  teamBoardRepoLatestPostId,
+  teamBoardRoster,
+  type TeamBoardMemberState,
+  type TeamBoardRosterChip,
   formatTeamBoardMembers,
   formatTeamBoardPushTime,
   formatTeamBoardRanges,
@@ -18,16 +23,22 @@ import {
 import type {
   EnvironmentId,
   NodeId,
-  OrchestrationV2Subagent,
   ScopedThreadRef,
   TeamBoardFile,
   TeamBoardPost,
   TeamBoardPush,
   ThreadId,
 } from "@t3tools/contracts";
-import { useCallback, useEffect, useState } from "react";
+import {
+  type ComponentProps,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { Platform, Pressable, ScrollView, View } from "react-native";
-import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { uuidv4 } from "../../lib/uuid";
 
@@ -38,15 +49,17 @@ import { ControlPill } from "../../components/ControlPill";
 import { ControlPillMenu } from "../../components/ControlPillMenu";
 import { SegmentedControl } from "../../components/SegmentedControl";
 import { cn } from "../../lib/cn";
+import { useEnvironmentServerConfig } from "../../state/entities";
 import { teamBoardEnvironment } from "../../state/teamBoard";
-import { environmentThreadDetails } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   TeamBoardAuthorAvatar,
   TeamBoardAuthorName,
   type TeamBoardDrivers,
+  TeamBoardPeople,
   TeamBoardPostList,
   useTeamBoardDrivers,
+  teamBoardChipHitSlop,
 } from "./TeamBoardPostList";
 
 type BoardTarget = {
@@ -57,8 +70,6 @@ type BoardTarget = {
   /** Opened from the header: past pushes, read-only, even while a new push runs. */
   readonly history?: boolean;
 };
-type Subagents = ReadonlyArray<OrchestrationV2Subagent>;
-const EMPTY_SUBAGENTS: Subagents = [];
 
 /** The live push, the list of past pushes, or one past push. */
 type SheetView =
@@ -76,7 +87,9 @@ export function ThreadTeamBoardSheet({ route }: StaticScreenProps<BoardTarget>) 
     target.history ? { kind: "history" } : { kind: "live" },
   );
   const close = () => navigation.goBack();
-  const bottomInset = Math.max(insets.bottom, 12);
+  // The keyboard covers the home indicator, so the composer sits right on it.
+  const keyboardVisible = useKeyboardState((state) => state.isVisible);
+  const bottomInset = keyboardVisible ? 8 : Math.max(insets.bottom, 12);
   const headerTop = Platform.OS === "android" ? insets.top + 12 : 18;
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
@@ -292,12 +305,26 @@ function BoardView(props: {
   );
   const setSeen = useAtomSet(teamBoardEnvironment.seenAtom(ref));
   const canPost = useAtomValue(teamBoardEnvironment.permissionAtom(ref.environmentId));
-  const subagents =
-    useAtomValue(
-      environmentThreadDetails.threadAtom(ref),
-      (thread) => thread?.projection.subagents,
-    ) ?? EMPTY_SUBAGENTS;
+  // The chat's task records, or the QA fixture's stand-ins.
+  const subagents = useAtomValue(teamBoardEnvironment.membersAtom(ref));
   const drivers = useTeamBoardDrivers(subagents);
+  const holds = useAtomValue(teamBoardEnvironment.holdsAtom(ref));
+  const providers = useEnvironmentServerConfig(ref.environmentId)?.providers;
+  const navigation = useNavigation();
+  // A post opens its sender's chat: the sheet closes and the chat is pushed, like a subagent row.
+  const people = useMemo(
+    () => ({
+      providers: providers ?? [],
+      members: subagents,
+      onOpen: (threadId: string) => {
+        navigation.goBack();
+        navigation.dispatch(
+          StackActions.push("Thread", { environmentId: String(ref.environmentId), threadId }),
+        );
+      },
+    }),
+    [navigation, providers, ref.environmentId, subagents],
+  );
   const [tab, setTab] = useState<"posts" | "files">("posts");
   const [filter, setFilter] = useState<TeamBoardFilter>("all");
   const [taskId, setTaskId] = useState<NodeId | null>(live ? (props.target.taskId ?? null) : null);
@@ -314,12 +341,12 @@ function BoardView(props: {
     (post: TeamBoardPost | null) => setReplyState(post === null ? null : { repo, post }),
     [repo],
   );
-  // The pill counts every live repository, so reading any of them marks the whole team read.
-  const latestPostId = live ? summary?.latestPostId : undefined;
+  // Reading a repository marks only its newest post seen; the dot stays while another has news.
+  const latestPostId = live ? teamBoardRepoLatestPostId(summary, repo) : undefined;
   // Reading the live board marks it read on this phone, including posts that land while open.
   useEffect(() => {
-    if (latestPostId !== undefined) setSeen(latestPostId);
-  }, [latestPostId, setSeen]);
+    if (latestPostId !== undefined) setSeen({ latestPostId, repo });
+  }, [latestPostId, repo, setSeen]);
   const agentName =
     taskId === null
       ? null
@@ -335,7 +362,7 @@ function BoardView(props: {
         : null;
 
   return (
-    <>
+    <TeamBoardPeople value={people}>
       <SheetHeader
         top={props.headerTop}
         subtitle={subtitle}
@@ -355,22 +382,13 @@ function BoardView(props: {
           onSelect={setTab}
         />
       </View>
-      {agentName !== null ? (
-        <View className="mx-5 mb-2 flex-row items-center gap-1.5">
-          <Text className="text-xs text-foreground-muted">Showing</Text>
-          <TeamBoardAuthorName author={{ name: agentName, taskId: taskId! }} drivers={drivers} />
-          <View className="flex-1" />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Show everyone"
-            hitSlop={8}
-            onPress={() => setTaskId(null)}
-            className="min-h-8 justify-center active:opacity-60"
-          >
-            <Text className="text-xs font-t3-medium text-foreground">Everyone</Text>
-          </Pressable>
-        </View>
-      ) : null}
+      <RosterRow
+        holds={holds}
+        roster={teamBoardRoster(subagents, details)}
+        selected={taskId}
+        drivers={drivers}
+        onSelect={setTaskId}
+      />
       {details === null ? (
         <View className="flex-1 flex-row items-start gap-2 px-5 pt-4">
           <AppActivityIndicator size="small" />
@@ -383,6 +401,7 @@ function BoardView(props: {
             posts={details.posts ?? EMPTY_POSTS}
             filter={filter}
             taskId={taskId}
+            memberName={agentName}
             emptyText={
               agentName !== null && filter === "all"
                 ? `No posts from ${agentName} yet.`
@@ -412,11 +431,128 @@ function BoardView(props: {
       ) : (
         <View style={{ height: props.bottomInset }} />
       )}
-    </>
+    </TeamBoardPeople>
   );
 }
 
 const EMPTY_POSTS: ReadonlyArray<TeamBoardPost> = [];
+
+const STATE_DOT: Record<TeamBoardMemberState, string> = {
+  working: "bg-adaptive-sky-600-400",
+  done: "bg-adaptive-emerald-600-400",
+  failed: "bg-adaptive-rose-600-400",
+};
+
+/** One chip per member; tapping one filters Posts and Files to it, tapping it again clears. */
+function RosterRow(props: {
+  readonly roster: ReadonlyArray<TeamBoardRosterChip>;
+  readonly selected: NodeId | null;
+  readonly drivers: TeamBoardDrivers;
+  readonly onSelect: (taskId: NodeId | null) => void;
+  /** Files each member holds now, from the presence feed (live frames carry no presence). */
+  readonly holds?: ReadonlyMap<string, number>;
+}) {
+  if (props.roster.length === 0) return null;
+  return (
+    // The strip's own padding takes each chip's touch area to 44 pt without reaching the filters.
+    <ChipStrip
+      accessibilityLabel="Team"
+      className="mb-0.5"
+      contentContainerClassName="gap-1.5 px-5 py-1"
+    >
+      {props.roster.map((chip, index) => {
+        const selected = props.selected === chip.member.id;
+        const detail = teamBoardHoldsLabel(props.holds?.get(chip.member.id) ?? chip.holds);
+        return (
+          <ChipPressable
+            key={chip.member.id}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            accessibilityLabel={[chip.name, chip.state, detail].filter(Boolean).join(", ")}
+            accessibilityHint={selected ? "Shows everyone" : "Shows only this subagent"}
+            onPress={() => props.onSelect(selected ? null : chip.member.id)}
+            index={index}
+            count={props.roster.length}
+            vertical={4}
+            className={cn(
+              "min-h-9 max-w-[300px] flex-row items-center gap-1.5 rounded-full border px-2 py-1 active:opacity-70",
+              selected ? "border-border bg-subtle-strong" : "border-border-subtle bg-subtle",
+            )}
+          >
+            <View>
+              <TeamBoardAuthorAvatar
+                author={{ name: chip.name, taskId: chip.member.id }}
+                drivers={props.drivers}
+                small
+              />
+              <View
+                className={cn(
+                  "absolute -right-0.5 -bottom-0.5 size-2 rounded-full border border-sheet",
+                  STATE_DOT[chip.state],
+                )}
+              />
+            </View>
+            <Text
+              numberOfLines={1}
+              className="max-w-[140px] font-t3-medium text-xs text-foreground"
+            >
+              {chip.name}
+            </Text>
+            {detail ? (
+              <Text numberOfLines={1} className="shrink text-xs text-foreground-muted">
+                {detail}
+              </Text>
+            ) : null}
+          </ChipPressable>
+        );
+      })}
+    </ChipStrip>
+  );
+}
+
+/** A strip chip whose touch area reaches 44 pt wide and tall without overlapping its neighbours. */
+function ChipPressable(
+  props: ComponentProps<typeof Pressable> & {
+    readonly index: number;
+    readonly count: number;
+    readonly vertical: number;
+  },
+) {
+  const { index, count, vertical, onLayout, ...rest } = props;
+  const [width, setWidth] = useState(44);
+  return (
+    <Pressable
+      {...rest}
+      hitSlop={teamBoardChipHitSlop(width, index, count, vertical)}
+      onLayout={(event) => {
+        setWidth(event.nativeEvent.layout.width);
+        onLayout?.(event);
+      }}
+    />
+  );
+}
+
+/** A sideways strip of chips with no scrollbar. */
+function ChipStrip(props: {
+  readonly children: ReactNode;
+  readonly className?: string;
+  readonly contentContainerClassName: string;
+  readonly accessibilityLabel?: string;
+}) {
+  return (
+    <View className={cn("grow-0 bg-sheet", props.className)}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        accessibilityLabel={props.accessibilityLabel}
+        className="grow-0"
+        contentContainerClassName={props.contentContainerClassName}
+      >
+        {props.children}
+      </ScrollView>
+    </View>
+  );
+}
 
 /** Stays above the list while it scrolls. */
 function FilterChips(props: {
@@ -424,16 +560,20 @@ function FilterChips(props: {
   readonly onFilterChange: (filter: TeamBoardFilter) => void;
 }) {
   return (
-    <View className="flex-row gap-1.5 bg-sheet px-5 pt-1 pb-2">
-      {TEAM_BOARD_FILTERS.map((entry) => {
+    // 32 pt chips touch at 44 pt inside the strip's own padding.
+    <ChipStrip contentContainerClassName="gap-1.5 px-5 py-1.5">
+      {TEAM_BOARD_FILTERS.map((entry, index) => {
         const selected = entry.id === props.filter;
         return (
-          <Pressable
+          <ChipPressable
             key={entry.id}
             accessibilityRole="button"
             accessibilityState={{ selected }}
             accessibilityLabel={`Show ${entry.label.toLowerCase()}`}
             onPress={() => props.onFilterChange(entry.id)}
+            index={index}
+            count={TEAM_BOARD_FILTERS.length}
+            vertical={6}
             className={cn(
               "min-h-8 justify-center rounded-full px-3 active:opacity-70",
               selected ? "bg-subtle-strong" : "bg-subtle",
@@ -447,10 +587,10 @@ function FilterChips(props: {
             >
               {entry.label}
             </Text>
-          </Pressable>
+          </ChipPressable>
         );
       })}
-    </View>
+    </ChipStrip>
   );
 }
 
@@ -461,13 +601,13 @@ function FilesList(props: {
 }) {
   if (props.files.length === 0) {
     return (
-      <View className="flex-1">
+      <ScrollView className="flex-1" contentContainerClassName="pb-4">
         <Text className="px-5 py-6 text-center text-sm text-foreground-muted">
           {props.agentName === null
-            ? "No file is claimed or changed by two agents."
+            ? "No file is being edited by two subagents."
             : `${props.agentName} shares no files yet.`}
         </Text>
-      </View>
+      </ScrollView>
     );
   }
   return (
@@ -504,7 +644,7 @@ function FilesList(props: {
                   formatTeamBoardRanges(entry.ranges),
                   ...(entry.claims ?? []).map((claim) => {
                     const label = teamBoardFileLabel(claim);
-                    return label.symbol ? `claims ${label.symbol}` : "claims the file";
+                    return label.symbol ? `editing ${label.symbol}` : "editing the file";
                   }),
                   // No change in a while: the range may no longer be what it edits.
                   entry.stale ? "stale" : null,
@@ -574,7 +714,7 @@ function TeamComposer(props: {
       style={{ paddingBottom: props.bottomInset }}
     >
       {props.replyTo ? (
-        <View className="flex-row items-center gap-1.5">
+        <View className="-mt-2 min-h-11 flex-row items-center gap-1.5">
           <SymbolView
             name="arrow.turn.left.up"
             size={11}
@@ -586,9 +726,8 @@ function TeamComposer(props: {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Cancel reply"
-            hitSlop={8}
             onPress={props.onClearReply}
-            className="h-6 w-6 items-center justify-center active:opacity-60"
+            className="-mr-2.5 h-11 w-11 items-center justify-center active:opacity-60"
           >
             <SymbolView name="xmark" size={10} tintColorClassName="accent-icon" type="monochrome" />
           </Pressable>

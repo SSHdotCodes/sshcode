@@ -1011,6 +1011,7 @@ const make = Effect.gen(function* () {
             ? {}
             : { modelSelection: input.modelSelection }),
         ...(input.mode === "auto" ? { deliveryIntent: "auto" as const } : {}),
+        ...(input.mode === "queue" ? { explicitQueue: true as const } : {}),
         dispatchMode,
         createdBy: input.createdBy,
         creationSource: input.creationSource,

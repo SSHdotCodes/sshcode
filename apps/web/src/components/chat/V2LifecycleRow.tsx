@@ -8,7 +8,6 @@ import {
 } from "./SubagentCard";
 export { SubagentAvatar } from "./SubagentCard";
 import { notificationSubagent } from "@t3tools/client-runtime/state/thread-execution";
-import { TeamBoardPresenceChip } from "./TeamBoard";
 import { SubagentGradeBadge } from "./SubagentGradeBadge";
 import { AgentElapsed } from "./AgentElapsed";
 import {
@@ -379,9 +378,6 @@ function SubagentTimelineLink(props: {
   }
   const trailing = (
     <>
-      {props.event === undefined && agent?.origin === "app_owned" ? (
-        <TeamBoardPresenceChip threadRef={props.parentRef} taskId={props.subagentId} />
-      ) : null}
       <SubagentGradeBadge
         environmentId={props.parentRef.environmentId}
         taskId={props.subagentId}

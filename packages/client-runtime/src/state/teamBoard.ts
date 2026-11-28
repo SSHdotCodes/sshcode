@@ -53,6 +53,12 @@ export function createTeamBoardAtoms<R, E>(runtime: Atom.AtomRuntime<Environment
 }
 
 export type TeamBoardSubagent = Pick<OrchestrationV2Subagent, "id" | "origin" | "remote" | "title">;
+/** What a post header and the roster read about a member, from the lead chat's task records. */
+export type TeamBoardMember = TeamBoardSubagent &
+  Pick<
+    OrchestrationV2Subagent,
+    "driver" | "providerInstanceId" | "model" | "modelSelection" | "childThreadId" | "status"
+  >;
 export type TeamBoardPostTarget = {
   readonly environmentId: EnvironmentId;
   readonly input: TeamBoardPostInput;
@@ -153,6 +159,8 @@ export interface TeamBoardFixtureSource {
     subagents: ReadonlyArray<TeamBoardSubagent>,
     request: TeamBoardRequest,
   ) => TeamBoardSnapshot | null;
+  /** The chat's own task records, or stand-ins so a chat without a team can show the board. */
+  readonly members: (subagents: ReadonlyArray<TeamBoardMember>) => ReadonlyArray<TeamBoardMember>;
   readonly post: TeamBoardPostCommand;
   readonly canPost?: boolean;
 }
@@ -164,7 +172,7 @@ export interface TeamBoardSeenStorage {
 }
 
 const SEEN_LIMIT = 200;
-const EMPTY_SUBAGENTS: ReadonlyArray<TeamBoardSubagent> = [];
+const EMPTY_SUBAGENTS: ReadonlyArray<TeamBoardMember> = [];
 
 /** Only local app-owned task records can share a board; remote and provider-native ones cannot. */
 export function canHaveTeamBoard(subagents: ReadonlyArray<TeamBoardSubagent>): boolean {
@@ -191,7 +199,7 @@ export function createTeamBoardViewAtoms(options: {
   };
   readonly subagentsAtom: (
     ref: ScopedThreadRef,
-  ) => Atom.Atom<ReadonlyArray<TeamBoardSubagent> | null | undefined>;
+  ) => Atom.Atom<ReadonlyArray<TeamBoardMember> | null | undefined>;
   readonly seenStorage?: TeamBoardSeenStorage | undefined;
   readonly fixture?: TeamBoardFixtureSource | undefined;
 }) {
@@ -204,10 +212,11 @@ export function createTeamBoardViewAtoms(options: {
   const seenFamily = Atom.family((key: string) =>
     Atom.writable(
       (get) => get(seenState)[key] ?? null,
-      (ctx, latestPostId: string) => {
+      (ctx, mark: string | TeamBoardSeenMark) => {
         const current = ctx.get(seenState);
-        if (current[key] === latestPostId) return;
-        const next = rememberSeen(current, key, latestPostId);
+        const marked = markTeamBoardSeen(current[key] ?? null, mark);
+        if (current[key] === marked) return;
+        const next = rememberSeen(current, key, marked);
         ctx.set(seenState, next);
         options.seenStorage?.write(JSON.stringify(next));
       },
@@ -230,7 +239,8 @@ export function createTeamBoardViewAtoms(options: {
               : { kind };
       const ref = parseThreadKey(scoped);
       return Atom.make((get): TeamBoardSnapshot | null => {
-        const subagents = get(options.subagentsAtom(ref)) ?? EMPTY_SUBAGENTS;
+        const own = get(options.subagentsAtom(ref)) ?? EMPTY_SUBAGENTS;
+        const subagents = fixture ? fixture.members(own) : own;
         if (
           !known.has(scoped) &&
           !canHaveTeamBoard(subagents) &&
@@ -259,22 +269,16 @@ export function createTeamBoardViewAtoms(options: {
       }).pipe(Atom.withLabel(`team-board-view:${kind}:${scoped}`));
     },
   );
-  const presenceFamily = Atom.family((key: string) => {
-    const separator = key.lastIndexOf(KEY_SEPARATOR);
-    const scoped = key.slice(0, separator);
-    const taskId = key.slice(separator + 1);
-    let previous: ReadonlyArray<string> | null = null;
-    return Atom.make((get) => {
-      const files =
-        get(snapshotFamily(requestKey(scoped, PRESENCE)))?.presence.find(
-          (entry) => entry.taskId === taskId,
-        )?.files ?? null;
-      // Each snapshot is new; keep the old array while the list reads the same.
-      if (files !== null && previous !== null && sameStrings(files, previous)) return previous;
-      previous = files === null || files.length === 0 ? null : files;
-      return previous;
-    });
-  });
+  const holdsFamily = Atom.family((scoped: string) =>
+    Atom.make(
+      (get): ReadonlyMap<string, number> =>
+        new Map(
+          (get(snapshotFamily(requestKey(scoped, PRESENCE)))?.presence ?? []).map(
+            ({ taskId, files }) => [taskId, files.length] as const,
+          ),
+        ),
+    ),
+  );
   const permissionAtom = (environmentId: EnvironmentId | null) =>
     fixture?.canPost === false ? Atom.make(false) : board.post.permissionAtom(environmentId);
   // The live repository picked on this client; kept while it stays live.
@@ -288,6 +292,12 @@ export function createTeamBoardViewAtoms(options: {
         get(pickedRepoFamily(scoped)),
       ),
     ),
+  );
+  const membersFamily = Atom.family((scoped: string) =>
+    Atom.make((get): ReadonlyArray<TeamBoardMember> => {
+      const own = get(options.subagentsAtom(parseThreadKey(scoped))) ?? EMPTY_SUBAGENTS;
+      return fixture ? fixture.members(own) : own;
+    }),
   );
   const detailsFamily = Atom.family((scoped: string) =>
     Atom.make((get) => {
@@ -327,11 +337,12 @@ export function createTeamBoardViewAtoms(options: {
      * for. Writing an `olderCursor` fetches the next page; closing the list forgets them.
      */
     historyListAtom: (ref: ScopedThreadRef) => historyListFamily(threadKey(ref)),
-    /** Files a task is claiming or editing now, or null while it holds none. */
-    presenceAtom: (ref: ScopedThreadRef, taskId: NodeId) =>
-      presenceFamily(`${threadKey(ref)}${KEY_SEPARATOR}${taskId}`),
     /** The newest post id this client has opened, per environment and lead chat. */
     seenAtom: (ref: ScopedThreadRef) => seenFamily(threadKey(ref)),
+    /** How many files each member holds now, for the roster; live frames carry no presence. */
+    holdsAtom: (ref: ScopedThreadRef) => holdsFamily(threadKey(ref)),
+    /** Who is on the board: the chat's task records, or the QA fixture's stand-ins. */
+    membersAtom: (ref: ScopedThreadRef) => membersFamily(threadKey(ref)),
     post: fixture?.post ?? board.post,
     permissionAtom,
   };
@@ -399,26 +410,77 @@ function rememberSeen(
   return Object.fromEntries(entries.slice(-SEEN_LIMIT));
 }
 
-function sameStrings(left: ReadonlyArray<string>, right: ReadonlyArray<string>) {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
 export interface TeamBoardPill {
   readonly postCount: number;
   readonly overlapCount: number;
   readonly unread: boolean;
 }
 
+/** Repositories a lead's seen mark remembers; the least recently viewed goes first. */
+const SEEN_PER_BOARD = 32;
+const seenEntries = (seen: string | null) => (seen === null ? [] : seen.split(" "));
+const seenIds = (seen: string | null) =>
+  seenEntries(seen).map((entry) => entry.slice(entry.indexOf("=") + 1));
+
+/** The newest post a reader saw, and the repository it was open on when the lead has several. */
+export interface TeamBoardSeenMark {
+  readonly latestPostId: string;
+  readonly repo: string | null;
+}
+
+/**
+ * The seen mark is the newest post read in each repository, newest first, space separated:
+ * `repo=post` per repository of a multi-repository team, or a bare post id for a single board.
+ */
+export function markTeamBoardSeen(seen: string | null, mark: string | TeamBoardSeenMark): string {
+  const { latestPostId, repo } =
+    typeof mark === "string" ? { latestPostId: mark, repo: null } : mark;
+  const key = repo === null ? "" : `${encodeURIComponent(repo)}=`;
+  return [
+    key + latestPostId,
+    ...seenEntries(seen).filter(
+      (entry) =>
+        !(key === "" ? !entry.includes("=") : entry.startsWith(key)) &&
+        entry.slice(entry.indexOf("=") + 1) !== latestPostId,
+    ),
+  ]
+    .slice(0, SEEN_PER_BOARD)
+    .join(" ");
+}
+
+/** The newest post of the repository a reader has open, or of the board when it has one. */
+export function teamBoardRepoLatestPostId(
+  snapshot: TeamBoardSnapshot | null,
+  repo: string | null,
+): string | undefined {
+  const repos = snapshot?.repos;
+  // A server that predates per-repository marks names only the team's newest post.
+  if (repo !== null && repos !== undefined && repos.some(({ latestPostId }) => latestPostId))
+    return repos.find(({ id }) => id === repo)?.latestPostId;
+  return snapshot?.latestPostId;
+}
+
 /** The composer pill shows only while a live board has posts. */
 export function teamBoardPill(
   snapshot: TeamBoardSnapshot | null,
-  seenPostId: string | null,
+  seen: string | null,
 ): TeamBoardPill | null {
   if (snapshot === null || !snapshot.active || snapshot.postCount === 0) return null;
+  const read = seenIds(seen);
+  // A server that predates per-repository marks names only the team's newest post.
+  const perRepo = (snapshot.repos ?? []).flatMap(({ latestPostId }) =>
+    latestPostId === undefined ? [] : [latestPostId],
+  );
+  const latest =
+    perRepo.length > 0
+      ? perRepo
+      : snapshot.latestPostId === undefined
+        ? []
+        : [snapshot.latestPostId];
   return {
     postCount: snapshot.postCount,
     overlapCount: snapshot.overlapCount,
-    unread: snapshot.latestPostId !== undefined && snapshot.latestPostId !== seenPostId,
+    unread: latest.some((id) => !read.includes(id)),
   };
 }
 
@@ -506,9 +568,11 @@ export function teamBoardPillLabel(pill: Pick<TeamBoardPill, "postCount" | "over
 
 export const TEAM_BOARD_FILTERS = [
   { id: "all", label: "All" },
-  { id: "claims", label: "Claims" },
+  // People read what a subagent is doing; the agent-facing tool keeps "claim".
+  { id: "claims", label: "Editing" },
   { id: "questions", label: "Questions" },
   { id: "overlaps", label: "Overlaps" },
+  { id: "direct", label: "Direct" },
 ] as const;
 export type TeamBoardFilter = (typeof TEAM_BOARD_FILTERS)[number]["id"];
 
@@ -520,7 +584,7 @@ export function teamBoardKind(
 ): { readonly label: string; readonly tone: TeamBoardKindTone } | null {
   switch (kind) {
     case "claim":
-      return { label: "Claim", tone: "claim" };
+      return { label: "Editing", tone: "claim" };
     case "finding":
       return { label: "Finding", tone: "finding" };
     case "question":
@@ -528,9 +592,11 @@ export function teamBoardKind(
     case "done":
       return { label: "Done", tone: "done" };
     case "release":
-      return { label: "Release", tone: "muted" };
+      return { label: "Done editing", tone: "muted" };
     case "decision":
       return { label: "Decision", tone: "decision" };
+    case "wait":
+      return { label: "Waiting", tone: "muted" };
     case "message":
       return null;
     default: {
@@ -552,12 +618,49 @@ function matchesFilter(post: TeamBoardPost, filter: TeamBoardFilter) {
       return post.kind === "question";
     case "overlaps":
       return post.conflict !== undefined;
+    case "direct":
+      return post.to !== undefined;
   }
 }
 
-/** One agent's own posts and the overlaps naming it. */
-function involvesTask(post: TeamBoardPost, taskId: NodeId) {
-  return post.author.taskId === taskId || post.conflict?.owner.taskId === taskId;
+const sameName = (left: string | undefined, right: string | undefined) =>
+  left !== undefined &&
+  right !== undefined &&
+  left.trim().toLowerCase() === right.trim().toLowerCase();
+
+/** One agent's posts, posts addressed to it, replies to its posts, and overlaps naming it. */
+function involvesTask(
+  post: TeamBoardPost,
+  taskId: NodeId,
+  name: string | undefined,
+  byId: ReadonlyMap<string, TeamBoardPost>,
+) {
+  return (
+    post.author.taskId === taskId ||
+    post.conflict?.owner.taskId === taskId ||
+    (post.toTaskId === undefined ? sameName(post.to, name) : post.toTaskId === taskId) ||
+    (post.replyTo !== undefined && byId.get(post.replyTo)?.author.taskId === taskId)
+  );
+}
+
+/** Who an addressed post is for: a sibling, the lead agent, or the person. */
+export function teamBoardAddressee(
+  post: TeamBoardPost,
+): { readonly kind: "member" | "lead" | "you"; readonly name: string } | null {
+  const to = post.to?.trim();
+  if (!to) return null;
+  if (/^(you|user)$/iu.test(to)) return { kind: "you", name: "You" };
+  if (/^lead$/iu.test(to)) return { kind: "lead", name: "Lead" };
+  return { kind: "member", name: to };
+}
+
+/** The member an addressed post is for: by id, or by title for posts from older servers. */
+export function teamBoardAddressedMember<
+  T extends { readonly id: string; readonly title: string | null },
+>(members: ReadonlyArray<T>, post: Pick<TeamBoardPost, "to" | "toTaskId">): T | undefined {
+  return post.toTaskId === undefined
+    ? members.find((member) => sameName(member.title ?? undefined, post.to))
+    : members.find((member) => member.id === post.toTaskId);
 }
 
 export interface TeamBoardRow {
@@ -571,14 +674,32 @@ export interface TeamBoardRow {
  */
 export function teamBoardRows(
   posts: ReadonlyArray<TeamBoardPost>,
-  options: { readonly filter: TeamBoardFilter; readonly taskId?: NodeId | null | undefined },
+  options: {
+    readonly filter: TeamBoardFilter;
+    readonly taskId?: NodeId | null | undefined;
+    /** The selected member's name, so posts addressed to it count as its own. */
+    readonly memberName?: string | undefined;
+  },
 ): ReadonlyArray<TeamBoardRow> {
+  const byId = new Map(posts.map((post) => [post.id, post]));
+  // Direct shows addressed posts and every reply in their thread.
+  const inAddressedThread = (post: TeamBoardPost) => {
+    const visited = new Set<string>();
+    for (let cursor: TeamBoardPost | undefined = post; cursor;) {
+      if (cursor.to !== undefined) return true;
+      if (cursor.replyTo === undefined || visited.has(cursor.id)) return false;
+      visited.add(cursor.id);
+      cursor = byId.get(cursor.replyTo);
+    }
+    return false;
+  };
   const shown = posts.filter(
     (post) =>
-      matchesFilter(post, options.filter) &&
-      (options.taskId == null || involvesTask(post, options.taskId)),
+      (options.filter === "direct"
+        ? inAddressedThread(post)
+        : matchesFilter(post, options.filter)) &&
+      (options.taskId == null || involvesTask(post, options.taskId, options.memberName, byId)),
   );
-  const byId = new Map(posts.map((post) => [post.id, post]));
   const shownIds = new Set(shown.map((post) => post.id));
   const rootOf = (post: TeamBoardPost) => {
     let root: TeamBoardPost | null = null;
@@ -619,30 +740,59 @@ export interface TeamBoardListItem {
   readonly reply: boolean;
   /** The thread's last row, which draws the divider below the thread. */
   readonly endsThread: boolean;
+  /** A thread's first post with replies, which can collapse them. */
+  readonly hasReplies: boolean;
+  /** How many replies a collapsed thread hides; 0 while open, so a new reply re-renders less. */
+  readonly replyCount: number;
+  readonly collapsed: boolean;
 }
 
 /**
  * Threads flattened into one row per post, so a thread with hundreds of replies still mounts
- * only the rows near the screen.
+ * only the rows near the screen. A collapsed thread shows its first post with the reply count.
  */
 export function teamBoardListItems(
   rows: ReadonlyArray<TeamBoardRow>,
+  collapsed: ReadonlySet<string> = NO_COLLAPSED,
 ): ReadonlyArray<TeamBoardListItem> {
   const items: TeamBoardListItem[] = [];
   for (const row of rows) {
-    items.push({ post: row.post, reply: false, endsThread: row.replies.length === 0 });
+    const closed = row.replies.length > 0 && collapsed.has(row.post.id);
+    items.push({
+      post: row.post,
+      reply: false,
+      endsThread: row.replies.length === 0 || closed,
+      hasReplies: row.replies.length > 0,
+      replyCount: closed ? row.replies.length : 0,
+      collapsed: closed,
+    });
+    if (closed) continue;
     const last = row.replies.length - 1;
     row.replies.forEach((reply, index) => {
-      items.push({ post: reply, reply: true, endsThread: index === last });
+      items.push({
+        post: reply,
+        reply: true,
+        endsThread: index === last,
+        hasReplies: false,
+        replyCount: 0,
+        collapsed: false,
+      });
     });
   }
   return items;
 }
 
+const NO_COLLAPSED: ReadonlySet<string> = new Set();
+
 /** Equal items render the same; a memoized row skips them between frames. */
 export function sameTeamBoardListItem(left: TeamBoardListItem, right: TeamBoardListItem) {
   return (
-    left.post === right.post && left.reply === right.reply && left.endsThread === right.endsThread
+    left.post === right.post &&
+    left.reply === right.reply &&
+    left.endsThread === right.endsThread &&
+    left.hasReplies === right.hasReplies &&
+    left.replyCount === right.replyCount &&
+    left.collapsed === right.collapsed
   );
 }
 
@@ -703,15 +853,8 @@ export function teamBoardFileLabel(file: string) {
 export function teamBoardOverlapLabel(conflict: NonNullable<TeamBoardPost["conflict"]>): string {
   const file = teamBoardFileLabel(conflict.file).name;
   return conflict.owner.user
-    ? `Overlap: You already hold ${file}`
-    : `Overlap: ${conflict.owner.name} already holds ${file}`;
-}
-
-/** "settings.ts" and "+2" for a subagent card's presence chip. */
-export function teamBoardPresenceLabel(files: ReadonlyArray<string>) {
-  const first = files[0];
-  if (first === undefined) return null;
-  return { name: teamBoardFileLabel(first).name, more: files.length - 1 };
+    ? `Overlap: You are already editing ${file}`
+    : `Overlap: ${conflict.owner.name} is already editing ${file}`;
 }
 
 export function formatTeamBoardRanges(
@@ -788,4 +931,152 @@ export function teamBoardDraftError(draft: string): string | null {
   return text.length > TEAM_BOARD_MESSAGE_MAX
     ? `${text.length - TEAM_BOARD_MESSAGE_MAX} over ${TEAM_BOARD_MESSAGE_MAX}`
     : null;
+}
+
+/** What a post's header needs about its author, from the lead chat's own subagent records. */
+export interface TeamBoardAuthorInfo {
+  readonly title: string | null;
+  readonly driver: OrchestrationV2Subagent["driver"] | null;
+  readonly providerInstanceId: string | null;
+  readonly model: string | null;
+  readonly modelOptions?: ReadonlyArray<{ readonly id: string; readonly value: unknown }>;
+  readonly childThreadId: string | null;
+}
+export type TeamBoardAuthors = ReadonlyMap<string, TeamBoardAuthorInfo>;
+
+/**
+ * Authors as a string that changes only when one of their header fields does, so a client can
+ * memoize the lookup on it and rows keep their props while the chat's task records churn.
+ */
+export type TeamBoardAuthorSource = Pick<
+  OrchestrationV2Subagent,
+  "id" | "title" | "driver" | "providerInstanceId" | "model" | "modelSelection" | "childThreadId"
+>;
+export function teamBoardAuthorsKey(subagents: ReadonlyArray<TeamBoardAuthorSource>): string {
+  return JSON.stringify(
+    subagents.map((task) => [
+      task.id,
+      task.title ?? null,
+      task.driver ?? null,
+      task.providerInstanceId ?? null,
+      task.model ?? null,
+      task.modelSelection?.options ?? null,
+      task.childThreadId ?? null,
+    ]),
+  );
+}
+
+export function teamBoardAuthorsFromKey(key: string): TeamBoardAuthors {
+  const rows = JSON.parse(key) as ReadonlyArray<
+    readonly [
+      string,
+      string | null,
+      TeamBoardAuthorInfo["driver"],
+      string | null,
+      string | null,
+      TeamBoardAuthorInfo["modelOptions"] | null,
+      string | null,
+    ]
+  >;
+  return new Map(
+    rows.map(([id, title, driver, providerInstanceId, model, modelOptions, childThreadId]) => [
+      id,
+      {
+        title,
+        driver,
+        providerInstanceId,
+        model,
+        ...(modelOptions === null || modelOptions === undefined ? {} : { modelOptions }),
+        childThreadId,
+      },
+    ]),
+  );
+}
+
+/**
+ * Who a post is from, as the lead chat's subagent rows name them: the task title, then the
+ * model's short name. The lead agent and the person say so. `open` is the subagent's chat.
+ */
+export function teamBoardAuthorLine(
+  author: TeamBoardPost["author"],
+  info: TeamBoardAuthorInfo | undefined,
+  modelLabel: string | null,
+): { readonly name: string; readonly model: string | null; readonly open: string | null } {
+  if (author.user) return { name: "You", model: null, open: null };
+  if (author.taskId === undefined) return { name: "Lead", model: null, open: null };
+  return {
+    name: info?.title?.trim() || author.name,
+    model: modelLabel === null || modelLabel === "Not reported" ? null : modelLabel,
+    open: info?.childThreadId ?? null,
+  };
+}
+
+export type TeamBoardMemberState = "working" | "done" | "failed";
+
+/** One chip at the top of the board: who, what state, and what it holds. */
+export interface TeamBoardRosterChip {
+  readonly member: TeamBoardMember;
+  readonly name: string;
+  readonly state: TeamBoardMemberState;
+  readonly holds: number;
+}
+
+/**
+ * The board's members in the chat's own task order, so chips keep their places as members come
+ * and go. A member shows once it is on the board (posts, files, presence) or is running.
+ */
+export function teamBoardRoster(
+  members: ReadonlyArray<TeamBoardMember>,
+  snapshot: TeamBoardSnapshot | null,
+): ReadonlyArray<TeamBoardRosterChip> {
+  if (snapshot === null) return [];
+  const onBoard = new Set<string>([
+    ...(snapshot.posts ?? []).flatMap(({ author }) => (author.taskId ? [author.taskId] : [])),
+    ...(snapshot.files ?? []).flatMap((file) =>
+      file.agents.flatMap(({ author }) => (author.taskId ? [author.taskId] : [])),
+    ),
+    ...snapshot.presence.map(({ taskId }) => taskId),
+  ]);
+  const repoMembers = snapshot.repos?.find(({ id }) => id === snapshot.pushId)?.members;
+  const local = members.filter(
+    (member) =>
+      member.origin === "app_owned" &&
+      member.remote === undefined &&
+      (repoMembers === undefined || repoMembers.includes(member.id)),
+  );
+  const nameOf = (taskId: string) => {
+    const member = local.find(({ id }) => id === taskId);
+    return (
+      member?.title?.trim() ||
+      snapshot.posts?.find(({ author }) => author.taskId === taskId)?.author.name ||
+      "Subagent"
+    );
+  };
+  return local
+    .filter(
+      (member) =>
+        onBoard.has(member.id) ||
+        (snapshot.active && ["pending", "running", "waiting"].includes(member.status)),
+    )
+    .map((member) => {
+      const state: TeamBoardMemberState =
+        member.status === "failed" ||
+        member.status === "cancelled" ||
+        member.status === "interrupted"
+          ? "failed"
+          : member.status === "completed" || member.status === "idle"
+            ? "done"
+            : "working";
+      return {
+        member,
+        name: nameOf(member.id),
+        state,
+        holds: snapshot.presence.find(({ taskId }) => taskId === member.id)?.files.length ?? 0,
+      };
+    });
+}
+
+/** "3 files" for a roster chip, or null while it holds none. */
+export function teamBoardHoldsLabel(holds: number): string | null {
+  return holds === 0 ? null : `${holds} ${holds === 1 ? "file" : "files"}`;
 }

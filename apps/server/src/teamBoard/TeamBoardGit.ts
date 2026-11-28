@@ -95,6 +95,16 @@ export class TeamBoardGit extends Context.Service<
   }
 >()("t3/teamBoard/TeamBoardGit") {}
 
+/**
+ * Reflog actions (Git 2.54 wording) that made a commit here. `pull` and `rebase` carry the
+ * user's arguments, as in `pull --rebase (pick)`.
+ */
+const OWN_COMMIT =
+  /^(?:(?:commit(?: \((?:amend|initial|merge)\))?|cherry-pick|revert|am|(?:rebase|pull\b[^:(]*)(?: -i)? \((?:pick|continue|squash|fixup|reword|edit)\)): |(?:merge|pull)\b[^:]*: Merge made by )/u;
+/** Reflog actions that moved HEAD onto commits made elsewhere. */
+const INHERITED_MOVE =
+  /^(?:checkout: moving from |reset: moving to |(?:rebase|pull\b[^:(]*)(?: -i)? \(start\): checkout |(?:merge|pull)\b[^:]*: [Ff]ast-forward$)/u;
+
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const hash = (text: string) =>
@@ -164,28 +174,36 @@ const make = Effect.gen(function* () {
   const ownCommittedPaths = Effect.fnUntraced(function* (cwd: string, base: string, head: string) {
     const range = `${base}..${head}`;
     const reflog = yield* output(cwd, ["reflog", "show", "--format=%H%x09%gs", "HEAD"]);
-    const history = reflog?.trim().split("\n") ?? [];
-    const fastForwards = history.flatMap((line, i) => {
-      if (!/\t(?:merge|pull) .*: [Ff]ast-forward$/u.test(line)) return [];
-      const before = history[i + 1]?.split("\t", 1)[0];
-      return before === undefined ? [] : [{ before, after: line.split("\t", 1)[0]! }];
+    const history = (reflog?.trim().split("\n") ?? []).map((line) => {
+      const tab = line.indexOf("\t");
+      return { hash: line.slice(0, tab), action: line.slice(tab + 1) };
+    });
+    // Commits this worktree made itself stay its own, whatever moved HEAD later.
+    const own = new Set(
+      history.flatMap(({ hash, action }) => (OWN_COMMIT.test(action) ? [hash] : [])),
+    );
+    // HEAD moved onto commits it did not make: each segment runs from the line's result back to
+    // where HEAD was before (or to the base when that is not on this branch).
+    const moves = history.flatMap(({ hash, action }, i) => {
+      if (!INHERITED_MOVE.test(action)) return [];
+      const before = history[i + 1]?.hash;
+      return before === undefined ? [] : [{ before, after: hash }];
     });
     const logArgs = ["log", "--diff-merges=off", "--format=", "--name-only", "--no-renames", "-z"];
-    if (fastForwards.length === 0)
-      return yield* output(cwd, [...logArgs, "--first-parent", range, "--"]);
-    // A fast-forward has no merge commit. Its reflog identifies the segment
-    // inherited from another branch even though those commits are first-parent.
+    if (moves.length === 0) return yield* output(cwd, [...logArgs, "--first-parent", range, "--"]);
+    // A fast-forward, checkout, reset or rebase start has no merge commit, so the inherited
+    // commits are first-parent too; the reflog is what tells them apart.
     const commits = (yield* output(cwd, ["rev-list", "--first-parent", range]))?.trim().split("\n");
     if (commits === undefined || commits.some((commit) => !SHA.test(commit))) return undefined;
     const positions = new Map(commits.map((commit, index) => [commit, index]));
     const inherited = new Set<string>();
-    for (const { before, after } of fastForwards) {
+    for (const { before, after } of moves) {
       const first = positions.get(after);
-      const end = before === base ? commits.length : positions.get(before);
-      if (first === undefined || end === undefined || end <= first) continue;
+      const end = positions.get(before) ?? commits.length;
+      if (first === undefined || end <= first) continue;
       for (const commit of commits.slice(first, end)) inherited.add(commit);
     }
-    const local = commits.filter((commit) => !inherited.has(commit));
+    const local = commits.filter((commit) => own.has(commit) || !inherited.has(commit));
     return local.length === 0
       ? ""
       : yield* output(cwd, [...logArgs, "--no-walk=unsorted", ...local, "--"]);

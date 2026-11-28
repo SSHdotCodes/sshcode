@@ -25,7 +25,14 @@ export const UsageLimitsInput = Schema.Struct({
 });
 
 // An agent choosing a provider has no use for the day-by-day rise the Usage page prices with.
-const { dailyRise: _dailyRise, id: _id, ...agentWindowFields } = ServerProviderUsageWindow.fields;
+const {
+  dailyRise: _dailyRise,
+  id: _id,
+  includedBudget: _includedBudget,
+  payAsYouGo: _payAsYouGo,
+  informational: _informational,
+  ...agentWindowFields
+} = ServerProviderUsageWindow.fields;
 
 const Reading = Schema.Struct({
   checkedAt: IsoDateTime,
@@ -95,7 +102,14 @@ function reading(
 ): typeof Reading.Type {
   const stale = isUsageLimitReadingStale(driver, limits, now);
   const windows = limits.windows.map((window) => {
-    const { dailyRise: _rise, id: _id, ...fields } = window;
+    const {
+      dailyRise: _rise,
+      id: _id,
+      includedBudget: _budget,
+      payAsYouGo: _overage,
+      informational: _informational,
+      ...fields
+    } = window;
     const runOutAt = stale ? null : recentUsageRunOut(window, now);
     return {
       ...fields,

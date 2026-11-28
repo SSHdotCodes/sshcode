@@ -102,6 +102,16 @@ const reason = (
 };
 
 describe("usageWindowsForModel", () => {
+  it("keeps metered allowances that do not constrain the model out of account routing", () => {
+    const provider = account("mistral-vibe", [
+      { ...weekly(60, 72), id: "vibe", kind: "monthly", label: "Vibe & Studio" },
+      { ...weekly(100, 72), id: "api", kind: "monthly", label: "API", informational: true },
+    ]);
+    expect(usageWindowsForModel(provider, "mistral-medium-3.5").map((window) => window.id)).toEqual(
+      ["vibe"],
+    );
+  });
+
   it("keeps the limits for every model and the model's own", () => {
     const provider = account("one", [weekly(10, 50), weeklyFable(20, 50), session(5)]);
     expect(usageWindowsForModel(provider, fable).map((window) => window.label)).toEqual([

@@ -465,6 +465,15 @@ function recentFailureNote(
 
 /** Names advertised slugs to retry with: same last `/` segment first, else a few current ones. */
 /** Antigravity 1.3 IDs append the thinking level (`gemini-3.8-flash-high`); the agent still accepts them. */
+/**
+ * Whether a subagent on this model hears audio and watches video from files. Checked on a real
+ * run: Antigravity's file reader hands Gemini the audio or video itself (Gemini 4 Neon,
+ * 2026-11-28). Other routes stay unmarked until one is checked the same way.
+ */
+export function readsAudioVideoFiles(driver: ServerProvider["driver"], family: string): boolean {
+  return driver === "antigravity" && family.startsWith("gemini");
+}
+
 function antigravitySuffixedModel(provider: ServerProvider, model: string) {
   if (provider.driver !== "antigravity" || provider.models.some((entry) => entry.slug === model))
     return;
@@ -3249,6 +3258,9 @@ const make = Effect.gen(function* () {
                     ? scopedNote
                     : { recentFailure: modelFailureNote(modelFailure, now) }),
                   ...(readsImages === false ? { images: false as const } : {}),
+                  ...(readsAudioVideoFiles(provider.driver, family)
+                    ? { audioVideo: true as const }
+                    : {}),
                   ...(family === model.slug ? {} : { family }),
                   ...(model.isLegacy ? { isLegacy: true } : {}),
                   ...(model.name && model.name !== model.slug ? { label: model.name } : {}),
@@ -3666,7 +3678,7 @@ const make = Effect.gen(function* () {
         const skipped: Array<{ taskId?: string; reason: string }> = [];
         if (grades === undefined) return { saved: 0, skipped };
         if (!Array.isArray(grades)) return { saved: 0, skipped: [{ reason: "invalid grades" }] };
-        const accepted: Array<RecordedGrade & { taskId: NodeId }> = [];
+        const accepted: Array<RecordedGrade & { taskId: NodeId; runTaskId?: NodeId }> = [];
         const acceptedReferences: NodeId[] = [];
         let grader: RecordedGrade["grader"];
         for (const raw of grades) {
@@ -3700,6 +3712,16 @@ const make = Effect.gen(function* () {
             // A run the provider or the app cut short says nothing about the model's work,
             // whatever it wrote before it ended.
             if (task.status === "failed") return "ended on a provider failure";
+            // A follow-up (t3_thread_send) continues the child its original task forked, and
+            // shares that task's ranked run, as the rankings projection hook records it.
+            const child = (yield* threadManagement
+              .getThreadRecords(task.childThreadId, [])
+              .pipe(Effect.mapError(threadManagementFailure))).thread;
+            if (child.title.startsWith("Council: ")) return "not ranked";
+            const original =
+              child.forkedFrom?.type === "node" && child.forkedFrom.nodeId !== task.taskId
+                ? child.forkedFrom.nodeId
+                : undefined;
             if (grader === undefined) {
               const parent = yield* threadManagement
                 .getThreadRecords(scope.thread.threadId, ["runs"])
@@ -3722,6 +3744,7 @@ const make = Effect.gen(function* () {
             accepted.push({
               ...grade,
               taskId: task.taskId,
+              ...(original === undefined ? {} : { runTaskId: original }),
               grader,
             });
             acceptedReferences.push(id);
@@ -3730,15 +3753,23 @@ const make = Effect.gen(function* () {
           if (result !== undefined) skipped.push({ taskId: id, reason: result });
         }
         if (accepted.length === 0 || Option.isNone(rankings)) return { saved: 0, skipped };
-        const saved = yield* rankings.value.gradeMany(accepted).pipe(
-          Effect.as(accepted.length),
+        const outcome = yield* rankings.value.gradeMany(accepted).pipe(
+          Effect.map(({ unmatched }) => ({ saved: true, unmatched })),
           Effect.catchCause((cause) =>
-            Effect.logWarning("orchestrator-mcp.grade-skipped", { cause }).pipe(Effect.as(0)),
+            Effect.logWarning("orchestrator-mcp.grade-skipped", { cause }).pipe(
+              Effect.as({ saved: false, unmatched: [] as ReadonlyArray<NodeId> }),
+            ),
           ),
         );
-        if (saved === 0)
+        if (!outcome.saved) {
           for (const taskId of acceptedReferences) skipped.push({ taskId, reason: "save failed" });
-        return { saved, skipped };
+          return { saved: 0, skipped };
+        }
+        accepted.forEach((grade, index) => {
+          if (outcome.unmatched.includes(grade.taskId))
+            skipped.push({ taskId: acceptedReferences[index]!, reason: "not ranked" });
+        });
+        return { saved: accepted.length - outcome.unmatched.length, skipped };
       }),
     taskStatus: (callerScope, taskId) =>
       Effect.gen(function* () {

@@ -32,12 +32,15 @@ import * as SqlError from "effect/sql/SqlError";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
+import * as ThreadManagementService from "./ThreadManagementService.ts";
 import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
@@ -1374,6 +1377,55 @@ it.effect("delivers agent messages queued behind /compact before a later one ste
         assert.deepEqual(delivered, ["BRAVO", "CHARLIE"].slice(0, delivered.length));
         assert.notInclude(steered, "CHARLIE");
       }).pipe(Effect.provide(layer));
+    }),
+  ),
+);
+
+it.effect("an agent's auto send steers past its explicitly queued message", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const name = "agent-auto-after-explicit-queue";
+      const { started, steered, layer, startFirstTurn } = yield* nextTurnSelectionHarness(name);
+      const managerLayer = ThreadManagementService.layer.pipe(
+        Layer.provideMerge(layer),
+        Layer.provide(ServerSettings.layerTest()),
+        Layer.provide(CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
+      );
+      yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const manager = yield* ThreadManagementService.ThreadManagementService;
+        const threadId = yield* startFirstTurn;
+        const send = (text: string, mode: "auto" | "queue") =>
+          manager.sendToThread({
+            projectId: ProjectId.make(`project:${name}`),
+            threadId,
+            commandId: CommandId.make(text),
+            messageId: MessageId.make(text),
+            text,
+            attachments: [],
+            mode,
+            createdBy: "agent",
+            creationSource: "mcp",
+            senderThreadId: ThreadId.make("thread:sender"),
+          });
+        const later = yield* send("later", "queue");
+        const now = yield* send("now", "auto");
+        yield* worker.drain();
+
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(later.delivery, "queued");
+        assert.equal(now.delivery, "steered");
+        assert.equal(now.run.id, started[0]?.runId);
+        assert.deepEqual(
+          steered.map((text) => text.split("\n").at(-1)),
+          ["now"],
+        );
+        assert.deepEqual(
+          projection.runs.filter((run) => run.status === "queued").map((run) => run.id),
+          [later.run.id],
+        );
+      }).pipe(Effect.provide(managerLayer));
     }),
   ),
 );

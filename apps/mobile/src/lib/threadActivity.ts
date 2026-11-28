@@ -25,6 +25,11 @@ import {
 } from "@t3tools/client-runtime/work-log/item-detail";
 import { commandDisplayText } from "@t3tools/client-runtime/work-log/command-label";
 import { resumedRestartNoticeIds } from "@t3tools/client-runtime/work-log/restart-notice";
+import {
+  teamBoardNote,
+  teamBoardNoteAsNotification,
+  type TeamBoardNote,
+} from "@t3tools/client-runtime/work-log/team-board-note";
 import { secretAnswerNoticeIds } from "@t3tools/client-runtime/secret-request";
 import {
   contextCompactionLabel,
@@ -119,6 +124,7 @@ export interface ThreadFeedActivity {
   readonly icon:
     | "agent"
     | "alert"
+    | "board"
     | "browser"
     | "computer"
     | "code"
@@ -365,6 +371,23 @@ export function workEntryRowLabel(entry: WorkLogPresentationEntry, expanded = fa
 type ThreadFeedActivityGroup = Extract<ThreadFeedEntry, { readonly type: "activity-group" }>;
 
 // Immutable source rows let retained history keep its identities while the active item streams.
+const boardNoteRows = new WeakMap<
+  OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2ProjectedTurnItem
+>();
+/** The notification row an older board note would be recorded as today; stable per row. */
+function boardNoteRow(
+  row: OrchestrationV2ProjectedTurnItem,
+  note: TeamBoardNote,
+): OrchestrationV2ProjectedTurnItem {
+  if (row.item.type === "notification") return row;
+  const cached = boardNoteRows.get(row);
+  if (cached !== undefined) return cached;
+  const item = teamBoardNoteAsNotification(row.item, note);
+  const next = item === undefined ? row : { ...row, item };
+  boardNoteRows.set(row, next);
+  return next;
+}
 const projectedEntriesCache = new WeakMap<
   OrchestrationV2ProjectedTurnItem,
   {
@@ -587,6 +610,8 @@ function itemWorkLogTone(item: OrchestrationV2TurnItem): WorkLogPresentationEntr
 
 function itemIcon(item: OrchestrationV2TurnItem): ThreadFeedActivity["icon"] {
   if (item.type === "notification") {
+    // Board notes wear the team board pill's glyph.
+    if (teamBoardNote(item) !== undefined) return "board";
     const source = item.source;
     switch (source.kind) {
       case "subagent":
@@ -1582,10 +1607,18 @@ export function deriveThreadFeedPresentation(
   // unless that tool is already on screen as its own row.
   const runningToolShown =
     runningTool !== undefined && result.some((row) => feedRowShowsRunningTool(row, runningTool));
+  const tail = result.at(-1);
+  // The visible reply already represents the live work. Keep the idle
+  // Thinking row out of its end layout so completion adds only the footer.
+  const replyAtTail =
+    tail?.type === "message" &&
+    tail.message.role === "assistant" &&
+    (tail.message.runId ?? null) === activeRunId;
   if (
     isWorking &&
     activeWorkStartedAt !== null &&
     !runningToolShown &&
+    (runningTool !== undefined || !replyAtTail) &&
     !result.some(
       (row) =>
         (row.type === "work-toggle" && row.shimmer) ||
@@ -2182,13 +2215,30 @@ export function buildThreadFeed(
       answerByMessageId.set(`async-answer:${item.questionAnswer.requestId}`, item.questionAnswer);
     }
   }
+  // With its answer message loaded, an answered card shows once, as that folded row.
+  const loadedAnswerMessageIds = new Set<string>();
+  for (const { item } of visibleTurnItems) {
+    if (item.type === "user_message" && answerByMessageId.has(item.messageId)) {
+      loadedAnswerMessageIds.add(item.messageId);
+    }
+  }
   const resumedRestartNotices = resumedRestartNoticeIds(visibleTurnItems);
   // The card's own row already says the secret was saved or declined.
   const repeatedSecretNotices = secretAnswerNoticeIds(visibleTurnItems);
-  for (const row of visibleTurnItems) {
+  for (const sourceRow of visibleTurnItems) {
+    // A team board note is never something the person said; older chats recorded it as one.
+    const boardNote = teamBoardNote(sourceRow.item);
+    if (boardNote?.routine) continue;
+    const row = boardNote === undefined ? sourceRow : boardNoteRow(sourceRow, boardNote);
     const item = row.item;
     if (turnItemIsWorkspacePreparation(item)) continue;
     if (resumedRestartNotices.has(item.id) || repeatedSecretNotices.has(item.id)) continue;
+    if (
+      item.type === "user_input_request" &&
+      item.questionAnswer &&
+      loadedAnswerMessageIds.has(`async-answer:${item.questionAnswer.requestId}`)
+    )
+      continue;
     if (item.type === "checkpoint" || (item.type === "todo_list" && item.steps.length === 0))
       continue;
     if (

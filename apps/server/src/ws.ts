@@ -5,7 +5,7 @@ import { getBenchmarkFeed } from "./benchmarks/BenchmarkFeed.ts";
 import { getXPostPreview } from "./xPost/XPostPreviews.ts";
 import * as ProviderCredentials from "./provider/ProviderCredentials.ts";
 import * as ComputerUseService from "./computer/ComputerUseService.ts";
-import { TeamBoardError } from "@t3tools/contracts";
+import { SubagentRankingsError, TeamBoardError } from "@t3tools/contracts";
 import * as OutsideAgents from "./auth/OutsideAgents.ts";
 import * as TerminalHandoffService from "./orchestration-v2/TerminalHandoffService.ts";
 import * as ClaudeRcService from "./project/ClaudeRcService.ts";
@@ -148,6 +148,7 @@ import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as HarnessDefaultsService from "./harnessDefaults/HarnessDefaultsService.ts";
 import * as NotesService from "./notes/NotesService.ts";
 import { SubagentRankings } from "./subagentRankings/SubagentRankings.ts";
+import { rankedRunTaskIds } from "./subagentRankings/runTaskIds.ts";
 import * as TeamBoard from "./teamBoard/TeamBoard.ts";
 import * as SharedSkills from "./sharedSkills/SharedSkills.ts";
 import * as WorkflowsService from "./workflows/WorkflowsService.ts";
@@ -2574,8 +2575,22 @@ export const layerWsRpc = (
         [WS_METHODS.notesSubscribe]: () => notes.subscribe(),
         [WS_METHODS.notesMutate]: (input) => notes.mutate(input),
         [WS_METHODS.subagentRankingsSubscribe]: () => subagentRankings.subscribe(),
+        // A follow-up's card names its own task; its thumb belongs to the original run.
         [WS_METHODS.subagentRankingsToggleThumb]: (input) =>
-          subagentRankings.toggleThumb(input.taskId, input.thumb),
+          rankedRunTaskIds([input.taskId]).pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
+            Effect.mapError(
+              (cause) =>
+                new SubagentRankingsError({
+                  operation: "thumb",
+                  message: "Could not read the subagent's run.",
+                  cause,
+                }),
+            ),
+            Effect.flatMap((runs) =>
+              subagentRankings.toggleThumb(input.taskId, input.thumb, runs.get(input.taskId)),
+            ),
+          ),
         [WS_METHODS.teamBoardSubscribe]: (input) =>
           Option.isSome(teamBoard) ? teamBoard.value.subscribe(input) : Stream.empty,
         [WS_METHODS.teamBoardPost]: (input) =>

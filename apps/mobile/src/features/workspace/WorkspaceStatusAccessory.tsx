@@ -8,6 +8,7 @@ import {
   isUsageWindowAlmostOut,
   usedPercentLabel,
   recentUseBySource,
+  limitPoolIconUrl,
 } from "@t3tools/shared/usageLimits";
 import * as Haptics from "expo-haptics";
 import { AsyncResult } from "effect/reactivity";
@@ -101,7 +102,7 @@ function LimitRing(props: { readonly limits: ProviderLimits }) {
         />
       </Svg>
       <View style={StyleSheet.absoluteFill} className="items-center justify-center">
-        <ProviderIcon provider={driver} size={11} />
+        <ProviderIcon provider={driver} iconUrl={limitPoolIconUrl(pool)} size={11} />
       </View>
     </View>
   );

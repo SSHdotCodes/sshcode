@@ -6,6 +6,7 @@ import {
   createOrderHoldController,
   generateSpreadPinOrderKeys,
   getLatestThreadForProject,
+  getThreadSortTimestamp,
   holdOrderedItems,
   pinOrderKeyBetween,
   planPinnedMove,
@@ -678,5 +679,26 @@ describe("createOrderHoldController", () => {
     expect(held).toBe(true);
     controller.endPointer();
     expect(held).toBe(false);
+  });
+});
+
+describe("notes in a chat", () => {
+  it("do not move a thread's last-message time", () => {
+    const thread = {
+      createdAt: "2026-11-27T10:00:00.000Z",
+      updatedAt: "2026-11-27T10:30:00.000Z",
+      messages: [
+        { createdAt: "2026-11-27T10:05:00.000Z", role: "user", createdBy: "user" },
+        {
+          createdAt: "2026-11-27T10:20:00.000Z",
+          role: "user",
+          createdBy: "agent",
+          notification: { summary: "Team board: Sol asked you about rules.ts" },
+        },
+      ],
+    };
+    expect(getThreadSortTimestamp(thread, "updated_at")).toBe(
+      Date.parse("2026-11-27T10:05:00.000Z"),
+    );
   });
 });

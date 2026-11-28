@@ -4,6 +4,7 @@ import { workspaceRelativeFilePath, fileBasename } from "./path.ts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   expandAbbreviatedInlineCodePaths,
+  extractInlineCodeSpans,
   extractMarkdownLinkHrefs,
   resolveMarkdownFileLinkTarget,
   isWindowsDrivePathHref,
@@ -251,6 +252,19 @@ describe("isWindowsDrivePathHref", () => {
     ["https://example.com/image.png", false],
   ])("classifies %s as %s", (href, expected) => {
     expect(isWindowsDrivePathHref(href)).toBe(expected);
+  });
+});
+
+describe("extractInlineCodeSpans", () => {
+  it.each([
+    ["``./a/shared.ts`` and `./b/shared.ts`", ["./a/shared.ts", "./b/shared.ts"]],
+    ["``a ` b`` and `./b/shared.ts`", ["a ` b", "./b/shared.ts"]],
+    ["``unclosed and `./b/shared.ts`", ["./b/shared.ts"]],
+    ["\\``./a/shared.ts` and `./b/shared.ts`", ["./a/shared.ts", "./b/shared.ts"]],
+    ["`a\\` and `./b/shared.ts`", ["a\\", "./b/shared.ts"]],
+    ["`unclosed\n`./b/shared.ts`", ["./b/shared.ts"]],
+  ])("matches complete backtick delimiter runs in %s", (markdown, spans) => {
+    expect(extractInlineCodeSpans(markdown)).toEqual(spans);
   });
 });
 

@@ -1,5 +1,7 @@
 import { createThreadProjectionCache } from "../../lib/threadProjectionCache";
-import { BugIcon, WorkflowIcon } from "lucide-react";
+import { teamBoardNote } from "@t3tools/client-runtime/work-log/team-board-note";
+import { openTeamBoard } from "../../state/teamBoard";
+import { BugIcon, MessagesSquareIcon, WorkflowIcon } from "lucide-react";
 import { UserMessageBubble } from "./UserMessageBubble";
 import { botInboundNote } from "@t3tools/client-runtime/state/bots";
 import type { BotWakeItem } from "@t3tools/shared/bots";
@@ -438,6 +440,7 @@ interface TimelineRowSharedState {
   onMediaJumpHandled?: ((sequence: number) => void) | undefined;
   timestampFormat: TimestampFormat;
   routeThreadKey: string;
+  teamBoardThreadRef: ScopedThreadRef | null;
   threadRef: ScopedThreadRef | null;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
@@ -665,6 +668,8 @@ interface MessagesTimelineProps {
   latestRun: TimelineLatestRun | null;
   runningRunId?: RunId | null;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
+  /** The board a team board note opens: the lead's, also from a subagent's chat. */
+  teamBoardThreadRef?: ScopedThreadRef | null;
   routeThreadKey: string;
   displayThreadKey?: string;
   /** The rows are a held snapshot of the previous thread while the next one loads. */
@@ -803,6 +808,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   latestRun,
   runningRunId = null,
   turnDiffSummaries,
+  teamBoardThreadRef = null,
   routeThreadKey,
   displayThreadKey,
   paintOnly = false,
@@ -1824,6 +1830,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       routeThreadKey,
       // Keep Markdown callbacks memoized during unrelated activity updates.
       threadRef: citationThreadRef,
+      teamBoardThreadRef: teamBoardThreadRef ?? citationThreadRef,
       markdownCwd,
       resolvedTheme,
       workspaceRoot,
@@ -1873,6 +1880,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
       timestampFormat,
       routeThreadKey,
       citationThreadRef,
+      teamBoardThreadRef,
       markdownCwd,
       resolvedTheme,
       workspaceRoot,
@@ -6891,6 +6899,7 @@ export type WorkEntryIconName =
   | "globe"
   | "hammer"
   | "message-circle"
+  | "messages-square"
   | "search"
   | "square-pen"
   | "terminal"
@@ -7111,6 +7120,8 @@ export function WorkEntryIcon({ name, className }: { name: WorkEntryIconName; cl
       return <SmartphoneIcon className={className} aria-hidden />;
     case "t3-code":
       return <AppMark className={className} aria-hidden />;
+    case "messages-square":
+      return <MessagesSquareIcon className={className} aria-hidden />;
     case "check":
       return <CheckIcon className={className} aria-hidden />;
     case "circle-alert":
@@ -7252,7 +7263,11 @@ export function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconNa
       case "background_task":
         return "zap";
       case "system":
-        return "t3-code";
+        // Board notes wear the Team board pill's glyph.
+        return workEntry.projectedItem !== undefined &&
+          teamBoardNote(workEntry.projectedItem.item) !== undefined
+          ? "messages-square"
+          : "t3-code";
       default:
         source satisfies never;
         return "zap";
@@ -7618,22 +7633,40 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
   const accessibleDisplayText = showFailedIndicator
     ? `${accessiblePreview}, tool call failed`
     : accessiblePreview;
-  const rowToggleProps = canExpandProjectedItem
+  const boardNoteItem = workEntry.projectedItem?.item;
+  const boardRef = ctx.teamBoardThreadRef;
+  const opensBoard =
+    boardRef !== null && boardNoteItem !== undefined && teamBoardNote(boardNoteItem) !== undefined;
+  const rowToggleProps = opensBoard
     ? {
         role: "button" as const,
         tabIndex: 0 as const,
-        "aria-label": accessibleDisplayText,
-        "aria-expanded": expanded,
-        onClick: toggleExpanded,
+        "aria-label": `${accessibleDisplayText}. Open the team board`,
+        onClick: () => openTeamBoard(boardRef, null),
         onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
           if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            toggleExpanded();
+            openTeamBoard(boardRef, null);
           }
         },
       }
-    : {};
+    : canExpandProjectedItem
+      ? {
+          role: "button" as const,
+          tabIndex: 0 as const,
+          "aria-label": accessibleDisplayText,
+          "aria-expanded": expanded,
+          onClick: toggleExpanded,
+          onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
+            if (e.target !== e.currentTarget) return;
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              toggleExpanded();
+            }
+          },
+        }
+      : {};
 
   return (
     <WorkLogRow

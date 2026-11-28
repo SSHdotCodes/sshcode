@@ -69,6 +69,18 @@ describe("composer list continuation", () => {
     expect(listIndentForTab("plain", 2, 2)).toBeNull();
     expect(listIndentForTab("- foo", 1, 3)).toBeNull();
   });
+
+  it.each([
+    ["1. a\n2. b\n3. c\n4. d", "1. a\n   1. b\n2. c\n3. d"],
+    ["1. a\n2. b\n3) c", "1. a\n   1. b\n3) c"],
+    ["1. a\n2. b\n   - x\n3. c", "1. a\n   1. b\n   - x\n2. c"],
+    ["9) a\n   1) child\n10) b\n11) c", "9) a\n   1) child\n   2) b\n10) c"],
+  ])("renumbers following siblings when indenting %j", (value, expected) => {
+    const cursor = value.indexOf("b");
+    const edit = listIndentForTab(value, cursor, cursor)!;
+    expect(applyEdit(value, edit)).toBe(expected);
+    expect(edit).toHaveProperty("cursorAfter", expected.indexOf("b"));
+  });
 });
 
 describe("nextOrderedMarkerText", () => {

@@ -1046,9 +1046,22 @@ describe("shared generation rules on the agents' side", () => {
         ]),
       ]),
     ).toEqual({
-      "opencode/gemini-3.7-flash": "opencode/gemini-3.8-flash",
+      // Hydrogen is the Flash line's new name: it retires 3.8 Flash, and 3.7 Flash points
+      // straight at it rather than at a model that is itself retired.
+      "opencode/gemini-3.7-flash": "opencode/gemini-4-hydrogen",
+      "opencode/gemini-3.8-flash": "opencode/gemini-4-hydrogen",
       "opencode/gemini-3.1-pro": "opencode/gemini-4-argon",
     });
+    // With no Hydrogen on any route, the newest Flash stays current.
+    expect(
+      await retired([
+        opencode([
+          { slug: "opencode/gemini-3.8-flash", family: "gemini:flash" },
+          { slug: "opencode/gemini-3.7-flash", family: "gemini:flash" },
+          { slug: "opencode/gemini-4-argon", family: "gemini:argon" },
+        ]),
+      ]),
+    ).toEqual({ "opencode/gemini-3.7-flash": "opencode/gemini-3.8-flash" });
     // The provider's line names the flagship when the id does not.
     expect(
       await retired([

@@ -56,22 +56,24 @@ export function WorkLogPressable({
   );
 }
 
-/** Headers stay one line; only the separate detail content can wrap. */
+/** Headers stay one line, unless a row asks for more; detail content wraps separately. */
 export function WorkLogLabel({
   children,
   tone = "default",
   ellipsizeMode = "tail",
   emphasized = false,
+  lines = 1,
 }: {
   children: ReactNode;
   tone?: "default" | "danger" | "warning";
   ellipsizeMode?: "head" | "tail";
   emphasized?: boolean;
+  lines?: number;
 }) {
   return (
     <Text
       selectable={false}
-      numberOfLines={1}
+      numberOfLines={lines}
       ellipsizeMode={ellipsizeMode}
       className={cn(
         "min-w-0 flex-1 text-sm text-foreground-muted",

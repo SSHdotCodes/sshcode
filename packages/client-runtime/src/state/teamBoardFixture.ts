@@ -1,5 +1,7 @@
 import {
   NodeId,
+  ProviderDriverKind,
+  ProviderInstanceId,
   type TeamBoardFile,
   type TeamBoardPost,
   type TeamBoardPush,
@@ -10,13 +12,42 @@ import { AsyncResult, Atom } from "effect/reactivity";
 import { threadKey } from "./entities.ts";
 import type {
   TeamBoardFixtureSource,
+  TeamBoardMember,
   TeamBoardPostCommand,
   TeamBoardRequest,
   TeamBoardSubagent,
 } from "./teamBoard.ts";
 
-/** "repos" is "active" with a second live repository, so the board offers a repository picker. */
-export type TeamBoardFixturePhase = "active" | "ended" | "readonly" | "repos";
+/**
+ * "repos" is "active" with a second live repository, so the board offers a repository picker.
+ * "team" is "repos" with an addressed thread and its replies. Everything in it is something a
+ * shipped server sends: no waits, merge plans or question counts.
+ */
+export type TeamBoardFixturePhase = "active" | "ended" | "readonly" | "repos" | "team";
+
+const FIXTURE_MEMBERS: ReadonlyArray<TeamBoardMember> = (
+  [
+    ["fx-task-sol", "Settings migration", "codex", "GPT-5.5", "running"],
+    ["fx-task-neon", "Theme default", "claudeAgent", "Opus 5.5", "running"],
+    ["fx-task-opus", "API cache key", "antigravity", "Gemini 3 Pro", "completed"],
+  ] as const
+).map(([id, title, driver, model, status]) => ({
+  id: NodeId.make(id),
+  origin: "app_owned" as const,
+  title,
+  driver: ProviderDriverKind.make(driver),
+  providerInstanceId: ProviderInstanceId.make(`fx-${driver}`),
+  model,
+  childThreadId: null,
+  status,
+}));
+
+/** The chat's own team, or three stand-ins so a chat without subagents can show the board. */
+export function teamBoardFixtureMembers(
+  subagents: ReadonlyArray<TeamBoardMember>,
+): ReadonlyArray<TeamBoardMember> {
+  return fixtureTasks(subagents).length >= 2 ? subagents : FIXTURE_MEMBERS;
+}
 
 type Author = TeamBoardPost["author"];
 const LEAD: Author = { name: "Lead" };
@@ -99,6 +130,29 @@ export function buildTeamBoardFixture(input: {
       at: at(3),
     },
   ];
+  const rich = input.phase === "team";
+  if (rich) {
+    posts.push(
+      {
+        id: "fx-8",
+        author: neon,
+        kind: "question",
+        text: "Can I start the theme fix from your migration?",
+        at: at(10),
+        to: sol.name,
+        files: ["src/settings.ts"],
+      },
+      {
+        id: "fx-9",
+        author: sol,
+        kind: "message",
+        text: "Yes, once abc1234 lands I'll post done.",
+        at: at(8),
+        to: neon.name,
+        replyTo: "fx-1",
+      },
+    );
+  }
   if (input.phase === "ended") {
     posts.push({
       id: "fx-7",
@@ -137,7 +191,10 @@ export function buildTeamBoardFixture(input: {
         { taskId: opus.taskId!, files: ["src/api/client.ts"] },
       ].filter((entry, index) => index < tasks.length)
     : [];
-  const latest = all[all.length - 1];
+  // Phones have no toSorted.
+  const latest = [...all].sort(
+    (left, right) => DateTime.toEpochMillis(left.at) - DateTime.toEpochMillis(right.at),
+  )[all.length - 1];
   return {
     active,
     postCount: all.length,
@@ -399,7 +456,9 @@ export function createTeamBoardFixtureSource(
         }, options.postDelayMs ?? 900);
       }),
   };
+  const repos = phase === "repos" || phase === "team";
   return {
+    members: teamBoardFixtureMembers,
     snapshot: (get, ref, subagents, request: TeamBoardRequest) => {
       const key = threadKey(ref);
       let now = startedAt.get(key);
@@ -420,10 +479,10 @@ export function createTeamBoardFixtureSource(
           details,
           extraPosts: get(userPosts(`${key}|${SITE_PUSH}`)),
         });
-      if (phase === "repos" && request.kind === "details" && request.repo === SITE_PUSH) {
+      if (repos && request.kind === "details" && request.repo === SITE_PUSH) {
         return site(true);
       }
-      const aggregate = phase === "repos" && request.kind === "summary";
+      const aggregate = repos && request.kind === "summary";
       const main = buildTeamBoardFixture({
         phase,
         subagents,

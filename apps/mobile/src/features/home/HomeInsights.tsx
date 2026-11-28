@@ -21,6 +21,7 @@ import {
   collectLimitPools,
   isUsageWindowAlmostOut,
   recentUseBySource,
+  limitPoolIconUrl,
 } from "@t3tools/shared/usageLimits";
 import { formatUsd, makeWindow } from "@t3tools/shared/usageFormat";
 import { AsyncResult } from "effect/reactivity";
@@ -669,6 +670,7 @@ type PlanLine =
       readonly key: string;
       readonly name: string;
       readonly driver: string;
+      readonly iconUrl?: string | undefined;
       readonly note: string;
     };
 
@@ -716,6 +718,7 @@ function usePlanLimits() {
         name:
           account.displayName ?? PROVIDER_DISPLAY_NAMES[account.driver] ?? String(account.driver),
         driver: String(account.driver),
+        iconUrl: account.iconUrl,
         note: account.notice ?? "",
       }));
       return [...bar, ...notes];
@@ -761,6 +764,7 @@ function LimitBar({
 function LimitRow({
   name,
   driver,
+  iconUrl,
   detail,
   usedPercent,
   almostOut,
@@ -770,6 +774,7 @@ function LimitRow({
 }: {
   name: string;
   driver: string;
+  iconUrl?: string | undefined;
   detail: string;
   usedPercent: number;
   almostOut: boolean;
@@ -782,7 +787,7 @@ function LimitRow({
     <Stagger index={index} arrived={arrived}>
       <View accessible accessibilityLabel={accessibilityLabel}>
         <View style={styles.legendRow}>
-          <ProviderIcon provider={driver} size={14} />
+          <ProviderIcon provider={driver} iconUrl={iconUrl} size={14} />
           <Text className="text-foreground" numberOfLines={1} style={styles.caption}>
             {name}
           </Text>
@@ -840,7 +845,7 @@ function LimitsCard({ onOpen }: { onOpen: () => void }) {
                   accessibilityLabel={`${line.name}: ${line.note}`}
                   style={styles.legendRow}
                 >
-                  <ProviderIcon provider={line.driver} size={14} />
+                  <ProviderIcon provider={line.driver} iconUrl={line.iconUrl} size={14} />
                   <Text className="text-foreground" numberOfLines={1} style={styles.caption}>
                     {line.name}
                   </Text>
@@ -862,6 +867,7 @@ function LimitsCard({ onOpen }: { onOpen: () => void }) {
               key={line.key}
               name={line.name}
               driver={line.limits.driver}
+              iconUrl={limitPoolIconUrl(line.limits.pool)}
               detail={`${tightest.label}${resets ? ` · ${resets}` : ""}`}
               usedPercent={tightest.usedPercent}
               almostOut={isUsageWindowAlmostOut(tightest)}

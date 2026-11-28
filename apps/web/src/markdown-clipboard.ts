@@ -366,12 +366,11 @@ function mathSourceElement(wrapper: Element): Element {
   return code;
 }
 
+/** A cell's text on one line, with each formula as its TeX. */
 function csvCellText(cell: Element): string {
-  const copy = cell.cloneNode(true) as Element;
-  for (const wrapper of copy.querySelectorAll("[data-markdown-math]")) {
-    wrapper.replaceWith(mathSourceElement(wrapper));
-  }
-  return copy.textContent ?? "";
+  const parts: string[] = [];
+  collectHtmlCellText(cell, parts, false);
+  return parts.join("").replace(/[\u0001\u0002]+/g, " ");
 }
 
 function csvCell(value: string): string {

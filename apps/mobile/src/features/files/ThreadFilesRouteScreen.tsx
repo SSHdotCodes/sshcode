@@ -48,6 +48,7 @@ import { FileTreeBrowser } from "./FileTreeBrowser";
 import { useFileTreeEntries } from "./useFileTreeEntries";
 import { preloadWorkspaceFileContents } from "./preload-workspace-file";
 import { SourceFileSurface } from "./SourceFileSurface";
+import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { ThreadFileNavigatorPane } from "./thread-file-navigator-pane";
 import { ScreenHeader } from "../../components/ScreenHeader";
@@ -239,8 +240,8 @@ function FileContent(props: {
   const thumbnailInstanceId = useId();
   const insets = useSafeAreaInsets();
   const columnMetrics = useNativeColumnLayoutMetrics();
-  const reservedHeaderInset =
-    Platform.OS === "ios" && props.truncated ? (columnMetrics?.safeArea.top ?? insets.top) : 0;
+  const headerInset = Platform.OS === "ios" ? (columnMetrics?.safeArea.top ?? insets.top) : 0;
+  const reservedHeaderInset = props.truncated ? headerInset : 0;
   const isMarkdown = isMarkdownPreviewFile(props.relativePath);
   const isBrowserFile = isWorkspaceBrowserPreviewPath(props.relativePath);
   const isImageFile = isWorkspaceImagePreviewPath(props.relativePath);
@@ -262,8 +263,10 @@ function FileContent(props: {
     );
   }
 
-  if (isVideoFile) {
-    return (
+  const isRasterPreview =
+    props.activeMode === "preview" && isImageFile && !isSvgImagePreviewFile(props.relativePath);
+  if (isVideoFile || isRasterPreview) {
+    const media = isVideoFile ? (
       <WorkspaceFileVideoPreview
         name={basename(props.relativePath)}
         thumbnailKey={`workspace-video:${thumbnailInstanceId}`}
@@ -271,7 +274,21 @@ function FileContent(props: {
         source={props.videoSource}
         resolvePlaybackUri={props.resolveVideoUri}
       />
+    ) : (
+      <WorkspaceFileImagePreview
+        accessibilityLabel={basename(props.relativePath)}
+        uri={props.previewUri}
+        actionsSource={props.mediaSource}
+      />
     );
+    if (Platform.OS === "ios" && Platform.isPad && NATIVE_LIQUID_GLASS_SUPPORTED) {
+      return (
+        <View className="flex-1" style={{ paddingTop: headerInset }}>
+          {media}
+        </View>
+      );
+    }
+    return media;
   }
 
   if (isAudioFile) {
@@ -283,16 +300,7 @@ function FileContent(props: {
   }
 
   if (props.activeMode === "preview" && isImageFile) {
-    if (isSvgImagePreviewFile(props.relativePath)) {
-      return <WorkspaceFileWebPreview uri={props.previewUri} scriptsAllowed />;
-    }
-    return (
-      <WorkspaceFileImagePreview
-        accessibilityLabel={basename(props.relativePath)}
-        uri={props.previewUri}
-        actionsSource={props.mediaSource}
-      />
-    );
+    return <WorkspaceFileWebPreview uri={props.previewUri} scriptsAllowed />;
   }
 
   if (props.activeMode === "preview" && isBrowserFile) {

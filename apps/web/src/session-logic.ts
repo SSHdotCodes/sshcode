@@ -29,6 +29,10 @@ import { cardFromToolItem, type AgentCardToolPresentation } from "@t3tools/share
 import { turnItemDetailRevision } from "@t3tools/client-runtime/work-log/item-detail";
 import { monitorNotificationLabel } from "@t3tools/client-runtime/work-log/monitor-notification";
 import { resumedRestartNoticeIds } from "@t3tools/client-runtime/work-log/restart-notice";
+import {
+  teamBoardNote,
+  teamBoardNoteAsNotification,
+} from "@t3tools/client-runtime/work-log/team-board-note";
 import type { McpAppReference } from "@t3tools/shared/mcpApp";
 import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
 import {
@@ -652,10 +656,28 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
         : [],
     ),
   );
+  // With its answer message loaded, an answered card shows once, as that folded row.
+  const loadedAnswerMessageIds = new Set<string>(
+    input.visibleTurnItems.flatMap(({ item }) =>
+      item.type === "user_message" && answerByMessageId.has(item.messageId) ? [item.messageId] : [],
+    ),
+  );
   const resumedRestartNotices = resumedRestartNoticeIds(input.visibleTurnItems);
   for (const row of input.visibleTurnItems) {
-    const { item } = row;
+    // A team board note is never something the person said; older chats recorded it as one.
+    const boardNote = teamBoardNote(row.item);
+    if (boardNote?.routine) continue;
+    const item =
+      boardNote === undefined
+        ? row.item
+        : (teamBoardNoteAsNotification(row.item, boardNote) ?? row.item);
     if (turnItemIsWorkspacePreparation(item)) continue;
+    if (
+      item.type === "user_input_request" &&
+      item.questionAnswer &&
+      loadedAnswerMessageIds.has(`async-answer:${item.questionAnswer.requestId}`)
+    )
+      continue;
     if (resumedRestartNotices.has(item.id)) continue;
     // Task progress belongs in the composer, not between conversation entries.
     if (item.type === "todo_list" || item.type === "checkpoint") continue;
@@ -678,7 +700,7 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
           tone: "info",
           itemType: item.type,
           structuredPayload: item,
-          projectedItem: row,
+          projectedItem: item === row.item ? row : { ...row, item },
         },
         ...attemptMetadata,
       });

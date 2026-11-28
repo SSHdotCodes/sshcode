@@ -3123,10 +3123,13 @@ describe("OrchestratorMcpService provider resolution", () => {
         const taskId = NodeId.make(
           `node:delegated-task:${encodeURIComponent("command:mcp:session:delegate-task:grade")}`,
         );
-        const grades: Array<readonly [NodeId, RecordedGrade]> = [];
+        const grades: Array<readonly [NodeId, RecordedGrade & { runTaskId?: NodeId }]> = [];
         let done = false;
         let failed = false;
         let output: "none" | "message" | "item" | "unrelated" = "none";
+        let childThread: Partial<OrchestrationV2ThreadProjection["thread"]> = {
+          title: "graded child",
+        };
         const resultRunId = RunId.make("graded-child-run");
         const grader = { instanceId: codexInstanceId, family: "codex" };
         const dependencies = Layer.mergeAll(
@@ -3137,6 +3140,11 @@ describe("OrchestratorMcpService provider resolution", () => {
                 ? Effect.fail(new SubagentRankingsError({ operation: "grade", message: "no run" }))
                 : Effect.sync(() => {
                     for (const { taskId, ...grade } of entries) grades.push([taskId, grade]);
+                    return {
+                      unmatched: entries.flatMap((grade) =>
+                        grade.runTaskId === "unranked-original" ? [grade.taskId] : [],
+                      ),
+                    };
                   }),
           }),
           Layer.mock(ThreadManagementService.ThreadManagementService)({
@@ -3162,6 +3170,7 @@ describe("OrchestratorMcpService provider resolution", () => {
                     ])
                   : ({
                       ...childProjection,
+                      thread: { ...childProjection.thread, ...childThread },
                       messages:
                         output === "message" || output === "unrelated"
                           ? [
@@ -3263,6 +3272,30 @@ describe("OrchestratorMcpService provider resolution", () => {
               skipped: [{ taskId: taskReference(taskId), reason: "save failed" }],
             },
           );
+          // A follow-up continues the child its original task forked, so its grade names that run.
+          const original = NodeId.make("original-task");
+          childThread = { title: "graded child", forkedFrom: { type: "node", nodeId: original } };
+          assert.equal(
+            (yield* service.gradeTasks(scope, [{ taskId: taskReference(taskId), score: 5 }])).saved,
+            1,
+          );
+          assert.deepEqual(grades.at(-1), [taskId, { score: 5, runTaskId: original, grader }]);
+          // One whose original run is not ranked is reported, not silently kept.
+          childThread = {
+            title: "graded child",
+            forkedFrom: { type: "node", nodeId: NodeId.make("unranked-original") },
+          };
+          assert.deepEqual(yield* service.gradeTasks(scope, [{ taskId, score: 5 }]), {
+            saved: 0,
+            skipped: [{ taskId, reason: "not ranked" }],
+          });
+          childThread = { title: "Council: gpt-6.2-sol" };
+          const before = grades.length;
+          assert.deepEqual(yield* service.gradeTasks(scope, [{ taskId, score: 5 }]), {
+            saved: 0,
+            skipped: [{ taskId, reason: "not ranked" }],
+          });
+          assert.equal(grades.length, before);
         }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(dependencies))));
       }),
   );
@@ -4320,6 +4353,14 @@ describe("OrchestratorMcpService provider resolution", () => {
       }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(dependencies))));
     }),
   );
+
+  it("marks only Gemini on Antigravity as taking audio and video files", () => {
+    const reads = OrchestratorMcpService.readsAudioVideoFiles;
+    assert.isTrue(reads(ProviderDriverKind.make("antigravity"), "gemini:neon"));
+    // Another maker's model on the same harness, and Gemini on a route nobody has checked.
+    assert.isFalse(reads(ProviderDriverKind.make("antigravity"), "claude:opus"));
+    assert.isFalse(reads(ProviderDriverKind.make("opencode"), "gemini:neon"));
+  });
 
   it.effect("pages a large live model catalog and returns options only on request", () =>
     Effect.gen(function* () {

@@ -1,10 +1,15 @@
+import * as ReviewSchema from "effect/Schema";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
+  TeamBoardPost as PostContract,
+  TeamBoardSnapshot as SnapshotContract,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentId,
   NodeId,
+  ProviderDriverKind,
+  ProviderInstanceId,
   ThreadId,
   WS_METHODS,
   type AuthSessionState,
@@ -47,10 +52,18 @@ import {
   teamBoardListItems,
   teamBoardOverlapLabel,
   teamBoardPill,
-  teamBoardPresenceLabel,
+  teamBoardAddressee,
+  teamBoardAddressedMember,
+  teamBoardHoldsLabel,
+  teamBoardRoster,
+  teamBoardAuthorLine,
+  teamBoardAuthorsFromKey,
+  teamBoardAuthorsKey,
+  markTeamBoardSeen,
+  teamBoardRepoLatestPostId,
   teamBoardRows,
   type TeamBoardSeenStorage,
-  type TeamBoardSubagent,
+  type TeamBoardMember,
 } from "./teamBoard.ts";
 import {
   buildTeamBoardFixture,
@@ -58,6 +71,7 @@ import {
   buildTeamBoardFixturePush,
   buildTeamBoardFixtureSite,
   createTeamBoardFixtureSource,
+  teamBoardFixtureMembers,
 } from "./teamBoardFixture.ts";
 
 // Board times use the viewer's zone; pin one so the expected clock text holds on any machine.
@@ -75,8 +89,21 @@ const ref = { environmentId: home, threadId: lead };
 const sol = NodeId.make("task-sol");
 const neon = NodeId.make("task-neon");
 const opus = NodeId.make("task-opus");
-const task = (id: NodeId, title: string, extra: Partial<TeamBoardSubagent> = {}) =>
-  ({ id, origin: "app_owned", title, ...extra }) as TeamBoardSubagent;
+const task = (
+  id: NodeId,
+  title: string,
+  extra: Partial<TeamBoardMember> = {},
+): TeamBoardMember => ({
+  id,
+  origin: "app_owned",
+  title,
+  driver: ProviderDriverKind.make("codex"),
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  model: null,
+  childThreadId: null,
+  status: "running",
+  ...extra,
+});
 const team = [task(sol, "Sol"), task(neon, "Neon"), task(opus, "Opus")];
 const now = DateTime.makeUnsafe("2026-11-27T02:42:00Z");
 
@@ -166,7 +193,7 @@ const harness = Effect.fn(function* (
     Layer.succeed(EnvironmentRegistry, { run, followStream } as EnvironmentRegistry["Service"]),
   );
   const subagents = Atom.family((_key: string) =>
-    Atom.make<ReadonlyArray<TeamBoardSubagent>>([]).pipe(Atom.keepAlive),
+    Atom.make<ReadonlyArray<TeamBoardMember>>([]).pipe(Atom.keepAlive),
   );
   const view = createTeamBoardViewAtoms({
     board: createTeamBoardAtoms(runtime),
@@ -189,7 +216,7 @@ const harness = Effect.fn(function* (
       permissions: [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
     }),
   );
-  const setSubagents = (value: ReadonlyArray<TeamBoardSubagent>) =>
+  const setSubagents = (value: ReadonlyArray<TeamBoardMember>) =>
     registry.set(subagents(threadKey(ref)), value);
   const until = <A>(atom: Atom.Atom<A>, done: (value: A) => boolean) =>
     Effect.callback<A>((resume) => {
@@ -226,7 +253,7 @@ describe("team board view", () => {
         expect(registry.get(view.summaryAtom(ref))).toBeNull();
         setSubagents([task(sol, "Sol"), task(neon, "Neon", { origin: "provider_native" })]);
         expect(registry.get(view.summaryAtom(ref))).toBeNull();
-        expect(registry.get(view.presenceAtom(ref, sol))).toBeNull();
+        expect(registry.get(view.holdsAtom(ref)).size).toBe(0);
         expect(calls).toEqual([]);
       } finally {
         unmount();
@@ -313,35 +340,52 @@ describe("team board view", () => {
     }),
   );
 
+  it.effect("counts each member's held files from the presence feed for the roster", () =>
+    Effect.gen(function* () {
+      const { view, registry, emit, setSubagents, until } = yield* harness();
+      setSubagents(team);
+      const unmountSummary = registry.mount(view.summaryAtom(ref));
+      const unmountHolds = registry.mount(view.holdsAtom(ref));
+      try {
+        // Live summary and delta frames carry no presence; holds come from the presence feed.
+        yield* until(view.holdsAtom(ref), (holds) => holds.get(opus) === 1);
+        yield* emit("presence", {
+          ...fixture("presence"),
+          presence: [{ taskId: opus, files: ["src/api/cache.ts", "src/api/client.ts"] }],
+        });
+        yield* until(view.holdsAtom(ref), (holds) => holds.get(opus) === 2);
+        expect(registry.get(view.holdsAtom(ref)).get(sol)).toBeUndefined();
+      } finally {
+        unmountHolds();
+        unmountSummary();
+      }
+    }),
+  );
+
   it.effect("keeps presence on its own feed while a push is live", () =>
     Effect.gen(function* () {
       const { view, registry, calls, emit, setSubagents, until } = yield* harness();
       setSubagents(team);
       const unmountSummary = registry.mount(view.summaryAtom(ref));
-      const unmountPresence = registry.mount(view.presenceAtom(ref, opus));
+      const unmountPresence = registry.mount(view.holdsAtom(ref));
       try {
-        yield* until(view.presenceAtom(ref, opus), (files) => files !== null);
+        yield* until(view.holdsAtom(ref), (holds) => holds.get(opus) === 1);
         expect(calls).toEqual([
           { threadId: lead, delta: true },
           { threadId: lead, presenceOnly: true },
         ]);
-        const chip = registry.get(view.presenceAtom(ref, opus));
-        expect(chip).toEqual(["src/api/client.ts"]);
-        // Summaries carry no presence; a new summary leaves the chip alone.
+        const holds = registry.get(view.holdsAtom(ref));
+        // Summaries carry no presence; a new summary leaves the roster's counts alone.
         yield* emit("summary", { ...fixture("summary"), postCount: 7, latestPostId: "fx-7" });
         yield* until(view.summaryAtom(ref), (value) => value?.postCount === 7);
-        expect(registry.get(view.presenceAtom(ref, opus))).toBe(chip);
+        expect(registry.get(view.holdsAtom(ref))).toBe(holds);
         // Presence moves without a summary frame.
         yield* emit("presence", {
           ...fixture("presence"),
-          presence: [{ taskId: opus, files: ["src/api/cache.ts"] }],
+          presence: [{ taskId: opus, files: ["src/api/cache.ts", "src/api/client.ts"] }],
         });
-        yield* until(view.presenceAtom(ref, opus), (files) => files?.[0] === "src/api/cache.ts");
+        yield* until(view.holdsAtom(ref), (counts) => counts.get(opus) === 2);
         expect(registry.get(view.summaryAtom(ref))?.postCount).toBe(7);
-        // The push ends: no chips, whatever the presence feed last said.
-        yield* emit("summary", { ...fixture("summary"), active: false });
-        yield* until(view.summaryAtom(ref), (value) => value?.active === false);
-        expect(registry.get(view.presenceAtom(ref, opus))).toBeNull();
       } finally {
         unmountPresence();
         unmountSummary();
@@ -573,6 +617,59 @@ describe("team board presentation", () => {
     expect(ended.presence).toEqual([]);
   });
 
+  it("keeps the dot while any live repository has an unseen post", () => {
+    const multi = {
+      ...active,
+      latestPostId: "s-3",
+      repos: [
+        { id: "web", name: "Web", latestPostId: "w-2" },
+        { id: "srv", name: "Server", latestPostId: "s-3" },
+      ],
+    };
+    // Reading Server marks only Server seen; Web's post keeps the dot.
+    const afterServer = markTeamBoardSeen(null, { latestPostId: "s-3", repo: "srv" });
+    expect(teamBoardPill(multi, afterServer)?.unread).toBe(true);
+    const afterBoth = markTeamBoardSeen(afterServer, { latestPostId: "w-2", repo: "web" });
+    expect(teamBoardPill(multi, afterBoth)?.unread).toBe(false);
+    const newer = {
+      ...multi,
+      repos: [multi.repos[0]!, { ...multi.repos[1]!, latestPostId: "s-4" }],
+    };
+    expect(teamBoardPill(newer, afterBoth)?.unread).toBe(true);
+    expect(teamBoardRepoLatestPostId(multi, "web")).toBe("w-2");
+    expect(teamBoardRepoLatestPostId(active, null)).toBe(active.latestPostId);
+    // A value saved before repositories were tracked still reads.
+    expect(teamBoardPill(active, "fx-6")?.unread).toBe(false);
+  });
+
+  it("opening an empty repository leaves another repository's news unread", () => {
+    const multi = {
+      ...active,
+      latestPostId: "s-1",
+      repos: [
+        { id: "web", name: "Web" },
+        { id: "srv", name: "Server", latestPostId: "s-1" },
+      ],
+    };
+    expect(teamBoardRepoLatestPostId(multi, "web")).toBeUndefined();
+    expect(teamBoardPill(multi, null)?.unread).toBe(true);
+  });
+
+  it("keeps a repository's seen mark however many posts another repository gets", () => {
+    const multi = {
+      ...active,
+      latestPostId: "b8",
+      repos: [
+        { id: "a", name: "A", latestPostId: "a1" },
+        { id: "b", name: "B", latestPostId: "b8" },
+      ],
+    };
+    let seen = markTeamBoardSeen(null, { latestPostId: "a1", repo: "a" });
+    for (let index = 1; index <= 8; index++)
+      seen = markTeamBoardSeen(seen, { latestPostId: `b${index}`, repo: "b" });
+    expect(teamBoardPill(multi, seen)?.unread).toBe(false);
+  });
+
   it("lists past pushes for the header, even while a new push runs", () => {
     const live = teamBoardHistory(active);
     const ids = (history: ReturnType<typeof teamBoardHistory>) =>
@@ -620,13 +717,15 @@ describe("team board presentation", () => {
   it("names the holder of the file in a denied claim, not the claimant", () => {
     const denied = active.posts!.find((post) => post.conflict !== undefined)!;
     expect(denied.author.name).toBe("Neon");
-    expect(teamBoardOverlapLabel(denied.conflict!)).toBe("Overlap: Sol already holds settings.ts");
+    expect(teamBoardOverlapLabel(denied.conflict!)).toBe(
+      "Overlap: Sol is already editing settings.ts",
+    );
     expect(
       teamBoardOverlapLabel({
         file: "src/api/client.ts#cacheKey",
         owner: { name: "You", user: true },
       }),
-    ).toBe("Overlap: You already hold client.ts");
+    ).toBe("Overlap: You are already editing client.ts");
   });
 
   it("picks a live repository only with two or more live", () => {
@@ -779,10 +878,11 @@ describe("team board presentation", () => {
     expect(ids(teamBoardRows(active.posts!, { filter: "claims" }))).toEqual(["fx-2", "fx-1"]);
     expect(ids(teamBoardRows(active.posts!, { filter: "questions" }))).toEqual(["fx-3"]);
     expect(ids(teamBoardRows(active.posts!, { filter: "overlaps" }))).toEqual(["fx-2"]);
-    // Sol's own posts and the overlap naming Sol as the owner.
+    // Sol's own posts, the overlap naming Sol as the owner, and Neon's question replying to Sol.
     expect(ids(teamBoardRows(active.posts!, { filter: "all", taskId: sol }))).toEqual([
       "fx-2",
       "fx-1",
+      "fx-3",
     ]);
     expect(ids(teamBoardRows(active.posts!, { filter: "all", taskId: neon }))).toEqual([
       "fx-3",
@@ -797,8 +897,8 @@ describe("team board presentation", () => {
   });
 
   it("reads open kinds, ranges, presence, and local times", () => {
-    expect(teamBoardKind("claim")).toEqual({ label: "Claim", tone: "claim" });
-    expect(teamBoardKind("release")).toEqual({ label: "Release", tone: "muted" });
+    expect(teamBoardKind("claim")).toEqual({ label: "Editing", tone: "claim" });
+    expect(teamBoardKind("release")).toEqual({ label: "Done editing", tone: "muted" });
     expect(teamBoardKind("message")).toBeNull();
     expect(teamBoardKind("handoff")).toEqual({ label: "Handoff", tone: "muted" });
     expect(
@@ -808,11 +908,6 @@ describe("team board presentation", () => {
       ]),
     ).toBe("L40–80, L7");
     expect(formatTeamBoardRanges(undefined)).toBeNull();
-    expect(teamBoardPresenceLabel(["src/settings.ts#loadSettings", "a.ts", "b.ts"])).toEqual({
-      name: "settings.ts",
-      more: 2,
-    });
-    expect(teamBoardPresenceLabel([])).toBeNull();
     expect(formatTeamBoardTime(now)).toBe("9:42 PM");
     expect(formatTeamBoardTime(DateTime.makeUnsafe("2026-07-01T13:05:00Z"))).toBe("9:05 AM");
   });
@@ -851,5 +946,264 @@ describe("team board presentation", () => {
     })!;
     expect(summary).toMatchObject({ active: false, postCount: 7, latestPostId: "fx-7" });
     expect(summary.posts).toBeUndefined();
+  });
+});
+
+describe("team board authors", () => {
+  it("names each post's sender as the chat's subagent rows do", () => {
+    const authors = teamBoardAuthorsFromKey(
+      teamBoardAuthorsKey([
+        {
+          id: team[0]!.id,
+          title: "Fix the parser",
+          driver: ProviderDriverKind.make("acpRegistry"),
+          providerInstanceId: ProviderInstanceId.make("devin"),
+          model: "swe-2.1",
+          modelSelection: { instanceId: ProviderInstanceId.make("devin"), model: "swe-2.1" },
+          childThreadId: ThreadId.make("child-1"),
+        },
+      ]),
+    );
+    const info = authors.get(team[0]!.id);
+    expect(info).toMatchObject({
+      title: "Fix the parser",
+      driver: "acpRegistry",
+      childThreadId: "child-1",
+    });
+    expect(teamBoardAuthorLine({ name: "Sol", taskId: team[0]!.id }, info, "SWE-2.1")).toEqual({
+      name: "Fix the parser",
+      model: "SWE-2.1",
+      open: "child-1",
+    });
+    // A member whose record paged out keeps its posted name and has nothing to open.
+    expect(teamBoardAuthorLine({ name: "Sol", taskId: team[1]!.id }, undefined, null)).toEqual({
+      name: "Sol",
+      model: null,
+      open: null,
+    });
+    expect(teamBoardAuthorLine({ name: "Lead" }, undefined, null).name).toBe("Lead");
+    expect(teamBoardAuthorLine({ name: "Sam", user: true }, undefined, null).name).toBe("You");
+  });
+});
+
+describe("team board conversations and roster", () => {
+  const board = buildTeamBoardFixture({ phase: "team", subagents: team, now, details: true })!;
+  const posts = board.posts!;
+
+  it("says whom an addressed post is for", () => {
+    expect(teamBoardAddressee(posts.find(({ id }) => id === "fx-3")!)).toEqual({
+      kind: "member",
+      name: "Sol",
+    });
+    expect(teamBoardAddressee({ ...posts[0]!, to: "you" })).toEqual({ kind: "you", name: "You" });
+    expect(teamBoardAddressee({ ...posts[0]!, to: "lead" })?.name).toBe("Lead");
+    expect(teamBoardAddressee(posts[0]!)).toBeNull();
+  });
+
+  it("shows only addressed posts and their threads under Direct", () => {
+    const rows = teamBoardRows(posts, { filter: "direct" });
+    // fx-1 is not addressed, but its replies are: they stand on their own under Direct.
+    expect(rows.map(({ post }) => post.id).sort()).toEqual(["fx-3", "fx-8", "fx-9"]);
+    expect(rows.every(({ post }) => teamBoardAddressee(post) !== null)).toBe(true);
+  });
+
+  it("filters to posts from or to one member", () => {
+    const rows = teamBoardRows(posts, { filter: "all", taskId: sol, memberName: "Sol" });
+    const ids = rows.flatMap(({ post, replies }) => [post.id, ...replies.map(({ id }) => id)]);
+    // Its own claim and reply, Neon's two questions to it, and an overlap naming it.
+    expect(ids).toEqual(expect.arrayContaining(["fx-1", "fx-2", "fx-3", "fx-8", "fx-9"]));
+  });
+
+  it("tells members with the same title apart by id", () => {
+    const reviewers = [
+      { ...team[0]!, title: "Reviewer" },
+      { ...team[1]!, title: "Reviewer" },
+    ];
+    const second = reviewers[1]!.id;
+    const question = (id: string, to: string, toTaskId: NodeId) => ({
+      ...posts[0]!,
+      id,
+      kind: "question",
+      to,
+      toTaskId,
+    });
+    const asked = [
+      question("q-1", "Reviewer", reviewers[0]!.id),
+      question("q-2", "Reviewer #2", second),
+    ];
+    expect(teamBoardAddressedMember(reviewers, asked[1]!)?.id).toBe(second);
+    const rows = teamBoardRows(asked, { filter: "all", taskId: second, memberName: "Reviewer" });
+    expect(rows.map(({ post }) => post.id)).toEqual(["q-2"]);
+  });
+
+  it("puts only the selected repository's members on the roster", () => {
+    const other = { ...team[2]!, status: "running" as const };
+    const roster = teamBoardRoster([team[0]!, other], {
+      active: true,
+      postCount: 0,
+      overlapCount: 0,
+      presence: [],
+      pushId: "web",
+      repos: [
+        { id: "web", name: "Web", members: [team[0]!.id] },
+        { id: "server", name: "Server", members: [other.id] },
+      ],
+    });
+    expect(roster.map(({ member }) => member.id)).toEqual([team[0]!.id]);
+  });
+
+  it("collapses a thread to its first post and reply count", () => {
+    const rows = teamBoardRows(posts, { filter: "all" });
+    const open = teamBoardListItems(rows);
+    const thread = open.find(({ post }) => post.id === "fx-1")!;
+    expect(thread).toMatchObject({ hasReplies: true, collapsed: false, endsThread: false });
+    const closed = teamBoardListItems(rows, new Set(["fx-1"]));
+    expect(closed.find(({ post }) => post.id === "fx-1")).toMatchObject({
+      replyCount: 2,
+      collapsed: true,
+      endsThread: true,
+    });
+    expect(closed.some(({ post }) => post.replyTo === "fx-1")).toBe(false);
+    expect(closed.length).toBe(open.length - 2);
+  });
+
+  it("lists the roster in task order with each member's state and what it holds", () => {
+    const roster = teamBoardRoster(
+      [...team.slice(0, 2), { ...team[2]!, status: "completed" }],
+      board,
+    );
+    expect(roster.map(({ name, state, holds }) => [name, state, holds])).toEqual([
+      ["Sol", "working", 2],
+      ["Neon", "working", 3],
+      ["Opus", "done", 1],
+    ]);
+    expect(teamBoardHoldsLabel(3)).toBe("3 files");
+    expect(teamBoardHoldsLabel(1)).toBe("1 file");
+    expect(teamBoardHoldsLabel(0)).toBeNull();
+  });
+
+  it("shows the QA board in a chat without subagents, with only what a shipped server sends", () => {
+    const members = teamBoardFixtureMembers([]);
+    expect(members.length).toBe(3);
+    const solo = buildTeamBoardFixture({ phase: "team", subagents: members, now, details: true })!;
+    expect(Object.keys(solo)).not.toEqual(
+      expect.arrayContaining(["waits", "mergePlan", "questionsForYou"]),
+    );
+    expect(solo.posts?.some(({ kind, to }) => kind === "wait" || to === "you")).toBe(false);
+    expect(buildTeamBoardFixtureSite({ subagents: members, now, details: true })).not.toBeNull();
+  });
+});
+
+describe("seen marks and the wire shape", () => {
+  it("the previous build's bare seen id survives upgrade and a second repository", () => {
+    const single = {
+      active: true,
+      postCount: 1,
+      overlapCount: 0,
+      presence: [],
+      latestPostId: "a-1",
+    };
+    const saved = JSON.parse(JSON.stringify({ thread: "a-1" })).thread as string;
+    expect(teamBoardPill(single, saved)?.unread).toBe(false);
+    const added = {
+      ...single,
+      postCount: 2,
+      latestPostId: "b-1",
+      repos: [
+        { id: "A", name: "A", latestPostId: "a-1" },
+        { id: "B", name: "B", latestPostId: "b-1" },
+      ],
+    };
+    expect(teamBoardPill(added, saved)?.unread).toBe(true);
+    const seen = markTeamBoardSeen(saved, { latestPostId: "b-1", repo: "B" });
+    expect(teamBoardPill(added, seen)?.unread).toBe(false);
+  });
+
+  it("reading nine live repositories can clear the unread dot", () => {
+    const repos = Array.from({ length: 9 }, (_, index) => ({
+      id: "repo-" + index,
+      name: "Repo " + index,
+      latestPostId: "post-" + index,
+    }));
+    let seen: string | null = null;
+    for (const { id, latestPostId } of repos) {
+      seen = markTeamBoardSeen(seen, { repo: id, latestPostId });
+    }
+    expect(
+      teamBoardPill(
+        {
+          active: true,
+          postCount: repos.length,
+          overlapCount: 0,
+          presence: [],
+          latestPostId: repos.at(-1)!.latestPostId,
+          repos,
+        },
+        seen,
+      )?.unread,
+    ).toBe(false);
+  });
+
+  it("older board wire shape and the current wire shape decode each other's snapshots", () => {
+    const prior = ReviewSchema.Struct({
+      ...SnapshotContract.fields,
+      posts: ReviewSchema.optionalKey(
+        ReviewSchema.Array(
+          PostContract.mapFields((fields) => {
+            const { toTaskId: _newField, ...oldFields } = fields;
+            return oldFields;
+          }),
+        ),
+      ),
+      repos: ReviewSchema.optionalKey(
+        ReviewSchema.Array(
+          ReviewSchema.Struct({
+            id: ReviewSchema.String,
+            name: ReviewSchema.String,
+          }),
+        ),
+      ),
+    });
+    const legacy = {
+      active: true,
+      postCount: 1,
+      overlapCount: 0,
+      presence: [],
+      posts: [
+        {
+          id: "post",
+          author: { name: "Lead" },
+          kind: "question",
+          text: "Ready?",
+          at: DateTime.makeUnsafe("2026-11-27T00:00:00.000Z"),
+          to: "Neon",
+        },
+      ],
+      repos: [{ id: "one", name: "One" }],
+    };
+    const task = NodeId.make("neon");
+    const current = {
+      ...legacy,
+      posts: [{ ...legacy.posts[0], toTaskId: task }],
+      repos: [{ ...legacy.repos[0], members: [task] }],
+    };
+    const upgraded = ReviewSchema.decodeUnknownSync(SnapshotContract)(legacy);
+    const downgraded = ReviewSchema.decodeUnknownSync(prior)(current);
+    expect(upgraded.posts?.[0]?.to).toBe("Neon");
+    expect(upgraded.posts?.[0]?.toTaskId).toBeUndefined();
+    expect(downgraded.posts?.[0]?.to).toBe("Neon");
+    expect(downgraded.repos?.[0]?.id).toBe("one");
+  });
+
+  it("keeps a mark for each of 32 repositories, dropping the least recently viewed", () => {
+    let seen: string | null = null;
+    for (let index = 0; index < 33; index++)
+      seen = markTeamBoardSeen(seen, { repo: `repo-${index}`, latestPostId: `post-${index}` });
+    // Viewing repo-1 again keeps it; repo-0, viewed least recently, is the one dropped.
+    seen = markTeamBoardSeen(seen, { repo: "repo-1", latestPostId: "post-1" });
+    const marks = seen!.split(" ");
+    expect(marks).toHaveLength(32);
+    expect(marks[0]).toBe("repo-1=post-1");
+    expect(marks).not.toContain("repo-0=post-0");
   });
 });

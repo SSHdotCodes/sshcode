@@ -32,6 +32,15 @@ export const ServerProviderUsageWindow = Schema.Struct({
   limited: Schema.optional(Schema.Boolean),
   resetsAt: Schema.optional(IsoDateTime),
   windowDurationMins: Schema.optional(NonNegativeInt),
+  includedBudget: Schema.optional(
+    Schema.Struct({
+      amount: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
+      currency: Schema.String.check(Schema.isPattern(/^[A-Z]{3}$/u)),
+    }),
+  ),
+  payAsYouGo: Schema.optional(Schema.Boolean),
+  /** Display-only allowance for Usage. */
+  informational: Schema.optional(Schema.Boolean),
   /**
    * How many points this reading rose on each recent day (`YYYY-MM-DD`, the
    * server's local day), counted across resets. Set against the work done on
@@ -79,6 +88,8 @@ export const ServerProviderUsageLimits = Schema.Struct({
   /** Opaque credential identity when the provider does not report an account. */
   credentialFingerprint: Schema.optional(TrimmedNonEmptyString),
   resetCredits: Schema.optional(ServerProviderResetCredits),
+  /** A provider environment variable needed before the plan's limits can be read. */
+  requiredApiKey: Schema.optional(TrimmedNonEmptyString),
   /** Provider-owned usage settings when quota windows are not available to the client. */
   externalUsage: Schema.optional(
     Schema.Struct({

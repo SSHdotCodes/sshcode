@@ -110,6 +110,7 @@ export function usageWindowsForModel(
   const slug = normalize(model);
   const name = normalize(provider.models.find((entry) => entry.slug === model)?.name ?? "");
   return limits.windows.filter((window) => {
+    if (window.informational) return false;
     // The models a limit names come before anything its label suggests. An empty list on a
     // label without a scope is an account-wide limit that names nobody, and still counts.
     const scopeIndex = window.label.lastIndexOf(" · ");
@@ -137,7 +138,7 @@ export function usageLimitModelIds(
   windowIds?: ReadonlyArray<string>,
 ): ReadonlyArray<string> | undefined {
   if (!provider.usageLimits || provider.usageLimits.unavailable) return undefined;
-  const windows = provider.usageLimits.windows;
+  const windows = provider.usageLimits.windows.filter((window) => !window.informational);
   const isScoped = (window: ServerProviderUsageWindow) =>
     (window.modelIds?.length ?? 0) > 0 ||
     (window.providerIds?.length ?? 0) > 0 ||

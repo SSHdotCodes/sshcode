@@ -896,6 +896,9 @@ const make = Effect.gen(function* () {
             yield* setupTracker.stageStatus(threadId, "setup-script", "failed", "still running");
             setupNotice = setupFailureNotice(`was still running after ${SUBAGENT_SETUP_TIMEOUT}`);
           } else {
+            // The script has exited. Recording its warm-worktree receipt must
+            // finish before this agent starts, but another setup can run now.
+            yield* releaseSetupGate;
             const { exitCode } = completion.value;
             yield* setupTracker.stage(threadId, "setup-script", {
               status: exitCode === 0 ? "done" : "failed",

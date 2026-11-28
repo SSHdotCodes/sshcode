@@ -138,6 +138,7 @@ export function sidebarLastMessagePreview(items: readonly OrchestrationV2Project
     const preview = threadMessagePreview({
       role: item.type === "user_message" ? "user" : "assistant",
       text: item.text,
+      ...(item.type === "user_message" ? { id: item.messageId } : {}),
     });
     if (preview) return preview;
   }

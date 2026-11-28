@@ -1,3 +1,4 @@
+import { isPersonMessage } from "@t3tools/shared/teamBoardNote";
 import type { ProjectId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import type { EnvironmentThreadShell } from "./models.ts";
@@ -11,6 +12,10 @@ export interface ThreadSortInput {
   readonly messages?: ReadonlyArray<{
     readonly createdAt: string;
     readonly role: string;
+    readonly id?: string;
+    readonly notification?: unknown;
+    readonly createdBy?: string;
+    readonly creationSource?: string;
   }>;
 }
 
@@ -90,7 +95,8 @@ function getLatestUserMessageTimestamp(thread: ThreadSortInput): number {
   let latestUserMessageTimestamp: number | null = null;
 
   for (const message of thread.messages ?? []) {
-    if (message.role !== "user") continue;
+    // A notice in the chat (team board, monitor, task) is not something the person said.
+    if (!isPersonMessage(message)) continue;
     const messageTimestamp = toSortableTimestamp(message.createdAt);
     if (messageTimestamp === null) continue;
     latestUserMessageTimestamp =

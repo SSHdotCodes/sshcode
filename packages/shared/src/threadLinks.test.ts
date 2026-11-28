@@ -86,6 +86,42 @@ describe("thread links", () => {
     expect(relabelThreadLinks(markdown, () => "New")).toBe(markdown.replace("[old]", "[New]"));
   });
 
+  it.each(
+    [
+      ["Stray ` tick", `> ${after} and \`code\``],
+      ["> Stray ` tick", `> > ${after} and \`code\``],
+      ["- Stray ` tick", `  > ${after} and \`code\``],
+      ["> Use `example", `> ${hidden} end\``, `> ${after}`],
+      ["> > Use `example", `> > ${hidden} end\``, `> > ${after}`],
+      ["> Use `example", `${hidden} end\``, after],
+      ["Use `example", `    > ${hidden} end\``, after],
+      ["> Use `example", `>     > ${hidden} end\``, `> ${after}`],
+      ["> Intro", "Use `example", `> ${hidden} end\``, `> ${after}`],
+      ["> > Intro", "> Use `example", `> > ${hidden} end\``, `> > ${after}`],
+      ["1. Stray ` tick", `    > ${after} and \`code\``],
+      ["1. Intro", "", "    Stray ` tick", `    > ${after} and \`code\``],
+      ["- Intro", "", "Use `example", `    > ${hidden} end\``, after],
+    ].map((lines) => [lines.join("\n")]),
+  )("relabels links outside blockquote code in %j", (markdown) => {
+    expect(relabelThreadLinks(markdown, () => "New")).toBe(markdown.replace("[old]", "[New]"));
+  });
+
+  it("keeps a link literal in a code span right after an escaped backtick", () => {
+    for (const ticks of ["`", "``"]) {
+      const markdown = "\\`" + ticks + hidden + ticks + " " + after;
+      expect(relabelThreadLinks(markdown, () => "New")).toBe(markdown.replace("[old]", "[New]"));
+    }
+    const markdown = "\\\\``" + after + "`";
+    expect(relabelThreadLinks(markdown, () => "New")).toBe(markdown.replace("[old]", "[New]"));
+  });
+
+  it.each(["\r", "\r\n", "\n"])("keeps fenced thread links literal with %j line endings", (eol) => {
+    for (const fence of ["~~~", "```"]) {
+      const markdown = [fence, hidden, fence, after].join(eol);
+      expect(relabelThreadLinks(markdown, () => "New")).toBe(markdown.replace("[old]", "[New]"));
+    }
+  });
+
   it("relabels links with the current title and leaves unknown threads alone", () => {
     const titles = new Map([["renamed", "Fix [the] build\nnow"]]);
     expect(

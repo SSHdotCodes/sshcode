@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import {
   CHATGPT_USAGE_URL,
   collectLimitAccounts,
@@ -14,7 +15,10 @@ import {
   type LimitPool,
   type LimitPoolMember,
   type LimitPoolWindow,
+  limitPoolIconUrl,
   limitsClock,
+  mistralPayAsYouGoNotices,
+  monthlyBudgetDetail,
   isUsageWindowLimited,
   remainingPercent,
   remainingPercentLabel,
@@ -110,6 +114,7 @@ function AccountAvatar({
           String(account.driver)
         }
         accentColor={account.accentColor}
+        acpRegistryIconUrl={account.iconUrl}
         showBadge={Boolean(account.displayName)}
         indicatorBackground="var(--popover)"
         className={cn("size-5", className)}
@@ -661,6 +666,7 @@ function PoolSection({
         <ProviderInstanceIcon
           driverKind={pool.driver}
           displayName={label}
+          acpRegistryIconUrl={limitPoolIconUrl(pool)}
           indicatorBackground="var(--background)"
           className="size-5"
           iconClassName="size-4 text-foreground/80"
@@ -675,6 +681,11 @@ function PoolSection({
       {older.length > 0 ? (
         <p className="text-xs text-muted-foreground tabular-nums">{older.join(" · ")}</p>
       ) : null}
+      {mistralPayAsYouGoNotices(windows).map((notice) => (
+        <p key={notice} className="text-xs text-muted-foreground">
+          {notice}
+        </p>
+      ))}
       <PoolForecast driver={pool.driver} windows={windows} now={now} />
       {windows.map((window) => {
         const details = pool.driver === "cursor" ? cursorUsageWindowDetails(window.id) : undefined;
@@ -686,7 +697,7 @@ function PoolSection({
             color={color}
             now={now}
             label={details?.label}
-            description={details?.description}
+            description={details?.description ?? monthlyBudgetDetail(window)}
             note={shared ? describeLimitForecast(shared, now, clock).text : undefined}
           />
         );
@@ -714,6 +725,18 @@ function UnreadPlan({ account }: { readonly account: LimitAccount }) {
         </span>
       ) : null}
       <span className="text-muted-foreground">{account.notice}</span>
+      {account.limits.requiredApiKey && account.redeem && "instanceId" in account.redeem.input ? (
+        <Link
+          to="/settings/providers"
+          search={{
+            environmentId: account.redeem.environmentId,
+            instanceId: account.redeem.input.instanceId,
+          }}
+          className="self-start text-foreground underline underline-offset-2"
+        >
+          Add {account.limits.requiredApiKey} in provider settings
+        </Link>
+      ) : null}
     </div>
   );
 }

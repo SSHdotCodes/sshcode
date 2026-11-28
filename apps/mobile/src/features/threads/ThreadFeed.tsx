@@ -40,7 +40,11 @@ import {
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { markLoad } from "@t3tools/client-runtime/load-marks";
-import { useViewabilityAmount, type LegendListRef } from "@legendapp/list/react-native";
+import {
+  useSyncLayout,
+  useViewabilityAmount,
+  type LegendListRef,
+} from "@legendapp/list/react-native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { HandoffEndpoints } from "@t3tools/client-runtime/handoff";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
@@ -250,6 +254,7 @@ import type { ThreadContentPresentation } from "./threadContentPresentation";
 import {
   resolveThreadFeedLiveFollow,
   shouldPinThreadFeedOpeningToEnd,
+  threadFeedIsAtEnd,
   type ThreadFeedLiveFollowEvent,
   type ThreadWorkGroupScrollPosition,
 } from "./thread-feed-live-follow";
@@ -2757,6 +2762,11 @@ const ThreadFeedRowContent = memo(function ThreadFeedRowContent(props: {
 }) {
   const { item, shared, rowStore } = props;
   const slice = useThreadFeedRowVolatileSlice(rowStore, item);
+  const syncRowLayout = useSyncLayout();
+  useLayoutEffect(() => {
+    // The row store can reveal the footer without re-rendering LegendList's container.
+    if (Platform.OS === "ios" && slice.isFinalAssistant) syncRowLayout();
+  }, [slice.isFinalAssistant, syncRowLayout]);
   const snapshot = rowStore.getSnapshot();
   const decoration =
     slice.decorationDay !== null || slice.decorationIsNew || slice.decorationGrouped
@@ -2893,6 +2903,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
   const [viewportHeight, setViewportHeight] = useState(0);
   const isPhone = Platform.OS === "ios" && !Platform.isPad;
+  const usesNativeAutomaticInsets =
+    props.usesAutomaticContentInsets === true && Platform.OS === "ios";
   const waitingForViewport = isPhone && (viewportHeight === 0 || viewportWidth === 0);
   const [loadedListKey, setLoadedListKey] = useState<string | null>(null);
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
@@ -2950,7 +2962,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         shouldPinThreadFeedOpeningToEnd({
           followEnabled: endFollowEnabledRef.current,
           userScrollSessionActive: userScrollSessionRef.current,
-          isAtEnd: listState.isAtEnd,
+          isAtEnd: usesNativeAutomaticInsets ? threadFeedIsAtEnd(listState) : listState.isAtEnd,
           contentLength: listState.contentLength,
           scrollLength: listState.scrollLength,
         })
@@ -2958,7 +2970,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         void list?.scrollToEnd({ animated: false });
       }
     });
-  }, [props.listRef]);
+  }, [props.listRef, usesNativeAutomaticInsets]);
   useEffect(() => endOpeningPin, [endOpeningPin]);
   const [interactionState, setInteractionState] = useState<{
     readonly copiedRowId: string | null;
@@ -3005,8 +3017,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const insets = useSafeAreaInsets();
   const topContentInset = props.contentTopInset ?? insets.top + IOS_NAV_BAR_HEIGHT;
   const bottomContentInset = props.contentBottomInset ?? 18;
-  const usesNativeAutomaticInsets =
-    props.usesAutomaticContentInsets === true && Platform.OS === "ios";
   const initialContentInset = deriveThreadFeedInitialContentInset({
     platform: Platform.OS,
     usesNativeAutomaticInsets,
@@ -3312,10 +3322,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     },
     [props.onHeaderMaterialVisibilityChange],
   );
-  const readIsAtEnd = useCallback(
-    () => props.listRef.current?.getState().isAtEnd ?? false,
-    [props.listRef],
-  );
+  const readIsAtEnd = useCallback(() => {
+    const state = props.listRef.current?.getState();
+    return state ? (usesNativeAutomaticInsets ? threadFeedIsAtEnd(state) : state.isAtEnd) : false;
+  }, [props.listRef, usesNativeAutomaticInsets]);
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       // anchorTopInset, not topContentInset: under automatic insets the list
@@ -3755,7 +3765,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         if (listState) {
           transitionEndFollow({
             type: "disclosure-settled",
-            isAtEnd: listState.isAtEnd,
+            isAtEnd: usesNativeAutomaticInsets ? threadFeedIsAtEnd(listState) : listState.isAtEnd,
             userScrollSessionActive: userScrollSessionRef.current,
           });
         }
@@ -3765,7 +3775,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         disclosureSettleSecondFrameRef.current = null;
       });
     });
-  }, [props.listRef, transitionEndFollow]);
+  }, [props.listRef, transitionEndFollow, usesNativeAutomaticInsets]);
 
   const suspendEndScrollMaintenanceForDisclosure = useCallback(
     (anchorKey: string | null) => {
@@ -4194,6 +4204,11 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                   // targets land one safe-area short of the true resting offset.
                   adjustedInsetCompensation={usesNativeAutomaticInsets ? insets.bottom : 0}
                   freeze={props.freeze}
+                  // The latch already captures scroll intent. A new row's estimate can
+                  // temporarily push the computed end beyond LegendList's threshold.
+                  maintainScrollAtEndThreshold={
+                    usesNativeAutomaticInsets ? Number.POSITIVE_INFINITY : undefined
+                  }
                   // Follow the measured end immediately. Animating toward an estimated
                   // end races row measurement when a pending message is acknowledged.
                   maintainScrollAtEnd={

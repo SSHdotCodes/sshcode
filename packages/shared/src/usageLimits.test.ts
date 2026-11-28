@@ -11,6 +11,7 @@ import { poolForecast } from "./usageLimitForecast.ts";
 
 import {
   type LimitAccount,
+  limitPoolIconUrl,
   isUsageLimitsCommand,
   collectProviderUsageLimits,
   sameUsageLimitCommandCoverage,
@@ -26,6 +27,9 @@ import {
   formatResetsIn,
   limitsClock,
   limitsNotice,
+  MISTRAL_USAGE_URL,
+  mistralPayAsYouGoNotices,
+  monthlyBudgetDetail,
   olderReadingAt,
   paceOf,
   providersWithLimits,
@@ -209,6 +213,29 @@ describe("pools", () => {
     checkedAt,
   };
   const laptop = { entry: { target: { label: "Laptop" } } };
+
+  it("carries a registry agent's own mark to its limits section and ring", () => {
+    const iconUrl = "https://cdn.agentclientprotocol.com/registry/v1/latest/mistral-vibe.svg";
+    const vibe = provider({
+      driver: ProviderDriverKind.make("acpRegistry"),
+      instanceId: ProviderInstanceId.make("acpRegistry_mistral_vibe"),
+      iconUrl,
+      usageLimits: { checkedAt, windows: [{ ...weekly, usedPercent: 40 }] },
+    });
+    const codex = provider({
+      usageLimits: { checkedAt, windows: [{ ...weekly, usedPercent: 10 }] },
+    });
+    const accounts = collectLimitAccounts(
+      new Map([
+        [EnvironmentId.make("env-a"), { ...laptop, serverConfig: { providers: [vibe, codex] } }],
+      ]),
+    );
+    const pools = collectLimitPools(accounts, now);
+    const byDriver = new Map(pools.map((pool) => [String(pool.driver), limitPoolIconUrl(pool)]));
+    expect(byDriver.get("acpRegistry")).toBe(iconUrl);
+    // A provider with a built-in mark has none to carry.
+    expect(byDriver.get("codex")).toBeUndefined();
+  });
 
   it("merges one account reported natively on two environments and by a hub into one entry", () => {
     const native = provider({
@@ -1955,6 +1982,74 @@ describe("ChatGPT sharing presentation", () => {
         auth: { status: "unauthenticated", subscriptionSharing: true },
       }),
     ).toBe(false);
+  });
+});
+
+describe("Mistral subscription limits", () => {
+  const externalUsage = { label: "Mistral Subscription", url: MISTRAL_USAGE_URL };
+  const on = (usageLimits: NonNullable<ServerProvider["usageLimits"]>) =>
+    new Map([
+      [
+        EnvironmentId.make("mistral-host"),
+        {
+          entry: { target: { label: "Laptop" } },
+          serverConfig: {
+            providers: [
+              provider({
+                driver: ProviderDriverKind.make("acpRegistry"),
+                instanceId: ProviderInstanceId.make("acpRegistry_mistral-vibe"),
+                displayName: "Mistral Vibe",
+                auth: { status: "unknown" },
+                usageLimits: { ...usageLimits, externalUsage },
+              }),
+            ],
+          },
+        },
+      ],
+    ]);
+
+  it("keeps the no-key plan and the subscription link when the ACP sign-in is unknown", () => {
+    const input = on({
+      checkedAt: window.resetsAt,
+      windows: [],
+      unavailable: {
+        reason: "unsupported",
+        message: "A Mistral API key is needed to report limits.",
+      },
+      requiredApiKey: "MISTRAL_API_KEY",
+    });
+    const [pool] = collectLimitPools(collectLimitAccounts(input, { withNotices: true }), now);
+    expect(pool?.windows).toEqual([]);
+    expect(pool?.unread[0]?.notice).toBe("A Mistral API key is needed to report limits.");
+    expect(collectExternalUsageLinks(input)).toEqual([
+      { ...externalUsage, accounts: ["Mistral Vibe on Laptop"] },
+    ]);
+  });
+
+  it("displays two monthly allowances and one quiet line per enabled overage", () => {
+    const vibe = {
+      ...window,
+      id: "vibe",
+      kind: "monthly" as const,
+      label: "Vibe & Studio",
+      includedBudget: { amount: 275, currency: "USD" },
+      payAsYouGo: true,
+    };
+    const api = {
+      ...vibe,
+      id: "api",
+      label: "API",
+      includedBudget: { amount: 35, currency: "USD" },
+    };
+    const [pool] = collectLimitPools(
+      collectLimitAccounts(on({ checkedAt: window.resetsAt, windows: [vibe, api] })),
+      now,
+    );
+    expect(pool?.windows.map(monthlyBudgetDetail)).toEqual(["of $275 a month", "of $35 a month"]);
+    expect(mistralPayAsYouGoNotices(pool!.windows)).toEqual([
+      "Vibe & Studio pay-as-you-go is on at Mistral: Vibe & Studio use past the included amount is billed.",
+      "API pay-as-you-go is on at Mistral: API use past the included amount is billed.",
+    ]);
   });
 });
 

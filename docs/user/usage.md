@@ -144,6 +144,12 @@ Grok reports the remaining subscription allowance and reset time for its current
 after signing in with `grok login`. Explicit `XAI_API_KEY` connections and custom authentication
 or endpoint configurations do not report subscription limits.
 
+Mistral Vibe shows the **Vibe & Studio** and **API** monthly allowances reported by Mistral,
+including usage from other machines. In web or desktop **Settings → Providers**, add
+`MISTRAL_API_KEY` to the Mistral Vibe instance's environment variables. The Limits page also
+shows when Mistral has enabled pay-as-you-go for either allowance. Manage those settings in
+[Mistral Subscription](https://admin.mistral.ai/subscription).
+
 Google doesn't share limits with apps yet. Google plans appear without bars. When Antigravity
 reports a limit in a chat, the chat shows any reset time it provides.
 

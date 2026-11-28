@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
+import { MASCOT_REACTION_MS, type MascotMoment } from "@t3tools/client-runtime/mascot-moments";
+import { harnessMascotForDriver } from "@t3tools/shared/harnessMascots";
 import { act, createElement, useLayoutEffect, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -11,8 +13,13 @@ const readiness = vi.hoisted(() => ({
 
 // The width native layout would report for a measured text; null reports nothing.
 const textLayout = vi.hoisted(() => ({ width: null as number | null }));
+const nativeGlass = vi.hoisted(() => ({ enabled: false }));
 
 vi.mock("react-native", () => ({
+  AppState: {
+    currentState: "active",
+    addEventListener: () => ({ remove: () => {} }),
+  },
   View: ({ children, testID }: { children: ReactNode; testID?: string }) =>
     createElement("div", { "data-testid": testID }, children),
   Text: ({
@@ -46,15 +53,29 @@ vi.mock("react-native-reanimated", () => {
     Easing: { out: (value: unknown) => value, cubic: () => {} },
     FadeIn: animation,
     FadeOut: animation,
+    LayoutAnimationConfig: ({ children }: { children: ReactNode }) => children,
     ReduceMotion: { System: "system" },
     useAnimatedStyle: (style: () => unknown) => style(),
     useSharedValue: (value: unknown) => useState(() => ({ value }))[0],
     withTiming: (value: unknown) => value,
   };
 });
-vi.mock("expo-glass-effect", () => ({ GlassView: () => null, GlassContainer: () => null }));
+vi.mock("@react-navigation/native", () => ({ useIsFocused: () => true }));
+vi.mock("../../native/v5-workspace-context", async () => {
+  const { createContext } = await import("react");
+  return { NativeWorkspaceTabActivityContext: createContext(null) };
+});
+vi.mock("expo-glass-effect", () => ({
+  GlassView: ({ children }: { children: ReactNode }) =>
+    createElement("div", { "data-native-glass": true }, children),
+  GlassContainer: ({ children }: { children: ReactNode }) => createElement("div", null, children),
+}));
 vi.mock("uniwind", () => ({ withUniwind: (component: unknown) => component }));
-vi.mock("../../native/native-glass", () => ({ NATIVE_LIQUID_GLASS_SUPPORTED: false }));
+vi.mock("../../native/native-glass", () => ({
+  get NATIVE_LIQUID_GLASS_SUPPORTED() {
+    return nativeGlass.enabled;
+  },
+}));
 vi.mock("../../components/AppText", () => ({
   AppText: ({ children }: { children: ReactNode }) => createElement("span", null, children),
 }));
@@ -108,13 +129,17 @@ import { HarnessMascotDriver, HarnessMascotAgentId } from "../../components/Harn
 import {
   compactWorkingLabel,
   FloatingWorkingControl,
+  FLOATING_WORKING_CONTROL_COVERAGE,
+  resolveFloatingWorkingReaction,
   teamBoardCapsuleLabel,
 } from "./floating-working-control";
+import { useTurnMascotMoments } from "./useTurnMascotState";
 
 let root: Root;
 let host: HTMLDivElement;
 beforeEach(() => {
   textLayout.width = null;
+  nativeGlass.enabled = false;
   readiness.ready = new Set(["grok"]);
   readiness.requested = [];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -123,13 +148,14 @@ beforeEach(() => {
 });
 afterEach(() => {
   act(() => root.unmount());
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 const render = (
   driver: string | null,
   mascotState: "done" | "failed" | "idle",
-  mascotMoment: Parameters<typeof FloatingWorkingControl>[0]["mascotMoment"] = null,
+  mascotMoment: MascotMoment | null = null,
   agentId: string | null = null,
 ) =>
   act(() =>
@@ -138,8 +164,11 @@ const render = (
         <HarnessMascotAgentId value={agentId}>
           <FloatingWorkingControl
             colorScheme="light"
-            mascotState={mascotState}
-            mascotMoment={mascotMoment}
+            reaction={resolveFloatingWorkingReaction(
+              mascotState,
+              mascotMoment,
+              harnessMascotForDriver(driver, agentId)?.id ?? null,
+            )}
             status={null}
             devicePreview={null}
             browserPreview={null}
@@ -181,21 +210,120 @@ it("still shows a meaningful moment when its provider is unavailable", () => {
   expect(host.textContent).toBe("Five high fives ✨");
 });
 
-it("waits for the selected registry pet before showing a plain result capsule", () => {
+it("shows the result label while the selected registry pet loads", () => {
   render("acpRegistry", "done", null, "kimi");
   expect(readiness.requested.at(-1)).toBe("kimi");
-  expect(host.innerHTML).toBe("");
+  expect(host.textContent).toBe("Done");
+  expect(host.querySelector("[data-mascot]")).toBeNull();
   readiness.ready.add("kimi");
   render("acpRegistry", "done", null, "kimi");
   expect(host.textContent).toBe("Done");
   expect(host.querySelector("[data-mascot]")?.getAttribute("data-mascot")).toBe("kimi");
   render("acpRegistry", "failed", null, "mistral-vibe");
   expect(readiness.requested.at(-1)).toBe("mistral");
-  expect(host.innerHTML).toBe("");
+  expect(host.textContent).toBe("Stopped");
+  expect(host.querySelector("[data-mascot]")).toBeNull();
   readiness.ready.add("mistral");
   render("acpRegistry", "failed", null, "mistral-vibe");
   expect(host.textContent).toBe("Stopped");
 });
+
+it.each([
+  ["completed", "done", "Done", "acpRegistry"],
+  ["interrupted", "failed", "Stopped", "acpRegistry"],
+  ["completed", "done", null, "unregistered-driver"],
+  ["idle", "idle", null, "acpRegistry"],
+] as const)(
+  "settles a %s turn as %s (label %s, provider %s) in its first commit",
+  (result, state, label, driver) => {
+    vi.useFakeTimers();
+    nativeGlass.enabled = true;
+    const frames: Array<{
+      state: string;
+      capsule: Element | null;
+      coverage: number;
+      text: string | null;
+    }> = [];
+
+    function Turn({ status }: { status: string }) {
+      const working = status === "running";
+      const mascot = useTurnMascotMoments("thread", working, false, status, "run");
+      const workingStatus = working
+        ? ({ kind: "working", startedAt: "2026-11-26T23:00:00.000Z" } as const)
+        : null;
+      const reaction = resolveFloatingWorkingReaction(
+        mascot.state,
+        mascot.moment,
+        harnessMascotForDriver(driver, "kimi")?.id ?? null,
+      );
+      useLayoutEffect(() => {
+        const capsule = host.querySelector("[data-native-glass]");
+        frames.push({
+          state: mascot.state,
+          capsule,
+          coverage:
+            workingStatus !== null || reaction !== null ? FLOATING_WORKING_CONTROL_COVERAGE : 0,
+          text: capsule?.textContent ?? null,
+        });
+      });
+      return (
+        <FloatingWorkingControl
+          colorScheme="dark"
+          reaction={reaction}
+          status={workingStatus}
+          devicePreview={null}
+          browserPreview={null}
+          showScrollToEnd={false}
+          onScrollToEnd={() => {}}
+          agents={null}
+          onOpenAgents={() => {}}
+          queuedCount={0}
+          onOpenQueue={() => {}}
+        />
+      );
+    }
+
+    const observe = (status: string) =>
+      act(() =>
+        root.render(
+          <HarnessMascotDriver value={driver}>
+            <HarnessMascotAgentId value="kimi">
+              <Turn status={status} />
+            </HarnessMascotAgentId>
+          </HarnessMascotDriver>,
+        ),
+      );
+
+    observe("running");
+    const capsule = host.querySelector("[data-native-glass]");
+    expect(capsule?.textContent).toContain("Working");
+    frames.length = 0;
+    observe(result);
+    expect(frames[0]).toEqual({
+      state,
+      capsule: label === null ? null : capsule,
+      coverage: label === null ? 0 : FLOATING_WORKING_CONTROL_COVERAGE,
+      text: label,
+    });
+    if (label === null) {
+      act(() => vi.advanceTimersByTime(MASCOT_REACTION_MS));
+      expect(frames.every((frame) => frame.capsule === null && frame.coverage === 0)).toBe(true);
+      return;
+    }
+    expect(frames.every((frame) => frame.capsule === capsule)).toBe(true);
+    expect(frames.every((frame) => frame.coverage === FLOATING_WORKING_CONTROL_COVERAGE)).toBe(
+      true,
+    );
+    expect(capsule?.textContent).toBe(label);
+    expect(capsule?.querySelector("[data-mascot]")).toBeNull();
+    readiness.ready.add("kimi");
+    observe(result);
+    expect(host.querySelector("[data-native-glass]")).toBe(capsule);
+    expect(capsule?.querySelector("[data-mascot]")).not.toBeNull();
+    act(() => vi.advanceTimersByTime(MASCOT_REACTION_MS));
+    expect(frames.at(-1)).toEqual({ state: "idle", capsule: null, coverage: 0, text: null });
+  },
+);
 
 it("keeps meaningful moment text visible while its pet is loading", () => {
   render("acpRegistry", "done", { kind: "returned", text: "Ready for you ✨" }, "kimi");
@@ -208,8 +336,7 @@ it("keeps a held-only bar visible with queue actions and no working claim", () =
     root.render(
       <FloatingWorkingControl
         colorScheme="light"
-        mascotState="idle"
-        mascotMoment={null}
+        reaction={null}
         status={{
           kind: "background",
           label: "Held: Discord levels · since Oct 27, 2026",
@@ -249,8 +376,7 @@ it("swaps the rate for time left and draws a bar when the agent reports progress
       root.render(
         <FloatingWorkingControl
           colorScheme="light"
-          mascotState="idle"
-          mascotMoment={null}
+          reaction={null}
           status={{
             kind: "working",
             startedAt: "2026-11-26T23:00:00.000Z",
@@ -306,6 +432,35 @@ it("shortens the team board label as other capsule segments join it", () => {
   });
 });
 
+it("puts a question for the person ahead of the team board's counts", () => {
+  const board = { postCount: 11, overlapCount: 1, questions: 1 };
+  // The question replaces the board's name and post count, so the pill never cuts it off,
+  // even at the largest standard text size.
+  expect(teamBoardCapsuleLabel(board, { beside: null })).toEqual({
+    lead: "",
+    questions: "1 question for you",
+    overlaps: " · 1 overlap",
+  });
+  expect(teamBoardCapsuleLabel(board, { beside: "segments" })).toEqual({
+    lead: "",
+    questions: "1 question for you",
+    overlaps: " · 1 overlap",
+  });
+  // Beside the working status it stands alone: bare counts next to it would not read.
+  expect(teamBoardCapsuleLabel(board, { beside: "status" })).toEqual({
+    lead: "",
+    questions: "1 for you",
+    overlaps: null,
+  });
+  expect(
+    teamBoardCapsuleLabel({ postCount: 4, overlapCount: 0, questions: 2 }, { beside: null }),
+  ).toEqual({ lead: "", questions: "2 questions for you", overlaps: null });
+  // No question: the label is what it was.
+  expect(
+    teamBoardCapsuleLabel({ postCount: 6, overlapCount: 1, questions: 0 }, { beside: null }),
+  ).toEqual({ lead: "Team board · 6 posts", overlaps: " · 1 overlap" });
+});
+
 it("keeps the compact working text whole or drops it to elapsed alone", () => {
   const label = (fullWidth: number | null) =>
     compactWorkingLabel({ elapsed: "57s", detail: "3 min left", width: 120, fullWidth });
@@ -326,8 +481,7 @@ it("beside team board counts, shows elapsed and time left without Working while 
       root.render(
         <FloatingWorkingControl
           colorScheme="light"
-          mascotState="idle"
-          mascotMoment={null}
+          reaction={null}
           status={{
             kind: "working",
             startedAt: "2026-11-26T23:00:00.000Z",

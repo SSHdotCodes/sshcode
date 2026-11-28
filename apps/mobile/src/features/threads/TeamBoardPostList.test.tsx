@@ -17,8 +17,17 @@ type Props = { readonly children?: ReactNode; readonly className?: string };
 vi.mock("react-native", () => ({
   View: ({ children, className }: Props) =>
     createElement("div", { "data-class": className }, children),
-  Pressable: ({ children, className }: Props) =>
-    createElement("div", { "data-class": className }, children),
+  Pressable: ({
+    children,
+    className,
+    onPress,
+    accessibilityLabel,
+  }: Props & { onPress?: () => void; accessibilityLabel?: string }) =>
+    createElement(
+      "div",
+      { "data-class": className, onClick: onPress, "aria-label": accessibilityLabel },
+      children,
+    ),
 }));
 vi.mock("@legendapp/list/react-native", () => ({
   // Renders every item; on a phone only the ones near the screen mount.
@@ -52,11 +61,22 @@ vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({ themeAppearance: "light" }),
 }));
 
-import { TeamBoardPostList } from "./TeamBoardPostList";
+import { TeamBoardPeople, TeamBoardPostList, teamBoardChipHitSlop } from "./TeamBoardPostList";
 
 const start = DateTime.makeUnsafe("2026-11-27T02:00:00Z");
 const kite = NodeId.make("task-kite");
-const drivers = new Map<string, ProviderDriverKind>([[kite, "codex" as ProviderDriverKind]]);
+const drivers = new Map([
+  [
+    kite as string,
+    {
+      title: "Fix the parser",
+      driver: "codex" as ProviderDriverKind,
+      providerInstanceId: null,
+      model: "gpt-5",
+      childThreadId: "child-kite",
+    },
+  ],
+]);
 const onReply = () => {};
 
 const post = (index: number, replyTo?: string): TeamBoardPost => ({
@@ -180,4 +200,93 @@ it("virtualizes a 300-post thread by reply, keeping the reply line", () => {
   expect(rendered.avatars).toBe(2);
   const moved = [...host.querySelectorAll('[data-class~="border-b"]')];
   expect(moved.map((node) => node.textContent)).toEqual([expect.stringContaining("Post 300")]);
+});
+
+it("says who sent each post and opens that subagent's chat on tap", () => {
+  const opened: string[] = [];
+  act(() =>
+    root.render(
+      <TeamBoardPeople value={{ providers: [], onOpen: (threadId) => opened.push(threadId) }}>
+        <TeamBoardPostList
+          posts={[post(1)]}
+          filter="all"
+          taskId={null}
+          emptyText="Nothing here yet."
+          drivers={drivers}
+          onReply={onReply}
+        />
+      </TeamBoardPeople>,
+    ),
+  );
+  // The task title the chat's subagent row shows, then the model's short name.
+  expect(textOf("Fix the parser")).toBeDefined();
+  expect(textOf("GPT-5")).toBeDefined();
+  const row = host.querySelector('[aria-label="Open Fix the parser"]') as HTMLElement;
+  act(() => row.click());
+  expect(opened).toEqual(["child-kite"]);
+});
+
+it("names whom a post is for and collapses a thread to its reply count", () => {
+  const question: TeamBoardPost = {
+    id: "q",
+    author: { name: "Kite", taskId: kite },
+    kind: "question",
+    text: "Can you check the parser?",
+    at: start,
+    to: "you",
+  };
+  const replies = [1, 2].map((index): TeamBoardPost => ({
+    id: `r${index}`,
+    author: { name: "Sam", user: true },
+    kind: "message",
+    text: `Answer ${index}`,
+    at: DateTime.add(start, { seconds: index }),
+    replyTo: "q",
+  }));
+  act(() =>
+    root.render(
+      <TeamBoardPostList
+        posts={[question, ...replies]}
+        filter="all"
+        taskId={null}
+        emptyText="Nothing here yet."
+        drivers={drivers}
+        onReply={onReply}
+      />,
+    ),
+  );
+  expect(textOf("→")).toBeDefined();
+  expect(textOf("You")).toBeDefined();
+  expect(textOf("Answer 2")).toBeDefined();
+  act(() => (textOf("Hide replies").parentElement as HTMLElement).click());
+  expect(textOf("2 replies")).toBeDefined();
+  expect([...host.querySelectorAll("span")].some((node) => node.textContent === "Answer 2")).toBe(
+    false,
+  );
+});
+
+it("chip touch rule: every chip with room around it takes taps 44 pt wide, and neighbours never overlap", () => {
+  const gap = 6;
+  for (const count of [1, 2, 5, 9])
+    for (const widths of [
+      Array.from({ length: count }, () => 36),
+      Array.from({ length: count }, (_, index) => 30 + index * 9),
+      Array.from({ length: count }, () => 120),
+    ]) {
+      const slops = widths.map((width, index) => teamBoardChipHitSlop(width, index, count, 6));
+      for (const [index, slop] of slops.entries()) {
+        expect(slop.top).toBe(6);
+        expect(slop.bottom).toBe(6);
+        // A chip between two others can grow only into half of each gap.
+        const room = (index === 0 ? 20 : gap / 2) + (index === count - 1 ? 20 : gap / 2);
+        expect(widths[index]! + slop.left + slop.right).toBeGreaterThanOrEqual(
+          Math.min(44, widths[index]! + room),
+        );
+        const next = slops[index + 1];
+        if (next !== undefined) expect(slop.right + next.left).toBeLessThanOrEqual(gap);
+      }
+    }
+  // The "All" filter, 36 pt wide and first, reaches 44 pt.
+  const all = teamBoardChipHitSlop(36, 0, 5, 6);
+  expect(36 + all.left + all.right).toBe(44);
 });

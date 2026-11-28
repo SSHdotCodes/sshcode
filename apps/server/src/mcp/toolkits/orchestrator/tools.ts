@@ -75,7 +75,7 @@ const threadMetadataDependencies = [
 
 const OrchestratorCapabilitiesTool = Tool.make("orchestrator_capabilities", {
   description:
-    "Pick providers and models. Defaults to 6 per provider; filter with providerInstanceId or modelSearch and page via cursor=nextCursor. includeOptions adds model settings. Search explicitly for legacy/superseded ids. images:false means text only. Avoid accountUnavailable or recentFailure; credit warnings allow retry. Quotas: usage_limits.",
+    "Pick providers and models. Defaults to 6 per provider; filter with providerInstanceId or modelSearch and page via cursor=nextCursor. includeOptions adds model settings. Search explicitly for legacy/superseded ids. images:false means text only; audioVideo:true reads audio/video files. Avoid accountUnavailable or recentFailure; credit warnings allow retry. Quotas: usage_limits.",
   parameters: OrchestratorMcpCapabilitiesInput,
   success: OrchestratorMcpCapabilitiesResult,
   failure: OrchestratorMcpFailure,

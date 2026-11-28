@@ -17,17 +17,36 @@ export const RecordedGrade = Schema.Struct({
 });
 export type RecordedGrade = typeof RecordedGrade.Type;
 
+const TaskGrade = Schema.Struct({ taskId: NodeId, ...RecordedGrade.fields });
+
+const Outcome = Schema.Literals(["completed", "failed", "cancelled", "interrupted"]);
+
+/**
+ * A follow-up assignment (t3_thread_send) continues its original run's child thread. It is
+ * not a run of its own; its outcome, grade and thumb count inside the original run.
+ * Outcome and finish time are missing for grades attached before its completion was recorded.
+ */
+export const FollowUp = Schema.Struct({
+  taskId: NodeId,
+  outcome: Schema.optionalKey(Outcome),
+  finishedAt: Schema.optionalKey(Schema.Number),
+  grade: Schema.optionalKey(RecordedGrade),
+  thumb: Schema.optionalKey(SubagentThumb),
+});
+export type FollowUp = typeof FollowUp.Type;
+
 export const RunRecord = Schema.Struct({
   taskId: NodeId,
   instanceId: ProviderInstanceId,
   model: Schema.String,
   family: Schema.String,
   kind: SubagentTaskKind,
-  outcome: Schema.Literals(["completed", "failed", "cancelled", "interrupted"]),
+  outcome: Outcome,
   elapsedMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   fixRounds: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   finishedAt: Schema.Number,
   grade: Schema.optionalKey(RecordedGrade),
+  followUps: Schema.optionalKey(Schema.Array(FollowUp)),
   thumb: Schema.optionalKey(SubagentThumb),
 });
 export type RunRecord = typeof RunRecord.Type;
@@ -35,8 +54,13 @@ export const RankingsState = Schema.Struct({
   // Version 1 stored grades on a 1–5 scale; version 2 uses 1–10.
   version: Schema.Literals([1, 2]),
   runs: Schema.Array(RunRecord),
+  /**
+   * Grades waiting for their run record: an original task's grade until its terminal record
+   * lands, and grades from before follow-ups were attached until startup resolves them.
+   * `runTaskId` names the original run a follow-up grade belongs to.
+   */
   pendingGrades: Schema.optionalKey(
-    Schema.Array(Schema.Struct({ taskId: NodeId, ...RecordedGrade.fields })),
+    Schema.Array(Schema.Struct({ ...TaskGrade.fields, runTaskId: Schema.optionalKey(NodeId) })),
   ),
 });
 export type RankingsState = typeof RankingsState.Type;
@@ -84,16 +108,29 @@ export const FLAG_ONLY_GRADING_SINCE = Date.UTC(2026, 10, 25, 19);
 /** About the mean of the earlier grades that weren't low (8.65), so averages stay comparable. */
 const UNFLAGGED_SCORE = 8.5;
 
-function countsAsUnflagged(run: RunRecord): boolean {
+function countsAsUnflagged(turn: RunRecord | FollowUp): boolean {
   return (
-    run.grade === undefined &&
-    run.thumb === undefined &&
-    run.outcome === "completed" &&
-    run.finishedAt >= FLAG_ONLY_GRADING_SINCE
+    turn.grade === undefined &&
+    turn.thumb === undefined &&
+    turn.outcome === "completed" &&
+    turn.finishedAt !== undefined &&
+    turn.finishedAt >= FLAG_ONLY_GRADING_SINCE
   );
 }
 
-/** Weighted score: one user thumb has four times the weight of a parent grade. */
+/** The run's own turn, then each follow-up assignment that continued it. */
+function turns(run: RunRecord): ReadonlyArray<RunRecord | FollowUp> {
+  return [run, ...(run.followUps ?? [])];
+}
+
+function parentGrades(run: RunRecord): ReadonlyArray<number> {
+  return turns(run).flatMap((turn) => (turn.grade ? [turn.grade.score] : []));
+}
+
+/**
+ * Weighted score: one user thumb has four times the weight of a parent grade. Each follow-up
+ * is scored like the run's own turn, yet the run counts once in `rated`.
+ */
 function score(runs: ReadonlyArray<RunRecord>): {
   readonly average: number;
   readonly rated: number;
@@ -102,19 +139,21 @@ function score(runs: ReadonlyArray<RunRecord>): {
   let total = 0;
   let rated = 0;
   for (const run of runs) {
-    if (run.grade) {
-      total += run.grade.score;
-      weight++;
-    } else if (countsAsUnflagged(run)) {
-      total += UNFLAGGED_SCORE;
-      weight++;
-      rated++;
+    const before = weight;
+    for (const turn of turns(run)) {
+      if (turn.grade) {
+        total += turn.grade.score;
+        weight++;
+      } else if (countsAsUnflagged(turn)) {
+        total += UNFLAGGED_SCORE;
+        weight++;
+      }
+      if (turn.thumb) {
+        total += (turn.thumb === "up" ? SUBAGENT_GRADE_MAX : 1) * 4;
+        weight += 4;
+      }
     }
-    if (run.thumb) {
-      total += (run.thumb === "up" ? SUBAGENT_GRADE_MAX : 1) * 4;
-      weight += 4;
-    }
-    if (run.grade || run.thumb) rated++;
+    if (weight > before) rated++;
   }
   return { average: weight ? total / weight : Number.NaN, rated };
 }
@@ -131,8 +170,10 @@ function summary(runs: ReadonlyArray<RunRecord>): string {
   const mid = Math.floor(n / 2);
   const median = n % 2 ? durations[mid]! : (durations[mid - 1]! + durations[mid]!) / 2;
   const { average, rated } = score(runs);
-  const graded = runs.filter((run) => run.grade !== undefined || countsAsUnflagged(run));
-  const low = graded.filter((run) => run.grade !== undefined && run.grade.score <= 6).length;
+  const graded = runs.filter(
+    (run) => parentGrades(run).length || turns(run).some(countsAsUnflagged),
+  );
+  const low = graded.filter((run) => parentGrades(run).some((grade) => grade <= 6)).length;
   return `${n} ${n === 1 ? "run" : "runs"}, ${rated} rated${done}${Number.isNaN(average) ? "" : ` · ${average.toFixed(1)}/${SUBAGENT_GRADE_MAX}`}${low ? ` · low grades ${low}/${graded.length}` : ""} · ${median < 30_000 ? `${Math.max(1, Math.round(median / 1000))}s` : `${Math.round(median / 60000)}m`} median${rated < 3 ? " · few runs" : ""}`;
 }
 
@@ -167,6 +208,58 @@ function kindNotes(runs: ReadonlyArray<RunRecord>): string {
       ? [` · ${kind} ${average.toFixed(1)}/${SUBAGENT_GRADE_MAX}`]
       : [];
   }).join("");
+}
+
+type PendingGrade = NonNullable<RankingsState["pendingGrades"]>[number];
+
+/** Updates (or adds) one follow-up on its original run; a follow-up appears once. */
+export function withFollowUp(
+  run: RunRecord,
+  taskId: NodeId,
+  change: (followUp: FollowUp) => FollowUp,
+): RunRecord {
+  const followUps = run.followUps ?? [];
+  const index = followUps.findIndex((followUp) => followUp.taskId === taskId);
+  const next = change(index === -1 ? { taskId } : followUps[index]!);
+  return {
+    ...run,
+    followUps:
+      index === -1 ? [...followUps, next] : followUps.map((f, i) => (i === index ? next : f)),
+  };
+}
+
+/**
+ * Puts each grade on the run it was given for: the run itself, or for a follow-up the original
+ * run its `runTaskId` names. A later grade for the same task replaces the earlier one.
+ * Returns the grades whose run record is not (yet) retained.
+ */
+export function attachGrades(
+  runs: ReadonlyArray<RunRecord>,
+  grades: ReadonlyArray<PendingGrade>,
+): { readonly runs: ReadonlyArray<RunRecord>; readonly unattached: ReadonlyArray<PendingGrade> } {
+  const byRun = new Map<string, Array<PendingGrade>>();
+  for (const grade of grades) {
+    const key = grade.runTaskId ?? grade.taskId;
+    const list = byRun.get(key);
+    if (list) list.push(grade);
+    else byRun.set(key, [grade]);
+  }
+  const attached = new Set<PendingGrade>();
+  const next = runs.map((run) => {
+    const incoming = byRun.get(run.taskId);
+    if (incoming === undefined) return run;
+    let result = run;
+    for (const entry of incoming) {
+      attached.add(entry);
+      const { taskId, runTaskId, ...grade } = entry;
+      result =
+        runTaskId === undefined || runTaskId === taskId
+          ? { ...result, grade }
+          : withFollowUp(result, taskId, (followUp) => ({ ...followUp, grade }));
+    }
+    return result;
+  });
+  return { runs: next, unattached: grades.filter((grade) => !attached.has(grade)) };
 }
 
 export function rankingsSnapshot(
@@ -204,11 +297,20 @@ export function rankingsSnapshot(
       ),
     // Follow-up assignments have cards of their own but share the original model run.
     thumbs: [
-      ...runs.map(({ taskId, thumb, grade }) => ({
-        taskId,
-        ...(thumb === undefined ? {} : { thumb }),
-        ...(grade === undefined ? {} : { grade: grade.score }),
-      })),
+      ...runs.flatMap((run) =>
+        turns(run).flatMap(({ taskId, thumb, grade }) =>
+          // A follow-up nobody rated has no card state to publish.
+          taskId !== run.taskId && thumb === undefined && grade === undefined
+            ? []
+            : [
+                {
+                  taskId,
+                  ...(thumb === undefined ? {} : { thumb }),
+                  ...(grade === undefined ? {} : { grade: grade.score }),
+                },
+              ],
+        ),
+      ),
       ...assignmentGrades.map(({ taskId, score }) => ({ taskId, grade: score })),
     ],
   };

@@ -57,7 +57,7 @@ export async function preloadHarnessMascot(id: HarnessMascotId) {
   await mascotComponent(id).load();
 }
 
-/** Plain result capsules wait for a drawable pet rather than showing a blank slot. */
+/** Lets a label render before its optional pet can be drawn. */
 export function useHarnessMascotReady(id: HarnessMascotId | null) {
   const [loaded, setLoaded] = useState<HarnessMascotId | null>(null);
   const ready = id !== null && (components.get(id)?.resolved !== undefined || loaded === id);

@@ -10,6 +10,7 @@ import {
 import { CheckIcon } from "lucide-react";
 import { Badge } from "../ui/badge";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
+import { isEditableFocused } from "~/lib/editableFocus";
 import { cn } from "~/lib/utils";
 import { ComposerBanner } from "./ComposerBanner";
 import ChatMarkdown from "../ChatMarkdown";
@@ -197,14 +198,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       )
         return;
       const target = event.target;
-      if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement ||
-        isInsideComposerFloatingLayer(target)
-      ) {
-        return;
-      }
+      if (isEditableFocused(target) || isInsideComposerFloatingLayer(target)) return;
       if (
         target instanceof HTMLElement &&
         target.closest(

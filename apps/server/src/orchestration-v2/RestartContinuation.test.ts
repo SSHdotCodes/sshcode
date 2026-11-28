@@ -28,6 +28,7 @@ import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
+import { RESTART_CONTINUE_PROMPT, RESTART_LOST_REQUEST_NOTE } from "./RestartBackgroundNote.ts";
 
 const threadId = ThreadId.make("thread:restart");
 const runId = RunId.make("run:restart");
@@ -1124,20 +1125,23 @@ it.effect("stops continuing after three automatic restart continuations in a row
   }),
 );
 
+// A question or approval the restart closed cannot be answered any more: the
+// turn continues and the agent is told to ask again. One still answerable by
+// message stays open and needs no note.
 it.effect.each([
-  ["user_input", "pending", "live", false],
-  ["user_input", "expired", "not_resumable", false],
-  ["user_input", "cancelled", "not_resumable", false],
-  ["command", "pending", "live", false],
-  ["command", "expired", "not_resumable", false],
-  ["user_input", "resolved", "live", true],
-  ["command", "cancelled", "live", true],
-  ["user_input", "pending", "message", true],
-  ["dynamic_tool_call", "pending", "live", true],
-  ["auth_refresh", "pending", "live", true],
+  ["user_input", "pending", "live", true],
+  ["user_input", "expired", "not_resumable", true],
+  ["user_input", "cancelled", "not_resumable", true],
+  ["command", "pending", "live", true],
+  ["command", "expired", "not_resumable", true],
+  ["user_input", "resolved", "live", false],
+  ["command", "cancelled", "live", false],
+  ["user_input", "pending", "message", false],
+  ["dynamic_tool_call", "pending", "live", false],
+  ["auth_refresh", "pending", "live", false],
 ] as const)(
-  "a %s request that is %s with %s capability allows continuation: %s",
-  ([kind, status, capability, shouldContinue]) =>
+  "continues past a %s request that is %s with %s capability; told it was lost: %s",
+  ([kind, status, capability, lost]) =>
     Effect.gen(function* () {
       const base = makeProjection();
       const runtimeRequests = [
@@ -1156,13 +1160,51 @@ it.effect.each([
         },
       ];
       const live = { ...base, runtimeRequests } as unknown as OrchestrationV2ThreadProjection;
-      assert.equal(restartContinuationRun(live, now) !== undefined, shouldContinue);
+      assert.equal(restartContinuationRun(live, now)?.id, runId);
       const cut = {
         ...cutMidTurn(),
         runtimeRequests,
       } as unknown as OrchestrationV2ThreadProjection;
-      assert.lengthOf(yield* continuationTexts(cut), shouldContinue ? 1 : 0);
+      // The shutdown pass closes a live request before the continuation reads it.
+      const closed =
+        status === "pending" && capability === "live"
+          ? ({
+              ...cut,
+              runtimeRequests: [
+                {
+                  ...runtimeRequests[0]!,
+                  status: "cancelled",
+                  responseCapability: { type: "not_resumable", reason: "The server shut down." },
+                },
+              ],
+            } as unknown as OrchestrationV2ThreadProjection)
+          : cut;
+      assert.deepEqual(yield* continuationTexts(closed), [
+        lost
+          ? `${RESTART_LOST_REQUEST_NOTE}\n\n${RESTART_CONTINUE_PROMPT}`
+          : RESTART_CONTINUE_PROMPT,
+      ]);
     }),
+);
+
+it.effect("does not report a request the restart closed on an earlier turn", () =>
+  Effect.gen(function* () {
+    const cut = cutMidTurn();
+    const texts = yield* continuationTexts({
+      ...cut,
+      runtimeRequests: [
+        {
+          id: RuntimeRequestId.make("request:old"),
+          nodeId: NodeId.make("node:old-question"),
+          providerTurnId: "provider-turn:older",
+          kind: "user_input",
+          status: "expired",
+          responseCapability: { type: "not_resumable", reason: "The server restarted." },
+        },
+      ],
+    } as unknown as OrchestrationV2ThreadProjection);
+    assert.deepEqual(texts, [RESTART_CONTINUE_PROMPT]);
+  }),
 );
 
 it.effect("does not wake a snoozed or settled thread, but continues once a snooze elapsed", () =>

@@ -1,72 +1,340 @@
 diff --git a/build/GlassContainer.types.d.ts b/build/GlassContainer.types.d.ts
-index 502f9b037900d62aa5875dc37f0fcb517dec7a44..cc521dcb7e411cba7dfe99f191bbc42ac979849f 100644
 --- a/build/GlassContainer.types.d.ts
 +++ b/build/GlassContainer.types.d.ts
-@@ -1,5 +1,5 @@
+@@ -1,4 +1,4 @@
  import type { Ref } from 'react';
 -import type { View, ViewProps } from 'react-native';
 +import type { ViewInstance, ViewProps } from 'react-native';
  export type GlassContainerProps = {
      /**
-      * The distance at which glass elements start affecting each other.
-@@ -7,5 +7,5 @@ export type GlassContainerProps = {
-      * @default undefined
+@@ -8,4 +8,4 @@
       */
      spacing?: number;
 -    ref?: Ref<View>;
 +    ref?: Ref<ViewInstance>;
  } & ViewProps;
 diff --git a/build/GlassView.types.d.ts b/build/GlassView.types.d.ts
-index a09487b1b3ef2e4d89b19e2bad81f99fc532d94d..eeadfff1dcd891bf581ef6be0493e2a6eda0849a 100644
 --- a/build/GlassView.types.d.ts
 +++ b/build/GlassView.types.d.ts
-@@ -1,5 +1,5 @@
+@@ -1,4 +1,4 @@
  import type { Ref } from 'react';
 -import type { ColorValue, View, ViewProps } from 'react-native';
 +import type { ColorValue, ViewInstance, ViewProps } from 'react-native';
  export type GlassStyle = 'clear' | 'regular' | 'none';
  export type GlassEffectStyleConfig = {
-     /**
-@@ -40,5 +40,5 @@ export type GlassViewProps = {
-      * @default 'auto'
+@@ -41,4 +41,6 @@
       */
      colorScheme?: GlassColorScheme;
 -    ref?: Ref<View>;
++    /** Background until the native effect is installed. Also opts in to lifecycle recovery. */
++    fallbackColor?: ColorValue;
 +    ref?: Ref<ViewInstance>;
  } & ViewProps;
+diff --git a/ios/GlassContainer.swift b/ios/GlassContainer.swift
+--- a/ios/GlassContainer.swift
++++ b/ios/GlassContainer.swift
+@@ -8,4 +8,5 @@
+
+   private var containerSpacing: CGFloat?
++  private var needsEffectRefresh = false
+
+   public required init(appContext: AppContext? = nil) {
+@@ -15,4 +16,9 @@
+
+     addSubview(containerEffectView)
++    if #available(iOS 17.0, tvOS 17.0, *) {
++      registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: GlassContainer, _) in
++        view.requestEffectRefresh()
++      }
++    }
+   }
+
+@@ -31,17 +37,39 @@
+     if containerSpacing != spacing {
+       containerSpacing = spacing
+-      guard isGlassContainerEffectAvailable() else {
+-        return
++      installEffect()
++    }
++  }
++
++  public override func didMoveToWindow() {
++    super.didMoveToWindow()
++    GlassRenderingRecovery.shared.track(self, attached: window != nil)
++    requestEffectRefresh()
++  }
++
++  func requestEffectRefresh() {
++    guard window != nil else { return }
++    needsEffectRefresh = true
++    setNeedsLayout()
++  }
++
++  public override func layoutSubviews() {
++    if needsEffectRefresh {
++      needsEffectRefresh = false
++      installEffect()
++    }
++    super.layoutSubviews()
++  }
++
++  private func installEffect() {
++    guard isGlassContainerEffectAvailable() else { return }
++    if #available(iOS 26.0, tvOS 26.0, macOS 26.0, *) {
++      #if compiler(>=6.2)
++      let effect = UIGlassContainerEffect()
++      if let spacing = containerSpacing {
++        effect.spacing = spacing
+       }
+-      if #available(iOS 26.0, tvOS 26.0, macOS 26.0, *) {
+-        #if compiler(>=6.2) // Xcode 26
+-        let effect = UIGlassContainerEffect()
+-        if let spacing = spacing {
+-          effect.spacing = spacing
+-        }
+-        containerEffectView.effect = effect
+-        containerEffect = effect
+-        #endif
+-      }
++      containerEffectView.effect = effect
++      containerEffect = effect
++      #endif
+     }
+   }
+diff --git a/ios/GlassEffectModule.swift b/ios/GlassEffectModule.swift
+--- a/ios/GlassEffectModule.swift
++++ b/ios/GlassEffectModule.swift
+@@ -47,4 +47,8 @@
+           view.setGlassStyle(.regular)
+         }
++      }
++
++      Prop("fallbackColor") { (view, color: UIColor?) in
++        view.setFallbackColor(color)
+       }
+
+diff --git a/ios/GlassView.swift b/ios/GlassView.swift
+--- a/ios/GlassView.swift
++++ b/ios/GlassView.swift
+@@ -3,4 +3,5 @@
+ import ExpoModulesCore
+ import React
++import os
+
+ public final class GlassView: ExpoView {
+@@ -17,4 +18,5 @@
+   private var glassIsInteractive: Bool?
+   private var glassColorScheme: GlassColorScheme?
++  private var fallbackColor: UIColor?
+
+   private var radius: CGFloat?
+@@ -35,4 +37,11 @@
+
+     addSubview(glassEffectView)
++    if #available(iOS 17.0, tvOS 17.0, *) {
++      registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: GlassView, _) in
++        if view.requestEffectRefresh() {
++          GlassRenderingRecovery.shared.recordAppearanceChange()
++        }
++      }
++    }
+   }
+
+@@ -55,4 +64,10 @@
+     super.layoutSubviews()
+     guard !isMounted, isGlassEffectAvailable() else {
++      return
++    }
++    // The in-flow status label starts at width zero while its text is measured.
++    // A layout at that size cannot install a usable backdrop.
++    if fallbackColor != nil, bounds.isEmpty {
++      stopWaitingForVisibility()
+       return
+     }
+@@ -93,4 +108,44 @@
+     glassEffectView.effect = UIVisualEffect()
+     updateEffect()
++    updateFallback()
++  }
++
++  func setFallbackColor(_ color: UIColor?) {
++    let hadFallback = fallbackColor != nil
++    fallbackColor = color
++    updateFallback()
++    if window != nil, hadFallback || color != nil {
++      GlassRenderingRecovery.shared.track(self, attached: color != nil)
++    }
++  }
++
++  private func updateFallback() {
++    glassEffectView.backgroundColor = glassStyle != GlassStyle.none && !hasInstalledGlass ? fallbackColor : nil
++  }
++
++  fileprivate var hasInstalledGlass: Bool {
++    #if compiler(>=6.2)
++    if #available(iOS 26.0, tvOS 26.0, *) {
++      return isMounted && glassEffectView.effect is UIGlassEffect
++    }
++    #endif
++    return false
++  }
++
++  @discardableResult
++  func requestEffectRefresh() -> Bool {
++    #if compiler(>=6.2)
++    if #available(iOS 26.0, tvOS 26.0, *),
++       fallbackColor != nil, window != nil,
++       let style = glassStyle?.toUIGlassEffectStyle(), isGlassEffectAvailable() {
++      isMounted = false
++      glassEffectView.effect = UIVisualEffect()
++      updateFallback()
++      glassEffect = UIGlassEffect(style: style)
++      setNeedsLayout()
++      return true
++    }
++    #endif
++    return false
+   }
+
+@@ -171,4 +226,5 @@
+     if glassStyle != newStyle {
+       glassStyle = newStyle
++      updateFallback()
+       guard isGlassEffectAvailable() else {
+         return
+@@ -180,4 +236,5 @@
+             self.glassEffect = UIGlassEffect(style: uiStyle)
+             self.updateEffect()
++            self.updateFallback()
+           } else {
+             // TODO: revisit this in newer versions of iOS
+@@ -287,6 +344,11 @@
+   func setColorScheme(_ colorScheme: GlassColorScheme) {
+     if glassColorScheme != colorScheme {
++      let previous = glassColorScheme
+       glassColorScheme = colorScheme
+-      updateEffect()
++      if previous != nil, requestEffectRefresh() {
++        GlassRenderingRecovery.shared.recordAppearanceChange()
++      } else {
++        updateEffect()
++      }
+     }
+   }
+@@ -294,8 +356,13 @@
+   public override func didMoveToWindow() {
+     super.didMoveToWindow()
+-    if (self.window == nil) {
++    if fallbackColor != nil {
++      GlassRenderingRecovery.shared.track(self, attached: window != nil)
++    }
++    if window == nil {
+       isMounted = false
+       stopWaitingForVisibility()
++      updateFallback()
+     } else {
++      requestEffectRefresh()
+       // https://github.com/expo/expo/issues/43732
+       // UIGlassEffect must be created during layoutSubviews
+@@ -351,2 +418,69 @@
+   }
+ }
++
++// Only chat surfaces with a fallback and their glass container register here.
++// UIKit can leave their view hierarchy attached while the scene is inactive.
++@MainActor
++final class GlassRenderingRecovery: NSObject {
++  static let shared = GlassRenderingRecovery()
++  private let attached = NSHashTable<UIView>.weakObjects()
++  private let logger = os.Logger(subsystem: "com.t3tools.t3code", category: "glass")
++  private var appearanceLogPending = false
++
++  private override init() {
++    super.init()
++    for name in [UIApplication.didBecomeActiveNotification,
++                 UIApplication.willResignActiveNotification,
++                 UIApplication.didEnterBackgroundNotification,
++                 UIApplication.didReceiveMemoryWarningNotification] {
++      NotificationCenter.default.addObserver(self, selector: #selector(handleLifecycle(_:)), name: name, object: nil)
++    }
++  }
++
++  func track(_ view: UIView, attached isAttached: Bool) {
++    if isAttached {
++      attached.add(view)
++    } else {
++      attached.remove(view)
++    }
++  }
++
++  @objc private func handleLifecycle(_ notification: Notification) {
++    if notification.name == UIApplication.willResignActiveNotification {
++      record("inactive")
++      return
++    }
++    if notification.name == UIApplication.didEnterBackgroundNotification {
++      record("background")
++      return
++    }
++    let active = notification.name == UIApplication.didBecomeActiveNotification
++    record(active ? "active" : "memory-warning")
++    if UIApplication.shared.applicationState != .background {
++      for view in attached.allObjects {
++        (view as? GlassContainer)?.requestEffectRefresh()
++        (view as? GlassView)?.requestEffectRefresh()
++      }
++    }
++  }
++
++  func recordAppearanceChange() {
++    guard !appearanceLogPending else { return }
++    appearanceLogPending = true
++    DispatchQueue.main.async {
++      self.appearanceLogPending = false
++      self.record("appearance")
++    }
++  }
++
++  private func record(_ reason: String) {
++    let views = attached.allObjects.compactMap { $0 as? GlassView }
++    let installed = views.filter(\.hasInstalledGlass).count
++    let sceneStyle = views.first?.window?.traitCollection.userInterfaceStyle.rawValue ?? 0
++    let appState = UIApplication.shared.applicationState.rawValue
++    let glassAPI = (NSClassFromString("UIGlassEffect") as? NSObject.Type)?.responds(to: Selector(("effectWithStyle:"))) ?? false
++    let reduceTransparency = UIAccessibility.isReduceTransparencyEnabled
++    let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
++    logger.notice("glass \(reason, privacy: .public) app=\(appState) style=\(sceneStyle) available=\(glassAPI) installed=\(installed)/\(views.count) reduceTransparency=\(reduceTransparency) lowPower=\(lowPower)")
++  }
++}
 diff --git a/src/GlassContainer.types.ts b/src/GlassContainer.types.ts
-index f57a30713a4a2c1769e4f213a43d29fa17d8c411..fa934d45d488dcbc8cb6396e88f0a2996834367b 100644
 --- a/src/GlassContainer.types.ts
 +++ b/src/GlassContainer.types.ts
-@@ -1,5 +1,5 @@
+@@ -1,4 +1,4 @@
  import type { Ref } from 'react';
 -import type { View, ViewProps } from 'react-native';
 +import type { ViewInstance, ViewProps } from 'react-native';
- 
+
  export type GlassContainerProps = {
-   /**
-@@ -8,5 +8,5 @@ export type GlassContainerProps = {
-    * @default undefined
+@@ -9,4 +9,4 @@
     */
    spacing?: number;
 -  ref?: Ref<View>;
 +  ref?: Ref<ViewInstance>;
  } & ViewProps;
 diff --git a/src/GlassView.types.ts b/src/GlassView.types.ts
-index 7fc30003a9337a12ffb12ffb44a050aae99e9b40..413db6b698055dd00d6ec2cf7b71e4370c85054c 100644
 --- a/src/GlassView.types.ts
 +++ b/src/GlassView.types.ts
-@@ -1,5 +1,5 @@
+@@ -1,4 +1,4 @@
  import type { Ref } from 'react';
 -import type { ColorValue, View, ViewProps } from 'react-native';
 +import type { ColorValue, ViewInstance, ViewProps } from 'react-native';
- 
+
  export type GlassStyle = 'clear' | 'regular' | 'none';
- 
-@@ -44,5 +44,5 @@ export type GlassViewProps = {
-    * @default 'auto'
+@@ -45,4 +45,6 @@
     */
    colorScheme?: GlassColorScheme;
 -  ref?: Ref<View>;
++  /** Background until the native effect is installed. Also opts in to lifecycle recovery. */
++  fallbackColor?: ColorValue;
 +  ref?: Ref<ViewInstance>;
  } & ViewProps;

@@ -17,6 +17,8 @@ import { COMMAND_OUTPUT_FAILURE_SCAN_CHARS, projectTurnItemForWire } from "./Wir
 import * as SubagentRankings from "../subagentRankings/SubagentRankings.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { terminalRunRecord } from "../subagentRankings/recording.ts";
+import { FLAG_ONLY_GRADING_SINCE } from "../subagentRankings/records.ts";
+import { completedFollowUpsSince, rankedRunTaskIds } from "../subagentRankings/runTaskIds.ts";
 import * as Stream from "effect/Stream";
 import { makeThreadFind, findProjectedThreadItems } from "./ThreadFind.ts";
 import type {
@@ -1157,6 +1159,9 @@ function preserveRunRecordedFields(
     ...(next.restartCancelledBackgroundWork === undefined &&
     current.restartCancelledBackgroundWork !== undefined
       ? { restartCancelledBackgroundWork: current.restartCancelledBackgroundWork }
+      : {}),
+    ...(next.explicitQueue === undefined && current.explicitQueue !== undefined
+      ? { explicitQueue: current.explicitQueue }
       : {}),
   };
 }
@@ -2878,6 +2883,29 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       Effect.catchCause((cause) => Effect.logWarning("Could not index chat activity.", { cause })),
     );
     yield* Effect.sleep("30 seconds").pipe(Effect.andThen(indexActivity), Effect.forkScoped);
+    // Grades saved before follow-ups shared their original's run, or before a run was recorded,
+    // wait in the rankings file. Attach those whose run the projection now names exactly, and
+    // record follow-ups that finished before their completions were kept.
+    if (Option.isSome(rankings))
+      yield* Effect.sleep("30 seconds").pipe(
+        Effect.andThen(
+          rankings.value.attachPending((taskIds) =>
+            rankedRunTaskIds(taskIds).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+          ),
+        ),
+        // Follow-ups that completed before their completion was recorded on the original run.
+        Effect.tap(() =>
+          completedFollowUpsSince(FLAG_ONLY_GRADING_SINCE).pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
+            Effect.flatMap((followUps) => rankings.value.record([], followUps)),
+          ),
+        ),
+        Effect.tap((result) => Effect.logInfo("subagent-rankings.pending-grades", result)),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Could not attach waiting subagent grades.", { cause }),
+        ),
+        Effect.forkScoped,
+      );
 
     // For run upserts: a snapshot without `path` keeps the value another event recorded there.
 
@@ -2888,7 +2916,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         THEN json_set(
           ${payload},
           ${path},
-          json_extract(orchestration_v2_projection_runs.payload_json, ${path})
+          orchestration_v2_projection_runs.payload_json -> ${path}
         )
         ELSE ${payload}
       END
@@ -3104,12 +3132,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 payload_json = ${keepRecordedRunField(
                   keepRecordedRunField(
                     keepRecordedRunField(
-                      keepRecordedRunField(sql`excluded.payload_json`, "$.delegatedTaskId"),
-                      "$.carriedTaskIds",
+                      keepRecordedRunField(
+                        keepRecordedRunField(sql`excluded.payload_json`, "$.delegatedTaskId"),
+                        "$.carriedTaskIds",
+                      ),
+                      "$.delegatedCompletion",
                     ),
-                    "$.delegatedCompletion",
+                    "$.restartCancelledBackgroundWork",
                   ),
-                  "$.restartCancelledBackgroundWork",
+                  "$.explicitQueue",
                 )}
             `;
             dispatchHistory.observe(event);
@@ -10588,7 +10619,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
     const prepareSubagentRankings = (events: ReadonlyArray<OrchestrationV2DomainEvent>) =>
       Effect.gen(function* () {
-        if (Option.isNone(rankings)) return [];
+        if (Option.isNone(rankings)) return { records: [], followUps: [] };
         const latest = new Map(
           events.flatMap((event) =>
             event.type === "subagent.updated" && event.payload.childActivity === undefined
@@ -10599,11 +10630,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         const tasks = [...latest.values()].filter((task) =>
           terminalRunRecord(task, { isolated: false, fixRounds: 0 }),
         );
-        if (tasks.length === 0) return [];
+        if (tasks.length === 0) return { records: [], followUps: [] };
         const providers = Option.isSome(rankingProviders)
           ? yield* rankingProviders.value.getProviders
           : [];
         const records = [];
+        const followUps: Array<SubagentRankings.FinishedFollowUp> = [];
         for (const task of tasks) {
           const child =
             task.childThreadId === null
@@ -10611,12 +10643,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               : yield* getThreadRecords(task.childThreadId, ["runs", "messages"], {
                   messageRoles: ["user"],
                 });
-          // t3_thread_send creates another task for the same child, not another model run.
-          if (
-            child?.thread.forkedFrom?.type === "node" &&
-            child.thread.forkedFrom.nodeId !== task.id
-          )
-            continue;
+          // t3_thread_send creates another task for the same child, not another model run:
+          // it is ranked inside the run of the task that forked the child.
+          const originalTaskId =
+            child?.thread.forkedFrom?.type === "node" && child.thread.forkedFrom.nodeId !== task.id
+              ? child.thread.forkedFrom.nodeId
+              : undefined;
           const runs =
             child === undefined
               ? []
@@ -10688,15 +10720,23 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             hasAssistantOutput: row?.has_assistant_output === 1,
             ...(provider === undefined ? {} : { provider }),
           });
-          if (record) records.push(record);
+          if (record === undefined) continue;
+          if (originalTaskId === undefined) records.push(record);
+          else
+            followUps.push({
+              taskId: record.taskId,
+              runTaskId: originalTaskId,
+              outcome: record.outcome,
+              finishedAt: record.finishedAt,
+            });
         }
-        return records;
+        return { records, followUps };
       }).pipe(
-        Effect.map((records) =>
+        Effect.map(({ records, followUps }) =>
           Option.isNone(rankings)
             ? Effect.void
             : rankings.value
-                .record(records)
+                .record(records, followUps)
                 .pipe(
                   Effect.catchCause((cause) =>
                     Effect.logWarning("Could not record subagent rankings.", { cause }),

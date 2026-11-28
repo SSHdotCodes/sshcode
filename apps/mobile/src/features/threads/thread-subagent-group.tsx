@@ -1,5 +1,4 @@
 import { FirstSubagentAsk } from "./FirstSubagentAsk";
-import { TeamBoardPresenceChip } from "./TeamBoardPresenceChip";
 import { SubagentGradeBadge } from "./SubagentGradeBadge";
 import { useAtomValue } from "@effect/atom-react";
 import { connectionWorkLabel, connectionWorkStatus } from "@t3tools/client-runtime/connection";
@@ -277,13 +276,6 @@ export function ThreadSubagentGroup(props: {
                       elapsed={<SubagentElapsed agents={[agent]} />}
                       grade={
                         <>
-                          {agent.origin === "app_owned" ? (
-                            <TeamBoardPresenceChip
-                              environmentId={props.environmentId}
-                              threadId={agent.threadId}
-                              taskId={agent.id}
-                            />
-                          ) : null}
                           <SubagentGradeBadge
                             environmentId={props.environmentId}
                             taskId={agent.id}

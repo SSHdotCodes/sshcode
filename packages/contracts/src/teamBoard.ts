@@ -17,6 +17,8 @@ export const TeamBoardPost = Schema.Struct({
   at: Schema.DateTimeUtc,
   files: Schema.optionalKey(Schema.Array(Schema.String)),
   to: Schema.optionalKey(Schema.String),
+  /** The member `to` names, so clients match by id rather than by title. */
+  toTaskId: Schema.optionalKey(NodeId),
   replyTo: Schema.optionalKey(Schema.String),
   commit: Schema.optionalKey(Schema.String),
   pinned: Schema.optionalKey(Schema.Boolean),
@@ -61,7 +63,16 @@ export const TeamBoardSnapshot = Schema.Struct({
   pushId: Schema.optionalKey(Schema.String),
   /** Live repository choices when a lead has more than one board. The id selects its push. */
   repos: Schema.optionalKey(
-    Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.String })),
+    Schema.Array(
+      Schema.Struct({
+        id: Schema.String,
+        name: Schema.String,
+        /** The repository's newest post, so a reader marks only that repository seen. */
+        latestPostId: Schema.optionalKey(Schema.String),
+        /** The repository's members, so a roster shows only the selected repository's. */
+        members: Schema.optionalKey(Schema.Array(NodeId)),
+      }),
+    ),
   ),
   history: Schema.optionalKey(Schema.Array(TeamBoardPush)),
   historyHasMore: Schema.optionalKey(Schema.Boolean),

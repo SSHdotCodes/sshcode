@@ -611,7 +611,11 @@
       "types": "./src/newChatSmoke.ts",
       "default": "./src/newChatSmoke.ts"
     },
-    "./assets/*": "./assets/*"
+    "./assets/*": "./assets/*",
+    "./work-log/team-board-note": {
+      "types": "./src/work-log/teamBoardNote.ts",
+      "default": "./src/work-log/teamBoardNote.ts"
+    }
   },
   "scripts": {
     "typecheck": "tsc-rs --noEmit",

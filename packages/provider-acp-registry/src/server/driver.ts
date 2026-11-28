@@ -23,6 +23,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
@@ -66,6 +67,7 @@ import * as AcpRegistryAuth from "./auth.ts";
 import * as AcpRegistryAuthenticationState from "./authenticationState.ts";
 import { withDevinLightningSpeed, withoutDevinEffortSuffix } from "./devinAcp.ts";
 import { makeDevinUsageLimitsProbe } from "./devinUsageLimits.ts";
+import { makeMistralUsageLimitsProbe } from "./mistralUsageLimits.ts";
 import { makeAcpRegistryLearnedModelOptions } from "./learnedModelOptions.ts";
 
 const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
@@ -711,6 +713,8 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           return next;
         });
       const isDevin = effectiveConfig.source === "registry" && effectiveConfig.agentId === "devin";
+      const isMistral =
+        effectiveConfig.source === "registry" && effectiveConfig.agentId === "mistral-vibe";
       const withLiveRuntimeState = (input: ServerProvider) =>
         withLiveRuntimeStateUndecorated(input).pipe(
           Effect.map((provider) =>
@@ -773,6 +777,12 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             Effect.provideService(Path.Path, path),
           )
         : undefined;
+      const checkUsageLimits = isMistral
+        ? yield* makeMistralUsageLimitsProbe(processEnvironment.MISTRAL_API_KEY).pipe(
+            Effect.provide(FetchHttpClient.layer),
+            Effect.provideService(Crypto.Crypto, crypto),
+          )
+        : devinUsageProbe?.probe;
       const enrichmentCache = yield* Ref.make<{
         readonly generation: number;
         readonly entry: {
@@ -874,7 +884,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             Effect.flatMap(withLiveRuntimeState),
           ),
         checkProvider,
-        ...(devinUsageProbe === undefined ? {} : { checkUsageLimits: devinUsageProbe.probe }),
+        ...(checkUsageLimits === undefined ? {} : { checkUsageLimits }),
         enrichSnapshot: ({ settings, snapshot, getSnapshot, publishSnapshot: publish }) => {
           const publishSnapshot = (provider: ServerProvider) =>
             Effect.gen(function* () {

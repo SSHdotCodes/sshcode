@@ -17,6 +17,7 @@ import {
   isUsageWindowAlmostOut,
   recentUseBySource,
   usedPercentLabel,
+  limitPoolIconUrl,
 } from "@t3tools/shared/usageLimits";
 import { useNavigate } from "@tanstack/react-router";
 import { BellIcon } from "lucide-react";
@@ -107,6 +108,7 @@ function LimitRing({ ring, now, onOpen }: { ring: StatusRing; now: number; onOpe
               <ProviderInstanceIcon
                 driverKind={driver}
                 displayName={name}
+                acpRegistryIconUrl={limitPoolIconUrl(pool)}
                 className="size-2.5"
                 iconClassName="size-2.5"
               />

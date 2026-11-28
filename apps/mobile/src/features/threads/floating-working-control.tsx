@@ -1,16 +1,11 @@
-import {
-  HarnessMascot,
-  HarnessMascotDriver,
-  HarnessMascotAgentId,
-  useHarnessMascotReady,
-} from "../../components/HarnessMascot";
-import { harnessMascotForDriver, type HarnessMascotState } from "@t3tools/shared/harnessMascots";
+import { HarnessMascot, useHarnessMascotReady } from "../../components/HarnessMascot";
+import type { HarnessMascotId, HarnessMascotState } from "@t3tools/shared/harnessMascots";
 import type { SubagentPillSegment } from "@t3tools/client-runtime/state/thread-subagents";
 import type { MascotMoment } from "@t3tools/client-runtime/mascot-moments";
 import { formatDuration } from "@t3tools/shared/orchestrationTiming";
 import { formatGenerationRate } from "@t3tools/shared/generationRate";
 import { GlassContainer, GlassView } from "expo-glass-effect";
-import { type ReactNode, use, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
   type LayoutChangeEvent,
   Pressable,
@@ -22,6 +17,7 @@ import Animated, {
   Easing,
   FadeIn,
   FadeOut,
+  LayoutAnimationConfig,
   ReduceMotion,
   type SharedValue,
   useAnimatedStyle,
@@ -73,6 +69,7 @@ const LABEL_EXITING = FadeOut.duration(100).reduceMotion(ReduceMotion.System);
 // can otherwise leave the label visible but lose the material behind it.
 const UniwindGlassView = withUniwind(GlassView, {
   style: { fromClassName: "className" },
+  fallbackColor: { fromClassName: "fallbackColorClassName", styleProperty: "accentColor" },
 });
 const UniwindGlassContainer = withUniwind(GlassContainer, {
   style: { fromClassName: "className" },
@@ -82,9 +79,22 @@ const AnimatedGlassView = Animated.createAnimatedComponent(UniwindGlassView);
 const CONTROL_OVERLAY_OFFSET = CONTROL_HEIGHT + CONTROL_GAP - COMPOSER_CAPSULE_INSET;
 export const FLOATING_WORKING_CONTROL_COVERAGE = CONTROL_OVERLAY_OFFSET + CONTROL_GAP;
 
+export function resolveFloatingWorkingReaction(
+  state: HarnessMascotState,
+  moment: MascotMoment | null,
+  mascotId: HarnessMascotId | null,
+) {
+  if (moment !== null && moment.kind !== "waiting") {
+    return { label: moment.text, state: moment.kind === "returned" ? "done" : state, mascotId };
+  }
+  if (mascotId !== null && (state === "done" || state === "failed")) {
+    return { label: state === "done" ? "Done" : "Stopped", state, mascotId };
+  }
+  return null;
+}
+
 export function FloatingWorkingControl(props: {
-  readonly mascotState?: HarnessMascotState;
-  readonly mascotMoment?: MascotMoment | null;
+  readonly reaction: ReturnType<typeof resolveFloatingWorkingReaction>;
   readonly colorScheme: "light" | "dark";
   readonly status: FloatingWorkingStatus | null;
   readonly devicePreview: { readonly count: number; readonly onPress: () => void } | null;
@@ -100,15 +110,14 @@ export function FloatingWorkingControl(props: {
   readonly teamBoard?: {
     readonly postCount: number;
     readonly overlapCount: number;
+    /** Open questions a subagent asked the person on the board. */
+    readonly questions?: number;
     readonly unread: boolean;
     readonly onPress: () => void;
   } | null;
   /** Extra distance to rise above the anchor, e.g. an overlay card's coverage. */
   readonly lift?: SharedValue<number>;
 }) {
-  const mascotDriver = use(HarnessMascotDriver);
-  const mascotAgentId = use(HarnessMascotAgentId);
-  const mascot = harnessMascotForDriver(mascotDriver, mascotAgentId);
   const { width: windowWidth } = useWindowDimensions();
   const [overlayWidth, setOverlayWidth] = useState(windowWidth);
   const [queueWidth, setQueueWidth] = useState(0);
@@ -167,11 +176,9 @@ export function FloatingWorkingControl(props: {
   };
   // Forget the width while no label is shown so the next one appears at its
   // own size instead of animating from the previous label's.
-  const moment = props.mascotMoment?.kind !== "waiting" ? props.mascotMoment : null;
-  const result = props.mascotState === "done" || props.mascotState === "failed";
-  const mascotReady = useHarnessMascotReady(moment != null || result ? (mascot?.id ?? null) : null);
-  const reacting = (mascotReady && result) || moment != null;
-  const hasStatus = props.status !== null || reacting;
+  const reaction = props.reaction;
+  const mascotReady = useHarnessMascotReady(reaction?.mascotId ?? null);
+  const hasStatus = props.status !== null || reaction !== null;
   const hasCapsule = hasStatus || hasQueue || hasAgents || hasPreview || hasBoard;
   useEffect(() => {
     if (!hasStatus) {
@@ -209,48 +216,50 @@ export function FloatingWorkingControl(props: {
   const capsuleInteractive = statusInteractive || hasQueue || hasAgents || hasPreview || hasBoard;
   // The host stays centered on the capsule, but its measurement constraint
   // comes from the overlay, independent of the capsule's current width.
-  const statusContent =
-    reacting && props.status === null ? (
-      <View className="h-11 flex-row items-center gap-1.5 px-3">
-        {mascotReady ? (
-          <HarnessMascot
-            state={moment?.kind === "returned" ? "done" : props.mascotState}
-            size={28}
-          />
-        ) : null}
-        <Text
-          maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
-          className="text-xs text-foreground"
-          numberOfLines={1}
-          style={{ maxWidth: Math.max(0, labelWidth - 48) }}
-        >
-          {moment?.text ?? (props.mascotState === "done" ? "Done" : "Stopped")}
-        </Text>
-      </View>
-    ) : props.status !== null ? (
+  const statusContent = hasStatus ? (
+    <View
+      pointerEvents={statusInteractive ? "box-none" : "none"}
+      className="h-11 items-center justify-center"
+    >
+      <Animated.View className="h-11" style={capsuleSizerStyle} />
       <View
         pointerEvents={statusInteractive ? "box-none" : "none"}
-        className="h-11 items-center justify-center"
+        className="absolute h-11 items-center justify-center"
+        style={{ width: labelWidth }}
       >
-        <Animated.View className="h-11" style={capsuleSizerStyle} />
-        <View
-          pointerEvents={statusInteractive ? "box-none" : "none"}
-          className="absolute h-11 items-center justify-center"
-          style={{ width: labelWidth }}
-        >
-          <FloatingStatusLabel
-            key={
-              props.status.kind === "working" || props.status.kind === "compacting"
-                ? props.status.kind
-                : `${props.status.kind}:${props.status.label}`
-            }
-            status={props.status}
-            onLayout={handleLabelLayout}
-            {...(hasBoard ? { compactWidth: labelWidth - WORKING_LABEL_CHROME } : {})}
-          />
-        </View>
+        {props.status !== null ? (
+          // Preserve status-to-status fades. When switching to a reaction,
+          // remove the outgoing status text before drawing the new label.
+          <LayoutAnimationConfig skipExiting>
+            <Animated.View className="absolute h-11 w-full items-center justify-center">
+              <FloatingStatusLabel
+                key={
+                  props.status.kind === "working" || props.status.kind === "compacting"
+                    ? props.status.kind
+                    : `${props.status.kind}:${props.status.label}`
+                }
+                status={props.status}
+                onLayout={handleLabelLayout}
+                {...(hasBoard ? { compactWidth: labelWidth - WORKING_LABEL_CHROME } : {})}
+              />
+            </Animated.View>
+          </LayoutAnimationConfig>
+        ) : reaction !== null ? (
+          <View className="h-11 flex-row items-center gap-1.5 px-3" onLayout={handleLabelLayout}>
+            {mascotReady ? <HarnessMascot state={reaction.state} size={28} /> : null}
+            <Text
+              maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
+              className="text-xs text-foreground"
+              numberOfLines={1}
+              style={{ maxWidth: Math.max(0, labelWidth - 48) }}
+            >
+              {reaction.label}
+            </Text>
+          </View>
+        ) : null}
       </View>
-    ) : null;
+    </View>
+  ) : null;
 
   // The board gives way: its name goes beside other segments, and beside the working status
   // (live progress included) it keeps only the counts, so both stay readable on a phone.
@@ -265,6 +274,9 @@ export function FloatingWorkingControl(props: {
           accessibilityRole="button"
           accessibilityLabel={[
             "Open team board",
+            (teamBoard.questions ?? 0) > 0
+              ? `${teamBoard.questions} ${teamBoard.questions === 1 ? "question" : "questions"} for you`
+              : null,
             `${teamBoard.postCount} ${teamBoard.postCount === 1 ? "post" : "posts"}`,
             teamBoard.overlapCount > 0
               ? `${teamBoard.overlapCount} ${teamBoard.overlapCount === 1 ? "overlap" : "overlaps"}`
@@ -299,6 +311,17 @@ export function FloatingWorkingControl(props: {
             style={{ flexShrink: 1 }}
           >
             {boardLabel.lead}
+            {boardLabel.questions ? (
+              <>
+                {boardLabel.lead ? " · " : null}
+                <Text
+                  maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
+                  className="font-t3-medium text-xs text-adaptive-amber-700-400"
+                >
+                  {boardLabel.questions}
+                </Text>
+              </>
+            ) : null}
             {boardLabel.overlaps ? (
               <Text
                 maxFontSizeMultiplier={CAPSULE_MAX_FONT_SCALE}
@@ -389,6 +412,7 @@ export function FloatingWorkingControl(props: {
         >
           <AnimatedGlassView
             colorScheme={props.colorScheme}
+            fallbackColorClassName="accent-glass-fallback"
             glassEffectStyle="regular"
             isInteractive={capsuleInteractive}
             pointerEvents={capsuleInteractive ? "box-none" : "none"}
@@ -400,6 +424,7 @@ export function FloatingWorkingControl(props: {
 
           <AnimatedGlassView
             colorScheme={props.colorScheme}
+            fallbackColorClassName="accent-glass-fallback"
             glassEffectStyle={{ style: props.showScrollToEnd ? "regular" : "none", animate: true }}
             isInteractive
             pointerEvents={props.showScrollToEnd ? "auto" : "none"}
@@ -442,6 +467,7 @@ export function FloatingWorkingControl(props: {
       ) : NATIVE_LIQUID_GLASS_SUPPORTED ? (
         <UniwindGlassView
           colorScheme={props.colorScheme}
+          fallbackColorClassName="accent-glass-fallback"
           glassEffectStyle="regular"
           isInteractive
           className="h-11 w-11 items-center justify-center overflow-hidden rounded-full"
@@ -462,13 +488,31 @@ export function FloatingWorkingControl(props: {
 }
 
 export function teamBoardCapsuleLabel(
-  board: { readonly postCount: number; readonly overlapCount: number } | null,
+  board: {
+    readonly postCount: number;
+    readonly overlapCount: number;
+    readonly questions?: number;
+  } | null,
   options: { readonly beside: "status" | "segments" | null },
-): { readonly lead: string; readonly overlaps: string | null } {
+): { readonly lead: string; readonly overlaps: string | null; readonly questions?: string } {
   if (board === null) return { lead: "", overlaps: null };
   const posts = `${board.postCount} ${board.postCount === 1 ? "post" : "posts"}`;
   const overlaps = `${board.overlapCount} ${board.overlapCount === 1 ? "overlap" : "overlaps"}`;
   const hasOverlaps = board.overlapCount > 0;
+  const waiting = board.questions ?? 0;
+  // A question for the person is the one thing the pill must not cut off, at any text size:
+  // it replaces the board's name and post count (the glyph says whose it is), and beside the
+  // working status it stands alone.
+  if (waiting > 0) {
+    if (options.beside === "status") {
+      return { lead: "", overlaps: null, questions: `${waiting} for you` };
+    }
+    return {
+      lead: "",
+      overlaps: hasOverlaps ? ` · ${overlaps}` : null,
+      questions: `${waiting} ${waiting === 1 ? "question" : "questions"} for you`,
+    };
+  }
   if (options.beside === "status") {
     return {
       lead: String(board.postCount),

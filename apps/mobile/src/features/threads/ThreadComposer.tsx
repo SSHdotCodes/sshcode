@@ -419,6 +419,7 @@ export function ComposerSurface(props: {
         <AnimatedGlassSurface
           chrome="none"
           fallbackColor={colors["--color-composer-surface"]}
+          recoverNativeGlass
           fallbackClassName="border border-composer-border"
           glassEffectStyle="regular"
           // The composer is a passive material containing interactive controls.

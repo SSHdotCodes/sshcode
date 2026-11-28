@@ -438,6 +438,8 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
   // Node can finish an in-flight rename after interruption. Wait for each attempt before
   // releasing the install scope, while keeping Windows retry delays interruptible.
 
+  // Node can finish an in-flight rename after interruption. Wait for each attempt before
+  // releasing the install scope, while keeping Windows retry delays interruptible.
   const renameWhenUnlocked = (from: string, to: string) =>
     fileSystem.rename(from, to).pipe(
       Effect.uninterruptible,

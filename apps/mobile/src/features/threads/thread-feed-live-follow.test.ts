@@ -6,6 +6,7 @@ import {
   resolveThreadWorkGroupInitialScroll,
   shouldFollowThreadWorkGroupAppend,
   shouldPinThreadFeedOpeningToEnd,
+  threadFeedIsAtEnd,
 } from "./thread-feed-live-follow";
 
 describe("tool-group scroll restoration", () => {
@@ -225,6 +226,36 @@ describe("resolveThreadFeedLiveFollow", () => {
 
   it("re-arms after an explicit reset", () => {
     expect(resolveThreadFeedLiveFollow(false, { type: "reset" })).toBe(true);
+  });
+});
+
+describe("the followed chat's visible end", () => {
+  it("stays paused when the list reaches the content but the last line is still under the pill", () => {
+    const feed = {
+      isAtEnd: true,
+      contentLength: 3032,
+      scrollLength: 874,
+      scroll: 2068,
+    };
+    const release = (scroll: number) =>
+      resolveThreadFeedLiveFollow(false, {
+        type: "user-scroll-end",
+        isAtEnd: threadFeedIsAtEnd({ ...feed, scroll }),
+        userScrollSessionActive: true,
+      });
+
+    expect(release(feed.scroll)).toBe(false);
+    expect(release(2158)).toBe(true);
+  });
+
+  it("recognizes an underfilled feed resting at its automatic top inset", () => {
+    expect(
+      threadFeedIsAtEnd({
+        contentLength: 766,
+        scrollLength: 874,
+        scroll: -96,
+      }),
+    ).toBe(true);
   });
 });
 

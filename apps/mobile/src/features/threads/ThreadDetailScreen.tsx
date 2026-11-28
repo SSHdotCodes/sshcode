@@ -20,6 +20,7 @@ import { ImageMarkupDraftKey } from "../../components/ImageMarkupContext";
 import {
   harnessMascotCompletedTurnDuration,
   harnessMascotAgentId,
+  harnessMascotForDriver,
 } from "@t3tools/shared/harnessMascots";
 import {
   HarnessMascotDriver,
@@ -190,6 +191,7 @@ import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
 import {
   FLOATING_WORKING_CONTROL_COVERAGE,
   FloatingWorkingControl,
+  resolveFloatingWorkingReaction,
 } from "./floating-working-control";
 import {
   backgroundWorkHasAgentsSheetRows,
@@ -797,14 +799,27 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     props.activityRun?.status,
     props.activityRun?.runId,
   );
-  const showWorkingControl = floatingStatus !== null;
+  const threadMascot = harnessMascotIdentity({
+    driver: agentProvider?.driver ?? null,
+    instanceId: props.selectedThread.modelSelection.instanceId,
+    model: props.selectedThread.modelSelection.model,
+    agentId: harnessMascotAgentId(
+      agentProvider?.driver,
+      agentProvider
+        ? props.serverConfig?.settings.providerInstances[agentProvider.instanceId]?.config
+        : null,
+    ),
+  });
+  const floatingReaction = resolveFloatingWorkingReaction(
+    mascotState,
+    mascotMoment,
+    harnessMascotForDriver(threadMascot.driver, threadMascot.agentId)?.id ?? null,
+  );
   // Mascot reactions also draw a capsule when the working status is gone.
   // Reserve the same pill height and gap until that reaction disappears.
   const showFloatingStatus =
-    showWorkingControl ||
-    mascotState === "done" ||
-    mascotState === "failed" ||
-    (mascotMoment !== null && mascotMoment.kind !== "waiting") ||
+    floatingStatus !== null ||
+    floatingReaction !== null ||
     queuedCount > 0 ||
     agentsSegment !== null ||
     boardPill !== null ||
@@ -1104,18 +1119,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     [discord, props.avatarRuns, props.serverConfig],
   );
   const [chatBackdropEnabled] = useChatBackdropEnabled();
-  const threadMascot = harnessMascotIdentity({
-    driver: providerSubagentProvider?.driver ?? null,
-    instanceId: props.selectedThread.modelSelection.instanceId,
-    model: props.selectedThread.modelSelection.model,
-    agentId: harnessMascotAgentId(
-      providerSubagentProvider?.driver,
-      providerSubagentProvider
-        ? props.serverConfig?.settings.providerInstances[providerSubagentProvider.instanceId]
-            ?.config
-        : null,
-    ),
-  });
   // Providers can report a dated id or alias (claude-haiku-4-5-20251001).
   const providerSubagentModelSlug = providerSubagentProvider
     ? resolveSelectableModel(
@@ -1733,8 +1736,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 <FloatingWorkingControl
                   colorScheme={isDarkMode ? "dark" : "light"}
                   status={discord && floatingStatus?.kind === "working" ? null : floatingStatus}
-                  mascotState={mascotState}
-                  mascotMoment={mascotMoment}
+                  reaction={floatingReaction}
                   lift={floatingControlLift}
                   devicePreview={
                     devicePreviews.length > 0

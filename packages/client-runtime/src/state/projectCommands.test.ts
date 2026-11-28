@@ -43,7 +43,7 @@ const PROJECT = {
 const makeHarness = Effect.fn("TestProjectCommands.makeHarness")(function* () {
   const metadataRequests: string[][] = [];
   const file = { byteLength: 5 };
-  const readResponse = { wait: Effect.void as Effect.Effect<void> };
+  const readResponse = { wait: Effect.void as Effect.Effect<void>, contents: "old" };
   const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
     target: { environmentId: ENVIRONMENT_ID },
     session: yield* SubscriptionRef.make(
@@ -54,7 +54,12 @@ const makeHarness = Effect.fn("TestProjectCommands.makeHarness")(function* () {
             Effect.gen(function* () {
               const byteLength = file.byteLength;
               yield* readResponse.wait;
-              return { relativePath: "foo", byteLength, contents: "old", truncated: false };
+              return {
+                relativePath: "foo",
+                byteLength,
+                contents: readResponse.contents,
+                truncated: false,
+              };
             }),
           [WS_METHODS.projectsWriteFile]: () =>
             Effect.sync(() => {
@@ -123,6 +128,42 @@ const makeHarness = Effect.fn("TestProjectCommands.makeHarness")(function* () {
     commands.openScratch.run(registry, { environmentId: ENVIRONMENT_ID, input: {} }),
   );
   return { registry, storedProject, openScratch, commands, metadataRequests, readResponse };
+});
+
+describe("readFile", () => {
+  it.effect("reads the file afresh when it is reopened after another client changed it", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const query = h.commands.readFile({
+        environmentId: ENVIRONMENT_ID,
+        input: { cwd: "/repo", relativePath: "foo" },
+      });
+      // Stale-while-revalidate refreshes from a task on the registry scheduler;
+      // queue behind it so the read sees the revalidation instead of racing it.
+      const afterScheduledTasks = Effect.callback<void>((resume) => {
+        h.registry.schedulerAsync.makeDispatcher().scheduleTask(() => resume(Effect.void), 0);
+      });
+      const readContents = afterScheduledTasks.pipe(
+        Effect.andThen(AtomRegistry.getResult(h.registry, query, { suspendOnWaiting: true })),
+        Effect.map((result) => result.contents),
+      );
+
+      const closeFile = h.registry.mount(query);
+      expect(yield* readContents).toBe("old");
+      closeFile();
+      yield* afterScheduledTasks;
+
+      // Saved on another device; this client did not write it.
+      h.readResponse.contents = "saved elsewhere";
+      const closeReopenedFile = h.registry.mount(query);
+      try {
+        expect(Option.getOrThrow(AsyncResult.value(h.registry.get(query))).contents).toBe("old");
+        expect(yield* readContents).toBe("saved elsewhere");
+      } finally {
+        closeReopenedFile();
+      }
+    }).pipe(Effect.scoped),
+  );
 });
 
 describe("writeFile metadata", () => {

@@ -20,6 +20,7 @@ import {
   WINDOW_MS,
   rankingsSnapshot,
   retainRuns,
+  type FollowUp,
   type RunRecord,
 } from "./records.ts";
 
@@ -28,6 +29,7 @@ const testLayer = ServerConfig.layerTest(process.cwd(), { prefix: "subagent-rank
 );
 const openService = Rankings.SubagentRankings.pipe(Effect.provide(Rankings.layer));
 const decode = Schema.decodeEffect(Schema.fromJsonString(RankingsState));
+const encodeState = Schema.encodeEffect(Schema.fromJsonString(RankingsState));
 const encodePublic = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const now = 1_000_000_000_000;
 const run = (n = 0, extra: Partial<RunRecord> = {}): RunRecord => ({
@@ -225,7 +227,7 @@ describe("SubagentRankings", () => {
         yield* service.grade(NodeId.make("unknown"), { score: 3 }).pipe(Effect.flip),
       ).toMatchObject({
         operation: "grade",
-        message: "This task has no retained subagent run to rate.",
+        message: "Not ranked.",
       });
       expect(
         yield* service.toggleThumb(NodeId.make("unknown"), "up").pipe(Effect.flip),
@@ -379,6 +381,169 @@ it.effect("persists a grade batch with one atomic save", () =>
       { taskId: run(2).taskId, grade: 9 },
       { taskId: run(1).taskId, grade: 8 },
     ]);
+  }).pipe(Effect.scoped, Effect.provide(testLayer)),
+);
+
+it.effect("puts a follow-up's grade on its original run, once, and counts it in the ranking", () =>
+  Effect.gen(function* () {
+    const service = yield* openService;
+    const original = run(0, { finishedAt: DateTime.toEpochMillis(yield* DateTime.now) - 1000 });
+    yield* service.record([original]);
+    const before = (yield* service.getSnapshot()).models[0]!.stats!;
+    const followUp = NodeId.make("follow-up-1");
+    const graded = yield* service.gradeMany([
+      { taskId: followUp, runTaskId: original.taskId, score: 4, note: "missed the test" },
+    ]);
+    expect(graded.unmatched).toEqual([]);
+    // Grading the same follow-up again replaces its grade instead of adding a second one.
+    yield* service.gradeMany([{ taskId: followUp, runTaskId: original.taskId, score: 3 }]);
+    const after = yield* service.getSnapshot();
+    // TestClock time is before flag-only grading, so the ungraded original turn is unrated.
+    expect(after.models[0]!.stats).toMatchObject({ runs: before.runs, rated: 1, average: 3 });
+    expect(after.models[0]!.yourRuns).toContain("low grades 1/1");
+    expect(after.thumbs).toEqual([{ taskId: original.taskId }, { taskId: followUp, grade: 3 }]);
+    const saved = yield* decode(
+      yield* (yield* FileSystem.FileSystem).readFileString(yield* filePath),
+    );
+    expect(saved.pendingGrades).toBeUndefined();
+    expect(saved.runs[0]?.followUps).toEqual([{ taskId: followUp, grade: { score: 3 } }]);
+    // The original's own grade is a separate judgment of its own turn.
+    yield* service.gradeMany([{ taskId: original.taskId, score: 9 }]);
+    expect((yield* service.getSnapshot()).models[0]!.stats).toMatchObject({ rated: 1, average: 6 });
+  }).pipe(Effect.scoped, Effect.provide(testLayer)),
+);
+
+it.effect("returns a follow-up grade whose original run is not ranked instead of keeping it", () =>
+  Effect.gen(function* () {
+    const service = yield* openService;
+    const followUp = NodeId.make("council-follow-up");
+    const result = yield* service.gradeMany([
+      { taskId: followUp, runTaskId: NodeId.make("council-member"), score: 5 },
+      { taskId: run(1).taskId, score: 7 },
+    ]);
+    expect(result.unmatched).toEqual([followUp]);
+    expect((yield* service.getSnapshot()).thumbs).toEqual([{ taskId: run(1).taskId, grade: 7 }]);
+  }).pipe(Effect.scoped, Effect.provide(testLayer)),
+);
+
+it.effect("attaches grades left waiting by earlier builds once their run is identified", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const at = DateTime.toEpochMillis(yield* DateTime.now) - 1000;
+    const graded = run(0, { finishedAt: at, grade: { score: 8 } });
+    const ungraded = run(1, { finishedAt: at });
+    const legacy = (taskId: string, score: number) => ({ taskId: NodeId.make(taskId), score });
+    const state: RankingsState = {
+      version: 2,
+      runs: [graded, ungraded],
+      pendingGrades: [
+        legacy("follow-up-a", 4),
+        legacy("follow-up-b", 6),
+        legacy("council-member", 7),
+        legacy("unknown-task", 5),
+      ],
+    };
+    yield* fs.writeFileString(yield* filePath, yield* encodeState(state));
+    const service = yield* openService;
+    const result = yield* service.attachPending((taskIds) =>
+      Effect.succeed(
+        new Map(
+          taskIds.flatMap((taskId) =>
+            taskId === "follow-up-a"
+              ? [[taskId, graded.taskId] as const]
+              : taskId === "follow-up-b"
+                ? [[taskId, ungraded.taskId] as const]
+                : taskId === "council-member"
+                  ? [[taskId, taskId] as const]
+                  : [],
+          ),
+        ),
+      ),
+    );
+    expect(result).toEqual({ attached: 2, remaining: 2 });
+    const saved = yield* decode(yield* fs.readFileString(yield* filePath));
+    expect(saved.runs.map((entry) => entry.followUps)).toEqual([
+      [{ taskId: "follow-up-a", grade: { score: 4 } }],
+      [{ taskId: "follow-up-b", grade: { score: 6 } }],
+    ]);
+    expect(saved.pendingGrades?.map((entry) => entry.taskId)).toEqual([
+      "council-member",
+      "unknown-task",
+    ]);
+    // Reopening resolves nothing new and never counts an attached grade twice.
+    const reopened = yield* openService;
+    expect(
+      yield* reopened.attachPending((taskIds) =>
+        Effect.succeed(new Map(taskIds.map((taskId) => [taskId, taskId] as const))),
+      ),
+    ).toEqual({ attached: 0, remaining: 2 });
+    expect((yield* reopened.getSnapshot()).models[0]!.stats).toMatchObject({
+      rated: 2,
+      // 8 and 4 from the graded run, 6 from the other.
+      average: 6,
+    });
+  }).pipe(Effect.scoped, Effect.provide(testLayer)),
+);
+
+it("scores follow-ups since flag-only grading like the run's own turn, without more runs", () => {
+  const at = FLAG_ONLY_GRADING_SINCE + 1000;
+  const followUp = (n: number, extra: Partial<FollowUp> = {}): FollowUp => ({
+    taskId: NodeId.make(`follow-up-${n}`),
+    outcome: "completed",
+    finishedAt: at + 10,
+    ...extra,
+  });
+  const original = run(0, {
+    finishedAt: at,
+    followUps: [
+      followUp(1),
+      followUp(2, { grade: { score: 4 } }),
+      // Stopped from outside or ended on the model's failure: no score unless flagged.
+      followUp(3, { outcome: "cancelled" }),
+      followUp(4, { outcome: "failed" }),
+      // Graded one by one before the switch, so an unflagged one is unrated.
+      followUp(5, { finishedAt: FLAG_ONLY_GRADING_SINCE - 1 }),
+    ],
+  });
+  const model = rankingsSnapshot([original], at + 10).models[0]!;
+  // Unflagged original and follow-up at 8.5 each, the flagged follow-up at 4.
+  expect(model.stats).toMatchObject({ runs: 1, rated: 1, average: 7 });
+  expect(model.yourRuns).toContain("1 run, 1 rated");
+  expect(model.yourRuns).toContain("low grades 1/1");
+  // A flag only lowers a model as much as the unflagged follow-up it replaces would raise it.
+  const flaggedOnly = run(0, {
+    finishedAt: at,
+    followUps: [followUp(2, { grade: { score: 4 } })],
+  });
+  const unflaggedOnly = run(0, { finishedAt: at, followUps: [followUp(1)] });
+  expect(rankingsSnapshot([flaggedOnly], at + 10).models[0]!.stats?.average).toBe(6.25);
+  expect(rankingsSnapshot([unflaggedOnly], at + 10).models[0]!.stats?.average).toBe(8.5);
+});
+
+it.effect("saves a thumb on a follow-up's card onto its original run", () =>
+  Effect.gen(function* () {
+    const service = yield* openService;
+    const original = run(0, { finishedAt: DateTime.toEpochMillis(yield* DateTime.now) - 1000 });
+    yield* service.record([original]);
+    const followUp = NodeId.make("follow-up-thumb");
+    yield* service.toggleThumb(followUp, "down", original.taskId);
+    // A second thumb replaces the first; the same thumb again clears it, as on a run.
+    yield* service.toggleThumb(followUp, "up", original.taskId);
+    let snapshot = yield* service.getSnapshot();
+    expect(snapshot.thumbs).toEqual([
+      { taskId: original.taskId },
+      { taskId: followUp, thumb: "up" },
+    ]);
+    expect(snapshot.models[0]!.stats).toMatchObject({ runs: 1, rated: 1, average: 10 });
+    // Once the follow-up is on its run, the card's task id alone finds it.
+    yield* service.toggleThumb(followUp, "up");
+    snapshot = yield* service.getSnapshot();
+    expect(snapshot.thumbs).toEqual([{ taskId: original.taskId }]);
+    expect(
+      yield* service
+        .toggleThumb(NodeId.make("council-follow-up"), "up", NodeId.make("council"))
+        .pipe(Effect.flip),
+    ).toMatchObject({ operation: "thumb", message: "Not ranked." });
   }).pipe(Effect.scoped, Effect.provide(testLayer)),
 );
 

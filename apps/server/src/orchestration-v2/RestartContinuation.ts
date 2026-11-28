@@ -27,6 +27,7 @@ import {
   isRestartNoteSource,
   neverReachedProvider,
   RESTART_CONTINUE_PROMPT,
+  RESTART_LOST_REQUEST_NOTE,
   restartCancelledBackgroundWorkNote,
   restartContinuationNote,
   restartContinuationMessageId,
@@ -50,17 +51,15 @@ export function undeliveredAccountMove(
 const MAX_CONTINUATION_CHAIN = 3;
 
 /**
- * Whether a restart must leave this run for the user: the thread is put away,
- * the provider turn already ended, or the user owes an answer. Checked when
- * intent is recorded and again when the continuation is delivered. A
- * `settled` run is woken for the awaited work it lost, so its ended provider
- * turn does not block it.
+ * Whether a restart must leave this run for the user: the thread is put away
+ * or the provider turn already ended. Checked when intent is recorded and
+ * again when the continuation is delivered. A `settled` run is woken for the
+ * awaited work it lost, so its ended provider turn does not block it. A
+ * question or approval the restart closed does not block either: the
+ * continuation tells the agent to ask again (`restartClosedRequest`).
  */
 function restartContinuationBlocked(
-  projection: Pick<
-    ProjectionRuntimeRecoveryState,
-    "thread" | "runtimeRequests" | "providerTurns" | "turnItems"
-  >,
+  projection: Pick<ProjectionRuntimeRecoveryState, "thread" | "providerTurns" | "turnItems">,
   source: OrchestrationV2Run,
   now: DateTime.Utc,
   settled: boolean,
@@ -74,25 +73,34 @@ function restartContinuationBlocked(
   )
     return true;
   const turn = latestProviderTurnForAttempt(projection.providerTurns, source.activeAttemptId);
-  if (
+  return (
     !settled &&
     turn !== undefined &&
     (turn.status === "completed" || turn.status === "failed" || turn.status === "interrupted")
-  )
-    return true;
-  return projection.runtimeRequests.some(
-    (request) =>
-      // Tool calls and auth refreshes do not wait on a person, and a
-      // message-capable question stays answerable after the restart.
-      request.kind !== "dynamic_tool_call" &&
-      request.kind !== "auth_refresh" &&
-      request.responseCapability.type !== "message" &&
-      (request.status === "pending" ||
-        // Recovery closes live callbacks on the cut turn; it does not answer them.
-        ((request.status === "expired" || request.status === "cancelled") &&
-          request.responseCapability.type === "not_resumable" &&
-          turn !== undefined &&
-          turn.id === request.providerTurnId)),
+  );
+}
+
+/**
+ * Whether the restart closed a question or approval the cut turn was waiting
+ * on. Recovery ends live callbacks without answering them; a message-capable
+ * question stays answerable and is not counted.
+ */
+function restartClosedRequest(
+  projection: Pick<ProjectionRuntimeRecoveryState, "runtimeRequests" | "providerTurns">,
+  source: OrchestrationV2Run,
+): boolean {
+  const turn = latestProviderTurnForAttempt(projection.providerTurns, source.activeAttemptId);
+  return (
+    turn !== undefined &&
+    projection.runtimeRequests.some(
+      (request) =>
+        // Tool calls and auth refreshes do not wait on a person.
+        request.kind !== "dynamic_tool_call" &&
+        request.kind !== "auth_refresh" &&
+        request.providerTurnId === turn.id &&
+        (request.status === "expired" || request.status === "cancelled") &&
+        request.responseCapability.type === "not_resumable",
+    )
   );
 }
 
@@ -364,12 +372,14 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
           ? undefined
           : restartCancelledBackgroundWorkNote(note.work, input.accountMove !== undefined);
       const settled = input.accountMove?.settled ?? note.settled;
+      const notes = [
+        ...(noteText === undefined ? [] : [noteText]),
+        ...(restartClosedRequest(projection, source) ? [RESTART_LOST_REQUEST_NOTE] : []),
+      ];
       const prompt =
-        noteText === undefined
+        notes.length === 0
           ? RESTART_CONTINUE_PROMPT
-          : settled
-            ? noteText
-            : `${noteText}\n\n${RESTART_CONTINUE_PROMPT}`;
+          : [...notes, ...(settled ? [] : [RESTART_CONTINUE_PROMPT])].join("\n\n");
       // A settled turn already took its messages; a cut one may not have read them.
       const unread = settled ? [] : yield* unreadMidTurnMessages(threads, input.threadId, source);
       continuation = {

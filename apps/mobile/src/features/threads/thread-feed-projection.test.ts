@@ -255,7 +255,8 @@ describe("streaming feed projection", () => {
       const next = project(projection);
       expect(historyReads).toBe(0);
       expect(next.feed.at(-1)).toMatchObject({ message: { text: "First chunk and next chunk" } });
-      expect(next.rows.at(-2)).toBe(next.feed.at(-1));
+      // The streaming reply is the last row: no idle Thinking row follows a visible reply.
+      expect(next.rows.at(-1)).toBe(next.feed.at(-1));
       expect(next.feed[0]).toBe(before.feed[0]);
       expect(next.summary).toBe(before.summary);
       expect(next.presentedSummary).toBe(before.presentedSummary);

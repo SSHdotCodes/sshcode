@@ -11,7 +11,10 @@ import { pruneManagedToolVersions } from "./managedToolRetention.ts";
 const fixture = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const base = yield* fs.makeTempDirectoryScoped({ prefix: "t3-tool-retention-" });
+  // The canonical path: the prune reports real paths, and macOS's default temp folder is a link.
+  const base = yield* fs.realPath(
+    yield* fs.makeTempDirectoryScoped({ prefix: "t3-tool-retention-" }),
+  );
   const toolsDirectory = path.join(base, "tools");
   const versionsDirectory = path.join(toolsDirectory, "provider");
   const version = (n: number) => `1.0.${n}`;

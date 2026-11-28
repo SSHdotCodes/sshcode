@@ -5032,13 +5032,28 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* runGit(repoDir, ["checkout", "-b", "feature-create-pr"]);
       const remoteDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
-      NodeFS.writeFileSync(NodePath.join(repoDir, "changes.txt"), "change\n");
+      const changesPath = NodePath.join(repoDir, "changes.txt");
+      NodeFS.writeFileSync(changesPath, "change\n");
+      yield* runGit(repoDir, ["add", "changes.txt"]);
+      const { stdout: examplePatch } = yield* runGit(repoDir, [
+        "diff",
+        "--cached",
+        "--no-ext-diff",
+        "--patch",
+        "--minimal",
+      ]);
+      const contentOffset = examplePatch.indexOf("+change\n") + 1;
+      expect(contentOffset).toBeGreaterThan(0);
+      // The git subprocess captures 59,000 bytes. Keep one emoji and cut the second after byte one.
+      const prefix = "😀" + "a".repeat(58_999 - contentOffset - Buffer.byteLength("😀"));
+      NodeFS.writeFileSync(changesPath, prefix + "😀\n");
       yield* runGit(repoDir, ["add", "changes.txt"]);
       yield* runGit(repoDir, ["commit", "-m", "Feature commit"]);
       yield* runGit(repoDir, ["push", "-u", "origin", "feature-create-pr"]);
       yield* runGit(repoDir, ["config", "branch.feature-create-pr.gh-merge-base", "main"]);
       let generatedPolicy: TextGeneration.PrContentGenerationInput["policy"] = undefined;
       let generatedChangeRequestTemplate: string | undefined;
+      let generatedDiffPatch = "";
 
       const { manager, ghCalls } = yield* makeManager({
         serverSettings: {
@@ -5051,6 +5066,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           generatePrContent: (input) => {
             generatedPolicy = input.policy;
             generatedChangeRequestTemplate = input.changeRequestTemplate;
+            generatedDiffPatch = input.diffPatch;
             return Effect.succeed({
               title: "Add stacked git actions",
               body: "## What changed?\nAdded stacked git actions.",
@@ -5084,6 +5100,8 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         changeRequestInstructions: "Lead with user impact.",
       });
       expect(generatedChangeRequestTemplate).toBe("## What changed?\n\n## Verification");
+      expect(generatedDiffPatch.includes("\uFFFD")).toBe(false);
+      expect(generatedDiffPatch.endsWith(`+${prefix}\n\n[truncated]`)).toBe(true);
       expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(2);
       expect(
         ghCalls.some((call) => call.includes("pr create --base main --head feature-create-pr")),
@@ -7265,6 +7283,71 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         ]),
       );
     }),
+  );
+
+  it.effect(
+    "truncates commit subjects, toast descriptions, and hook output without splitting an emoji",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        NodeFS.mkdirSync(NodePath.join(repoDir, ".git", "hooks"), { recursive: true });
+        NodeFS.writeFileSync(
+          NodePath.join(repoDir, ".git", "hooks", "pre-commit"),
+          `#!/bin/sh\nprintf '%s\\n' '${"a".repeat(499)}😀bbbb'\n`,
+          { mode: 0o755 },
+        );
+        NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "split emoji\n");
+        const { manager } = yield* makeManager({
+          textGeneration: {
+            generateCommitMessage: () =>
+              Effect.succeed({ subject: `${"a".repeat(71)}😀bb`, body: "" }),
+          },
+        });
+        const events: GitActionProgressEvent[] = [];
+
+        const split = yield* runStackedAction(
+          manager,
+          {
+            cwd: repoDir,
+            action: "commit",
+            commitMessage: `${"a".repeat(68)}😀bbbb`,
+          },
+          {
+            actionId: "action-emoji-toast",
+            progressReporter: {
+              publish: (event) =>
+                Effect.sync(() => {
+                  events.push(event);
+                }),
+            },
+          },
+        );
+
+        expect(split.toast.description).toBe(`${"a".repeat(68)}...`);
+        const hookLines = events
+          .filter(
+            (event): event is Extract<GitActionProgressEvent, { kind: "hook_output" }> =>
+              event.kind === "hook_output",
+          )
+          .map((event) => event.text);
+        expect(hookLines).toContain("a".repeat(499));
+
+        NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "whole emoji\n");
+        const intact = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "commit",
+          commitMessage: `${"a".repeat(67)}😀bbbb`,
+        });
+
+        expect(intact.toast.description).toBe(`${"a".repeat(67)}😀...`);
+
+        NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "generated emoji\n");
+        const generated = yield* runStackedAction(manager, { cwd: repoDir, action: "commit" });
+
+        expect(generated.commit.subject).toBe("a".repeat(71));
+        expect(generated.toast.description).toBe("a".repeat(71));
+      }),
   );
 
   it.effect("emits action_failed when a commit hook rejects", () =>

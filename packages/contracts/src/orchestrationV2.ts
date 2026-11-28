@@ -658,6 +658,8 @@ export const OrchestrationV2Run = Schema.Struct({
   queuePosition: Schema.optional(Schema.NullOr(PositiveInt)),
   /** The queue is paused until the user explicitly resumes it or sends a new message. */
   queueHeld: Schema.optional(Schema.Boolean),
+  /** The sender asked for a separate turn that later auto sends can steer past. */
+  explicitQueue: Schema.optionalKey(Schema.Literal(true)),
   /** The user asked to interrupt the active turn and deliver this queued run first. */
   sendNext: Schema.optionalKey(Schema.Literal(true)),
   /** A user follow-up waiting to steer this run when its provider turn starts. */
@@ -3269,6 +3271,7 @@ export const OrchestrationV2MessageDispatchCommand = Schema.Struct({
   usageLimitRecoveryRequestId: Schema.optional(CommandId),
   /** Resolve untargeted delivery against the server's serialized thread state. */
   deliveryIntent: Schema.optional(Schema.Literals(["auto", "steer", "restart"])),
+  explicitQueue: Schema.optionalKey(Schema.Literal(true)),
   /** Internal notices may use native steering only, without starting or interrupting a turn. */
   steerExistingOnly: Schema.optional(Schema.Boolean),
   delegatedCompletion: Schema.optional(

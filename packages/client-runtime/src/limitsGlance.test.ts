@@ -59,6 +59,22 @@ function pool(driver: string, windows: LimitPoolWindow[]): LimitPool {
 }
 
 describe("summarizeProviderLimits", () => {
+  it("uses the tightest monthly allowance for the Mistral Vibe plan's one ring", () => {
+    const [plan] = summarizeProviderLimits([
+      {
+        ...pool("acpRegistry", [
+          window("vibe", 38, 120, "monthly"),
+          window("api", 96, 120, "monthly"),
+        ]),
+        label: "Mistral Vibe",
+      },
+    ]);
+    const rings = statusRowRings([plan!], undefined, undefined);
+    expect(rings).toHaveLength(1);
+    expect(rings[0]?.limits.tightest.id).toBe("api");
+    expect(rings[0]?.limits.windows.map((window) => window.id)).toEqual(["vibe", "api"]);
+  });
+
   it("keeps providers and their windows in place while naming the tightest", () => {
     const summary = summarizeProviderLimits([
       pool("codex", [window("5h", 20, 60), window("weekly", 55, 3_000, "weekly")]),

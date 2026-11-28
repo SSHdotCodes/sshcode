@@ -29,6 +29,8 @@ interface GlassSurfaceProps extends ViewProps {
   readonly chrome?: "default" | "none";
   /** Base color for the frosted tint, or solid fill when blur is unavailable. */
   readonly fallbackColor?: ColorValue;
+  /** Fill the native capsule while UIKit reinstalls its effect. */
+  readonly recoverNativeGlass?: boolean;
   /** Uniwind styling used only when native Liquid Glass is unavailable. */
   readonly fallbackClassName?: string;
 }
@@ -41,6 +43,7 @@ export function GlassSurface({
   tintColor,
   tintColorClassName,
   fallbackColor,
+  recoverNativeGlass,
   fallbackClassName,
   className,
   style,
@@ -77,6 +80,7 @@ export function GlassSurface({
           tintColorClassName ?? (tintColor === undefined ? "accent-glass-tint" : undefined)
         }
         colorScheme={isDarkMode ? "dark" : "light"}
+        fallbackColor={recoverNativeGlass ? fallbackColor : undefined}
         style={[surfaceStyle, style]}
       >
         {children}

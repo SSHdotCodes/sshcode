@@ -37,7 +37,11 @@ const seenStorage: TeamBoardSeenStorage = {
 function devFixturePhase(): TeamBoardFixturePhase | null {
   if (!__DEV__) return null;
   const value = process.env.EXPO_PUBLIC_QA_TEAM_BOARD_FIXTURE;
-  return value === "active" || value === "ended" || value === "readonly" || value === "repos"
+  return value === "active" ||
+    value === "ended" ||
+    value === "readonly" ||
+    value === "repos" ||
+    value === "team"
     ? value
     : null;
 }

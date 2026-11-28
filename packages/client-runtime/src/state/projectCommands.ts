@@ -140,7 +140,8 @@ export function createProjectEnvironmentAtoms<R, E>(
     readFile: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:projects:read-file",
       tag: WS_METHODS.projectsReadFile,
-      staleTimeMs: 30_000,
+      staleTimeMs: 0,
+      revalidateOnRemount: true,
       idleTtlMs: 5 * 60_000,
       execute: (input) =>
         fileMetadata.seedAfterRead(

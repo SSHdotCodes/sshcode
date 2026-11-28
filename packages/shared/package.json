@@ -698,6 +698,10 @@
     "./autoModel/recommendAutoModel": {
       "types": "./src/autoModel/recommendAutoModel.logic.ts",
       "import": "./src/autoModel/recommendAutoModel.logic.ts"
+    },
+    "./teamBoardNote": {
+      "types": "./src/teamBoardNote.ts",
+      "import": "./src/teamBoardNote.ts"
     }
   },
   "scripts": {

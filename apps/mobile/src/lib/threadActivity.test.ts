@@ -296,17 +296,68 @@ describe("buildThreadFeed", () => {
       messageId: MessageId.make(`async-answer:${requestId}`),
     };
     const feed = buildThreadFeed([projected(question, 0), projected(reply, 1)]);
-    expect(feed).toHaveLength(2);
+    // The answer keeps its place in the feed, carrying the question it answers;
+    // the question's own work row is not repeated beside it.
+    expect(feed).toHaveLength(1);
     expect(feed[0]).toMatchObject({
-      type: "activity-group",
-      activities: [{ workEntry: { questionAnswer: question.questionAnswer } }],
-    });
-    // The answer keeps its place in the feed, carrying the question it answers.
-    expect(feed[1]).toMatchObject({
       type: "message",
       message: { role: "user", questionAnswer: question.questionAnswer },
     });
     expect(buildThreadFeed([projected(reply, 0)])[0]?.type).toBe("message");
+  });
+
+  describe("one row per answered ask_user card", () => {
+    const requestId = RuntimeRequestId.make("card");
+    const twoQuestionAnswer = {
+      requestId,
+      answers: { color: "Blue", size: "Large" },
+      questionTextById: { color: "Which color?", size: "Which size?" },
+      attachmentsByQuestionId: {},
+    };
+    const answeredQuestion: OrchestrationV2TurnItem = {
+      ...base("card", "2026-06-20T00:00:01.000Z", 0),
+      type: "user_input_request",
+      requestId,
+      questions: [],
+      questionAnswer: twoQuestionAnswer,
+    };
+    const answerMessage = (forRequest: string): OrchestrationV2TurnItem => ({
+      ...userMessage(),
+      id: TurnItemId.make(`answer:${forRequest}`),
+      messageId: MessageId.make(`async-answer:${forRequest}`),
+      text: "Which color?\nBlue\n\nWhich size?\nLarge",
+    });
+    const feedOf = (items: ReadonlyArray<OrchestrationV2TurnItem>) =>
+      buildThreadFeed(items.map((item, index) => projected(item, index)));
+
+    it("keeps only the folded answer row, carrying every question and answer", () => {
+      const feed = feedOf([answeredQuestion, answerMessage(requestId)]);
+      expect(feed).toHaveLength(1);
+      expect(feed[0]).toMatchObject({
+        type: "message",
+        message: { questionAnswer: twoQuestionAnswer },
+      });
+    });
+
+    it("keeps the work row when the answer message is paged out", () => {
+      const feed = feedOf([answeredQuestion]);
+      expect(feed).toHaveLength(1);
+      expect(feed[0]).toMatchObject({
+        type: "activity-group",
+        activities: [{ workEntry: { questionAnswer: twoQuestionAnswer } }],
+      });
+    });
+
+    it("matches by request id, not position", () => {
+      const feed = feedOf([answeredQuestion, answerMessage("another-card")]);
+      expect(feed.map((entry) => entry.type)).toEqual(["activity-group", "message"]);
+    });
+
+    it("keeps a pending request's row", () => {
+      const { questionAnswer: _answer, ...pending } = answeredQuestion;
+      const feed = feedOf([{ ...pending, status: "pending" }]);
+      expect(feed.map((entry) => entry.type)).toEqual(["activity-group"]);
+    });
   });
 
   it("does not create a work group for a message and checkpoint", () => {
@@ -1592,12 +1643,9 @@ describe("buildThreadFeed", () => {
     const sshOnly = present(true, false);
     expect(sshOnly.map((entry) => entry.type)).toEqual(["message", "work-toggle", "message"]);
     expect(sshOnly[1]).toMatchObject({ type: "work-toggle", summary: "Running ssh" });
-    expect(present(false, false).at(-1)).toEqual({
-      type: "thinking",
-      id: "live-activity-row",
-      createdAt: startedAt,
-      runId,
-      label: "Thinking…",
+    expect(present(false, false).at(-1)).toMatchObject({
+      type: "message",
+      message: { role: "assistant" },
     });
   });
 
@@ -3135,6 +3183,20 @@ it("shows thinking while a thought streams and a finished thought as one collaps
   );
 });
 
+it.each([true, false])(
+  "keeps an active reply as the tail once its text arrives (streaming: %s)",
+  (streaming) => {
+    const at = "2026-06-20T00:00:02.000Z";
+    const run = { runId, status: "running" as const, startedAt: at, completedAt: null };
+    const feed = buildThreadFeed([
+      projected(userMessage(), 0),
+      projected({ ...assistantMessage(), streaming }, 1),
+    ]);
+    const presented = deriveThreadFeedPresentation(feed, run, new Set(), new Set(), at);
+    expect(presented.at(-1)).toMatchObject({ type: "message", message: { role: "assistant" } });
+  },
+);
+
 it("folds a working stretch of tools and thoughts into one row that opens and closes", () => {
   const at = "2026-06-20T00:00:02.000Z";
   const thought = (id: string, ordinal: number): OrchestrationV2TurnItem => ({
@@ -3507,4 +3569,55 @@ describe("commandless commands", () => {
       summary: "Running command",
     });
   });
+});
+
+it("draws team board notes as compact rows, never as the person's message", () => {
+  const legacy = (id: string, text: string, ordinal: number) =>
+    ({
+      ...base(`turn-item:message:${encodeURIComponent(id)}`, "2026-11-27T22:00:00.000Z", ordinal),
+      type: "user_message",
+      messageId: MessageId.make(id),
+      createdBy: "system",
+      creationSource: "mcp",
+      inputIntent: "steer",
+      attachments: [],
+      text,
+    }) as OrchestrationV2TurnItem;
+  const current = {
+    ...base(
+      `turn-item:message:${encodeURIComponent("team-board:n3")}`,
+      "2026-11-27T22:00:02.000Z",
+      2,
+    ),
+    type: "notification",
+    source: { kind: "system" },
+    outcome: "updated",
+    summary: "Team board: Neon will conflict in rules.ts",
+  } as OrchestrationV2TurnItem;
+  const feed = buildThreadFeed(
+    [
+      legacy(
+        "team-board:n1",
+        "SSHCode team board (from sibling subagents, not the user): Sol asked you about rules.ts (reply p1). Which key wins?",
+        0,
+      ),
+      legacy(
+        "team-board:open:n2",
+        "SSHCode team board (from sibling subagents, not the user): The team board is open.",
+        1,
+      ),
+      current,
+    ].map((item, index) => projected(item, index)),
+  );
+  expect(feed.some((entry) => entry.type === "message")).toBe(false);
+  const activities = feed.flatMap((entry) =>
+    entry.type === "activity-group" ? entry.activities : [],
+  );
+  expect(activities.map((activity) => activity.summary)).toEqual([
+    "Team board: Sol asked you about rules.ts",
+    "Team board: Neon will conflict in rules.ts",
+  ]);
+  expect(activities[0]?.projectedItem.item.type).toBe("notification");
+  // Same glyph as the team board pill.
+  expect(activities.map((activity) => activity.icon)).toEqual(["board", "board"]);
 });

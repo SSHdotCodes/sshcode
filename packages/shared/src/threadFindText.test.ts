@@ -171,3 +171,10 @@ it("does not index the hidden marker of an alert written with CR-only line endin
     searchableMessageSegments({ role: "assistant", text: "> [!NOTE]\r> hi", streaming: false }),
   ).toEqual(["hi"]);
 });
+
+it("projects carriage-return soft line breaks to a space outside code blocks", () => {
+  // SSHCode always renders assistant line breaks, so a soft break splits the
+  // segment here; what matters is that CR-only input behaves exactly like LF.
+  expect(assistantSegments("First\rsecond")).toEqual(assistantSegments("First\nsecond"));
+  expect(assistantSegments("```text\nFirst\rsecond\n```")).toEqual(["First\rsecond\n"]);
+});

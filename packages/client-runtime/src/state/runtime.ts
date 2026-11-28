@@ -89,6 +89,8 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends Omit<
   readonly persistence?: QueryPersistence<A>;
   readonly staleTimeMs?: number;
   readonly revalidateOnMount?: boolean;
+  /** Release the SWR view when its last reader leaves while retaining its cached response. */
+  readonly revalidateOnRemount?: boolean;
   readonly idleTtlMs?: number;
   readonly refreshIntervalMs?: number;
   readonly refreshTrigger?: (target: {
@@ -584,6 +586,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
   const family = Atom.family((key: string) => {
     const target = parseEnvironmentRpcKey<Input>(key);
     const idleTtlMs = options.idleTtlMs ?? 5 * 60_000;
+    const viewIdleTtlMs = options.revalidateOnRemount ? 0 : idleTtlMs;
     const queryAtom = runtime
       .atom<
         A,
@@ -668,11 +671,12 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
         });
       })
       .pipe(
+        (source) => (options.revalidateOnRemount ? Atom.setIdleTTL(source, idleTtlMs) : source),
         Atom.swr({
           staleTime: options.staleTimeMs ?? 30_000,
           revalidateOnMount: options.revalidateOnMount ?? true,
         }),
-        Atom.setIdleTTL(idleTtlMs),
+        Atom.setIdleTTL(viewIdleTtlMs),
       );
     const isFinal = (result: AsyncResult.AsyncResult<A, unknown>) =>
       options.isFinal !== undefined && Option.exists(AsyncResult.value(result), options.isFinal);
@@ -685,7 +689,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
       refreshTrigger === undefined
         ? intervalQuery
         : intervalQuery.pipe(refreshOnSignalWhileRead(refreshTrigger, isFinal))
-    ).pipe(Atom.setIdleTTL(idleTtlMs), Atom.withLabel(`${options.label}:${key}`));
+    ).pipe(Atom.setIdleTTL(viewIdleTtlMs), Atom.withLabel(`${options.label}:${key}`));
   });
   return (target) => family(environmentRpcKey(target));
 }
@@ -760,6 +764,7 @@ export function createEnvironmentRpcQueryAtomFamily<
     >;
     readonly persistence?: QueryPersistence<EnvironmentRpcSuccess<TTag>>;
     readonly staleTimeMs?: number;
+    readonly revalidateOnRemount?: boolean;
     readonly idleTtlMs?: number;
     readonly refreshIntervalMs?: number;
     readonly refreshTrigger?: (target: {
@@ -773,6 +778,9 @@ export function createEnvironmentRpcQueryAtomFamily<
     label: options.label,
     ...(options.persistence === undefined ? {} : { persistence: options.persistence }),
     ...(options.staleTimeMs === undefined ? {} : { staleTimeMs: options.staleTimeMs }),
+    ...(options.revalidateOnRemount === undefined
+      ? {}
+      : { revalidateOnRemount: options.revalidateOnRemount }),
     ...(options.idleTtlMs === undefined ? {} : { idleTtlMs: options.idleTtlMs }),
     ...(options.refreshIntervalMs === undefined
       ? {}

@@ -651,6 +651,17 @@ export function modelFamilySupersessions(providers: ReadonlyArray<ServerProvider
       candidates.find((candidate) => candidate.instanceId === model.instanceId) ?? candidates[0]!;
     superseded.set(key, { instanceId: replacement.instanceId, model: replacement.model });
   }
+  // A replacement that was itself retired points on to the current one
+  // (3.7 Flash → 3.8 Flash → Gemini 4 Hydrogen names Hydrogen for both).
+  for (const [key, first] of superseded) {
+    let current = first;
+    for (let hops = 0; hops < 8; hops++) {
+      const next = superseded.get(modelRankingSelectionKey(current));
+      if (!next) break;
+      current = next;
+    }
+    if (current !== first) superseded.set(key, current);
+  }
   return superseded;
 }
 

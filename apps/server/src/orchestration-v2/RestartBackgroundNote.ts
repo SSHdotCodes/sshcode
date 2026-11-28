@@ -358,6 +358,10 @@ export function mergeRestartCancelledBackgroundWork(
 /** The prompt of a restart continuation that only resumes the cut turn. */
 export const RESTART_CONTINUE_PROMPT = "Continue where you left off.";
 
+/** Told to a continued turn whose question or approval card the restart closed. */
+export const RESTART_LOST_REQUEST_NOTE =
+  "Your open question or approval was lost in the restart; ask again if needed.";
+
 /**
  * Whether `run` never reached its provider, so a restart starts it over from
  * its message instead of resuming it. Mirrors the provider-retry fence: app-side

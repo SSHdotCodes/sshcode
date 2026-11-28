@@ -13,6 +13,7 @@ import {
   isModelManagerThreadId,
   isProviderNativeSubagentThread,
 } from "@t3tools/contracts";
+import { isPersonMessage } from "@t3tools/shared/teamBoardNote";
 import { Atom } from "effect/reactivity";
 
 import type { EnvironmentThreadShell, PendingSubagentRequest } from "./models.ts";
@@ -495,7 +496,7 @@ function latestUserMessageAt(
 ): OrchestrationV2ThreadShell["latestUserMessageAt"] {
   for (let index = projection.messages.length - 1; index >= 0; index -= 1) {
     const message = projection.messages[index];
-    if (message?.role === "user") {
+    if (message !== undefined && isPersonMessage(message)) {
       return message.createdAt;
     }
   }

@@ -11,12 +11,15 @@ import {
   cursorUsageWindowDetails,
   formatAsOf,
   isUsageWindowAlmostOut,
+  mistralPayAsYouGoNotices,
+  monthlyBudgetDetail,
   usedPercentLabel,
   type LimitPool,
   type LimitPoolWindow,
   type LimitPoolMember,
   formatResetsIn,
   recentUseBySource,
+  limitPoolIconUrl,
 } from "@t3tools/shared/usageLimits";
 import { newSessionAccountKeys } from "@t3tools/shared/accountBalance";
 import { collectStorage, describeStorage } from "@t3tools/shared/storageUsage";
@@ -116,7 +119,7 @@ function ProviderLimitsCard({
   return (
     <View className="gap-4 rounded-[24px] border-continuous bg-grouped-card p-4">
       <View className="flex-row items-center gap-2">
-        <ProviderIcon provider={pool.driver} size={18} />
+        <ProviderIcon provider={pool.driver} iconUrl={limitPoolIconUrl(pool)} size={18} />
         <Text className="min-w-0 flex-1 text-base font-t3-bold text-foreground" numberOfLines={1}>
           {pool.label ?? providerLabel(pool.driver)}
         </Text>
@@ -128,6 +131,11 @@ function ProviderLimitsCard({
           <Text className="max-w-[60%] text-right text-xs text-foreground-muted">{plan}</Text>
         ) : null}
       </View>
+      {mistralPayAsYouGoNotices(windows).map((notice) => (
+        <Text key={notice} className="text-sm text-foreground-muted">
+          {notice}
+        </Text>
+      ))}
       {forecast && forecastText ? (
         <View className="gap-0.5">
           <Text
@@ -152,6 +160,7 @@ function ProviderLimitsCard({
         const label = details?.label ?? window.label;
         const color = LIMIT_TONE_COLOR[limitTone(window.usedPercent)];
         const resetsIn = resetsInLabel(window, now);
+        const description = details?.description ?? monthlyBudgetDetail(window);
         const shared = borrowedPoolForecast(pool.driver, window, now);
         return (
           <View key={`${window.kind}:${window.id}`} className="gap-1.5">
@@ -173,9 +182,9 @@ function ProviderLimitsCard({
                 }}
               />
             </View>
-            {resetsIn || details?.description ? (
+            {resetsIn || description ? (
               <Text className="text-xs tabular-nums text-foreground-muted" numberOfLines={2}>
-                {[resetsIn, details?.description].filter(Boolean).join(" · ")}
+                {[resetsIn, description].filter(Boolean).join(" · ")}
               </Text>
             ) : null}
             {shared ? (
@@ -242,11 +251,19 @@ function ProviderLimitsCard({
         </Pressable>
       ) : null}
       {pool.unread.map((account) => {
+        const notice = [
+          account.notice,
+          account.limits.requiredApiKey
+            ? `Add ${account.limits.requiredApiKey} to this provider’s environment variables in web or desktop Settings.`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" ");
         // A card that is only this plan: its header already names it, so just the notice.
         if (pool.accounts.length === 0 && pool.unread.length === 1)
           return (
             <Text key={account.key} className="pb-1 pt-2 text-sm text-foreground-muted">
-              {account.notice}
+              {notice}
             </Text>
           );
         const detail = [account.plan, whereSignedIn(account)].filter(Boolean).join(" · ");
@@ -258,7 +275,7 @@ function ProviderLimitsCard({
           >
             <Text className="text-sm text-foreground">{accountName(account)}</Text>
             {detail ? <Text className="text-xs text-foreground-muted">{detail}</Text> : null}
-            <Text className="text-xs text-foreground-muted">{account.notice}</Text>
+            <Text className="text-xs text-foreground-muted">{notice}</Text>
           </View>
         );
       })}
@@ -486,7 +503,7 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
           <>
             <View className="gap-2">
               <View className="flex-row items-center gap-2">
-                <ProviderIcon provider={account.driver} size={24} />
+                <ProviderIcon provider={account.driver} iconUrl={account.iconUrl} size={24} />
                 <Text className="flex-1 text-xl font-t3-bold text-foreground">
                   {account.displayName ?? providerLabel(account.driver)}
                 </Text>

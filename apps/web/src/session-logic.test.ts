@@ -1078,7 +1078,7 @@ describe("native provider presentation in the v2 timeline", () => {
     const nextInput = { ...input, visibleTurnItems: [...input.visibleTurnItems, visible(reply)] };
     const next = deriveTimelineEntriesFromVisibleTurnItemsWithState(nextInput, previous);
     expect(next.entries).toEqual(deriveTimelineEntriesFromVisibleTurnItems(nextInput));
-    expect(next.entries).toHaveLength(2);
+    expect(next.entries).toHaveLength(1);
     const replyFirst = { ...input, visibleTurnItems: [visible(reply)] };
     const replyProjection = deriveTimelineEntriesFromVisibleTurnItemsWithState(replyFirst);
     const questionAfterReply = {
@@ -1090,12 +1090,9 @@ describe("native provider presentation in the v2 timeline", () => {
         .entries,
     ).toEqual(deriveTimelineEntriesFromVisibleTurnItems(questionAfterReply));
 
+    // The answer keeps its place in the transcript, carrying the question it answers;
+    // the question's own work row is not repeated beside it.
     expect(next.entries[0]).toMatchObject({
-      kind: "work",
-      entry: { questionAnswer: question.questionAnswer },
-    });
-    // The answer keeps its place in the transcript, carrying the question it answers.
-    expect(next.entries[1]).toMatchObject({
       kind: "message",
       message: { role: "user", questionAnswer: question.questionAnswer },
     });
@@ -1104,6 +1101,68 @@ describe("native provider presentation in the v2 timeline", () => {
       deriveTimelineEntriesFromVisibleTurnItems({ ...input, visibleTurnItems: [visible(reply)] })[0]
         ?.kind,
     ).toBe("message");
+  });
+
+  describe("one row per answered ask_user card", () => {
+    const requestId = RuntimeRequestId.make("card");
+    const twoQuestionAnswer = {
+      requestId,
+      answers: { color: "Blue", size: "Large" },
+      questionTextById: { color: "Which color?", size: "Which size?" },
+      attachmentsByQuestionId: {},
+    };
+    const answeredQuestion: OrchestrationV2TurnItem = {
+      ...base,
+      type: "user_input_request",
+      requestId,
+      questions: [],
+      questionAnswer: twoQuestionAnswer,
+    };
+    const answerMessage = (forRequest: string): OrchestrationV2TurnItem => ({
+      ...base,
+      id: TurnItemId.make(`answer:${forRequest}`),
+      type: "user_message",
+      messageId: MessageId.make(`async-answer:${forRequest}`),
+      inputIntent: "steer",
+      text: "Which color?\nBlue\n\nWhich size?\nLarge",
+      createdBy: "user",
+      creationSource: "server",
+      attachments: [],
+    });
+    const derive = (items: ReadonlyArray<OrchestrationV2TurnItem>) =>
+      deriveTimelineEntriesFromVisibleTurnItems({
+        visibleTurnItems: items.map(visible),
+        optimisticMessages: [],
+      });
+
+    it("keeps only the folded answer row, carrying every question and answer", () => {
+      const entries = derive([answeredQuestion, answerMessage(requestId)]);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        kind: "message",
+        message: { questionAnswer: twoQuestionAnswer },
+      });
+    });
+
+    it("keeps the work row when the answer message is paged out", () => {
+      const entries = derive([answeredQuestion]);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        kind: "work",
+        entry: { questionAnswer: twoQuestionAnswer },
+      });
+    });
+
+    it("matches by request id, not position", () => {
+      const entries = derive([answeredQuestion, answerMessage("another-card")]);
+      expect(entries.map((entry) => entry.kind)).toEqual(["work", "message"]);
+    });
+
+    it("keeps a pending request's row", () => {
+      const { questionAnswer: _answer, ...pending } = answeredQuestion;
+      const entries = derive([{ ...pending, status: "pending" }]);
+      expect(entries.map((entry) => entry.kind)).toEqual(["work"]);
+    });
   });
 
   it("excludes checkpoint-only work from the timeline", () => {
@@ -2135,4 +2194,86 @@ it("renders automatic completion as a work entry instead of a user bubble", () =
       ],
     })[0]?.kind,
   ).toBe("message");
+});
+
+it("draws team board notes as compact rows, never as the person's message", () => {
+  const now = DateTime.makeUnsafe("2026-11-27T22:00:00Z");
+  const base = {
+    threadId: ThreadId.make("lead"),
+    runId: RunId.make("run"),
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    status: "completed" as const,
+    title: null,
+    startedAt: now,
+    completedAt: now,
+    updatedAt: now,
+  };
+  const legacy = (id: string, text: string, ordinal: number) => {
+    const item = {
+      ...base,
+      id: TurnItemId.make(`turn-item:message:${encodeURIComponent(id)}`),
+      ordinal,
+      type: "user_message" as const,
+      messageId: MessageId.make(id),
+      createdBy: "system" as const,
+      creationSource: "mcp" as const,
+      inputIntent: "steer" as const,
+      attachments: [],
+      text,
+    };
+    return {
+      item,
+      position: ordinal,
+      visibility: "local" as const,
+      sourceThreadId: item.threadId,
+      sourceItemId: item.id,
+    };
+  };
+  const current = {
+    ...base,
+    id: TurnItemId.make(`turn-item:message:${encodeURIComponent("team-board:n3")}`),
+    ordinal: 2,
+    type: "notification" as const,
+    source: { kind: "system" as const },
+    outcome: "updated" as const,
+    summary: "Team board: Neon will conflict in rules.ts",
+  };
+  const entries = deriveTimelineEntriesFromVisibleTurnItems({
+    optimisticMessages: [],
+    visibleTurnItems: [
+      // Recorded before notes were notifications: a question, and the routine opening note.
+      legacy(
+        "team-board:n1",
+        "SSHCode team board (from sibling subagents, not the user): Sol asked you about rules.ts (reply p1). Which key wins?",
+        0,
+      ),
+      legacy(
+        "team-board:n2",
+        "SSHCode team board (from sibling subagents, not the user): The team board is open. Use team_board to read or post when needed.",
+        1,
+      ),
+      {
+        item: current,
+        position: 2,
+        visibility: "local" as const,
+        sourceThreadId: current.threadId,
+        sourceItemId: current.id,
+      },
+    ],
+  });
+  expect(entries.map((entry) => entry.kind)).toEqual(["work", "work"]);
+  expect(entries[0]).toMatchObject({
+    entry: {
+      label: "Team board: Sol asked you about rules.ts",
+      itemType: "notification",
+      projectedItem: { item: { type: "notification" } },
+    },
+  });
+  expect(entries[1]).toMatchObject({
+    entry: { label: "Team board: Neon will conflict in rules.ts" },
+  });
 });

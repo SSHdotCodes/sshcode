@@ -318,3 +318,78 @@ it.live("credits a sibling's imported handoff paths only to the sibling", () =>
     ]);
   }).pipe(Effect.provide(layer)),
 );
+
+const commitFiles = (
+  { fs, path, cmd }: Effect.Success<typeof setup>,
+  dir: string,
+  names: ReadonlyArray<string>,
+) =>
+  Effect.forEach(
+    names,
+    (name) =>
+      Effect.gen(function* () {
+        yield* fs.writeFileString(path.join(dir, name), `export const value = "${name}";\n`);
+        yield* cmd(dir, "add", name);
+        yield* cmd(dir, "commit", "-qm", `Add ${name}`);
+      }),
+    { discard: true },
+  );
+const paths = (state: { readonly files: ReadonlyArray<{ readonly path: string }> }) =>
+  state.files.map(({ path }) => path).toSorted();
+
+it.live("a worktree that checks out a branch 60 commits ahead lists only the file it writes", () =>
+  Effect.gen(function* () {
+    const fixture = yield* setup;
+    const { fs, path, cmd, board, base, worktree } = fixture;
+    const ahead = yield* worktree("ahead");
+    yield* commitFiles(
+      fixture,
+      ahead,
+      Array.from({ length: 60 }, (_, i) => `branch-${i}.ts`),
+    );
+    const reviewer = yield* worktree("reviewer");
+    yield* cmd(reviewer, "checkout", "-q", "--detach", "ahead");
+    yield* fs.writeFileString(path.join(reviewer, "review.test.ts"), "export {};\n");
+    expect(paths((yield* board.inspect(reviewer, base))!)).toEqual(["review.test.ts"]);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.live("an own commit stays listed after HEAD leaves it and comes back", () =>
+  Effect.gen(function* () {
+    const fixture = yield* setup;
+    const { cmd, board, base, worktree } = fixture;
+    const sol = yield* worktree("sol");
+    yield* commitFiles(fixture, sol, ["own.ts"]);
+    // Elsewhere and back: a checkout to the base, then a fast-forward onto its own commit.
+    yield* cmd(sol, "checkout", "-q", "-b", "elsewhere", base);
+    yield* cmd(sol, "merge", "-q", "--ff-only", "sol");
+    const state = (yield* board.inspect(sol, base))!;
+    expect(paths(state)).toEqual(["own.ts"]);
+    expect(state.committed.has("own.ts")).toBe(true);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.live("a rebase onto a moved base keeps the picked commits and drops the upstream's", () =>
+  Effect.gen(function* () {
+    const fixture = yield* setup;
+    const { cmd, board, base, worktree } = fixture;
+    const sol = yield* worktree("sol");
+    yield* commitFiles(fixture, sol, ["a.ts", "b.ts"]);
+    const moved = yield* worktree("moved");
+    yield* commitFiles(fixture, moved, ["upstream-1.ts", "upstream-2.ts"]);
+    yield* cmd(sol, "rebase", "-q", "moved");
+    expect(paths((yield* board.inspect(sol, base))!)).toEqual(["a.ts", "b.ts"]);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.live("a hard reset to another branch's tip lists nothing from that branch", () =>
+  Effect.gen(function* () {
+    const fixture = yield* setup;
+    const { cmd, board, base, worktree } = fixture;
+    const other = yield* worktree("other");
+    yield* commitFiles(fixture, other, ["theirs-1.ts", "theirs-2.ts"]);
+    const sol = yield* worktree("sol");
+    yield* cmd(sol, "reset", "-q", "--hard", "other");
+    expect(paths((yield* board.inspect(sol, base))!)).toEqual([]);
+  }).pipe(Effect.provide(layer)),
+);

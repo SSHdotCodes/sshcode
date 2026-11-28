@@ -432,6 +432,23 @@ describe("model picker catalog", () => {
     ).toEqual(current);
   });
 
+  it("files Gemini 3.8 Flash with the older models once Gemini 4 Hydrogen is offered", () => {
+    const current = ["google/gemini-4-argon", "google/gemini-4-hydrogen"];
+    const old = ["google/gemini-3.8-flash", "google/gemini-3.5-flash-lite"];
+    const providers = [
+      provider(
+        "opencode",
+        "opencode",
+        [...current, ...old].map((slug) => model(slug)),
+      ),
+    ];
+    expect(
+      createModelPickerCatalog(sources(providers), { providers }).sources.map(
+        (source) => source.slug,
+      ),
+    ).toEqual(current);
+  });
+
   it("keeps only current open releases, dropping retired lines, dated copies, Flint and non-text models", () => {
     const current = [
       "openrouter/deepseek/deepseek-v4.1-flash",

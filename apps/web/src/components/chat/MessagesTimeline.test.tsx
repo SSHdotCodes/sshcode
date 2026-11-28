@@ -3501,3 +3501,50 @@ describe("MessagesTimeline", () => {
     }
   });
 });
+
+describe("team board note icon", () => {
+  it("board notes wear the Team board pill's glyph; other system notes keep the app mark", async () => {
+    const { workEntryIconName } = await import("./MessagesTimeline");
+    const { deriveTimelineEntriesFromVisibleTurnItems } = await import("../../session-logic");
+    const { TurnItemId } = await import("@t3tools/contracts");
+    const DateTime = await import("effect/DateTime");
+    const now = DateTime.makeUnsafe("2026-11-27T22:00:00Z");
+    const note = (messageId: string) => {
+      const item = {
+        threadId: ThreadId.make("lead"),
+        runId: RunId.make("run"),
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        status: "completed" as const,
+        title: null,
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+        id: TurnItemId.make(`turn-item:message:${encodeURIComponent(messageId)}`),
+        ordinal: 0,
+        type: "notification" as const,
+        source: { kind: "system" as const },
+        outcome: "updated" as const,
+        summary: "Team board: Neon will conflict in rules.ts",
+      };
+      const [entry] = deriveTimelineEntriesFromVisibleTurnItems({
+        optimisticMessages: [],
+        visibleTurnItems: [
+          {
+            item,
+            position: 0,
+            visibility: "local",
+            sourceThreadId: item.threadId,
+            sourceItemId: item.id,
+          },
+        ],
+      });
+      return entry?.kind === "work" ? workEntryIconName(entry.entry) : null;
+    };
+    expect(note("team-board:n1")).toBe("messages-square");
+    expect(note("other-system-note")).toBe("t3-code");
+  });
+});

@@ -2,7 +2,6 @@ import {
   createTeamBoardAtoms,
   createTeamBoardViewAtoms,
   teamBoardHistory,
-  teamBoardPill,
   type TeamBoardSeenStorage,
 } from "@t3tools/client-runtime/state/team-board";
 import {
@@ -43,7 +42,11 @@ const seenStorage: TeamBoardSeenStorage = {
 function devFixturePhase(): TeamBoardFixturePhase | null {
   if (!import.meta.env.DEV) return null;
   const value = localStorageOrNull()?.getItem(FIXTURE_STORAGE_KEY);
-  return value === "active" || value === "ended" || value === "readonly" || value === "repos"
+  return value === "active" ||
+    value === "ended" ||
+    value === "readonly" ||
+    value === "repos" ||
+    value === "team"
     ? value
     : null;
 }
@@ -79,16 +82,25 @@ export const teamBoardOpenAtom = Atom.family((_key: string) =>
   Atom.make<TeamBoardOpenState | null>(null),
 );
 
-/** Opens the live board: the pill's popover while the pill shows, otherwise a dialog. */
+// Boards whose pill is on screen. A subagent's chat shows its lead's board without the pill.
+const mountedPills = new Map<string, number>();
+
+/** The pill calls this while it is on screen; the returned function takes it off. */
+export function showTeamBoardPill(key: string) {
+  mountedPills.set(key, (mountedPills.get(key) ?? 0) + 1);
+  return () => {
+    const count = (mountedPills.get(key) ?? 1) - 1;
+    if (count === 0) mountedPills.delete(key);
+    else mountedPills.set(key, count);
+  };
+}
+
+/** Opens the live board: the pill's popover while that pill is on screen, otherwise a dialog. */
 export function openTeamBoard(ref: ScopedThreadRef, taskId: NodeId | null) {
-  const pillShown =
-    teamBoardPill(
-      appAtomRegistry.get(teamBoardEnvironment.summaryAtom(ref)),
-      appAtomRegistry.get(teamBoardEnvironment.seenAtom(ref)),
-    ) !== null;
-  appAtomRegistry.set(teamBoardOpenAtom(threadKey(ref)), {
+  const key = threadKey(ref);
+  appAtomRegistry.set(teamBoardOpenAtom(key), {
     view: { kind: "live", taskId },
-    from: pillShown ? "pill" : "elsewhere",
+    from: mountedPills.has(key) ? "pill" : "elsewhere",
   });
 }
 

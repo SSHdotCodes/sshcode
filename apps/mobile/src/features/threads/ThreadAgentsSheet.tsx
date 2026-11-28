@@ -1,4 +1,3 @@
-import { TeamBoardPresenceChip } from "./TeamBoardPresenceChip";
 import { SubagentGradeBadge } from "./SubagentGradeBadge";
 import { useUiMode } from "../discord/useUiMode";
 import { DiscordMainMembers, DiscordMember } from "../discord/DiscordMembers";
@@ -306,13 +305,6 @@ function AgentRow(props: {
   const paused = resolveSubagentRowPresentation(subagent).live && !presentation.live;
   const grade = (
     <>
-      {subagent.origin === "app_owned" ? (
-        <TeamBoardPresenceChip
-          environmentId={props.environmentId}
-          threadId={subagent.threadId}
-          taskId={subagent.id}
-        />
-      ) : null}
       <SubagentGradeBadge
         environmentId={props.environmentId}
         taskId={subagent.id}

@@ -1,4 +1,6 @@
 import { SubagentNotificationRow } from "./SubagentNotificationRow";
+import { teamBoardNote } from "@t3tools/client-runtime/work-log/team-board-note";
+import { TeamBoardNoteRow } from "./TeamBoardNoteRow";
 import { formatTranscriptTimestamp } from "../../lib/time";
 import { CreatedChatCard } from "./CreatedChatCard";
 import { automaticProviderRetryPresentation } from "@t3tools/shared/orchestrationV2ThreadError";
@@ -422,6 +424,8 @@ export function workRowSymbolName(icon: ThreadFeedActivity["icon"]): WorkContent
       return { ios: "sparkles", android: "auto_awesome" };
     case "alert":
       return { ios: "exclamationmark.triangle", android: "error" };
+    case "board":
+      return { ios: "bubble.left.and.text.bubble.right", android: "chat" };
     case "browser":
       return { ios: "safari", android: "public" };
     case "check":
@@ -901,6 +905,17 @@ function ReplCodeText({
 function ThreadWorkLogRow(props: ComponentProps<typeof ThreadWorkLogRowContent>) {
   const item = props.row.projectedItem.item;
   const fallback = <ThreadWorkLogRowContent {...props} />;
+  const boardNote = teamBoardNote(item);
+  if (boardNote !== undefined)
+    return (
+      <TeamBoardNoteRow
+        environmentId={props.environmentId}
+        threadId={item.threadId}
+        label={boardNote.summary}
+      >
+        {fallback}
+      </TeamBoardNoteRow>
+    );
   return item.type === "notification" && notificationChildThreadId(item.source) !== undefined ? (
     <SubagentNotificationRow environmentId={props.environmentId} item={item}>
       {fallback}
@@ -1219,6 +1234,8 @@ const ThreadWorkLogRowContent = memo(function ThreadWorkLogRowContent(
               tone={isUsageLimit ? "warning" : iconIsDestructive ? "danger" : "default"}
               ellipsizeMode={reasoning?.streaming && !expanded ? "head" : "tail"}
               emphasized={expanded}
+              // A board note keeps a hand-off's commit, which comes last.
+              lines={teamBoardNote(row.projectedItem.item) === undefined ? 1 : 2}
             >
               {isSystemNotice ? row.summary : displayText}
               {answerPreview ? (

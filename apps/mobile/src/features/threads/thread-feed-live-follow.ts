@@ -88,6 +88,16 @@ export function resolveThreadFeedLiveFollow(
   }
 }
 
+export function threadFeedIsAtEnd(state: {
+  readonly contentLength: number;
+  readonly scrollLength: number;
+  readonly scroll: number;
+}) {
+  // LegendList includes the effective bottom inset in contentLength, but
+  // excludes it from isAtEnd. A chat at its visible end has cleared the inset.
+  return state.contentLength - state.scrollLength - state.scroll <= 1;
+}
+
 // Opening a chat lands on its latest message. The feed cached from the last
 // visit renders first, so newer messages and measured row heights can arrive
 // after the initial end scroll, past the threshold where maintainScrollAtEnd

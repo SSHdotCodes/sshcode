@@ -25,12 +25,36 @@ interface TurnObservation {
   readonly runKey?: string | undefined;
 }
 
+export function resolveTurnMascotCompletion(
+  last: TurnObservation | undefined,
+  next: TurnObservation,
+  settledRunKey: string | undefined,
+) {
+  if (
+    last?.threadKey !== next.threadKey ||
+    (!last.working && last.status !== "running") ||
+    (next.runKey !== undefined && next.runKey === settledRunKey) ||
+    next.working
+  ) {
+    return null;
+  }
+  switch (next.status) {
+    case "completed":
+      return "done";
+    case "failed":
+    case "interrupted":
+      return "failed";
+    default:
+      return null;
+  }
+}
+
 /** Watches this visit only. History, reconnect snapshots and other chats never celebrate. */
 export function createTurnMascotMoments(
   onChange: (snapshot: TurnMascotSnapshot) => void,
   now = Date.now,
 ) {
-  let previous: TurnObservation | null = null;
+  let previous: TurnObservation | undefined;
   let startedAt: number | null = null;
   let completed = 0;
   let settledRunKey: string | undefined;
@@ -114,15 +138,10 @@ export function createTurnMascotMoments(
           }
         }, 1200);
       }
-      if (
-        !changedThread &&
-        (last?.working || last?.status === "running") &&
-        (next.runKey === undefined || next.runKey !== settledRunKey) &&
-        !next.working &&
-        (next.status === "completed" || next.status === "failed" || next.status === "interrupted")
-      ) {
+      const completion = resolveTurnMascotCompletion(last, next, settledRunKey);
+      if (completion !== null) {
         settledRunKey = next.runKey;
-        outcome = next.status === "completed" ? "done" : "failed";
+        outcome = completion;
         clearTimeout(reactionTimer);
         reactionTimer = setTimeout(() => {
           outcome = null;
@@ -147,6 +166,7 @@ export function createTurnMascotMoments(
         startedAt = null;
       }
       publish();
+      return { observation: next, settledRunKey };
     },
     setActive(value: boolean) {
       if (active === value) return;

@@ -19,13 +19,22 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as ServerConfig from "../config.ts";
 import {
   MAX_RUNS,
+  attachGrades,
   currentRuns,
   RankingsState,
   RecordedGrade,
   rankingsSnapshot,
   retainRuns,
   type RunRecord,
+  withFollowUp,
 } from "./records.ts";
+
+export interface FinishedFollowUp {
+  readonly taskId: NodeId;
+  readonly runTaskId: NodeId;
+  readonly outcome: RunRecord["outcome"];
+  readonly finishedAt: number;
+}
 
 export class SubagentRankings extends Context.Service<
   SubagentRankings,
@@ -34,18 +43,42 @@ export class SubagentRankings extends Context.Service<
       taskId: NodeId,
       grade: SubagentGrade,
     ) => Effect.Effect<void, SubagentRankingsError>;
-    /** MCP grades may arrive before the terminal projection hook records the run. */
+    /**
+     * MCP grades may arrive before the terminal projection hook records the run; those wait.
+     * A follow-up's grade names its original run in `runTaskId`, which was recorded when the
+     * original finished, so one without a retained run is returned as unmatched.
+     */
     readonly gradeMany: (
-      grades: ReadonlyArray<RecordedGrade & { readonly taskId: NodeId }>,
-    ) => Effect.Effect<void, SubagentRankingsError>;
+      grades: ReadonlyArray<
+        RecordedGrade & { readonly taskId: NodeId; readonly runTaskId?: NodeId }
+      >,
+    ) => Effect.Effect<{ readonly unmatched: ReadonlyArray<NodeId> }, SubagentRankingsError>;
+    /**
+     * Startup: `resolve` maps waiting task ids to the run each belongs to (itself, or a
+     * follow-up's original); waiting grades whose run is retained are attached.
+     */
+    readonly attachPending: <E>(
+      resolve: (taskIds: ReadonlyArray<NodeId>) => Effect.Effect<ReadonlyMap<NodeId, NodeId>, E>,
+    ) => Effect.Effect<
+      { readonly attached: number; readonly remaining: number },
+      SubagentRankingsError | E
+    >;
+    /** A follow-up's thumb lands on the original run `runTaskId` names, like its grade. */
     readonly toggleThumb: (
       taskId: NodeId,
       thumb: SubagentThumb,
+      runTaskId?: NodeId,
     ) => Effect.Effect<void, SubagentRankingsError>;
     readonly subscribe: () => Stream.Stream<SubagentRankingsSnapshot>;
     readonly getSnapshot: () => Effect.Effect<SubagentRankingsSnapshot>;
-    /** Projection hook, awaited after commit and before publishing the terminal event. */
-    readonly record: (runs: ReadonlyArray<RunRecord>) => Effect.Effect<void, SubagentRankingsError>;
+    /**
+     * Projection hook, awaited after commit and before publishing the terminal event.
+     * Finished follow-ups land on their original run; one whose run is not retained is dropped.
+     */
+    readonly record: (
+      runs: ReadonlyArray<RunRecord>,
+      followUps?: ReadonlyArray<FinishedFollowUp>,
+    ) => Effect.Effect<void, SubagentRankingsError>;
   }
 >()("t3/subagentRankings/SubagentRankings") {}
 
@@ -54,7 +87,13 @@ const decode = Schema.decodeEffect(codec);
 const encode = Schema.encodeEffect(codec);
 const decodeGrade = Schema.decodeUnknownEffect(SubagentGrade);
 const decodeGrades = Schema.decodeEffect(
-  Schema.Array(Schema.Struct({ taskId: NodeId, ...RecordedGrade.fields })),
+  Schema.Array(
+    Schema.Struct({
+      taskId: NodeId,
+      runTaskId: Schema.optionalKey(NodeId),
+      ...RecordedGrade.fields,
+    }),
+  ),
 );
 const sameState = Schema.toEquivalence(RankingsState);
 const sameSnapshot = Schema.toEquivalence(SubagentRankingsSnapshot);
@@ -142,6 +181,18 @@ const make = Effect.gen(function* () {
     current = next;
     yield* refresh();
   });
+  const commit = (
+    runs: ReadonlyArray<RunRecord>,
+    pending: NonNullable<RankingsState["pendingGrades"]>,
+  ) => {
+    const attached = attachGrades(runs, pending);
+    const waiting = attached.unattached.slice(-MAX_RUNS);
+    return save({
+      version: 2,
+      runs: attached.runs,
+      ...(waiting.length ? { pendingGrades: waiting } : {}),
+    }).pipe(Effect.as(attached.unattached));
+  };
   const update = (
     change: (
       runs: ReadonlyArray<RunRecord>,
@@ -150,38 +201,24 @@ const make = Effect.gen(function* () {
     lock.withPermits(1)(
       Effect.gen(function* () {
         const changed = yield* change(current.runs);
-        const pending = new Map(
-          (current.pendingGrades ?? []).map(({ taskId, ...grade }) => [taskId, grade]),
-        );
-        const runs = changed.map((run) => {
-          const grade = pending.get(run.taskId);
-          pending.delete(run.taskId);
-          return grade === undefined ? run : { ...run, grade };
-        });
-        yield* save({
-          version: 2,
-          runs,
-          ...(pending.size
-            ? { pendingGrades: [...pending].map(([taskId, grade]) => ({ taskId, ...grade })) }
-            : {}),
-        });
+        yield* commit(changed, current.pendingGrades ?? []);
       }).pipe(Effect.uninterruptible),
     );
+  const notRanked = (operation: "grade" | "thumb") =>
+    Effect.fail(new SubagentRankingsError({ operation, message: "Not ranked." }));
   const feedback = (
     taskId: NodeId,
     operation: "grade" | "thumb",
     change: (run: RunRecord) => RunRecord,
   ) =>
     update((runs) => {
-      if (!runs.some((r) => r.taskId === taskId))
-        return Effect.fail(
-          new SubagentRankingsError({
-            operation,
-            message: "This task has no retained subagent run to rate.",
-          }),
-        );
+      if (!runs.some((r) => r.taskId === taskId)) return notRanked(operation);
       return Effect.succeed(runs.map((r) => (r.taskId === taskId ? change(r) : r)));
     });
+  const toggle = <A extends { readonly thumb?: SubagentThumb }>(turn: A, thumb: SubagentThumb) => {
+    const { thumb: previous, ...rest } = turn;
+    return (previous === thumb ? rest : { ...rest, thumb }) as A;
+  };
   return SubagentRankings.of({
     grade: Effect.fn("SubagentRankings.grade")(function* (taskId, grade) {
       const checked = yield* decodeGrade(grade).pipe(
@@ -205,41 +242,81 @@ const make = Effect.gen(function* () {
                 new SubagentRankingsError({ operation: "grade", message: "Invalid grade.", cause }),
             ),
           );
-          const pending = new Map(
-            (current.pendingGrades ?? []).map(({ taskId, ...grade }) => [taskId, grade]),
+          const retained = new Set(current.runs.map((run) => run.taskId));
+          const unmatched = checked.filter(
+            (grade) =>
+              grade.runTaskId !== undefined &&
+              grade.runTaskId !== grade.taskId &&
+              !retained.has(grade.runTaskId),
           );
-          for (const { taskId, ...grade } of checked) pending.set(taskId, grade);
-          const runs = current.runs.map((run) => {
-            const grade = pending.get(run.taskId);
-            pending.delete(run.taskId);
-            return grade === undefined ? run : { ...run, grade };
-          });
-          yield* save({
-            version: 2,
-            runs,
-            ...(pending.size
-              ? {
-                  pendingGrades: [...pending]
-                    .slice(-MAX_RUNS)
-                    .map(([taskId, grade]) => ({ taskId, ...grade })),
-                }
-              : {}),
-          });
+          const incoming = checked.filter((grade) => !unmatched.includes(grade));
+          const replaced = new Set(incoming.map((grade) => grade.taskId));
+          yield* commit(current.runs, [
+            ...(current.pendingGrades ?? []).filter((grade) => !replaced.has(grade.taskId)),
+            ...incoming,
+          ]);
+          return { unmatched: unmatched.map((grade) => grade.taskId) };
         }).pipe(Effect.uninterruptible),
       ),
-    toggleThumb: (taskId, thumb) =>
-      feedback(taskId, "thumb", (run) => {
-        const { thumb: previous, ...rest } = run;
-        return previous === thumb ? rest : { ...rest, thumb };
+    attachPending: (resolve) =>
+      lock.withPermits(1)(
+        Effect.gen(function* () {
+          const pending = current.pendingGrades ?? [];
+          const unresolved = pending.filter((grade) => grade.runTaskId === undefined);
+          if (unresolved.length === 0) return { attached: 0, remaining: pending.length };
+          const runFor = yield* resolve(unresolved.map((grade) => grade.taskId));
+          const remaining = yield* commit(
+            current.runs,
+            pending.map((grade) => {
+              const runTaskId = grade.runTaskId ?? runFor.get(grade.taskId);
+              return runTaskId === undefined || runTaskId === grade.taskId
+                ? grade
+                : { ...grade, runTaskId };
+            }),
+          );
+          return { attached: pending.length - remaining.length, remaining: remaining.length };
+        }).pipe(Effect.uninterruptible),
+      ),
+    toggleThumb: (taskId, thumb, runTaskId) =>
+      update((runs) => {
+        if (runs.some((run) => run.taskId === taskId))
+          return Effect.succeed(
+            runs.map((run) => (run.taskId === taskId ? toggle(run, thumb) : run)),
+          );
+        const original =
+          runs.find((run) => run.followUps?.some((followUp) => followUp.taskId === taskId)) ??
+          (runTaskId === undefined || runTaskId === taskId
+            ? undefined
+            : runs.find((run) => run.taskId === runTaskId));
+        if (original === undefined) return notRanked("thumb");
+        return Effect.succeed(
+          runs.map((run) =>
+            run === original
+              ? withFollowUp(run, taskId, (followUp) => toggle(followUp, thumb))
+              : run,
+          ),
+        );
       }),
-    record: (runs) =>
-      runs.length === 0
+    record: (runs, followUps = []) =>
+      runs.length === 0 && followUps.length === 0
         ? Effect.void
         : update((existing) => {
             const byId = new Map(existing.map((run) => [run.taskId, run]));
             for (const run of runs) {
               const previous = byId.get(run.taskId);
               byId.set(run.taskId, { ...previous, ...run });
+            }
+            for (const { taskId, runTaskId, outcome, finishedAt } of followUps) {
+              const original = byId.get(runTaskId);
+              if (original === undefined) continue;
+              byId.set(
+                runTaskId,
+                withFollowUp(original, taskId, (followUp) => ({
+                  ...followUp,
+                  outcome,
+                  finishedAt,
+                })),
+              );
             }
             return Effect.succeed(retainRuns([...byId.values()]));
           }),

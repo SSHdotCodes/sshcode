@@ -2,6 +2,7 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { threadKey } from "@t3tools/client-runtime/state/entities";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
+  teamBoardRepoLatestPostId,
   formatTeamBoardMembers,
   formatTeamBoardPushTime,
   formatTeamBoardRanges,
@@ -12,8 +13,17 @@ import {
   TEAM_BOARD_MESSAGE_MAX,
   teamBoardAuthorKey,
   teamBoardDraftError,
-  teamBoardDriversFromKey,
-  teamBoardDriversKey,
+  teamBoardAddressee,
+  teamBoardAuthorLine,
+  teamBoardHoldsLabel,
+  teamBoardAddressedMember,
+  teamBoardRoster,
+  type TeamBoardMember,
+  type TeamBoardMemberState,
+  type TeamBoardRosterChip,
+  teamBoardAuthorsFromKey,
+  teamBoardAuthorsKey,
+  type TeamBoardAuthors,
   teamBoardFileLabel,
   teamBoardFiles,
   teamBoardKind,
@@ -22,18 +32,21 @@ import {
   type TeamBoardKindTone,
   teamBoardPill,
   teamBoardPillLabel,
-  teamBoardPresenceLabel,
   type TeamBoardRow,
   teamBoardRows,
 } from "@t3tools/client-runtime/state/team-board";
-import type {
-  NodeId,
-  OrchestrationV2Subagent,
-  ScopedThreadRef,
-  TeamBoardFile,
-  TeamBoardPost,
-  TeamBoardPush,
-  TeamBoardSnapshot,
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { resolveSubagentMetadata } from "@t3tools/client-runtime/state/subagent-display";
+import { useNavigate } from "@tanstack/react-router";
+import {
+  ThreadId,
+  type NodeId,
+  type ScopedThreadRef,
+  type ServerProvider,
+  type TeamBoardFile,
+  type TeamBoardPost,
+  type TeamBoardPush,
+  type TeamBoardSnapshot,
 } from "@t3tools/contracts";
 import {
   ArrowUpIcon,
@@ -47,16 +60,26 @@ import {
   UserRoundIcon,
   XIcon,
 } from "lucide-react";
-import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  type KeyboardEvent,
+  memo,
+  use,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
 import { cn, randomUUID } from "~/lib/utils";
 import {
-  openTeamBoard,
+  showTeamBoardPill,
   teamBoardEnvironment,
   teamBoardOpenAtom,
   type TeamBoardView,
 } from "../../state/teamBoard";
-import { environmentThreadDetails } from "../../state/threads";
+import { useServerConfigs } from "../../state/entities";
+import { buildThreadRouteParams } from "../../threadRoutes";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
@@ -65,28 +88,41 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { Spinner } from "../ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
+import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ComposerBanner } from "./ComposerBanner";
-import { providerTextColor } from "./ProviderInstanceIcon";
 import { SubagentAvatar } from "./SubagentCard";
 
-type Subagents = ReadonlyArray<OrchestrationV2Subagent>;
-type Drivers = ReadonlyMap<string, OrchestrationV2Subagent["driver"]>;
-const EMPTY_SUBAGENTS: Subagents = [];
+type Subagents = ReadonlyArray<TeamBoardMember>;
+type Drivers = TeamBoardAuthors;
+const EMPTY_PROVIDERS: ReadonlyArray<ServerProvider> = [];
 
-/** Authors' providers; the map changes only when one does, so rows keep their props. */
+/** Authors as the chat's subagent rows show them; the map changes only when one does. */
 function useAuthorDrivers(subagents: Subagents): Drivers {
-  const key = teamBoardDriversKey(subagents);
-  return useMemo(() => teamBoardDriversFromKey(key), [key]);
+  const key = teamBoardAuthorsKey(subagents);
+  return useMemo(() => teamBoardAuthorsFromKey(key), [key]);
 }
 
-function useThreadSubagents(ref: ScopedThreadRef): Subagents {
-  return (
-    useAtomValue(
-      environmentThreadDetails.threadAtom(ref),
-      (thread) => thread?.projection.subagents,
-    ) ?? EMPTY_SUBAGENTS
-  );
+/** The lead chat's providers, and how a post opens its author's chat. */
+const BoardPeople = createContext<{
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly members: ReadonlyArray<TeamBoardMember>;
+  readonly onOpen: ((threadId: string) => void) | null;
+}>({ providers: EMPTY_PROVIDERS, members: [], onOpen: null });
+
+function useAuthorLine(author: TeamBoardPost["author"], drivers: Drivers) {
+  const { providers } = use(BoardPeople);
+  const info = author.taskId === undefined ? undefined : drivers.get(author.taskId);
+  const provider = providers.find((entry) => entry.instanceId === info?.providerInstanceId);
+  const modelLabel =
+    info === undefined
+      ? null
+      : resolveSubagentMetadata({
+          model: info.model,
+          modelOptions: info.modelOptions,
+          provider,
+        }).modelLabel;
+  return { ...teamBoardAuthorLine(author, info, modelLabel), info, provider };
 }
 
 /** "Team board · 6 posts · 1 overlap" above the lead's composer, beside live progress. */
@@ -94,12 +130,15 @@ export function TeamBoardPill(props: { readonly threadRef: ScopedThreadRef }) {
   const ref = props.threadRef;
   const summary = useAtomValue(teamBoardEnvironment.summaryAtom(ref));
   const seen = useAtomValue(teamBoardEnvironment.seenAtom(ref));
-  const openAtom = teamBoardOpenAtom(threadKey(ref));
+  const key = threadKey(ref);
+  const openAtom = teamBoardOpenAtom(key);
   const open = useAtomValue(openAtom);
   const setOpen = useAtomSet(openAtom);
   // The pill moves between the dock's start and end; the popover stays over the chat column.
   const [column, setColumn] = useState<Element | null>(null);
   const pill = teamBoardPill(summary, seen);
+  const shown = pill !== null;
+  useEffect(() => (shown ? showTeamBoardPill(key) : undefined), [shown, key]);
   if (pill === null) return null;
   const label = teamBoardPillLabel(pill);
   const popoverOpen = open?.from === "pill";
@@ -353,8 +392,29 @@ function TeamBoardPanel(props: {
       : teamBoardEnvironment.pushAtom(ref, props.push.id),
   );
   const setSeen = useAtomSet(teamBoardEnvironment.seenAtom(ref));
-  const subagents = useThreadSubagents(ref);
+  // The chat's task records, or the QA fixture's stand-ins.
+  const subagents = useAtomValue(teamBoardEnvironment.membersAtom(ref));
   const drivers = useAuthorDrivers(subagents);
+  const providers = useServerConfigs().get(ref.environmentId)?.providers ?? EMPTY_PROVIDERS;
+  const navigate = useNavigate();
+  const setBoardOpen = useAtomSet(teamBoardOpenAtom(threadKey(ref)));
+  // A post opens its author's chat the way the subagent's row in the lead chat does.
+  const people = useMemo(
+    () => ({
+      providers,
+      members: subagents,
+      onOpen: (threadId: string) => {
+        setBoardOpen(null);
+        void navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(
+            scopeThreadRef(ref.environmentId, ThreadId.make(threadId)),
+          ),
+        });
+      },
+    }),
+    [navigate, providers, ref.environmentId, setBoardOpen, subagents],
+  );
   const [tab, setTab] = useState<"posts" | "files">("posts");
   const [filter, setFilter] = useState<TeamBoardFilter>("all");
   const summary = useAtomValue(teamBoardEnvironment.summaryAtom(ref));
@@ -370,12 +430,12 @@ function TeamBoardPanel(props: {
     (post: TeamBoardPost | null) => setReplyState(post === null ? null : { repo, post }),
     [repo],
   );
-  // The pill counts every live repository, so reading any of them marks the whole team read.
-  const latestPostId = live ? summary?.latestPostId : undefined;
+  // Reading a repository marks only its newest post seen; the dot stays while another has news.
+  const latestPostId = live ? teamBoardRepoLatestPostId(summary, repo) : undefined;
   // Reading the live board marks it read on this machine, including posts that land while open.
   useEffect(() => {
-    if (latestPostId !== undefined) setSeen(latestPostId);
-  }, [latestPostId, setSeen]);
+    if (latestPostId !== undefined) setSeen({ latestPostId, repo });
+  }, [latestPostId, repo, setSeen]);
   const agent =
     props.taskId === null ? null : (subagents.find((entry) => entry.id === props.taskId) ?? null);
   const agentName =
@@ -386,92 +446,89 @@ function TeamBoardPanel(props: {
         "Subagent";
   const canPost = useAtomValue(teamBoardEnvironment.permissionAtom(ref.environmentId));
   const writable = live && details?.active === true;
+  const roster = teamBoardRoster(subagents, details);
+  const holds = useAtomValue(teamBoardEnvironment.holdsAtom(ref));
   return (
-    <div className="flex max-h-[calc(60vh-2px)] min-h-0 flex-col" data-team-board-panel="true">
-      <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
-        {props.onBack ? (
-          <Button size="icon-xs" variant="ghost" aria-label="Past pushes" onClick={props.onBack}>
-            <ChevronLeftIcon />
-          </Button>
+    <BoardPeople value={people}>
+      <div className="flex max-h-[calc(60vh-2px)] min-h-0 flex-col" data-team-board-panel="true">
+        <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+          {props.onBack ? (
+            <Button size="icon-xs" variant="ghost" aria-label="Past pushes" onClick={props.onBack}>
+              <ChevronLeftIcon />
+            </Button>
+          ) : (
+            <MessagesSquareIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+          )}
+          {live ? (
+            <RepoPicker threadRef={ref} />
+          ) : (
+            <span className="min-w-0 shrink-0 truncate text-sm font-medium text-foreground">
+              Team board
+            </span>
+          )}
+          {props.push === null && details !== null && !details.active ? (
+            <span className="shrink-0 text-2xs text-muted-foreground">Ended · read-only</span>
+          ) : null}
+          <span className="flex-1" />
+          <ToggleGroup
+            aria-label="Board view"
+            value={[tab]}
+            onValueChange={(value) => {
+              const next = value[0];
+              if (next === "posts" || next === "files") setTab(next);
+            }}
+          >
+            <ToggleGroupItem value="posts">Posts</ToggleGroupItem>
+            <ToggleGroupItem value="files">Files</ToggleGroupItem>
+          </ToggleGroup>
+          {props.onClose ? (
+            <Button size="icon-xs" variant="ghost" aria-label="Close" onClick={props.onClose}>
+              <XIcon />
+            </Button>
+          ) : null}
+        </div>
+        {props.push !== null ? <PushMetadata push={props.push} /> : null}
+        <RosterRow
+          holds={holds}
+          roster={roster}
+          selected={props.taskId}
+          drivers={drivers}
+          onSelect={props.onTaskChange}
+        />
+        {details === null ? (
+          <div className="flex items-center gap-2 px-3 py-6 text-xs text-muted-foreground">
+            <Spinner size="sm" tone="muted" />
+            Loading the board…
+          </div>
+        ) : tab === "posts" ? (
+          <PostsTab
+            snapshot={details}
+            filter={filter}
+            onFilterChange={setFilter}
+            taskId={props.taskId}
+            agentName={agentName}
+            drivers={drivers}
+            onReply={writable && canPost ? setReplyTo : null}
+          />
         ) : (
-          <MessagesSquareIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+          <FilesTab
+            files={teamBoardFiles(details.files ?? [], props.taskId)}
+            agentName={agentName}
+            drivers={drivers}
+          />
         )}
-        {live ? (
-          <RepoPicker threadRef={ref} />
-        ) : (
-          <span className="min-w-0 shrink-0 truncate text-sm font-medium text-foreground">
-            Team board
-          </span>
-        )}
-        {props.push === null && details !== null && !details.active ? (
-          <span className="shrink-0 text-2xs text-muted-foreground">Ended · read-only</span>
-        ) : null}
-        <span className="flex-1" />
-        <ToggleGroup
-          aria-label="Board view"
-          value={[tab]}
-          onValueChange={(value) => {
-            const next = value[0];
-            if (next === "posts" || next === "files") setTab(next);
-          }}
-        >
-          <ToggleGroupItem value="posts">Posts</ToggleGroupItem>
-          <ToggleGroupItem value="files">Files</ToggleGroupItem>
-        </ToggleGroup>
-        {props.onClose ? (
-          <Button size="icon-xs" variant="ghost" aria-label="Close" onClick={props.onClose}>
-            <XIcon />
-          </Button>
+        {writable ? (
+          <TeamBoardComposer
+            threadRef={ref}
+            repo={repo}
+            canPost={canPost}
+            replyTo={replyTo}
+            onClearReply={() => setReplyTo(null)}
+            drivers={drivers}
+          />
         ) : null}
       </div>
-      {props.push !== null ? <PushMetadata push={props.push} /> : null}
-      {agentName !== null ? (
-        <div className="flex items-center gap-1.5 border-b border-border/60 px-3 py-1.5 text-xs text-muted-foreground">
-          <span>Showing</span>
-          <AuthorName author={{ name: agentName, taskId: props.taskId! }} drivers={drivers} />
-          <Button
-            size="xs"
-            variant="ghost"
-            className="ml-auto"
-            onClick={() => props.onTaskChange(null)}
-          >
-            Everyone
-          </Button>
-        </div>
-      ) : null}
-      {details === null ? (
-        <div className="flex items-center gap-2 px-3 py-6 text-xs text-muted-foreground">
-          <Spinner size="sm" tone="muted" />
-          Loading the board…
-        </div>
-      ) : tab === "posts" ? (
-        <PostsTab
-          snapshot={details}
-          filter={filter}
-          onFilterChange={setFilter}
-          taskId={props.taskId}
-          agentName={agentName}
-          drivers={drivers}
-          onReply={writable && canPost ? setReplyTo : null}
-        />
-      ) : (
-        <FilesTab
-          files={teamBoardFiles(details.files ?? [], props.taskId)}
-          agentName={agentName}
-          drivers={drivers}
-        />
-      )}
-      {writable ? (
-        <TeamBoardComposer
-          threadRef={ref}
-          repo={repo}
-          canPost={canPost}
-          replyTo={replyTo}
-          onClearReply={() => setReplyTo(null)}
-          drivers={drivers}
-        />
-      ) : null}
-    </div>
+    </BoardPeople>
   );
 }
 
@@ -507,7 +564,18 @@ function PostsTab(props: {
   const rows = teamBoardRows(props.snapshot.posts ?? [], {
     filter: props.filter,
     taskId: props.taskId,
+    ...(props.agentName === null ? {} : { memberName: props.agentName }),
   });
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const toggle = useCallback(
+    (postId: string) =>
+      setCollapsed((current) => {
+        const next = new Set(current);
+        if (!next.delete(postId)) next.add(postId);
+        return next;
+      }),
+    [],
+  );
   return (
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
       <div className="sticky top-0 z-10 border-b border-border/40 bg-popover/95 px-2 py-1.5 backdrop-blur-sm">
@@ -540,6 +608,8 @@ function PostsTab(props: {
             <PostThread
               key={row.post.id}
               row={row}
+              collapsed={collapsed.has(row.post.id)}
+              onToggle={toggle}
               drivers={props.drivers}
               onReply={props.onReply}
             />
@@ -552,6 +622,8 @@ function PostsTab(props: {
 
 interface PostThreadProps {
   readonly row: TeamBoardRow;
+  readonly collapsed: boolean;
+  readonly onToggle: (postId: string) => void;
   readonly drivers: Drivers;
   readonly onReply: ((post: TeamBoardPost) => void) | null;
 }
@@ -563,6 +635,20 @@ const PostThread = memo(
       <li data-team-board-post={props.row.post.id}>
         <PostRow post={props.row.post} drivers={props.drivers} onReply={props.onReply} />
         {props.row.replies.length > 0 ? (
+          <Button
+            size="xs"
+            variant="ghost"
+            className="mb-1 ml-9"
+            aria-expanded={!props.collapsed}
+            data-team-board-replies-toggle="true"
+            onClick={() => props.onToggle(props.row.post.id)}
+          >
+            {props.collapsed
+              ? `${props.row.replies.length} ${props.row.replies.length === 1 ? "reply" : "replies"}`
+              : "Hide replies"}
+          </Button>
+        ) : null}
+        {props.row.replies.length > 0 && !props.collapsed ? (
           <ol className="mb-2 ml-9 border-l border-border/70" data-team-board-replies="true">
             {props.row.replies.map((reply) => (
               <li key={reply.id} data-team-board-post={reply.id}>
@@ -576,6 +662,8 @@ const PostThread = memo(
   },
   (previous: PostThreadProps, next: PostThreadProps) =>
     sameTeamBoardRow(previous.row, next.row) &&
+    previous.collapsed === next.collapsed &&
+    previous.onToggle === next.onToggle &&
     previous.drivers === next.drivers &&
     previous.onReply === next.onReply,
 );
@@ -596,46 +684,70 @@ function PostRow(props: {
   readonly nested?: boolean;
 }) {
   const { post } = props;
+  const { onOpen } = use(BoardPeople);
   const kind = teamBoardKind(post.kind);
   const conflict = post.conflict;
+  const line = useAuthorLine(post.author, props.drivers);
+  const open = onOpen === null || line.open === null ? null : () => onOpen(line.open!);
   return (
     <div
       data-team-board-kind={post.kind}
       data-team-board-conflict={conflict ? "true" : undefined}
+      {...(open === null
+        ? {}
+        : {
+            role: "button",
+            tabIndex: 0,
+            "aria-label": `Open ${line.name}`,
+            onClick: open,
+            onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
+              if (event.target !== event.currentTarget) return;
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                open();
+              }
+            },
+          })}
       className={cn(
         "group/team-post flex gap-2 py-2",
         props.nested ? "pr-3 pl-3" : "px-3",
         conflict && "bg-warning/8",
+        open !== null &&
+          "cursor-pointer hover:bg-accent/40 focus-visible:bg-accent/40 focus-visible:outline-none active:bg-accent/60",
       )}
     >
       <AuthorAvatar author={post.author} drivers={props.drivers} />
       <div className="min-w-0 flex-1 space-y-1">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <AuthorName author={post.author} drivers={props.drivers} />
-          {post.to ? (
-            <span className="min-w-0 truncate text-2xs text-muted-foreground">to {post.to}</span>
-          ) : null}
-          {kind ? (
-            <span
-              className={cn(
-                "shrink-0 rounded-sm px-1.5 py-px text-2xs font-medium",
-                KIND_CHIP_CLASS[kind.tone],
-              )}
-            >
-              {kind.label}
+        <div className="flex min-w-0 items-start gap-1.5">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <AuthorName author={post.author} drivers={props.drivers} />
+            <span className="flex min-w-0 max-w-full items-center gap-1.5">
+              <Addressee post={post} drivers={props.drivers} />
+              {kind ? (
+                <span
+                  className={cn(
+                    "shrink-0 rounded-sm px-1.5 py-px text-2xs font-medium",
+                    KIND_CHIP_CLASS[kind.tone],
+                  )}
+                >
+                  {kind.label}
+                </span>
+              ) : null}
+              {post.pinned ? (
+                <PinIcon aria-label="Pinned" className="size-3 shrink-0 text-muted-foreground" />
+              ) : null}
             </span>
-          ) : null}
-          {post.pinned ? (
-            <PinIcon aria-label="Pinned" className="size-3 shrink-0 text-muted-foreground" />
-          ) : null}
-          <span className="flex-1" />
+          </div>
           {props.onReply ? (
             <span className="opacity-0 transition-opacity duration-120 group-hover/team-post:opacity-100 focus-within:opacity-100 motion-reduce:transition-none">
               <Button
                 size="icon-xs"
                 variant="ghost"
-                aria-label={`Reply to ${post.author.name}`}
-                onClick={() => props.onReply?.(post)}
+                aria-label={`Reply to ${line.name}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onReply?.(post);
+                }}
               >
                 <ReplyIcon />
               </Button>
@@ -685,77 +797,201 @@ function FilesTab(props: {
 }) {
   if (props.files.length === 0) {
     return (
-      <p className="px-3 py-6 text-center text-xs text-muted-foreground">
-        {props.agentName === null
-          ? "No file is claimed or changed by two agents."
-          : `${props.agentName} shares no files yet.`}
-      </p>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+          {props.agentName === null
+            ? "No file is being edited by two subagents."
+            : `${props.agentName} shares no files yet.`}
+        </p>
+      </div>
     );
   }
   return (
-    <ol className="min-h-0 flex-1 divide-y divide-border/40 overflow-y-auto overscroll-contain">
-      {props.files.map((file) => (
-        <li key={file.path} className="space-y-1.5 px-3 py-2" data-team-board-file={file.path}>
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="flex min-w-0 flex-1 font-mono text-xs text-foreground">
-              <MiddleTruncate value={file.path} />
-            </span>
-            {file.willConflict === true ? (
-              <span className="shrink-0 rounded-sm bg-warning/14 px-1.5 py-px text-2xs font-medium text-warning-foreground">
-                Will conflict
+    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      <ol className="divide-y divide-border/40">
+        {props.files.map((file) => (
+          <li key={file.path} className="space-y-1.5 px-3 py-2" data-team-board-file={file.path}>
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="flex min-w-0 flex-1 font-mono text-xs text-foreground">
+                <MiddleTruncate value={file.path} />
               </span>
-            ) : file.willConflict === false ? (
-              <span className="shrink-0 text-2xs text-muted-foreground">No conflict</span>
-            ) : null}
-          </div>
-          <ul className="space-y-1">
-            {file.agents.map((entry) => (
-              <li
-                key={teamBoardAuthorKey(entry.author)}
-                data-team-board-stale={entry.stale ? "true" : undefined}
-                className={cn(
-                  "flex min-w-0 items-center gap-1.5 text-xs",
-                  entry.stale && "opacity-60",
-                )}
-              >
-                <AuthorAvatar author={entry.author} drivers={props.drivers} small />
-                <AuthorName author={entry.author} drivers={props.drivers} />
-                <span className="min-w-0 truncate text-muted-foreground tabular-nums">
-                  {[
-                    formatTeamBoardRanges(entry.ranges),
-                    ...(entry.claims ?? []).map((claim) => {
-                      const label = teamBoardFileLabel(claim);
-                      return label.symbol ? `claims ${label.symbol}` : "claims the file";
-                    }),
-                    // No change in a while: the range may no longer be what it edits.
-                    entry.stale ? "stale" : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
+              {file.willConflict === true ? (
+                <span className="shrink-0 rounded-sm bg-warning/14 px-1.5 py-px text-2xs font-medium text-warning-foreground">
+                  Will conflict
                 </span>
-              </li>
-            ))}
-          </ul>
-        </li>
-      ))}
-    </ol>
+              ) : file.willConflict === false ? (
+                <span className="shrink-0 text-2xs text-muted-foreground">No conflict</span>
+              ) : null}
+            </div>
+            <ul className="space-y-1">
+              {file.agents.map((entry) => (
+                <li
+                  key={teamBoardAuthorKey(entry.author)}
+                  data-team-board-stale={entry.stale ? "true" : undefined}
+                  className={cn(
+                    "flex min-w-0 items-center gap-1.5 text-xs",
+                    entry.stale && "opacity-60",
+                  )}
+                >
+                  <AuthorAvatar author={entry.author} drivers={props.drivers} small />
+                  <AuthorName author={entry.author} drivers={props.drivers} />
+                  <span className="min-w-0 truncate text-muted-foreground tabular-nums">
+                    {[
+                      formatTeamBoardRanges(entry.ranges),
+                      ...(entry.claims ?? []).map((claim) => {
+                        const label = teamBoardFileLabel(claim);
+                        return label.symbol ? `editing ${label.symbol}` : "editing the file";
+                      }),
+                      // No change in a while: the range may no longer be what it edits.
+                      entry.stale ? "stale" : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 
-/** Subagents use their card's provider color; the user and the lead read in the text color. */
+const STATE_DOT: Record<TeamBoardMemberState, string> = {
+  working: "bg-info",
+  done: "bg-success",
+  failed: "bg-destructive",
+};
+const STATE_LABEL: Record<TeamBoardMemberState, string> = {
+  working: "working",
+  done: "done",
+  failed: "failed",
+};
+
+/** One chip per member; picking one filters Posts and Files to it, picking it again clears. */
+function RosterRow(props: {
+  readonly roster: ReadonlyArray<TeamBoardRosterChip>;
+  readonly selected: NodeId | null;
+  readonly drivers: Drivers;
+  readonly onSelect: (taskId: NodeId | null) => void;
+  /** Files each member holds now, from the presence feed (live frames carry no presence). */
+  readonly holds?: ReadonlyMap<string, number>;
+}) {
+  if (props.roster.length === 0) return null;
+  return (
+    <div className="h-10 shrink-0 border-b border-border/60">
+      <ScrollArea radius="none" hideScrollbars scrollFade scrollFadePadding={false}>
+        <div
+          role="group"
+          aria-label="Team"
+          data-team-board-roster="true"
+          className="flex h-full w-max min-w-full items-center gap-1.5 px-3"
+        >
+          {props.roster.map((chip) => {
+            const selected = props.selected === chip.member.id;
+            const detail = teamBoardHoldsLabel(props.holds?.get(chip.member.id) ?? chip.holds);
+            return (
+              <button
+                key={chip.member.id}
+                type="button"
+                aria-pressed={selected}
+                aria-label={[chip.name, STATE_LABEL[chip.state], detail].filter(Boolean).join(", ")}
+                data-team-board-member={chip.member.id}
+                onClick={() => props.onSelect(selected ? null : chip.member.id)}
+                className={cn(
+                  "inline-flex h-7 max-w-[18rem] shrink-0 items-center gap-1.5 rounded-full border px-1.5 pr-2.5 text-xs transition-colors duration-120 motion-reduce:transition-none",
+                  selected
+                    ? "border-foreground/25 bg-accent text-foreground"
+                    : "border-border/70 text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                )}
+              >
+                <span className="relative inline-flex shrink-0">
+                  <AuthorAvatar
+                    author={{ name: chip.name, taskId: chip.member.id }}
+                    drivers={props.drivers}
+                    small
+                  />
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "absolute -right-0.5 -bottom-0.5 size-1.5 rounded-full ring-1 ring-background",
+                      STATE_DOT[chip.state],
+                    )}
+                  />
+                </span>
+                <span className="max-w-[9rem] shrink-0 truncate font-medium text-foreground">
+                  {chip.name}
+                </span>
+                {detail ? (
+                  <span className="min-w-0 truncate text-2xs text-muted-foreground">{detail}</span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      </ScrollArea>
+    </div>
+  );
+}
+
+/** "→ Sol 6.2", "→ Lead" or "→ You": the addressee's avatar and short model name. */
+function Addressee(props: { readonly post: TeamBoardPost; readonly drivers: Drivers }) {
+  const { members } = use(BoardPeople);
+  const to = teamBoardAddressee(props.post);
+  const member = to?.kind === "member" ? teamBoardAddressedMember(members, props.post) : undefined;
+  const author = { name: to?.name ?? "", ...(member ? { taskId: member.id } : {}) };
+  const line = useAuthorLine(author, props.drivers);
+  if (to === null) return null;
+  const name = member ? line.name : to.name;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            aria-label={`to ${name}`}
+            className="flex min-w-0 items-center gap-1 text-2xs text-muted-foreground"
+          />
+        }
+      >
+        <span aria-hidden className="shrink-0">
+          →
+        </span>
+        {member ? <AuthorAvatar author={author} drivers={props.drivers} small /> : null}
+        {member && line.model !== null ? (
+          <>
+            <span aria-hidden className="min-w-0 truncate font-medium text-foreground">
+              {name}
+            </span>
+            <span aria-hidden className="shrink-0 whitespace-nowrap">
+              {line.model}
+            </span>
+          </>
+        ) : (
+          <span aria-hidden className="shrink-0 font-medium whitespace-nowrap text-foreground">
+            {name}
+          </span>
+        )}
+      </TooltipTrigger>
+      <TooltipPopup>{name}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/** The sender as its row in the lead chat names it: title, then the model's short name. */
 function AuthorName(props: {
   readonly author: TeamBoardPost["author"];
   readonly drivers: Drivers;
 }) {
-  const driver =
-    props.author.taskId === undefined ? undefined : props.drivers.get(props.author.taskId);
-  const color = driver ? providerTextColor(driver) : {};
+  const line = useAuthorLine(props.author, props.drivers);
   return (
-    <span
-      className={cn("min-w-0 shrink truncate text-xs font-medium text-foreground", color.className)}
-      style={color.style}
-    >
-      {props.author.user ? "You" : props.author.name}
+    <span className="flex min-w-0 shrink items-baseline gap-1">
+      <span className="min-w-0 shrink truncate text-xs font-medium text-foreground">
+        {line.name}
+      </span>
+      {line.model === null ? null : (
+        <span className="shrink-0 text-2xs text-muted-foreground">{line.model}</span>
+      )}
     </span>
   );
 }
@@ -765,6 +1001,7 @@ function AuthorAvatar(props: {
   readonly drivers: Drivers;
   readonly small?: boolean;
 }) {
+  const line = useAuthorLine(props.author, props.drivers);
   const size = props.small ? "size-4" : "size-6";
   if (props.author.user || props.author.taskId === undefined) {
     const Icon = props.author.user ? UserRoundIcon : CrownIcon;
@@ -780,9 +1017,11 @@ function AuthorAvatar(props: {
       </span>
     );
   }
+  // Same mark as the subagent's row: its instance's own icon; a neutral mark when unknown.
   return (
     <SubagentAvatar
-      driver={props.drivers.get(props.author.taskId)}
+      driver={line.provider?.driver ?? line.info?.driver ?? undefined}
+      provider={line.provider}
       className={cn("ring-0", size)}
     />
   );
@@ -893,43 +1132,5 @@ function TeamBoardComposer(props: {
         </p>
       ) : null}
     </div>
-  );
-}
-
-/** What a subagent card's agent is claiming or editing now; opens the board filtered to it. */
-export function TeamBoardPresenceChip(props: {
-  readonly threadRef: ScopedThreadRef;
-  readonly taskId: NodeId;
-}) {
-  const files = useAtomValue(teamBoardEnvironment.presenceAtom(props.threadRef, props.taskId));
-  const label = files === null ? null : teamBoardPresenceLabel(files);
-  if (files === null || label === null) return null;
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        delay={300}
-        render={
-          <button
-            type="button"
-            data-team-board-presence={props.taskId}
-            aria-label={`On the team board: ${files.join(", ")}. Open the board for this subagent.`}
-            onClick={() => openTeamBoard(props.threadRef, props.taskId)}
-            className="ml-1.5 inline-flex max-w-36 shrink-0 items-center gap-1 rounded-full border border-border/60 bg-background/60 px-2 py-0.5 font-mono text-2xs text-muted-foreground transition-colors duration-120 ease-out hover:border-border hover:bg-accent/50 hover:text-foreground motion-reduce:transition-none"
-          />
-        }
-      >
-        <span className="min-w-0 truncate">{label.name}</span>
-        {label.more > 0 ? <span className="shrink-0 tabular-nums">+{label.more}</span> : null}
-      </TooltipTrigger>
-      <TooltipPopup>
-        <span className="block font-mono text-2xs">
-          {files.map((file) => (
-            <span key={file} className="block">
-              {file}
-            </span>
-          ))}
-        </span>
-      </TooltipPopup>
-    </Tooltip>
   );
 }

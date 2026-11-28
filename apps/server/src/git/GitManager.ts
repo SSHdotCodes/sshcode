@@ -514,6 +514,10 @@ function shortenSha(sha: string | undefined): string | null {
   return sha.slice(0, SHORT_SHA_LENGTH);
 }
 
+function sliceTextPrefix(value: string, length: number): string {
+  return value.slice(0, length).replace(/[\uD800-\uDBFF]$/u, "");
+}
+
 function truncateText(
   value: string | undefined,
   maxLength = TOAST_DESCRIPTION_MAX,
@@ -521,7 +525,7 @@ function truncateText(
   if (!value) return undefined;
   if (value.length <= maxLength) return value;
   if (maxLength <= 3) return "...".slice(0, maxLength);
-  return `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+  return `${sliceTextPrefix(value, maxLength - 3).trimEnd()}...`;
 }
 
 function withDescription(title: string, description: string | undefined) {
@@ -572,7 +576,7 @@ function sanitizeCommitMessage(generated: {
 } {
   const rawSubject = generated.subject.trim().split(/\r?\n/g)[0]?.trim() ?? "";
   const subject = rawSubject.replace(/[.]+$/g, "").trim();
-  const safeSubject = subject.length > 0 ? subject.slice(0, 72).trimEnd() : "Update project files";
+  const safeSubject = sliceTextPrefix(subject, 72).trimEnd() || "Update project files";
   return {
     subject: safeSubject,
     body: generated.body.trim(),
@@ -588,7 +592,7 @@ function sanitizeProgressText(value: string): string | null {
   if (trimmed.length <= MAX_PROGRESS_TEXT_LENGTH) {
     return trimmed;
   }
-  return trimmed.slice(0, MAX_PROGRESS_TEXT_LENGTH).trimEnd();
+  return sliceTextPrefix(trimmed, MAX_PROGRESS_TEXT_LENGTH).trimEnd();
 }
 
 interface CommitAndBranchSuggestion {

@@ -12591,9 +12591,13 @@ export default function ChatView(props: ChatViewProps) {
         <>
           <TeamBoardPill threadRef={activeThreadRef} />
           <TeamBoardDialog threadRef={activeThreadRef} />
+          {/* A board note in a subagent's chat opens its lead's board. */}
+          {parentSubagentThreadRef === null ? null : (
+            <TeamBoardDialog threadRef={parentSubagentThreadRef} />
+          )}
         </>
       ) : null,
-    [activeThreadRef, isServerThread],
+    [activeThreadRef, isServerThread, parentSubagentThreadRef],
   );
   // Side chats need a started thread, and only some harnesses have one.
   const sideChatKind =
@@ -13291,6 +13295,7 @@ export default function ChatView(props: ChatViewProps) {
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
                 visitWatermark={visitWatermark ?? undefined}
+                teamBoardThreadRef={parentSubagentThreadRef ?? activeThreadRef}
                 mascotState={
                   // A bot has its own face; the harness mascot stays out of its chat.
                   chatBot === undefined && harnessMascotForDriver(mascot.driver, mascot.agentId)

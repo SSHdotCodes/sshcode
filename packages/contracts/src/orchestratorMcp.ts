@@ -742,6 +742,8 @@ export const OrchestratorMcpProviderCapability = Schema.Struct({
       yourRuns: Schema.optionalKey(Schema.String),
       /** Present (false) only for a model its provider says cannot read images. */
       images: Schema.optionalKey(Schema.Literal(false)),
+      /** Present (true) only where a subagent on this model takes audio and video files as input. */
+      audioVideo: Schema.optionalKey(Schema.Literal(true)),
       isLegacy: Schema.optional(Schema.Boolean),
       /** The newer version of this family/line, possibly on another provider instance. */
       supersededBy: Schema.optional(Schema.String),

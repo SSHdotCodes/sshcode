@@ -24,6 +24,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
@@ -1475,5 +1476,151 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
         message: "Devin could not read usage limits.",
       });
     }),
+  );
+
+  it.effect("reads both Mistral allowances on refresh and reports a failed read", () => {
+    const calls: string[] = [];
+    let failSubscription = false;
+    const fetch: typeof globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      calls.push(url);
+      expect(init?.method).toBe("GET");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fake-key");
+      switch (url) {
+        case "https://api.mistral.ai/v1/billing/budget":
+          return Response.json({
+            vibe_budget: {
+              usage_percentage: 100,
+              initial_budget: 275,
+              currency: "USD",
+              reset_at: "2026-12-01T00:00:00Z",
+              payg_enabled: false,
+            },
+            api_budget: {
+              usage_percentage: "0.01446856",
+              initial_budget: "32.50",
+              currency: "EUR",
+              reset_at: "2026-12-01T00:00:00Z",
+              payg_enabled: false,
+            },
+            usage_percentage: 91,
+          });
+        case "https://api.mistral.ai/v1/billing/subscription":
+          return failSubscription
+            ? Response.json({}, { status: 503 })
+            : Response.json({ payg_enabled: true, vibe_payg_enabled: false });
+        default:
+          throw new Error("Unexpected URL");
+      }
+    };
+    return Effect.gen(function* () {
+      const instance = yield* AcpRegistryDriver.create({
+        instanceId: ProviderInstanceId.make("acpRegistry_mistral-vibe"),
+        displayName: "Mistral Vibe",
+        enabled: true,
+        environment: [{ name: "MISTRAL_API_KEY", value: "fake-key", sensitive: true }],
+        config: decodeSettings({ agentId: "mistral-vibe" }),
+      });
+      const nextReading = (failed: boolean) =>
+        instance.snapshot.streamChanges.pipe(
+          Stream.filter(({ usageLimits }) =>
+            failed
+              ? usageLimits?.unavailable?.reason === "probeFailed"
+              : usageLimits?.windows.length === 2,
+          ),
+          Stream.runHead,
+          Effect.map((snapshot) => Option.getOrThrow(snapshot).usageLimits),
+          Effect.forkScoped({ startImmediately: true }),
+        );
+      const pending = yield* nextReading(false);
+      const current = (yield* instance.snapshot.getSnapshot).usageLimits;
+      const live = current?.windows.length === 2 ? current : yield* Fiber.join(pending);
+      expect(live?.windows).toEqual([
+        {
+          id: "vibe",
+          kind: "monthly",
+          label: "Vibe & Studio",
+          usedPercent: 100,
+          limited: true,
+          resetsAt: "2026-12-01T00:00:00.000Z",
+          includedBudget: { amount: 275, currency: "USD" },
+          payAsYouGo: false,
+        },
+        {
+          id: "api",
+          kind: "monthly",
+          label: "API",
+          usedPercent: 0.01446856,
+          limited: false,
+          resetsAt: "2026-12-01T00:00:00.000Z",
+          includedBudget: { amount: 32.5, currency: "EUR" },
+          payAsYouGo: true,
+          informational: true,
+        },
+      ]);
+      expect(calls).toHaveLength(2);
+
+      failSubscription = true;
+      const failed = yield* nextReading(true);
+      yield* instance.snapshot.refresh;
+      const reading = yield* Fiber.join(failed);
+      expect(reading?.windows).toEqual([]);
+      expect(reading?.credentialFingerprint).toBe(live?.credentialFingerprint);
+      expect(reading?.unavailable?.message).toBe("Mistral could not report usage limits.");
+      expect(calls).toHaveLength(4);
+    }).pipe(
+      Effect.provideService(FetchHttpClient.Fetch, fetch),
+      Effect.provideService(
+        AcpRegistrySupport.AcpRegistryCatalog,
+        catalogWithInspection({
+          status: "missing_runner",
+          agentId: "mistral-vibe",
+          version: "3.1.0",
+          distribution: "uvx",
+          runner: "uvx",
+        }),
+      ),
+    );
+  });
+
+  it.effect("reports the Mistral key requirement without making a billing request", () =>
+    Effect.gen(function* () {
+      const instance = yield* AcpRegistryDriver.create({
+        instanceId: ProviderInstanceId.make("acpRegistry_mistral-vibe"),
+        displayName: "Mistral Vibe",
+        enabled: true,
+        environment: [{ name: "MISTRAL_API_KEY", value: "", sensitive: true }],
+        config: decodeSettings({ agentId: "mistral-vibe" }),
+      });
+      const pending = yield* instance.snapshot.streamChanges.pipe(
+        Stream.filter((snapshot) => snapshot.usageLimits?.requiredApiKey !== undefined),
+        Stream.runHead,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      const current = yield* instance.snapshot.getSnapshot;
+      const snapshot = current.usageLimits?.requiredApiKey
+        ? current
+        : Option.getOrThrow(yield* Fiber.join(pending));
+      expect(snapshot.usageLimits).toMatchObject({
+        requiredApiKey: "MISTRAL_API_KEY",
+        windows: [],
+        unavailable: { reason: "unsupported" },
+        externalUsage: { url: "https://admin.mistral.ai/subscription" },
+      });
+    }).pipe(
+      Effect.provideService(FetchHttpClient.Fetch, () => {
+        throw new Error("Billing must not be read without a key");
+      }),
+      Effect.provideService(
+        AcpRegistrySupport.AcpRegistryCatalog,
+        catalogWithInspection({
+          status: "missing_runner",
+          agentId: "mistral-vibe",
+          version: "3.1.0",
+          distribution: "uvx",
+          runner: "uvx",
+        }),
+      ),
+    ),
   );
 });

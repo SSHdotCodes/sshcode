@@ -96,6 +96,7 @@ import { buildCodexDeveloperInstructions } from "./CodexDeveloperInstructions.ts
 import { ProviderRegistry } from "./ProviderRegistry.ts";
 import { antigravityMcpDiscoveryInstructions } from "./acp/AntigravityAcpSupport.ts";
 import budget from "./agentContextBudget.json" with { type: "json" };
+import { RESTART_LOST_REQUEST_NOTE } from "../orchestration-v2/RestartBackgroundNote.ts";
 import { DEFAULT_AGENT_TOOL_POLICY, DEFAULT_BOT_PERMISSIONS } from "@t3tools/contracts";
 import { botInstructions, memoryNotes } from "../bots/botInstructions.ts";
 import { setBotThreads } from "../bots/botsRuntime.ts";
@@ -727,6 +728,7 @@ it.effect("agent context matches the committed budget", () =>
           (codex.additionalContext?.[key]?.value === entry.value ? 0 : utf8Bytes(entry.value)),
         0,
       ),
+      restartLostRequestNoteBytes: utf8Bytes(RESTART_LOST_REQUEST_NOTE),
       codexBackgroundWakeAsciiBytes: utf8Bytes(
         codexBackgroundCommandDetail({
           command: "a".repeat(201),

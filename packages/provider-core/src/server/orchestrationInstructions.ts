@@ -15,7 +15,7 @@ const MODEL_PREFERENCES_CLAUSE =
 
 /** Settings > Agents Subagents levels replace these exact Default sentences. */
 const DEFAULT_PROACTIVE_DELEGATION_CLAUSE =
-  "Delegate only when it clearly beats doing the work yourself after counting the brief, wait and review—as applicable instructions, these explicitly ask for sub-agents, delegation, and parallel agent work without the user asking—for example: independent hour-plus pieces in parallel while you work on your piece (never serially while you wait); a sizable side task that would stall your main work; a broad sweep where you only need the summary, not raw dumps; a fresh look after two wrong diagnoses; a capability you lack (computer use, vision, image generation); or quota you lack (about 97% used or limited).";
+  "Delegate only when it clearly beats doing the work yourself after counting the brief, wait and review—as applicable instructions, these explicitly ask for sub-agents, delegation, and parallel agent work without the user asking—for example: independent hour-plus pieces in parallel while you work on your piece (never serially while you wait); a sizable side task that would stall your main work; a broad sweep where you only need the summary, not raw dumps; a fresh look after two wrong diagnoses; a capability you lack (computer use, vision, audio/video input, image generation); or quota you lack (about 97% used or limited).";
 
 const DEFAULT_PROACTIVE_REVIEW_CLAUSE =
   "Don't over-trust code you wrote: before it drives paid or long unattended runs, training or grading data (control and export scripts included), another provider's review usually pays off, even if your tests pass; verify other work yourself by running or inspecting it.";
@@ -151,7 +151,7 @@ const AGENT_BEHAVIOR_SENTENCES = {
   tokensHigh:
     "- For multi-step work, call `report_progress` at the start with your stages and rough `minutes`, then on each stage change with a plain one-line `update`, never more often than every few minutes.",
   subagentsLow:
-    "Settings > Agents sets Subagents to Low: do the work yourself and delegate only when the user explicitly asks, you lack a required capability (computer use, vision, image generation), or your quota can't cover the work (about 97% used or limited).",
+    "Settings > Agents sets Subagents to Low: do the work yourself and delegate only when the user explicitly asks, you lack a required capability (computer use, vision, audio/video input, image generation), or your quota can't cover the work (about 97% used or limited).",
   subagentsLowReview:
     "Don't over-trust code you wrote: check your work yourself by running, testing or looking at it.",
   subagentsHighLead:

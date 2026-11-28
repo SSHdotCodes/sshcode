@@ -17,10 +17,14 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
@@ -29,6 +33,7 @@ import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
 import * as Rankings from "./SubagentRankings.ts";
 import { isAccountFailure, isInfrastructureFailure, terminalRunRecord } from "./recording.ts";
 import { RankingsState, inferTaskKind } from "./records.ts";
+import { completedFollowUpsSince } from "./runTaskIds.ts";
 import { catalog } from "../workflows/fixtures.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 
@@ -774,14 +779,60 @@ it("omits council members by their generated task or child title", () => {
   ).toBeUndefined();
 });
 
-it.effect("omits follow-ups to an existing child without discarding its original run", () =>
+it.effect(
+  "records no run for follow-ups to an existing child but ranks their grades on its original run",
+  () =>
+    Effect.gen(function* () {
+      const sink = yield* EventSink.EventSinkV2;
+      const rankings = yield* Rankings.SubagentRankings;
+      const original = task();
+      yield* sink.write({
+        events: [parentId, childId].map((id) => ({
+          id: EventId.make(`followup-thread-${id}`),
+          type: "thread.created" as const,
+          threadId: id,
+          occurredAt: at,
+          payload: {
+            ...thread(id),
+            forkedFrom: id === childId ? { type: "node" as const, nodeId: original.id } : null,
+          },
+        })),
+      });
+      yield* sink.write({ events: [taskEvent(original)] });
+      yield* sink.write({ events: [taskEvent(task({ id: NodeId.make("followup") }))] });
+      yield* sink.write({
+        events: [
+          taskEvent({
+            ...original,
+            completionDelivery: { state: "acknowledged", observedByRunId: null },
+          }),
+        ],
+      });
+      // Rankings read only runs in their window; move the test clock past the run.
+      yield* TestClock.setTime(DateTime.toEpochMillis(finish) + 60_000);
+      const before = yield* rankings.getSnapshot();
+      expect(before.thumbs.map((run) => run.taskId)).toEqual([original.id]);
+      const followup = NodeId.make("followup");
+      yield* rankings.gradeMany([{ taskId: followup, runTaskId: original.id, score: 3 }]);
+      const after = yield* rankings.getSnapshot();
+      expect(after.thumbs).toContainEqual({ taskId: followup, grade: 3 });
+      // The follow-up's flag counts against the run it continued, which stays one run.
+      expect(after.models[0]!.stats?.runs).toBe(before.models[0]!.stats?.runs);
+      expect(after.models[0]!.yourRuns).toContain("low grades 1/1");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+);
+
+it.effect("attaches a follow-up grade an earlier build left waiting to its original run", () =>
   Effect.gen(function* () {
     const sink = yield* EventSink.EventSinkV2;
     const rankings = yield* Rankings.SubagentRankings;
+    const fs = yield* FileSystem.FileSystem;
+    const config = yield* ServerConfig.ServerConfig;
     const original = task();
+    const followup = task({ id: NodeId.make("waiting-followup") });
     yield* sink.write({
       events: [parentId, childId].map((id) => ({
-        id: EventId.make(`followup-thread-${id}`),
+        id: EventId.make(`waiting-thread-${id}`),
         type: "thread.created" as const,
         threadId: id,
         occurredAt: at,
@@ -792,21 +843,50 @@ it.effect("omits follow-ups to an existing child without discarding its original
       })),
     });
     yield* sink.write({ events: [taskEvent(original)] });
-    yield* sink.write({ events: [taskEvent(task({ id: NodeId.make("followup") }))] });
-    yield* sink.write({
-      events: [
-        taskEvent({
-          ...original,
-          completionDelivery: { state: "acknowledged", observedByRunId: null },
-        }),
-      ],
+    yield* sink.write({ events: [taskEvent(followup)] });
+    // Earlier builds saved a follow-up's grade without naming its original run.
+    yield* rankings.gradeMany([
+      { taskId: followup.id, score: 4 },
+      { taskId: NodeId.make("never-ran"), score: 7 },
+    ]);
+    // The startup pass runs once the server has settled; its grade then ranks the original.
+    const ranked = yield* rankings.subscribe().pipe(
+      Stream.filter((snapshot) => snapshot.models.some((model) => (model.stats?.rated ?? 0) > 0)),
+      Stream.runHead,
+      Effect.forkScoped,
+    );
+    yield* TestClock.setTime(DateTime.toEpochMillis(finish) + 60_000);
+    expect(Option.getOrThrow(yield* Fiber.join(ranked)).models[0]!.stats).toMatchObject({
+      rated: 1,
+      average: 4,
     });
-    const before = yield* rankings.getSnapshot();
-    expect(before.thumbs.map((run) => run.taskId)).toEqual([original.id]);
-    const followup = NodeId.make("followup");
-    yield* rankings.gradeMany([{ taskId: followup, score: 8 }]);
-    const after = yield* rankings.getSnapshot();
-    expect(after.thumbs).toContainEqual({ taskId: followup, grade: 8 });
-    expect(after.models).toEqual(before.models);
+    const saved = yield* decodeState(
+      yield* fs.readFileString(`${config.stateDir}/subagent-rankings.json`),
+    );
+    // The follow-up's own completion was recorded on the original run as it finished.
+    expect(saved.runs.map((run) => [run.taskId, run.followUps])).toEqual([
+      [
+        original.id,
+        [
+          {
+            taskId: followup.id,
+            outcome: "completed",
+            finishedAt: DateTime.toEpochMillis(finish),
+            grade: { score: 4 },
+          },
+        ],
+      ],
+    ]);
+    expect(saved.pendingGrades).toEqual([{ taskId: "never-ran", score: 7 }]);
+    // Startup also records follow-ups that completed before completions were kept.
+    expect(yield* completedFollowUpsSince(DateTime.toEpochMillis(at))).toEqual([
+      {
+        taskId: followup.id,
+        runTaskId: original.id,
+        outcome: "completed",
+        finishedAt: DateTime.toEpochMillis(finish),
+      },
+    ]);
+    expect(yield* completedFollowUpsSince(DateTime.toEpochMillis(finish) + 1)).toEqual([]);
   }).pipe(Effect.scoped, Effect.provide(testLayer)),
 );
